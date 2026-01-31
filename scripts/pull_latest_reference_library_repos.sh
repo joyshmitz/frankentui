@@ -45,6 +45,7 @@ log_error() {
 
 # Sync a single repo
 # Usage: sync_repo name url branch
+# Returns: 0 on success, 1 on failure
 sync_repo() {
     local repo_name="$1"
     local repo_url="$2"
@@ -54,21 +55,23 @@ sync_repo() {
     if [[ -d "$repo_path/.git" ]]; then
         # Repo exists, pull latest
         log_info "Updating $repo_name ($default_branch)..."
-        if (cd "$repo_path" && git fetch origin "$default_branch" --quiet 2>/dev/null && git reset --hard "origin/$default_branch" --quiet 2>/dev/null); then
+        # Note: We use reset --hard to ensure we always match origin exactly.
+        # These are read-only reference copies; local modifications are not expected.
+        if (cd "$repo_path" && git fetch origin "$default_branch" --quiet && git reset --hard "origin/$default_branch" --quiet); then
             log_info "  $repo_name updated successfully"
             return 0
         else
-            log_warn "  Failed to update $repo_name (continuing anyway)"
+            log_warn "  Failed to update $repo_name (check network connectivity)"
             return 1
         fi
     else
         # Repo doesn't exist, clone it
         log_info "Cloning $repo_name ($default_branch)..."
-        if git clone --depth 1 --branch "$default_branch" "$repo_url" "$repo_path" 2>/dev/null; then
+        if git clone --depth 1 --branch "$default_branch" "$repo_url" "$repo_path"; then
             log_info "  $repo_name cloned successfully"
             return 0
         else
-            log_error "  Failed to clone $repo_name"
+            log_error "  Failed to clone $repo_name (check network connectivity)"
             return 1
         fi
     fi
@@ -78,22 +81,22 @@ sync_repo() {
 mkdir -p "$REFERENCE_DIR"
 
 # Track results
-updates_made=0
-errors=0
+successes=0
+failures=0
 
 # The three reference libraries that FrankenTUI synthesizes from
-sync_repo "rich_rust" "https://github.com/Dicklesworthstone/rich_rust.git" "master" && updates_made=$((updates_made + 1)) || errors=$((errors + 1))
-sync_repo "charmed_rust" "https://github.com/Dicklesworthstone/charmed_rust.git" "master" && updates_made=$((updates_made + 1)) || errors=$((errors + 1))
-sync_repo "opentui_rust" "https://github.com/Dicklesworthstone/opentui_rust.git" "main" && updates_made=$((updates_made + 1)) || errors=$((errors + 1))
+sync_repo "rich_rust" "https://github.com/Dicklesworthstone/rich_rust.git" "master" && successes=$((successes + 1)) || failures=$((failures + 1))
+sync_repo "charmed_rust" "https://github.com/Dicklesworthstone/charmed_rust.git" "master" && successes=$((successes + 1)) || failures=$((failures + 1))
+sync_repo "opentui_rust" "https://github.com/Dicklesworthstone/opentui_rust.git" "main" && successes=$((successes + 1)) || failures=$((failures + 1))
 
-if [[ $errors -gt 0 ]]; then
-    log_warn "Completed with $errors warning(s)"
-fi
-
-if [[ $updates_made -gt 0 ]]; then
-    log_info "Reference libraries synchronized ($updates_made repos)"
+# Report results
+if [[ $failures -eq 0 ]]; then
+    log_info "All reference libraries synchronized successfully ($successes repos)"
+elif [[ $successes -eq 0 ]]; then
+    log_error "All sync operations failed ($failures repos)"
+    exit 1
 else
-    log_info "Reference libraries already up to date"
+    log_warn "Partial sync: $successes succeeded, $failures failed"
 fi
 
 # Print summary
@@ -105,5 +108,7 @@ for repo_name in rich_rust charmed_rust opentui_rust; do
     if [[ -d "$repo_path" ]]; then
         commit=$(cd "$repo_path" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
         echo "  $repo_name @ $commit"
+    else
+        echo "  $repo_name (not present)"
     fi
 done

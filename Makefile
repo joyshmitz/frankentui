@@ -3,7 +3,7 @@
 # This Makefile provides convenient targets for building and developing FrankenTUI.
 # The reference libraries are automatically synchronized before builds.
 
-.PHONY: all build check test clean sync-refs setup help
+.PHONY: all build check test clean sync-refs setup help clippy fmt-check
 
 # Default target
 all: build
