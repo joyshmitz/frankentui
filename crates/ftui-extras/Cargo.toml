@@ -30,6 +30,6 @@ markdown = ["dep:pulldown-cmark", "dep:ftui-render", "dep:ftui-style", "dep:ftui
 export = ["dep:ftui-render"]
 forms = ["dep:ftui-core", "dep:ftui-render", "dep:ftui-style", "dep:unicode-segmentation", "dep:unicode-width"]
 pty-capture = ["dep:portable-pty"]
-syntax = []
+syntax = ["dep:ftui-render", "dep:ftui-style"]
 
 [dev-dependencies]
