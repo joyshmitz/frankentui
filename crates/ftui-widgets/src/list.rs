@@ -1,0 +1,408 @@
+#![forbid(unsafe_code)]
+
+//! List widget.
+//!
+//! A widget to display a list of items with selection support.
+
+use crate::block::Block;
+use crate::{StatefulWidget, Widget, draw_text_span, set_style_area};
+use ftui_core::geometry::Rect;
+use ftui_render::buffer::Buffer;
+use ftui_style::Style;
+use ftui_text::Text;
+
+/// A single item in a list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListItem<'a> {
+    content: Text,
+    style: Style,
+    marker: &'a str,
+}
+
+impl<'a> ListItem<'a> {
+    pub fn new(content: impl Into<Text>) -> Self {
+        Self {
+            content: content.into(),
+            style: Style::default(),
+            marker: "",
+        }
+    }
+
+    pub fn style(mut self, style: Style) -> Self {
+        self.style = style;
+        self
+    }
+
+    pub fn marker(mut self, marker: &'a str) -> Self {
+        self.marker = marker;
+        self
+    }
+}
+
+impl<'a> From<&'a str> for ListItem<'a> {
+    fn from(s: &'a str) -> Self {
+        Self::new(s)
+    }
+}
+
+/// A widget to display a list of items.
+#[derive(Debug, Clone, Default)]
+pub struct List<'a> {
+    block: Option<Block<'a>>,
+    items: Vec<ListItem<'a>>,
+    style: Style,
+    highlight_style: Style,
+    highlight_symbol: Option<&'a str>,
+}
+
+impl<'a> List<'a> {
+    pub fn new(items: impl IntoIterator<Item = impl Into<ListItem<'a>>>) -> Self {
+        Self {
+            block: None,
+            items: items.into_iter().map(|i| i.into()).collect(),
+            style: Style::default(),
+            highlight_style: Style::default(),
+            highlight_symbol: None,
+        }
+    }
+
+    pub fn block(mut self, block: Block<'a>) -> Self {
+        self.block = Some(block);
+        self
+    }
+
+    pub fn style(mut self, style: Style) -> Self {
+        self.style = style;
+        self
+    }
+
+    pub fn highlight_style(mut self, style: Style) -> Self {
+        self.highlight_style = style;
+        self
+    }
+
+    pub fn highlight_symbol(mut self, symbol: &'a str) -> Self {
+        self.highlight_symbol = Some(symbol);
+        self
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ListState {
+    pub selected: Option<usize>,
+    pub offset: usize,
+}
+
+impl ListState {
+    pub fn select(&mut self, index: Option<usize>) {
+        self.selected = index;
+        if index.is_none() {
+            self.offset = 0;
+        }
+    }
+
+    pub fn selected(&self) -> Option<usize> {
+        self.selected
+    }
+}
+
+impl<'a> StatefulWidget for List<'a> {
+    type State = ListState;
+
+    fn render(&self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        #[cfg(feature = "tracing")]
+        let _span = tracing::debug_span!(
+            "widget_render",
+            widget = "List",
+            x = area.x,
+            y = area.y,
+            w = area.width,
+            h = area.height
+        )
+        .entered();
+
+        let list_area = match &self.block {
+            Some(b) => {
+                b.render(area, buf);
+                b.inner(area)
+            }
+            None => area,
+        };
+
+        if list_area.is_empty() {
+            return;
+        }
+
+        // Apply base style
+        set_style_area(buf, list_area, self.style);
+
+        if self.items.is_empty() {
+            return;
+        }
+
+        let list_height = list_area.height as usize;
+
+        // Ensure selection is within bounds
+        if let Some(selected) = state.selected
+            && selected >= self.items.len()
+        {
+            state.selected = Some(self.items.len() - 1);
+        }
+
+        // Ensure visible range includes selected item
+        if let Some(selected) = state.selected {
+            if selected >= state.offset + list_height {
+                state.offset = selected - list_height + 1;
+            } else if selected < state.offset {
+                state.offset = selected;
+            }
+        }
+
+        // Iterate over visible items
+        for (i, item) in self
+            .items
+            .iter()
+            .enumerate()
+            .skip(state.offset)
+            .take(list_height)
+        {
+            let y = list_area.y + (i - state.offset) as u16;
+            let is_selected = state.selected == Some(i);
+
+            // Determine style
+            let item_style = if is_selected {
+                self.highlight_style
+            } else {
+                item.style
+            };
+
+            // Apply item background style to the whole row
+            let row_area = Rect::new(list_area.x, y, list_area.width, 1);
+            set_style_area(buf, row_area, item_style);
+
+            // Determine symbol
+            let symbol = if is_selected {
+                self.highlight_symbol.unwrap_or(item.marker)
+            } else {
+                item.marker
+            };
+
+            let mut x = list_area.x;
+
+            // Draw symbol if present
+            if !symbol.is_empty() {
+                x = draw_text_span(buf, x, y, symbol, item_style, list_area.right());
+                // Add a space after symbol
+                x = draw_text_span(buf, x, y, " ", item_style, list_area.right());
+            }
+
+            // Draw content
+            // Note: List items are currently single-line for simplicity in v1
+            if let Some(line) = item.content.lines().first() {
+                for span in line.spans() {
+                    let span_style = match span.style {
+                        Some(s) => s.merge(&item_style),
+                        None => item_style,
+                    };
+                    x = draw_text_span(buf, x, y, &span.content, span_style, list_area.right());
+                    if x >= list_area.right() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl<'a> Widget for List<'a> {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        let mut state = ListState::default();
+        StatefulWidget::render(self, area, buf, &mut state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_empty_list() {
+        let list = List::new(Vec::<ListItem>::new());
+        let area = Rect::new(0, 0, 10, 5);
+        let mut buf = Buffer::new(10, 5);
+        Widget::render(&list, area, &mut buf);
+    }
+
+    #[test]
+    fn render_simple_list() {
+        let items = vec![
+            ListItem::new("Item A"),
+            ListItem::new("Item B"),
+            ListItem::new("Item C"),
+        ];
+        let list = List::new(items);
+        let area = Rect::new(0, 0, 10, 3);
+        let mut buf = Buffer::new(10, 3);
+        let mut state = ListState::default();
+        StatefulWidget::render(&list, area, &mut buf, &mut state);
+
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('I'));
+        assert_eq!(buf.get(5, 0).unwrap().content.as_char(), Some('A'));
+        assert_eq!(buf.get(5, 1).unwrap().content.as_char(), Some('B'));
+        assert_eq!(buf.get(5, 2).unwrap().content.as_char(), Some('C'));
+    }
+
+    #[test]
+    fn list_state_select() {
+        let mut state = ListState::default();
+        assert_eq!(state.selected(), None);
+
+        state.select(Some(2));
+        assert_eq!(state.selected(), Some(2));
+
+        state.select(None);
+        assert_eq!(state.selected(), None);
+        assert_eq!(state.offset, 0);
+    }
+
+    #[test]
+    fn list_scrolls_to_selected() {
+        let items: Vec<ListItem> = (0..10)
+            .map(|i| ListItem::new(format!("Item {i}")))
+            .collect();
+        let list = List::new(items);
+        let area = Rect::new(0, 0, 10, 3);
+        let mut buf = Buffer::new(10, 3);
+        let mut state = ListState::default();
+        state.select(Some(5));
+
+        StatefulWidget::render(&list, area, &mut buf, &mut state);
+        // offset should have been adjusted so item 5 is visible
+        assert!(state.offset <= 5);
+        assert!(state.offset + 3 > 5);
+    }
+
+    #[test]
+    fn list_clamps_selection() {
+        let items = vec![ListItem::new("A"), ListItem::new("B")];
+        let list = List::new(items);
+        let area = Rect::new(0, 0, 10, 3);
+        let mut buf = Buffer::new(10, 3);
+        let mut state = ListState::default();
+        state.select(Some(10)); // out of bounds
+
+        StatefulWidget::render(&list, area, &mut buf, &mut state);
+        // should clamp to last item
+        assert_eq!(state.selected(), Some(1));
+    }
+
+    #[test]
+    fn render_list_with_highlight_symbol() {
+        let items = vec![ListItem::new("A"), ListItem::new("B")];
+        let list = List::new(items).highlight_symbol(">");
+        let area = Rect::new(0, 0, 10, 2);
+        let mut buf = Buffer::new(10, 2);
+        let mut state = ListState::default();
+        state.select(Some(0));
+
+        StatefulWidget::render(&list, area, &mut buf, &mut state);
+        // First item should have ">" symbol
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('>'));
+    }
+
+    #[test]
+    fn render_zero_area() {
+        let list = List::new(vec![ListItem::new("A")]);
+        let area = Rect::new(0, 0, 0, 0);
+        let mut buf = Buffer::new(1, 1);
+        let mut state = ListState::default();
+        StatefulWidget::render(&list, area, &mut buf, &mut state);
+    }
+
+    #[test]
+    fn list_item_from_str() {
+        let item: ListItem = "hello".into();
+        assert_eq!(
+            item.content.lines().first().unwrap().to_plain_text(),
+            "hello"
+        );
+        assert_eq!(item.marker, "");
+    }
+
+    #[test]
+    fn list_item_with_marker() {
+        let items = vec![
+            ListItem::new("A").marker("•"),
+            ListItem::new("B").marker("•"),
+        ];
+        let list = List::new(items);
+        let area = Rect::new(0, 0, 10, 2);
+        let mut buf = Buffer::new(10, 2);
+        let mut state = ListState::default();
+        StatefulWidget::render(&list, area, &mut buf, &mut state);
+
+        // Marker should be rendered at the start
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('•'));
+        assert_eq!(buf.get(0, 1).unwrap().content.as_char(), Some('•'));
+    }
+
+    #[test]
+    fn list_state_deselect_resets_offset() {
+        let mut state = ListState {
+            offset: 5,
+            ..Default::default()
+        };
+        state.select(Some(10));
+        assert_eq!(state.offset, 5); // select doesn't reset offset
+
+        state.select(None);
+        assert_eq!(state.offset, 0); // deselect resets offset
+    }
+
+    #[test]
+    fn list_scrolls_up_when_selection_above_viewport() {
+        let items: Vec<ListItem> = (0..10)
+            .map(|i| ListItem::new(format!("Item {i}")))
+            .collect();
+        let list = List::new(items);
+        let area = Rect::new(0, 0, 10, 3);
+        let mut buf = Buffer::new(10, 3);
+        let mut state = ListState::default();
+
+        // First scroll down
+        state.select(Some(8));
+        StatefulWidget::render(&list, area, &mut buf, &mut state);
+        assert!(state.offset > 0);
+
+        // Now select item 0 - should scroll back up
+        state.select(Some(0));
+        StatefulWidget::render(&list, area, &mut buf, &mut state);
+        assert_eq!(state.offset, 0);
+    }
+
+    #[test]
+    fn render_list_more_items_than_viewport() {
+        let items: Vec<ListItem> = (0..20).map(|i| ListItem::new(format!("{i}"))).collect();
+        let list = List::new(items);
+        let area = Rect::new(0, 0, 5, 3);
+        let mut buf = Buffer::new(5, 3);
+        let mut state = ListState::default();
+        StatefulWidget::render(&list, area, &mut buf, &mut state);
+
+        // Only first 3 should render
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('0'));
+        assert_eq!(buf.get(0, 1).unwrap().content.as_char(), Some('1'));
+        assert_eq!(buf.get(0, 2).unwrap().content.as_char(), Some('2'));
+    }
+
+    #[test]
+    fn widget_render_uses_default_state() {
+        let items = vec![ListItem::new("X")];
+        let list = List::new(items);
+        let area = Rect::new(0, 0, 5, 1);
+        let mut buf = Buffer::new(5, 1);
+        // Using Widget trait (not StatefulWidget)
+        Widget::render(&list, area, &mut buf);
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('X'));
+    }
+}

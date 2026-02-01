@@ -372,4 +372,264 @@ mod tests {
         assert!(pool.capacity() >= 100);
         assert!(pool.is_empty());
     }
+
+    mod property {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Generate a non-empty string suitable for interning.
+        fn arb_grapheme() -> impl Strategy<Value = String> {
+            prop::string::string_regex(".{1,8}")
+                .unwrap()
+                .prop_filter("non-empty", |s| !s.is_empty())
+        }
+
+        /// Generate a valid width (0..=127).
+        fn arb_width() -> impl Strategy<Value = u8> {
+            0u8..=GraphemeId::MAX_WIDTH
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(256))]
+
+            /// Intern followed by get always returns the original string.
+            #[test]
+            fn intern_get_roundtrip(s in arb_grapheme(), w in arb_width()) {
+                let mut pool = GraphemePool::new();
+                let id = pool.intern(&s, w);
+                prop_assert_eq!(pool.get(id), Some(s.as_str()));
+            }
+
+            /// Width is preserved through intern.
+            #[test]
+            fn intern_preserves_width(s in arb_grapheme(), w in arb_width()) {
+                let mut pool = GraphemePool::new();
+                let id = pool.intern(&s, w);
+                prop_assert_eq!(id.width(), w as usize);
+            }
+
+            /// Interning the same string twice returns the same id.
+            #[test]
+            fn deduplication_same_id(s in arb_grapheme(), w in arb_width()) {
+                let mut pool = GraphemePool::new();
+                let id1 = pool.intern(&s, w);
+                let id2 = pool.intern(&s, w);
+                prop_assert_eq!(id1, id2);
+                prop_assert_eq!(pool.len(), 1);
+            }
+
+            /// After N interns of the same string, refcount equals N.
+            #[test]
+            fn deduplication_refcount(s in arb_grapheme(), w in arb_width(), extra in 0u32..10) {
+                let mut pool = GraphemePool::new();
+                let id = pool.intern(&s, w);
+                for _ in 0..extra {
+                    pool.intern(&s, w);
+                }
+                prop_assert_eq!(pool.refcount(id), 1 + extra);
+            }
+
+            /// Retain increments refcount, release decrements it.
+            #[test]
+            fn retain_release_refcount(
+                s in arb_grapheme(),
+                w in arb_width(),
+                retains in 0u32..10,
+                releases in 0u32..10
+            ) {
+                let mut pool = GraphemePool::new();
+                let id = pool.intern(&s, w);
+                // Start at refcount 1
+                for _ in 0..retains {
+                    pool.retain(id);
+                }
+                let expected_after_retain = 1 + retains;
+                prop_assert_eq!(pool.refcount(id), expected_after_retain);
+
+                let actual_releases = releases.min(expected_after_retain - 1);
+                for _ in 0..actual_releases {
+                    pool.release(id);
+                }
+                prop_assert_eq!(pool.refcount(id), expected_after_retain - actual_releases);
+                // Entry should still be alive
+                prop_assert_eq!(pool.get(id), Some(s.as_str()));
+            }
+
+            /// Releasing all references frees the slot.
+            #[test]
+            fn release_to_zero_frees(s in arb_grapheme(), w in arb_width(), extra in 0u32..5) {
+                let mut pool = GraphemePool::new();
+                let id = pool.intern(&s, w);
+                for _ in 0..extra {
+                    pool.retain(id);
+                }
+                // Release all: 1 (initial) + extra (retains)
+                for _ in 0..=extra {
+                    pool.release(id);
+                }
+                prop_assert_eq!(pool.get(id), None);
+                prop_assert_eq!(pool.refcount(id), 0);
+                prop_assert!(pool.is_empty());
+            }
+
+            /// Freed slots are reused by subsequent interns.
+            #[test]
+            fn slot_reuse_after_free(
+                s1 in arb_grapheme(),
+                s2 in arb_grapheme(),
+                w in arb_width()
+            ) {
+                let mut pool = GraphemePool::new();
+                let id1 = pool.intern(&s1, w);
+                let slot1 = id1.slot();
+                pool.release(id1);
+
+                // s2 should reuse slot1's index
+                let id2 = pool.intern(&s2, w);
+                prop_assert_eq!(id2.slot(), slot1);
+                prop_assert_eq!(pool.get(id2), Some(s2.as_str()));
+            }
+
+            /// len() tracks active entries correctly across operations.
+            #[test]
+            fn len_invariant(count in 1usize..20) {
+                let mut pool = GraphemePool::new();
+                let mut ids = Vec::new();
+                for i in 0..count {
+                    let s = format!("g{i}");
+                    ids.push(pool.intern(&s, 1));
+                }
+                prop_assert_eq!(pool.len(), count);
+
+                // Release half
+                let release_count = count / 2;
+                for id in &ids[..release_count] {
+                    pool.release(*id);
+                }
+                prop_assert_eq!(pool.len(), count - release_count);
+            }
+
+            /// Multiple distinct strings produce distinct ids.
+            #[test]
+            fn distinct_strings_distinct_ids(count in 2usize..15) {
+                let mut pool = GraphemePool::new();
+                let mut ids = Vec::new();
+                for i in 0..count {
+                    let s = format!("unique_{i}");
+                    ids.push(pool.intern(&s, 1));
+                }
+                // All ids should be distinct
+                for i in 0..ids.len() {
+                    for j in (i + 1)..ids.len() {
+                        prop_assert_ne!(ids[i], ids[j]);
+                    }
+                }
+            }
+
+            /// Clear resets the pool entirely regardless of contents.
+            #[test]
+            fn clear_resets_all(count in 1usize..20) {
+                let mut pool = GraphemePool::new();
+                let mut ids = Vec::new();
+                for i in 0..count {
+                    let s = format!("c{i}");
+                    ids.push(pool.intern(&s, 1));
+                }
+                pool.clear();
+                prop_assert!(pool.is_empty());
+                prop_assert_eq!(pool.len(), 0);
+                for id in &ids {
+                    prop_assert_eq!(pool.get(*id), None);
+                }
+            }
+
+            // --- Executable Invariant Tests (bd-10i.13.2) ---
+
+            /// Invariant: refcount > 0 implies get() returns Some (slot is valid).
+            #[test]
+            fn positive_refcount_implies_valid_slot(
+                count in 1usize..10,
+                retains in proptest::collection::vec(0u32..5, 1..10),
+            ) {
+                let mut pool = GraphemePool::new();
+                let mut ids = Vec::new();
+                for i in 0..count {
+                    let s = format!("inv_{i}");
+                    ids.push(pool.intern(&s, 1));
+                }
+
+                // Apply random retains
+                for (i, &extra) in retains.iter().enumerate() {
+                    let id = ids[i % count];
+                    for _ in 0..extra {
+                        pool.retain(id);
+                    }
+                }
+
+                // Invariant check: every id with refcount > 0 must be gettable
+                for (i, &id) in ids.iter().enumerate() {
+                    let rc = pool.refcount(id);
+                    if rc > 0 {
+                        prop_assert!(pool.get(id).is_some(),
+                            "slot {} has refcount {} but get() returned None", i, rc);
+                    }
+                }
+            }
+
+            /// Invariant: each release() decrements refcount by exactly 1.
+            #[test]
+            fn release_decrements_by_one(s in arb_grapheme(), w in arb_width(), retains in 1u32..8) {
+                let mut pool = GraphemePool::new();
+                let id = pool.intern(&s, w);
+                for _ in 0..retains {
+                    pool.retain(id);
+                }
+                let rc_before = pool.refcount(id);
+                pool.release(id);
+                let rc_after = pool.refcount(id);
+                prop_assert_eq!(rc_after, rc_before - 1,
+                    "release should decrement refcount by exactly 1");
+            }
+
+            /// Invariant: releasing a freed slot does not corrupt pool state.
+            #[test]
+            fn over_release_does_not_corrupt(count in 1usize..5) {
+                let mut pool = GraphemePool::new();
+                let mut ids = Vec::new();
+                for i in 0..count {
+                    let s = format!("or_{i}");
+                    ids.push(pool.intern(&s, 1));
+                }
+
+                // Free the first entry
+                let victim = ids[0];
+                pool.release(victim);
+                prop_assert_eq!(pool.refcount(victim), 0);
+                prop_assert_eq!(pool.get(victim), None);
+
+                // Double-release should be safe (saturating)
+                pool.release(victim);
+                prop_assert_eq!(pool.refcount(victim), 0);
+
+                // Other entries must be unaffected
+                for &id in &ids[1..] {
+                    prop_assert!(pool.get(id).is_some(),
+                        "over-release corrupted unrelated slot");
+                    prop_assert!(pool.refcount(id) > 0);
+                }
+            }
+
+            /// Invariant: GraphemeId from one pool is not valid in a different pool.
+            #[test]
+            fn cross_pool_id_is_invalid(s in arb_grapheme(), w in arb_width()) {
+                let mut pool_a = GraphemePool::new();
+                let pool_b = GraphemePool::new();
+                let id = pool_a.intern(&s, w);
+
+                // id from pool_a should not resolve in empty pool_b
+                prop_assert_eq!(pool_b.get(id), None,
+                    "GraphemeId from pool A should not be valid in pool B");
+            }
+        }
+    }
 }

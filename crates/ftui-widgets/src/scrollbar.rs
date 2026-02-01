@@ -1,0 +1,390 @@
+#![forbid(unsafe_code)]
+
+//! Scrollbar widget.
+//!
+//! A widget to display a scrollbar.
+
+use crate::{StatefulWidget, Widget};
+use ftui_core::geometry::Rect;
+use ftui_render::buffer::Buffer;
+use ftui_style::Style;
+
+/// Scrollbar orientation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScrollbarOrientation {
+    #[default]
+    VerticalRight,
+    VerticalLeft,
+    HorizontalBottom,
+    HorizontalTop,
+}
+
+/// A widget to display a scrollbar.
+#[derive(Debug, Clone, Default)]
+pub struct Scrollbar<'a> {
+    orientation: ScrollbarOrientation,
+    thumb_style: Style,
+    track_style: Style,
+    begin_symbol: Option<&'a str>,
+    end_symbol: Option<&'a str>,
+    track_symbol: Option<&'a str>,
+    thumb_symbol: Option<&'a str>,
+}
+
+impl<'a> Scrollbar<'a> {
+    pub fn new(orientation: ScrollbarOrientation) -> Self {
+        Self {
+            orientation,
+            thumb_style: Style::default(),
+            track_style: Style::default(),
+            begin_symbol: None,
+            end_symbol: None,
+            track_symbol: None,
+            thumb_symbol: None,
+        }
+    }
+
+    pub fn thumb_style(mut self, style: Style) -> Self {
+        self.thumb_style = style;
+        self
+    }
+
+    pub fn track_style(mut self, style: Style) -> Self {
+        self.track_style = style;
+        self
+    }
+
+    pub fn symbols(
+        mut self,
+        track: &'a str,
+        thumb: &'a str,
+        begin: Option<&'a str>,
+        end: Option<&'a str>,
+    ) -> Self {
+        self.track_symbol = Some(track);
+        self.thumb_symbol = Some(thumb);
+        self.begin_symbol = begin;
+        self.end_symbol = end;
+        self
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ScrollbarState {
+    pub content_length: usize,
+    pub position: usize,
+    pub viewport_length: usize,
+}
+
+impl ScrollbarState {
+    pub fn new(content_length: usize, position: usize, viewport_length: usize) -> Self {
+        Self {
+            content_length,
+            position,
+            viewport_length,
+        }
+    }
+}
+
+impl<'a> StatefulWidget for Scrollbar<'a> {
+    type State = ScrollbarState;
+
+    fn render(&self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        #[cfg(feature = "tracing")]
+        let _span = tracing::debug_span!(
+            "widget_render",
+            widget = "Scrollbar",
+            x = area.x,
+            y = area.y,
+            w = area.width,
+            h = area.height
+        )
+        .entered();
+
+        if area.is_empty() || state.content_length == 0 {
+            return;
+        }
+
+        let is_vertical = match self.orientation {
+            ScrollbarOrientation::VerticalRight | ScrollbarOrientation::VerticalLeft => true,
+            ScrollbarOrientation::HorizontalBottom | ScrollbarOrientation::HorizontalTop => false,
+        };
+
+        let length = if is_vertical { area.height } else { area.width } as usize;
+        if length == 0 {
+            return;
+        }
+
+        // Calculate scrollbar layout
+        // Simplified logic: track is the full length
+        let track_len = length;
+
+        // Calculate thumb size and position
+        let viewport_ratio = state.viewport_length as f64 / state.content_length as f64;
+        let thumb_size = (track_len as f64 * viewport_ratio).max(1.0).round() as usize;
+        let thumb_size = thumb_size.min(track_len);
+
+        let max_pos = state.content_length.saturating_sub(state.viewport_length);
+        let pos_ratio = if max_pos == 0 {
+            0.0
+        } else {
+            state.position.min(max_pos) as f64 / max_pos as f64
+        };
+
+        let available_track = track_len.saturating_sub(thumb_size);
+        let thumb_offset = (available_track as f64 * pos_ratio).round() as usize;
+
+        // Symbols
+        let track_char = self
+            .track_symbol
+            .unwrap_or(if is_vertical { "│" } else { "─" });
+        let thumb_char = self.thumb_symbol.unwrap_or("█");
+        let begin_char = self
+            .begin_symbol
+            .unwrap_or(if is_vertical { "▲" } else { "◄" });
+        let end_char = self
+            .end_symbol
+            .unwrap_or(if is_vertical { "▼" } else { "►" });
+
+        // Draw
+        for i in 0..track_len {
+            let is_thumb = i >= thumb_offset && i < thumb_offset + thumb_size;
+            let symbol = if is_thumb {
+                thumb_char
+            } else if i == 0 && self.begin_symbol.is_some() {
+                begin_char
+            } else if i == track_len - 1 && self.end_symbol.is_some() {
+                end_char
+            } else {
+                track_char
+            };
+
+            let style = if is_thumb {
+                self.thumb_style
+            } else {
+                self.track_style
+            };
+
+            let (x, y) = if is_vertical {
+                let x = match self.orientation {
+                    ScrollbarOrientation::VerticalRight => area.right().saturating_sub(1),
+                    ScrollbarOrientation::VerticalLeft => area.left(),
+                    _ => unreachable!(),
+                };
+                (x, area.top() + i as u16)
+            } else {
+                let y = match self.orientation {
+                    ScrollbarOrientation::HorizontalBottom => area.bottom().saturating_sub(1),
+                    ScrollbarOrientation::HorizontalTop => area.top(),
+                    _ => unreachable!(),
+                };
+                (area.left() + i as u16, y)
+            };
+
+            // Only draw if within bounds (redundant check but safe)
+            if x < area.right() && y < area.bottom() {
+                // We use draw_text_span-like logic but for single cell
+                use ftui_render::cell::Cell;
+                if let Some(c) = symbol.chars().next() {
+                    let mut cell = Cell::from_char(c);
+                    crate::apply_style(&mut cell, style);
+                    buf.set(x, y, cell);
+                }
+            }
+        }
+    }
+}
+
+impl<'a> Widget for Scrollbar<'a> {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        let mut state = ScrollbarState::default();
+        StatefulWidget::render(self, area, buf, &mut state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scrollbar_empty_area() {
+        let sb = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+        let area = Rect::new(0, 0, 0, 0);
+        let mut buf = Buffer::new(1, 1);
+        let mut state = ScrollbarState::new(100, 0, 10);
+        StatefulWidget::render(&sb, area, &mut buf, &mut state);
+    }
+
+    #[test]
+    fn scrollbar_zero_content() {
+        let sb = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+        let area = Rect::new(0, 0, 1, 10);
+        let mut buf = Buffer::new(1, 10);
+        let mut state = ScrollbarState::new(0, 0, 10);
+        StatefulWidget::render(&sb, area, &mut buf, &mut state);
+        // Should not render anything when content_length is 0
+    }
+
+    #[test]
+    fn scrollbar_vertical_right_renders() {
+        let sb = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+        let area = Rect::new(0, 0, 1, 10);
+        let mut buf = Buffer::new(1, 10);
+        let mut state = ScrollbarState::new(100, 0, 10);
+        StatefulWidget::render(&sb, area, &mut buf, &mut state);
+
+        // Thumb should be at the top (position=0), track should have chars
+        let top_cell = buf.get(0, 0).unwrap();
+        assert!(top_cell.content.as_char().is_some());
+    }
+
+    #[test]
+    fn scrollbar_vertical_left_renders() {
+        let sb = Scrollbar::new(ScrollbarOrientation::VerticalLeft);
+        let area = Rect::new(0, 0, 1, 10);
+        let mut buf = Buffer::new(1, 10);
+        let mut state = ScrollbarState::new(100, 0, 10);
+        StatefulWidget::render(&sb, area, &mut buf, &mut state);
+
+        let top_cell = buf.get(0, 0).unwrap();
+        assert!(top_cell.content.as_char().is_some());
+    }
+
+    #[test]
+    fn scrollbar_horizontal_renders() {
+        let sb = Scrollbar::new(ScrollbarOrientation::HorizontalBottom);
+        let area = Rect::new(0, 0, 10, 1);
+        let mut buf = Buffer::new(10, 1);
+        let mut state = ScrollbarState::new(100, 0, 10);
+        StatefulWidget::render(&sb, area, &mut buf, &mut state);
+
+        let left_cell = buf.get(0, 0).unwrap();
+        assert!(left_cell.content.as_char().is_some());
+    }
+
+    #[test]
+    fn scrollbar_thumb_moves_with_position() {
+        let sb = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+        let area = Rect::new(0, 0, 1, 10);
+
+        // Position at start
+        let mut buf1 = Buffer::new(1, 10);
+        let mut state1 = ScrollbarState::new(100, 0, 10);
+        StatefulWidget::render(&sb, area, &mut buf1, &mut state1);
+
+        // Position at end
+        let mut buf2 = Buffer::new(1, 10);
+        let mut state2 = ScrollbarState::new(100, 90, 10);
+        StatefulWidget::render(&sb, area, &mut buf2, &mut state2);
+
+        // The thumb char (█) should be at different positions
+        let thumb_char = '█';
+        let thumb_pos_1 =
+            (0..10u16).find(|&y| buf1.get(0, y).unwrap().content.as_char() == Some(thumb_char));
+        let thumb_pos_2 =
+            (0..10u16).find(|&y| buf2.get(0, y).unwrap().content.as_char() == Some(thumb_char));
+
+        // At start, thumb should be near top; at end, near bottom
+        assert!(thumb_pos_1.unwrap_or(0) < thumb_pos_2.unwrap_or(0));
+    }
+
+    #[test]
+    fn scrollbar_state_constructor() {
+        let state = ScrollbarState::new(200, 50, 20);
+        assert_eq!(state.content_length, 200);
+        assert_eq!(state.position, 50);
+        assert_eq!(state.viewport_length, 20);
+    }
+
+    #[test]
+    fn scrollbar_content_fits_viewport() {
+        // When viewport >= content, thumb should fill the whole track
+        let sb = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+        let area = Rect::new(0, 0, 1, 10);
+        let mut buf = Buffer::new(1, 10);
+        let mut state = ScrollbarState::new(5, 0, 10);
+        StatefulWidget::render(&sb, area, &mut buf, &mut state);
+
+        // All cells should be thumb (█)
+        let thumb_char = '█';
+        for y in 0..10u16 {
+            assert_eq!(buf.get(0, y).unwrap().content.as_char(), Some(thumb_char));
+        }
+    }
+
+    #[test]
+    fn scrollbar_horizontal_top_renders() {
+        let sb = Scrollbar::new(ScrollbarOrientation::HorizontalTop);
+        let area = Rect::new(0, 0, 10, 1);
+        let mut buf = Buffer::new(10, 1);
+        let mut state = ScrollbarState::new(100, 0, 10);
+        StatefulWidget::render(&sb, area, &mut buf, &mut state);
+
+        let left_cell = buf.get(0, 0).unwrap();
+        assert!(left_cell.content.as_char().is_some());
+    }
+
+    #[test]
+    fn scrollbar_custom_symbols() {
+        let sb = Scrollbar::new(ScrollbarOrientation::VerticalRight).symbols(
+            ".",
+            "#",
+            Some("^"),
+            Some("v"),
+        );
+        let area = Rect::new(0, 0, 1, 5);
+        let mut buf = Buffer::new(1, 5);
+        let mut state = ScrollbarState::new(50, 0, 10);
+        StatefulWidget::render(&sb, area, &mut buf, &mut state);
+
+        // Should use our custom symbols
+        let mut chars: Vec<Option<char>> = Vec::new();
+        for y in 0..5u16 {
+            chars.push(buf.get(0, y).unwrap().content.as_char());
+        }
+        // At least some cells should have our custom chars
+        assert!(chars.contains(&Some('#')) || chars.contains(&Some('.')));
+    }
+
+    #[test]
+    fn scrollbar_position_clamped_beyond_max() {
+        let sb = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+        let area = Rect::new(0, 0, 1, 10);
+        let mut buf = Buffer::new(1, 10);
+        // Position way beyond content_length
+        let mut state = ScrollbarState::new(100, 500, 10);
+        StatefulWidget::render(&sb, area, &mut buf, &mut state);
+
+        // Should still render without panic, thumb at bottom
+        let thumb_char = '█';
+        let thumb_pos =
+            (0..10u16).find(|&y| buf.get(0, y).unwrap().content.as_char() == Some(thumb_char));
+        assert!(thumb_pos.is_some());
+    }
+
+    #[test]
+    fn scrollbar_state_default() {
+        let state = ScrollbarState::default();
+        assert_eq!(state.content_length, 0);
+        assert_eq!(state.position, 0);
+        assert_eq!(state.viewport_length, 0);
+    }
+
+    #[test]
+    fn scrollbar_widget_trait_renders() {
+        let sb = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+        let area = Rect::new(0, 0, 1, 5);
+        let mut buf = Buffer::new(1, 5);
+        // Widget trait uses default state (content_length=0, so no rendering)
+        Widget::render(&sb, area, &mut buf);
+        // Should not panic with default state
+    }
+
+    #[test]
+    fn scrollbar_orientation_default_is_vertical_right() {
+        assert_eq!(
+            ScrollbarOrientation::default(),
+            ScrollbarOrientation::VerticalRight
+        );
+    }
+}

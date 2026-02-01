@@ -16,8 +16,10 @@
 //! ```
 //! use ftui_render::frame::Frame;
 //! use ftui_render::cell::Cell;
+//! use ftui_render::grapheme_pool::GraphemePool;
 //!
-//! let mut frame = Frame::new(80, 24);
+//! let mut pool = GraphemePool::new();
+//! let mut frame = Frame::new(80, 24, &mut pool);
 //!
 //! // Draw content
 //! frame.buffer.set_raw(0, 0, Cell::from_char('H'));
@@ -27,7 +29,10 @@
 //! frame.set_cursor(Some((2, 0)));
 //! ```
 
+use crate::budget::DegradationLevel;
 use crate::buffer::Buffer;
+use crate::cell::GraphemeId;
+use crate::grapheme_pool::GraphemePool;
 use ftui_core::geometry::Rect;
 
 /// Identifier for a clickable region in the hit grid.
@@ -45,9 +50,9 @@ impl HitId {
 
     /// Get the raw ID value.
     #[inline]
-pub const fn id(self) -> u32 {
-    self.0
-}
+    pub const fn id(self) -> u32 {
+        self.0
+    }
 }
 
 /// Opaque user data for hit callbacks.
@@ -179,10 +184,8 @@ impl HitGrid {
     ///
     /// Returns the hit tuple if a region is registered at (x, y).
     pub fn hit_test(&self, x: u16, y: u16) -> Option<(HitId, HitRegion, HitData)> {
-        self.get(x, y).and_then(|cell| {
-            cell.widget_id
-                .map(|id| (id, cell.region, cell.data))
-        })
+        self.get(x, y)
+            .and_then(|cell| cell.widget_id.map(|id| (id, cell.region, cell.data)))
     }
 
     /// Return all hits within the given rectangle.
@@ -213,10 +216,18 @@ impl HitGrid {
 /// The Frame is passed to `Model::view()` and contains everything needed
 /// to render a single frame. The Buffer holds cells; metadata controls
 /// cursor and enables mouse hit testing.
-#[derive(Debug, Clone)]
-pub struct Frame {
+///
+/// # Lifetime
+///
+/// The frame borrows the `GraphemePool` from the runtime, so it cannot outlive
+/// the render pass. This is correct because frames are ephemeral render targets.
+#[derive(Debug)]
+pub struct Frame<'a> {
     /// The cell grid for this render pass.
     pub buffer: Buffer,
+
+    /// Reference to the grapheme pool for interning strings.
+    pub pool: &'a mut GraphemePool,
 
     /// Optional hit grid for mouse hit testing.
     ///
@@ -230,31 +241,60 @@ pub struct Frame {
 
     /// Whether cursor should be visible.
     pub cursor_visible: bool,
+
+    /// Current degradation level from the render budget.
+    ///
+    /// Widgets can read this to skip expensive operations when the
+    /// budget is constrained (e.g., use ASCII borders instead of
+    /// Unicode, skip decorative rendering, etc.).
+    pub degradation: DegradationLevel,
 }
 
-impl Frame {
-    /// Create a new frame with given dimensions.
+impl<'a> Frame<'a> {
+    /// Create a new frame with given dimensions and grapheme pool.
     ///
     /// The frame starts with no hit grid and visible cursor at no position.
-    pub fn new(width: u16, height: u16) -> Self {
+    pub fn new(width: u16, height: u16, pool: &'a mut GraphemePool) -> Self {
         Self {
             buffer: Buffer::new(width, height),
+            pool,
             hit_grid: None,
             cursor_position: None,
             cursor_visible: true,
+            degradation: DegradationLevel::Full,
         }
     }
 
     /// Create a frame with hit testing enabled.
     ///
     /// The hit grid allows widgets to register clickable regions.
-    pub fn with_hit_grid(width: u16, height: u16) -> Self {
+    pub fn with_hit_grid(width: u16, height: u16, pool: &'a mut GraphemePool) -> Self {
         Self {
             buffer: Buffer::new(width, height),
+            pool,
             hit_grid: Some(HitGrid::new(width, height)),
             cursor_position: None,
             cursor_visible: true,
+            degradation: DegradationLevel::Full,
         }
+    }
+
+    /// Intern a string in the grapheme pool.
+    ///
+    /// Returns a `GraphemeId` that can be used to create a `Cell`.
+    /// The width is calculated automatically or can be provided if already known.
+    ///
+    /// # Panics
+    ///
+    /// Panics if width > 127.
+    pub fn intern(&mut self, text: &str) -> GraphemeId {
+        let width = unicode_width::UnicodeWidthStr::width(text).min(127) as u8;
+        self.pool.intern(text, width)
+    }
+
+    /// Intern a string with explicit width.
+    pub fn intern_with_width(&mut self, text: &str, width: u8) -> GraphemeId {
+        self.pool.intern(text, width)
     }
 
     /// Enable hit testing on an existing frame.
@@ -309,7 +349,13 @@ impl Frame {
     /// Register a hit region (if hit grid is enabled).
     ///
     /// Returns `true` if the region was registered, `false` if no hit grid.
-    pub fn register_hit(&mut self, rect: Rect, id: HitId, region: HitRegion, data: HitData) -> bool {
+    pub fn register_hit(
+        &mut self,
+        rect: Rect,
+        id: HitId,
+        region: HitRegion,
+        data: HitData,
+    ) -> bool {
         if let Some(ref mut grid) = self.hit_grid {
             grid.register(rect, id, region, data);
             true
@@ -329,13 +375,6 @@ impl Frame {
     }
 }
 
-impl Default for Frame {
-    /// Create a 1x1 frame (minimum size).
-    fn default() -> Self {
-        Self::new(1, 1)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,7 +382,8 @@ mod tests {
 
     #[test]
     fn frame_creation() {
-        let frame = Frame::new(80, 24);
+        let mut pool = GraphemePool::new();
+        let frame = Frame::new(80, 24, &mut pool);
         assert_eq!(frame.width(), 80);
         assert_eq!(frame.height(), 24);
         assert!(frame.hit_grid.is_none());
@@ -353,7 +393,8 @@ mod tests {
 
     #[test]
     fn frame_with_hit_grid() {
-        let frame = Frame::with_hit_grid(80, 24);
+        let mut pool = GraphemePool::new();
+        let frame = Frame::with_hit_grid(80, 24, &mut pool);
         assert!(frame.hit_grid.is_some());
         assert_eq!(frame.width(), 80);
         assert_eq!(frame.height(), 24);
@@ -361,7 +402,8 @@ mod tests {
 
     #[test]
     fn frame_cursor() {
-        let mut frame = Frame::new(80, 24);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
         assert!(frame.cursor_position.is_none());
         assert!(frame.cursor_visible);
 
@@ -377,7 +419,8 @@ mod tests {
 
     #[test]
     fn frame_clear() {
-        let mut frame = Frame::with_hit_grid(10, 10);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::with_hit_grid(10, 10, &mut pool);
 
         // Add some content
         frame.buffer.set_raw(5, 5, Cell::from_char('X'));
@@ -400,7 +443,8 @@ mod tests {
 
     #[test]
     fn frame_bounds() {
-        let frame = Frame::new(80, 24);
+        let mut pool = GraphemePool::new();
+        let frame = Frame::new(80, 24, &mut pool);
         let bounds = frame.bounds();
         assert_eq!(bounds.x, 0);
         assert_eq!(bounds.y, 0);
@@ -417,25 +461,17 @@ mod tests {
 
     #[test]
     fn hit_grid_registration() {
-        let mut frame = Frame::with_hit_grid(80, 24);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::with_hit_grid(80, 24, &mut pool);
         let hit_id = HitId::new(42);
         let rect = Rect::new(10, 5, 20, 3);
 
         frame.register_hit(rect, hit_id, HitRegion::Button, 99);
 
         // Inside rect
-        assert_eq!(
-            frame.hit_test(15, 6),
-            Some((hit_id, HitRegion::Button, 99))
-        );
-        assert_eq!(
-            frame.hit_test(10, 5),
-            Some((hit_id, HitRegion::Button, 99))
-        ); // Top-left corner
-        assert_eq!(
-            frame.hit_test(29, 7),
-            Some((hit_id, HitRegion::Button, 99))
-        ); // Bottom-right corner
+        assert_eq!(frame.hit_test(15, 6), Some((hit_id, HitRegion::Button, 99)));
+        assert_eq!(frame.hit_test(10, 5), Some((hit_id, HitRegion::Button, 99))); // Top-left corner
+        assert_eq!(frame.hit_test(29, 7), Some((hit_id, HitRegion::Button, 99))); // Bottom-right corner
 
         // Outside rect
         assert!(frame.hit_test(5, 5).is_none()); // Left of rect
@@ -446,10 +482,16 @@ mod tests {
 
     #[test]
     fn hit_grid_overlapping_regions() {
-        let mut frame = Frame::with_hit_grid(20, 20);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::with_hit_grid(20, 20, &mut pool);
 
         // Register two overlapping regions
-        frame.register_hit(Rect::new(0, 0, 10, 10), HitId::new(1), HitRegion::Content, 1);
+        frame.register_hit(
+            Rect::new(0, 0, 10, 10),
+            HitId::new(1),
+            HitRegion::Content,
+            1,
+        );
         frame.register_hit(Rect::new(5, 5, 10, 10), HitId::new(2), HitRegion::Border, 2);
 
         // Non-overlapping region from first
@@ -473,7 +515,8 @@ mod tests {
 
     #[test]
     fn hit_grid_out_of_bounds() {
-        let frame = Frame::with_hit_grid(10, 10);
+        let mut pool = GraphemePool::new();
+        let frame = Frame::with_hit_grid(10, 10, &mut pool);
 
         // Out of bounds returns None
         assert!(frame.hit_test(100, 100).is_none());
@@ -490,14 +533,16 @@ mod tests {
 
     #[test]
     fn register_hit_region_no_grid() {
-        let mut frame = Frame::new(10, 10);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 10, &mut pool);
         let result = frame.register_hit_region(Rect::new(0, 0, 5, 5), HitId::new(1));
         assert!(!result); // No hit grid, returns false
     }
 
     #[test]
     fn register_hit_region_with_grid() {
-        let mut frame = Frame::with_hit_grid(10, 10);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::with_hit_grid(10, 10, &mut pool);
         let result = frame.register_hit_region(Rect::new(0, 0, 5, 5), HitId::new(1));
         assert!(result); // Has hit grid, returns true
     }
@@ -522,7 +567,12 @@ mod tests {
         let mut grid = HitGrid::new(10, 10);
 
         // Register region that extends beyond grid
-        grid.register(Rect::new(8, 8, 10, 10), HitId::new(1), HitRegion::Content, 0);
+        grid.register(
+            Rect::new(8, 8, 10, 10),
+            HitId::new(1),
+            HitRegion::Content,
+            0,
+        );
 
         // Inside clipped region
         assert_eq!(
@@ -546,9 +596,185 @@ mod tests {
     }
 
     #[test]
-    fn frame_default() {
-        let frame = Frame::default();
-        assert_eq!(frame.width(), 1);
-        assert_eq!(frame.height(), 1);
+    fn frame_intern() {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 10, &mut pool);
+
+        let id = frame.intern("👋");
+        assert_eq!(frame.pool.get(id), Some("👋"));
+    }
+
+    #[test]
+    fn frame_intern_with_width() {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 10, &mut pool);
+
+        let id = frame.intern_with_width("🧪", 2);
+        assert_eq!(id.width(), 2);
+        assert_eq!(frame.pool.get(id), Some("🧪"));
+    }
+
+    #[test]
+    fn frame_enable_hit_testing() {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 10, &mut pool);
+        assert!(frame.hit_grid.is_none());
+
+        frame.enable_hit_testing();
+        assert!(frame.hit_grid.is_some());
+
+        // Calling again is idempotent
+        frame.enable_hit_testing();
+        assert!(frame.hit_grid.is_some());
+    }
+
+    #[test]
+    fn frame_enable_hit_testing_then_register() {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 10, &mut pool);
+        frame.enable_hit_testing();
+
+        let registered = frame.register_hit_region(Rect::new(0, 0, 5, 5), HitId::new(1));
+        assert!(registered);
+        assert_eq!(
+            frame.hit_test(2, 2),
+            Some((HitId::new(1), HitRegion::Content, 0))
+        );
+    }
+
+    #[test]
+    fn hit_cell_default_is_empty() {
+        let cell = HitCell::default();
+        assert!(cell.is_empty());
+        assert_eq!(cell.widget_id, None);
+        assert_eq!(cell.region, HitRegion::None);
+        assert_eq!(cell.data, 0);
+    }
+
+    #[test]
+    fn hit_cell_new_is_not_empty() {
+        let cell = HitCell::new(HitId::new(1), HitRegion::Button, 42);
+        assert!(!cell.is_empty());
+        assert_eq!(cell.widget_id, Some(HitId::new(1)));
+        assert_eq!(cell.region, HitRegion::Button);
+        assert_eq!(cell.data, 42);
+    }
+
+    #[test]
+    fn hit_region_variants() {
+        assert_eq!(HitRegion::default(), HitRegion::None);
+
+        // All variants are distinct
+        let variants = [
+            HitRegion::None,
+            HitRegion::Content,
+            HitRegion::Border,
+            HitRegion::Scrollbar,
+            HitRegion::Handle,
+            HitRegion::Button,
+            HitRegion::Link,
+            HitRegion::Custom(0),
+            HitRegion::Custom(1),
+            HitRegion::Custom(255),
+        ];
+        for i in 0..variants.len() {
+            for j in (i + 1)..variants.len() {
+                assert_ne!(
+                    variants[i], variants[j],
+                    "variants {i} and {j} should differ"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hit_id_default() {
+        let id = HitId::default();
+        assert_eq!(id.id(), 0);
+    }
+
+    #[test]
+    fn hit_grid_initial_cells_empty() {
+        let grid = HitGrid::new(5, 5);
+        for y in 0..5 {
+            for x in 0..5 {
+                let cell = grid.get(x, y).unwrap();
+                assert!(cell.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn hit_grid_zero_dimensions() {
+        let grid = HitGrid::new(0, 0);
+        assert_eq!(grid.width(), 0);
+        assert_eq!(grid.height(), 0);
+        assert!(grid.get(0, 0).is_none());
+        assert!(grid.hit_test(0, 0).is_none());
+    }
+
+    #[test]
+    fn hit_grid_hits_in_empty_area() {
+        let grid = HitGrid::new(10, 10);
+        let hits = grid.hits_in(Rect::new(0, 0, 5, 5));
+        // All cells are empty, so no actual HitId hits
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn hit_grid_hits_in_clipped_area() {
+        let mut grid = HitGrid::new(5, 5);
+        grid.register(Rect::new(0, 0, 5, 5), HitId::new(1), HitRegion::Content, 0);
+
+        // Query area extends beyond grid — should be clipped
+        let hits = grid.hits_in(Rect::new(3, 3, 10, 10));
+        assert_eq!(hits.len(), 4); // 2x2 cells inside grid
+    }
+
+    #[test]
+    fn hit_test_no_grid_returns_none() {
+        let mut pool = GraphemePool::new();
+        let frame = Frame::new(10, 10, &mut pool);
+        assert!(frame.hit_test(0, 0).is_none());
+    }
+
+    #[test]
+    fn frame_cursor_operations() {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+
+        // Set position at edge of frame
+        frame.set_cursor(Some((79, 23)));
+        assert_eq!(frame.cursor_position, Some((79, 23)));
+
+        // Set position at origin
+        frame.set_cursor(Some((0, 0)));
+        assert_eq!(frame.cursor_position, Some((0, 0)));
+
+        // Toggle visibility
+        frame.set_cursor_visible(false);
+        assert!(!frame.cursor_visible);
+        frame.set_cursor_visible(true);
+        assert!(frame.cursor_visible);
+    }
+
+    #[test]
+    fn hit_data_large_values() {
+        let mut grid = HitGrid::new(5, 5);
+        // HitData is u64, test max value
+        grid.register(
+            Rect::new(0, 0, 1, 1),
+            HitId::new(1),
+            HitRegion::Content,
+            u64::MAX,
+        );
+        let result = grid.hit_test(0, 0);
+        assert_eq!(result, Some((HitId::new(1), HitRegion::Content, u64::MAX)));
+    }
+
+    #[test]
+    fn hit_id_large_value() {
+        let id = HitId::new(u32::MAX);
+        assert_eq!(id.id(), u32::MAX);
     }
 }
