@@ -18,7 +18,7 @@ use nix::pty::{ForkptyResult, Winsize, forkpty};
 #[cfg(unix)]
 use nix::sys::signal::{kill, Signal};
 #[cfg(unix)]
-use nix::sys::wait::{WaitStatus, waitpid};
+use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 #[cfg(unix)]
 use nix::unistd::{ForkResult, Pid, close, read, write};
 #[cfg(unix)]
@@ -367,6 +367,32 @@ impl PtySession {
                 "unexpected wait status: {:?}",
                 other
             ))),
+        }
+    }
+
+    /// Wait for the child to exit, but return `None` if the timeout elapses.
+    pub fn wait_with_timeout(&mut self, timeout: Duration) -> io::Result<Option<ExitStatus>> {
+        let deadline = Instant::now() + timeout;
+
+        loop {
+            match waitpid(self.child_pid, Some(WaitPidFlag::WNOHANG)).map_err(nix_error)? {
+                WaitStatus::StillAlive => {
+                    if Instant::now() >= deadline {
+                        return Ok(None);
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                WaitStatus::Exited(_, code) => return Ok(Some(ExitStatus::from_raw(code << 8))),
+                WaitStatus::Signaled(_, signal, _) => {
+                    return Ok(Some(ExitStatus::from_raw(signal as i32)));
+                }
+                other => {
+                    return Err(io::Error::other(format!(
+                        "unexpected wait status: {:?}",
+                        other
+                    )));
+                }
+            }
         }
     }
 
