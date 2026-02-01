@@ -6,7 +6,6 @@ publish = false
 
 [dependencies]
 ftui-render = { path = "../ftui-render" }
-ftui-render = { path = "../ftui-render" }
 tracing = "0.1"
 
 [dev-dependencies]

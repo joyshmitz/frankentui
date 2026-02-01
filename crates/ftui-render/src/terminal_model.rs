@@ -57,7 +57,10 @@ impl Default for ModelCell {
 impl ModelCell {
     /// Create a cell with the given character and default style.
     pub fn with_char(ch: char) -> Self {
-        Self { ch, ..Default::default() }
+        Self {
+            ch,
+            ..Default::default()
+        }
     }
 }
 
@@ -481,16 +484,16 @@ impl TerminalModel {
         let has_question = self.csi_intermediate.contains(&b'?');
 
         match final_byte {
-            b'H' | b'f' => self.csi_cup(),          // CUP - cursor position
-            b'A' => self.csi_cuu(),                 // CUU - cursor up
-            b'B' => self.csi_cud(),                 // CUD - cursor down
-            b'C' => self.csi_cuf(),                 // CUF - cursor forward
-            b'D' => self.csi_cub(),                 // CUB - cursor back
-            b'G' => self.csi_cha(),                 // CHA - cursor horizontal absolute
-            b'd' => self.csi_vpa(),                 // VPA - vertical position absolute
-            b'J' => self.csi_ed(),                  // ED - erase in display
-            b'K' => self.csi_el(),                  // EL - erase in line
-            b'm' => self.csi_sgr(),                 // SGR - select graphic rendition
+            b'H' | b'f' => self.csi_cup(),             // CUP - cursor position
+            b'A' => self.csi_cuu(),                    // CUU - cursor up
+            b'B' => self.csi_cud(),                    // CUD - cursor down
+            b'C' => self.csi_cuf(),                    // CUF - cursor forward
+            b'D' => self.csi_cub(),                    // CUB - cursor back
+            b'G' => self.csi_cha(),                    // CHA - cursor horizontal absolute
+            b'd' => self.csi_vpa(),                    // VPA - vertical position absolute
+            b'J' => self.csi_ed(),                     // ED - erase in display
+            b'K' => self.csi_el(),                     // EL - erase in line
+            b'm' => self.csi_sgr(),                    // SGR - select graphic rendition
             b'h' if has_question => self.csi_decset(), // DECSET
             b'l' if has_question => self.csi_decrst(), // DECRST
             b's' => {
@@ -754,9 +757,9 @@ impl TerminalModel {
     fn csi_decset(&mut self) {
         for &code in &self.csi_params {
             match code {
-                25 => self.modes.cursor_visible = true,     // DECTCEM - cursor visible
-                1049 => self.modes.alt_screen = true,       // Alt screen buffer
-                2026 => self.modes.sync_output_level += 1,  // Synchronized output begin
+                25 => self.modes.cursor_visible = true, // DECTCEM - cursor visible
+                1049 => self.modes.alt_screen = true,   // Alt screen buffer
+                2026 => self.modes.sync_output_level += 1, // Synchronized output begin
                 _ => {}
             }
         }
@@ -765,8 +768,8 @@ impl TerminalModel {
     fn csi_decrst(&mut self) {
         for &code in &self.csi_params {
             match code {
-                25 => self.modes.cursor_visible = false,    // DECTCEM - cursor hidden
-                1049 => self.modes.alt_screen = false,      // Alt screen buffer off
+                25 => self.modes.cursor_visible = false, // DECTCEM - cursor hidden
+                1049 => self.modes.alt_screen = false,   // Alt screen buffer off
                 2026 => {
                     // Synchronized output end
                     self.modes.sync_output_level = self.modes.sync_output_level.saturating_sub(1);
@@ -778,18 +781,17 @@ impl TerminalModel {
 
     fn execute_osc(&mut self) {
         // Parse OSC: code ; data
-        let data = String::from_utf8_lossy(&self.osc_buffer);
+        // Clone buffer to avoid borrow issues when calling handle_osc8
+        let data = String::from_utf8_lossy(&self.osc_buffer).to_string();
         let mut parts = data.splitn(2, ';');
         let code: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
 
-        match code {
-            8 => {
-                // OSC 8 - hyperlink
-                if let Some(rest) = parts.next() {
-                    self.handle_osc8(rest);
-                }
-            }
-            _ => {} // Other OSC codes ignored
+        // OSC 8 - hyperlink (other OSC codes ignored)
+        if code == 8
+            && let Some(rest) = parts.next()
+        {
+            let rest = rest.to_string();
+            self.handle_osc8(&rest);
         }
     }
 
@@ -865,7 +867,8 @@ impl TerminalModel {
                             output.push_str("\\e]");
                             i += 2;
                             while i < bytes.len() && bytes[i] != 0x07 {
-                                if bytes[i] == 0x1B && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
+                                if bytes[i] == 0x1B && i + 1 < bytes.len() && bytes[i + 1] == b'\\'
+                                {
                                     output.push_str("\\e\\\\");
                                     i += 2;
                                     break;
@@ -938,13 +941,13 @@ mod tests {
     fn relative_cursor_moves() {
         let mut model = TerminalModel::new(80, 24);
         model.process(b"\x1b[10;10H"); // Move to (9, 9)
-        model.process(b"\x1b[2A");     // Up 2
+        model.process(b"\x1b[2A"); // Up 2
         assert_eq!(model.cursor(), (9, 7));
-        model.process(b"\x1b[3B");     // Down 3
+        model.process(b"\x1b[3B"); // Down 3
         assert_eq!(model.cursor(), (9, 10));
-        model.process(b"\x1b[5C");     // Forward 5
+        model.process(b"\x1b[5C"); // Forward 5
         assert_eq!(model.cursor(), (14, 10));
-        model.process(b"\x1b[3D");     // Back 3
+        model.process(b"\x1b[3D"); // Back 3
         assert_eq!(model.cursor(), (11, 10));
     }
 
@@ -984,8 +987,10 @@ mod tests {
     fn erase_line() {
         let mut model = TerminalModel::new(10, 5);
         model.process(b"ABCDEFGHIJ");
-        model.process(b"\x1b[5G"); // Move to column 5
-        model.process(b"\x1b[K");  // Erase to end of line
+        // After 10 chars in 10-col terminal, cursor wraps to (0, 1)
+        // Move back to row 1, column 5 explicitly
+        model.process(b"\x1b[1;5H"); // Row 1, Col 5 (1-indexed) = (4, 0)
+        model.process(b"\x1b[K"); // Erase to end of line
         assert_eq!(model.row_text(0), Some("ABCD".to_string()));
     }
 

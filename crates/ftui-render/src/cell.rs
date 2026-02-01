@@ -43,7 +43,7 @@
 /// - 7 bits for width allows display widths 0-127 (most graphemes are 1-2)
 /// - Embedded width avoids pool lookup for width queries
 /// - Total 31 bits leaves bit 31 for `CellContent` type discrimination
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(transparent)]
 pub struct GraphemeId(u32);
 
@@ -97,12 +97,6 @@ impl core::fmt::Debug for GraphemeId {
             .field("slot", &self.slot())
             .field("width", &self.width())
             .finish()
-    }
-}
-
-impl Default for GraphemeId {
-    fn default() -> Self {
-        Self(0)
     }
 }
 

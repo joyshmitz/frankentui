@@ -6,6 +6,10 @@ publish = false
 
 [dependencies]
 bitflags = "2.10.0"
-ftui-layout = { path = "../ftui-layout" }
-ftui-style = { path = "../ftui-style" }
-ftui-text = { path = "../ftui-text" }
+# Note: ftui-render is the core kernel and should not depend on ftui-style.
+# ftui-style depends on ftui-render (not vice versa).
+# ftui-layout = { path = "../ftui-layout" }  # TODO: Add when needed
+# ftui-text = { path = "../ftui-text" }      # TODO: Add when needed
+
+[dev-dependencies]
+proptest = "1"
