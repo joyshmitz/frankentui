@@ -4,13 +4,15 @@
 //!
 //! Demonstrates:
 //! - `MarkdownRenderer` with custom `MarkdownTheme`
+//! - GFM auto-detection with `is_likely_markdown`
+//! - Streaming/fragment rendering with `render_streaming`
 //! - Text style attributes (bold, italic, underline, etc.)
 //! - Unicode text with CJK and emoji in a `Table`
 //! - `WrapMode` and `Alignment` cycling
 
 use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use ftui_core::geometry::Rect;
-use ftui_extras::markdown::{MarkdownRenderer, MarkdownTheme};
+use ftui_extras::markdown::{MarkdownRenderer, MarkdownTheme, is_likely_markdown};
 use ftui_layout::{Constraint, Flex};
 use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
@@ -27,62 +29,174 @@ use ftui_widgets::table::{Row, Table};
 use super::{HelpEntry, Screen};
 use crate::theme;
 
-const SAMPLE_MARKDOWN: &str = "\
-# FrankenTUI Markdown Demo
+/// Simulated LLM streaming response with complex GFM content.
+/// This demonstrates real-world markdown that an LLM might generate.
+const STREAMING_MARKDOWN: &str = "\
+# Understanding Quantum Computing
 
-## Typography Showcase
+Quantum computers leverage **quantum mechanics** to process information in fundamentally different ways than classical computers.
 
-This demonstrates the **full range** of *Markdown rendering* capabilities
-built into the framework.
+## Key Concepts
 
-### Inline Styles
+### Qubits vs Classical Bits
 
-You can use **bold**, *italic*, ~~strikethrough~~, and `inline code`.
-Combine them: ***bold italic***, **`bold code`**, *`italic code`*.
+While classical bits are either $0$ or $1$, qubits can exist in a **superposition**:
 
-### Links
+$$|\\psi\\rangle = \\alpha|0\\rangle + \\beta|1\\rangle$$
 
-Visit [FrankenTUI](https://github.com/example/frankentui) for more info.
+where $|\\alpha|^2 + |\\beta|^2 = 1$.
 
-### Blockquotes
+### Quantum Gates
 
-> \"Any sufficiently advanced technology is indistinguishable from magic.\"
-> — Arthur C. Clarke
+Common single-qubit gates include:
 
-### Code Block
+| Gate | Matrix | Effect |
+|------|--------|--------|
+| Hadamard | $H$ | Creates superposition |
+| Pauli-X | $X$ | Bit flip (NOT) |
+| Pauli-Z | $Z$ | Phase flip |
 
-```rust
-fn main() {
-    println!(\"Hello, FrankenTUI!\");
-    let tui = FrankenTUI::new()
-        .with_theme(Theme::dark())
-        .build();
-    tui.run().unwrap();
-}
+> [!NOTE]
+> The Hadamard gate is fundamental to quantum algorithms like Grover's search.
+
+### Example: Bell State
+
+```python
+from qiskit import QuantumCircuit
+
+# Create a Bell state (maximally entangled)
+qc = QuantumCircuit(2)
+qc.h(0)      # Hadamard on qubit 0
+qc.cx(0, 1)  # CNOT: entangle qubits
 ```
 
-### Lists
+## Progress Checklist
 
-Unordered:
-- Styled text rendering
-- Unicode-aware wrapping
-- Grapheme cluster support
-- CJK and emoji handling
+- [x] Understand superposition
+- [x] Learn about entanglement
+- [ ] Implement Shor's algorithm
+- [ ] Build quantum error correction
 
-Ordered:
-1. Parse markdown with pulldown-cmark
-2. Apply theme styles to elements
-3. Render styled Text in Paragraph widget
+## Further Reading
 
-### Headings at Every Level
+See [Qiskit Textbook](https://qiskit.org/learn)[^1] for interactive tutorials.
 
-#### H4: Sub-subsection
-##### H5: Minor heading
-###### H6: Smallest heading
+[^1]: IBM's open-source quantum computing framework.
 
 ---
 
-*End of demo document.*
+*Press* <kbd>Space</kbd> *to toggle streaming, <kbd>r</kbd> to restart* \u{1f680}
+";
+
+const SAMPLE_MARKDOWN: &str = "\
+# GitHub-Flavored Markdown
+
+## Math & LaTeX Support
+
+Inline math like $E = mc^2$ and $\\alpha + \\beta = \\gamma$ renders to Unicode.
+
+Display math for complex equations:
+
+$$\\sum_{i=1}^{n} x_i = \\frac{n(n+1)}{2}$$
+
+$$f(x) = \\int_{-\\infty}^{\\infty} e^{-x^2} dx = \\sqrt{\\pi}$$
+
+Greek letters: $\\alpha$, $\\beta$, $\\gamma$, $\\delta$, $\\epsilon$
+
+Operators: $\\times$, $\\div$, $\\pm$, $\\leq$, $\\geq$, $\\neq$, $\\approx$
+
+## Task Lists
+
+- [x] Implement markdown parser
+- [x] Add LaTeX to Unicode conversion
+- [x] Support task list checkboxes
+- [ ] Add syntax highlighting
+- [ ] Write comprehensive tests
+
+## Admonitions
+
+> [!NOTE]
+> This is an informational note with helpful context.
+
+> [!TIP]
+> Pro tip: Use keyboard shortcuts for faster navigation.
+
+> [!IMPORTANT]
+> Critical information that users need to know.
+
+> [!WARNING]
+> Potential issues or things to be careful about.
+
+> [!CAUTION]
+> Dangerous actions that may cause problems.
+
+## Footnotes
+
+FrankenTUI[^1] supports GitHub-Flavored Markdown[^gfm] with
+many extensions for rich terminal rendering.
+
+[^1]: A TUI framework for Rust.
+[^gfm]: GitHub-Flavored Markdown specification.
+
+## Code Blocks
+
+```rust
+fn fibonacci(n: u64) -> u64 {
+    match n {
+        0 => 0,
+        1 => 1,
+        _ => fibonacci(n - 1) + fibonacci(n - 2),
+    }
+}
+```
+
+```python
+def quicksort(arr):
+    if len(arr) <= 1:
+        return arr
+    pivot = arr[len(arr) // 2]
+    left = [x for x in arr if x < pivot]
+    return quicksort(left) + [pivot] + quicksort(right)
+```
+
+## HTML Subset
+
+Press <kbd>Ctrl</kbd>+<kbd>C</kbd> to copy, <kbd>Ctrl</kbd>+<kbd>V</kbd> to paste.
+
+Chemical formula: H<sub>2</sub>O (water), CO<sub>2</sub> (carbon dioxide)
+
+Math notation: x<sup>2</sup> + y<sup>2</sup> = r<sup>2</sup>
+
+## Tables
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Basic MD | ✓ | Headings, lists, emphasis |
+| GFM | ✓ | Tasks, tables, footnotes |
+| Math | ✓ | LaTeX → Unicode |
+| Admonitions | ✓ | Note, tip, warning, etc. |
+
+## Mermaid Diagrams
+
+```mermaid
+graph LR
+    A[Input] --> B{Parse}
+    B --> C[Render]
+    C --> D[Display]
+```
+
+## Typography
+
+**Bold**, *italic*, ~~strikethrough~~, `inline code`
+
+Combined: ***bold italic***, **`bold code`**
+
+> \"The best way to predict the future is to invent it.\"
+> — Alan Kay
+
+---
+
+*Built with FrankenTUI \u{1f980}*
 ";
 
 const WRAP_MODES: &[WrapMode] = &[
@@ -94,11 +208,19 @@ const WRAP_MODES: &[WrapMode] = &[
 
 const ALIGNMENTS: &[Alignment] = &[Alignment::Left, Alignment::Center, Alignment::Right];
 
+/// Characters to advance per tick during streaming simulation.
+const STREAM_CHARS_PER_TICK: usize = 3;
+
 pub struct MarkdownRichText {
     md_scroll: u16,
     rendered_md: Text,
     wrap_index: usize,
     align_index: usize,
+    // Streaming simulation state
+    stream_position: usize,
+    stream_paused: bool,
+    stream_scroll: u16,
+    md_theme: MarkdownTheme,
 }
 
 impl Default for MarkdownRichText {
@@ -140,7 +262,7 @@ impl MarkdownRichText {
             admonition_warning: Style::new().fg(theme::accent::WARNING).bold(),
             admonition_caution: Style::new().fg(theme::accent::ERROR).bold(),
         };
-        let renderer = MarkdownRenderer::new(md_theme).rule_width(36);
+        let renderer = MarkdownRenderer::new(md_theme.clone()).rule_width(36);
         let rendered_md = renderer.render(SAMPLE_MARKDOWN);
 
         Self {
@@ -148,7 +270,46 @@ impl MarkdownRichText {
             rendered_md,
             wrap_index: 1, // Start at Word
             align_index: 0,
+            // Streaming starts active
+            stream_position: 0,
+            stream_paused: false,
+            stream_scroll: 0,
+            md_theme,
         }
+    }
+
+    /// Advance the streaming simulation by one tick.
+    fn tick_stream(&mut self) {
+        if self.stream_paused {
+            return;
+        }
+        let max_len = STREAMING_MARKDOWN.len();
+        if self.stream_position < max_len {
+            // Advance by a few characters, ensuring we land on a char boundary
+            let mut new_pos = self.stream_position.saturating_add(STREAM_CHARS_PER_TICK);
+            while new_pos < max_len && !STREAMING_MARKDOWN.is_char_boundary(new_pos) {
+                new_pos += 1;
+            }
+            self.stream_position = new_pos.min(max_len);
+        }
+    }
+
+    /// Get the current streaming fragment.
+    fn current_stream_fragment(&self) -> &str {
+        let end = self.stream_position.min(STREAMING_MARKDOWN.len());
+        &STREAMING_MARKDOWN[..end]
+    }
+
+    /// Render the streaming fragment using streaming-aware rendering.
+    fn render_stream_fragment(&self) -> Text {
+        let fragment = self.current_stream_fragment();
+        let renderer = MarkdownRenderer::new(self.md_theme.clone());
+        renderer.render_streaming(fragment)
+    }
+
+    /// Check if streaming is complete.
+    fn stream_complete(&self) -> bool {
+        self.stream_position >= STREAMING_MARKDOWN.len()
     }
 
     fn current_wrap(&self) -> WrapMode {
@@ -338,12 +499,97 @@ impl MarkdownRichText {
             .style(Style::new().fg(theme::fg::PRIMARY))
             .render(chunks[1], frame);
     }
+
+    fn render_streaming_panel(&self, frame: &mut Frame, area: Rect) {
+        // Build title with streaming status
+        let progress_pct =
+            (self.stream_position as f64 / STREAMING_MARKDOWN.len() as f64 * 100.0) as u8;
+        let status = if self.stream_complete() {
+            "Complete".to_string()
+        } else if self.stream_paused {
+            format!("Paused ({progress_pct}%)")
+        } else {
+            format!("Streaming... {progress_pct}%")
+        };
+
+        let title = format!("LLM Streaming Simulation | {status}");
+
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(title.as_str())
+            .title_alignment(Alignment::Center)
+            .style(Style::new().fg(theme::screen_accent::MARKDOWN));
+
+        let inner = block.inner(area);
+        block.render(area, frame);
+
+        if inner.is_empty() {
+            return;
+        }
+
+        // Split into content area and detection info
+        let chunks = Flex::vertical()
+            .constraints([Constraint::Min(5), Constraint::Fixed(3)])
+            .split(inner);
+
+        // Render the streaming markdown fragment
+        let stream_text = self.render_stream_fragment();
+        Paragraph::new(stream_text)
+            .wrap(WrapMode::Word)
+            .scroll((self.stream_scroll, 0))
+            .render(chunks[0], frame);
+
+        // Detection status panel
+        let fragment = self.current_stream_fragment();
+        let detection = is_likely_markdown(fragment);
+        let det_line1 = format!(
+            "Detection: {} indicators | {}",
+            detection.indicators,
+            if detection.is_confident() {
+                "Confident"
+            } else if detection.is_likely() {
+                "Likely"
+            } else {
+                "Uncertain"
+            }
+        );
+        let det_line2 = format!(
+            "Confidence: {:.0}% | Chars: {}/{}",
+            detection.confidence() * 100.0,
+            self.stream_position,
+            STREAMING_MARKDOWN.len()
+        );
+        let det_line3 = "Space: play/pause | r: restart | ↑↓: scroll stream";
+
+        let detection_text = Text::from_lines([
+            Line::from_spans([
+                Span::styled("  ", Style::new()),
+                Span::styled(det_line1, theme::muted()),
+            ]),
+            Line::from_spans([
+                Span::styled("  ", Style::new()),
+                Span::styled(det_line2, theme::muted()),
+            ]),
+            Line::from_spans([
+                Span::styled("  ", Style::new()),
+                Span::styled(det_line3, Style::new().fg(theme::accent::INFO).dim()),
+            ]),
+        ]);
+
+        Paragraph::new(detection_text).render(chunks[1], frame);
+    }
 }
 
 impl Screen for MarkdownRichText {
     type Message = Event;
 
     fn update(&mut self, event: &Event) -> Cmd<Self::Message> {
+        // Handle tick events for streaming
+        if let Event::Tick = event {
+            self.tick_stream();
+        }
+
         if let Event::Key(KeyEvent {
             code,
             kind: KeyEventKind::Press,
@@ -351,6 +597,7 @@ impl Screen for MarkdownRichText {
         }) = event
         {
             match code {
+                // Markdown panel scrolling
                 KeyCode::Up => {
                     self.md_scroll = self.md_scroll.saturating_sub(1);
                 }
@@ -366,11 +613,30 @@ impl Screen for MarkdownRichText {
                 KeyCode::Home => {
                     self.md_scroll = 0;
                 }
+                // Wrap/alignment controls
                 KeyCode::Char('w') => {
                     self.wrap_index = (self.wrap_index + 1) % WRAP_MODES.len();
                 }
                 KeyCode::Char('a') => {
                     self.align_index = (self.align_index + 1) % ALIGNMENTS.len();
+                }
+                // Streaming controls
+                KeyCode::Char(' ') => {
+                    self.stream_paused = !self.stream_paused;
+                }
+                KeyCode::Char('r') => {
+                    // Reset streaming
+                    self.stream_position = 0;
+                    self.stream_paused = false;
+                    self.stream_scroll = 0;
+                }
+                KeyCode::Char('[') => {
+                    // Scroll stream panel up
+                    self.stream_scroll = self.stream_scroll.saturating_sub(1);
+                }
+                KeyCode::Char(']') => {
+                    // Scroll stream panel down
+                    self.stream_scroll = self.stream_scroll.saturating_add(1);
                 }
                 _ => {}
             }
@@ -383,20 +649,29 @@ impl Screen for MarkdownRichText {
             return;
         }
 
+        // Main layout: three columns - left markdown, center streaming, right panels
         let cols = Flex::horizontal()
-            .constraints([Constraint::Percentage(50.0), Constraint::Percentage(50.0)])
+            .constraints([
+                Constraint::Percentage(35.0),
+                Constraint::Percentage(35.0),
+                Constraint::Percentage(30.0),
+            ])
             .split(area);
 
+        // Left: Full GFM markdown demo
         self.render_markdown_panel(frame, cols[0]);
 
+        // Center: Streaming simulation
+        self.render_streaming_panel(frame, cols[1]);
+
+        // Right: Auxiliary panels
         let right_rows = Flex::vertical()
             .constraints([
-                Constraint::Fixed(9),
+                Constraint::Fixed(8),
                 Constraint::Fixed(1),
-                Constraint::Min(8),
                 Constraint::Min(6),
             ])
-            .split(cols[1]);
+            .split(cols[2]);
 
         self.render_style_sampler(frame, right_rows[0]);
 
@@ -404,8 +679,7 @@ impl Screen for MarkdownRichText {
             .style(Style::new().fg(theme::fg::MUTED).dim())
             .render(right_rows[1], frame);
 
-        self.render_unicode_table(frame, right_rows[2]);
-        self.render_wrap_demo(frame, right_rows[3]);
+        self.render_wrap_demo(frame, right_rows[2]);
     }
 
     fn keybindings(&self) -> Vec<HelpEntry> {
@@ -415,20 +689,20 @@ impl Screen for MarkdownRichText {
                 action: "Scroll markdown",
             },
             HelpEntry {
-                key: "PgUp/PgDn",
-                action: "Scroll fast",
+                key: "[/]",
+                action: "Scroll stream",
             },
             HelpEntry {
-                key: "Home",
-                action: "Scroll to top",
+                key: "Space",
+                action: "Play/pause stream",
             },
             HelpEntry {
-                key: "w",
-                action: "Cycle wrap mode",
+                key: "r",
+                action: "Restart stream",
             },
             HelpEntry {
-                key: "a",
-                action: "Cycle alignment",
+                key: "w/a",
+                action: "Wrap/align mode",
             },
         ]
     }
@@ -472,9 +746,9 @@ mod tests {
             .map(|l| l.to_plain_text())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(plain.contains("FrankenTUI Markdown Demo"));
-        assert!(plain.contains("Typography Showcase"));
-        assert!(plain.contains("Code Block"));
+        assert!(plain.contains("GitHub-Flavored Markdown"));
+        assert!(plain.contains("Math & LaTeX Support"));
+        assert!(plain.contains("Task Lists"));
     }
 
     #[test]
@@ -487,12 +761,12 @@ mod tests {
             .map(|l| l.to_plain_text())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(plain.contains("fn main()"));
-        assert!(plain.contains("println!"));
+        assert!(plain.contains("fn fibonacci"));
+        assert!(plain.contains("def quicksort"));
     }
 
     #[test]
-    fn markdown_renders_list_bullets() {
+    fn markdown_renders_task_lists() {
         let screen = MarkdownRichText::new();
         let plain: String = screen
             .rendered_md
@@ -501,8 +775,9 @@ mod tests {
             .map(|l| l.to_plain_text())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(plain.contains("\u{2022} Styled text rendering"));
-        assert!(plain.contains("1. Parse markdown"));
+        // Task list items should have checkbox markers
+        assert!(plain.contains("Implement markdown parser"));
+        assert!(plain.contains("Add syntax highlighting"));
     }
 
     #[test]

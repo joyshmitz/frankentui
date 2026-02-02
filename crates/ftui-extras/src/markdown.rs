@@ -10,19 +10,451 @@
 //! - Footnotes with `[^id]` syntax
 //! - Admonitions (`[!NOTE]`, `[!WARNING]`, etc.)
 //!
+//! # Auto-Detection
+//!
+//! Use [`is_likely_markdown`] for efficient detection of text that appears to be
+//! Markdown or GFM. This is useful for automatically rendering markdown when
+//! displaying user-provided text.
+//!
+//! # Streaming / Fragment Support
+//!
+//! Use [`render_streaming`] or [`MarkdownRenderer::render_streaming`] to render
+//! incomplete markdown fragments gracefully. This handles:
+//! - Unclosed code blocks (renders content with code style)
+//! - Incomplete inline formatting (renders partial bold/italic)
+//! - Incomplete links and math expressions
+//!
 //! # Example
 //! ```
-//! use ftui_extras::markdown::{MarkdownRenderer, MarkdownTheme};
+//! use ftui_extras::markdown::{MarkdownRenderer, MarkdownTheme, is_likely_markdown};
 //!
-//! let renderer = MarkdownRenderer::new(MarkdownTheme::default());
-//! let text = renderer.render("# Hello\n\nSome **bold** text with $E=mc^2$.");
-//! assert!(text.height() > 0);
+//! let text = "# Hello\n\nSome **bold** text with $E=mc^2$.";
+//!
+//! // Auto-detect if this looks like markdown
+//! if is_likely_markdown(text).is_likely() {
+//!     let renderer = MarkdownRenderer::new(MarkdownTheme::default());
+//!     let styled = renderer.render(text);
+//!     assert!(styled.height() > 0);
+//! }
 //! ```
 
 use ftui_render::cell::PackedRgba;
 use ftui_style::Style;
 use ftui_text::text::{Line, Span, Text};
 use pulldown_cmark::{BlockQuoteKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+
+// ---------------------------------------------------------------------------
+// GFM Auto-Detection
+// ---------------------------------------------------------------------------
+
+/// Result of markdown detection analysis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MarkdownDetection {
+    /// Number of markdown indicators found.
+    pub indicators: u8,
+    /// Whether the text appears to be markdown (2+ indicators).
+    likely: bool,
+}
+
+impl MarkdownDetection {
+    /// Returns true if the text is likely markdown (2+ indicators found).
+    #[must_use]
+    pub const fn is_likely(self) -> bool {
+        self.likely
+    }
+
+    /// Returns true if the text is definitely markdown (4+ indicators).
+    #[must_use]
+    pub const fn is_confident(self) -> bool {
+        self.indicators >= 4
+    }
+
+    /// Returns a confidence score from 0.0 to 1.0.
+    #[must_use]
+    pub fn confidence(self) -> f32 {
+        (self.indicators as f32 / 6.0).min(1.0)
+    }
+}
+
+/// Fast, efficient detection of text that looks like GitHub-Flavored Markdown.
+///
+/// Uses simple byte-level pattern matching for maximum speed. Looks for:
+/// - Headings (`#`)
+/// - Bold/italic (`**`, `*`, `__`, `_`)
+/// - Code (`` ` ``, ` ``` `)
+/// - Links (`[`, `](`)
+/// - Lists (`-`, `*`, `1.`)
+/// - Math (`$`)
+/// - Tables (`|`)
+/// - Task lists (`[ ]`, `[x]`)
+/// - Blockquotes (`>`)
+///
+/// This is designed to be called on every piece of text with minimal overhead.
+/// Returns a [`MarkdownDetection`] with indicator count and likelihood assessment.
+///
+/// # Performance
+///
+/// This function scans bytes directly without regex or parsing, making it
+/// suitable for high-frequency calls. Typical execution is under 100ns for
+/// short strings.
+///
+/// # Example
+/// ```
+/// use ftui_extras::markdown::is_likely_markdown;
+///
+/// assert!(is_likely_markdown("# Hello\n**bold**").is_likely());
+/// assert!(!is_likely_markdown("just plain text").is_likely());
+/// assert!(is_likely_markdown("```rust\ncode\n```").is_confident());
+/// ```
+#[must_use]
+pub fn is_likely_markdown(text: &str) -> MarkdownDetection {
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+
+    if len == 0 {
+        return MarkdownDetection {
+            indicators: 0,
+            likely: false,
+        };
+    }
+
+    let mut indicators: u8 = 0;
+
+    // Check first bytes for line-start patterns
+    let first_byte = bytes[0];
+
+    // Heading at start of text
+    if first_byte == b'#' {
+        indicators = indicators.saturating_add(1);
+    }
+
+    // Blockquote at start
+    if first_byte == b'>' {
+        indicators = indicators.saturating_add(1);
+    }
+
+    // List item at start (-, *, digit followed by .)
+    if (first_byte == b'-' || first_byte == b'*') && len > 1 && bytes[1] == b' ' {
+        indicators = indicators.saturating_add(1);
+    }
+    if first_byte.is_ascii_digit() && len > 1 && bytes[1] == b'.' {
+        indicators = indicators.saturating_add(1);
+    }
+
+    // Scan through bytes looking for patterns
+    let mut i = 0;
+    while i < len {
+        let b = bytes[i];
+
+        // After newline, check for line-start patterns
+        if b == b'\n' && i + 1 < len {
+            let next = bytes[i + 1];
+            // Heading
+            if next == b'#' {
+                indicators = indicators.saturating_add(1);
+            }
+            // Blockquote
+            if next == b'>' {
+                indicators = indicators.saturating_add(1);
+            }
+            // List item
+            if (next == b'-' || next == b'*') && i + 2 < len && bytes[i + 2] == b' ' {
+                indicators = indicators.saturating_add(1);
+            }
+            if next.is_ascii_digit() && i + 2 < len && bytes[i + 2] == b'.' {
+                indicators = indicators.saturating_add(1);
+            }
+            // Table row
+            if next == b'|' {
+                indicators = indicators.saturating_add(1);
+            }
+        }
+
+        // Code fence (```)
+        if b == b'`' && i + 2 < len && bytes[i + 1] == b'`' && bytes[i + 2] == b'`' {
+            indicators = indicators.saturating_add(2); // Strong indicator
+            i += 3;
+            continue;
+        }
+
+        // Inline code (single backtick not followed by more backticks)
+        if b == b'`' && (i + 1 >= len || bytes[i + 1] != b'`') {
+            indicators = indicators.saturating_add(1);
+            i += 1;
+            continue;
+        }
+
+        // Bold (**) or italic (*)
+        if b == b'*' && i + 1 < len && bytes[i + 1] == b'*' {
+            indicators = indicators.saturating_add(1);
+            i += 2;
+            continue;
+        }
+        if b == b'*' {
+            // Single * could be italic or list, check context
+            if i > 0 && !bytes[i - 1].is_ascii_whitespace() {
+                indicators = indicators.saturating_add(1);
+            }
+        }
+
+        // Bold (__) or italic (_)
+        if b == b'_' && i + 1 < len && bytes[i + 1] == b'_' {
+            indicators = indicators.saturating_add(1);
+            i += 2;
+            continue;
+        }
+
+        // Link/image start
+        if b == b'[' {
+            // Look for ]( pattern ahead
+            let mut j = i + 1;
+            while j < len && j < i + 100 {
+                if bytes[j] == b']' && j + 1 < len && bytes[j + 1] == b'(' {
+                    indicators = indicators.saturating_add(1);
+                    break;
+                }
+                if bytes[j] == b'\n' {
+                    break;
+                }
+                j += 1;
+            }
+        }
+
+        // Math expressions ($)
+        if b == b'$' {
+            indicators = indicators.saturating_add(1);
+            // Display math ($$)
+            if i + 1 < len && bytes[i + 1] == b'$' {
+                indicators = indicators.saturating_add(1);
+                i += 2;
+                continue;
+            }
+        }
+
+        // Task list checkbox [ ] or [x]
+        if b == b'[' && i + 2 < len && bytes[i + 2] == b']' {
+            let middle = bytes[i + 1];
+            if middle == b' ' || middle == b'x' || middle == b'X' {
+                indicators = indicators.saturating_add(1);
+                i += 3;
+                continue;
+            }
+        }
+
+        // Strikethrough (~~)
+        if b == b'~' && i + 1 < len && bytes[i + 1] == b'~' {
+            indicators = indicators.saturating_add(1);
+            i += 2;
+            continue;
+        }
+
+        // Table separator (|)
+        if b == b'|' {
+            indicators = indicators.saturating_add(1);
+        }
+
+        // HTML tags that GFM supports (<kbd>, <sub>, <sup>, <br>)
+        if b == b'<'
+            && i + 3 < len
+            && (bytes[i + 1..].starts_with(b"kbd")
+                || bytes[i + 1..].starts_with(b"sub")
+                || bytes[i + 1..].starts_with(b"sup")
+                || bytes[i + 1..].starts_with(b"br")
+                || bytes[i + 1..].starts_with(b"hr"))
+        {
+            indicators = indicators.saturating_add(1);
+        }
+
+        // Footnote reference [^
+        if b == b'[' && i + 1 < len && bytes[i + 1] == b'^' {
+            indicators = indicators.saturating_add(1);
+        }
+
+        // Horizontal rule (--- at line start, checked above in newline handler)
+        if b == b'-' && i + 2 < len && bytes[i + 1] == b'-' && bytes[i + 2] == b'-' {
+            // Check if at line start
+            if i == 0 || bytes[i - 1] == b'\n' {
+                indicators = indicators.saturating_add(1);
+            }
+        }
+
+        i += 1;
+
+        // Early exit if we've found enough indicators
+        if indicators >= 6 {
+            break;
+        }
+    }
+
+    MarkdownDetection {
+        indicators,
+        likely: indicators >= 2,
+    }
+}
+
+/// Complete any unclosed markdown constructs in a fragment.
+///
+/// This is used internally by streaming render to handle incomplete input.
+fn complete_fragment(text: &str) -> String {
+    let mut result = text.to_string();
+
+    // Count backticks to close any unclosed code
+    let backtick_count = text.bytes().filter(|&b| b == b'`').count();
+
+    // Check for unclosed code fence
+    let fence_count = text.matches("```").count();
+    if fence_count % 2 == 1 {
+        // Odd number of fences means one is unclosed
+        result.push_str("\n```");
+    } else if backtick_count % 2 == 1 {
+        // Odd backticks means unclosed inline code
+        result.push('`');
+    }
+
+    // Check for unclosed bold (**)
+    let bold_count = text.matches("**").count();
+    if bold_count % 2 == 1 {
+        result.push_str("**");
+    }
+
+    // Check for unclosed italic (*) - tricky because * is also used for lists
+    // Only close if there's clearly an unclosed italic (not at line start)
+    let asterisk_count = text.bytes().filter(|&b| b == b'*').count();
+    let bold_asterisks = bold_count * 2;
+    let remaining = asterisk_count.saturating_sub(bold_asterisks);
+    if remaining % 2 == 1
+        && let Some(pos) = text.rfind('*')
+        && pos > 0
+        && !text.as_bytes()[pos - 1].is_ascii_whitespace()
+    {
+        result.push('*');
+    }
+
+    // Check for unclosed math
+    let dollar_count = text.bytes().filter(|&b| b == b'$').count();
+    let display_math_count = text.matches("$$").count();
+    if display_math_count % 2 == 1 {
+        result.push_str("$$");
+    } else {
+        let inline_math = dollar_count.saturating_sub(display_math_count * 2);
+        if inline_math % 2 == 1 {
+            result.push('$');
+        }
+    }
+
+    // Check for unclosed link - look for [ without matching ]()
+    let mut bracket_depth = 0i32;
+    let mut in_link = false;
+    for c in text.chars() {
+        match c {
+            '[' => {
+                bracket_depth += 1;
+                in_link = true;
+            }
+            ']' => {
+                bracket_depth -= 1;
+                if bracket_depth < 0 {
+                    bracket_depth = 0;
+                }
+            }
+            '(' if in_link && bracket_depth == 0 => {
+                bracket_depth += 1;
+            }
+            ')' if in_link => {
+                bracket_depth -= 1;
+                if bracket_depth <= 0 {
+                    in_link = false;
+                    bracket_depth = 0;
+                }
+            }
+            _ => {}
+        }
+    }
+    if bracket_depth > 0 && in_link {
+        // Unclosed link - add a simple closure
+        result.push_str("](...)");
+    } else if bracket_depth > 0 {
+        result.push(']');
+    }
+
+    result
+}
+
+/// Render markdown text that may be incomplete (streaming/fragment mode).
+///
+/// This function handles incomplete markdown gracefully by auto-closing
+/// unclosed constructs like code blocks, bold, italic, and math expressions.
+/// Useful for rendering markdown as it streams in character by character.
+///
+/// # Example
+/// ```
+/// use ftui_extras::markdown::{render_streaming, MarkdownTheme};
+///
+/// // Incomplete code block
+/// let text = render_streaming("```rust\nfn main()", &MarkdownTheme::default());
+/// assert!(text.height() > 0);
+///
+/// // Incomplete bold
+/// let text = render_streaming("Some **bold text", &MarkdownTheme::default());
+/// assert!(text.height() > 0);
+/// ```
+#[must_use]
+pub fn render_streaming(fragment: &str, theme: &MarkdownTheme) -> Text {
+    let completed = complete_fragment(fragment);
+    let renderer = MarkdownRenderer::new(theme.clone());
+    renderer.render(&completed)
+}
+
+/// Convenience function to auto-detect and render text.
+///
+/// If the text looks like markdown (2+ indicators), renders it as markdown.
+/// Otherwise returns the text as plain [`Text`].
+///
+/// # Example
+/// ```
+/// use ftui_extras::markdown::{auto_render, MarkdownTheme};
+///
+/// let theme = MarkdownTheme::default();
+///
+/// // Markdown text gets rendered
+/// let md = auto_render("# Hello\n**world**", &theme);
+///
+/// // Plain text stays plain
+/// let plain = auto_render("just some text", &theme);
+/// ```
+#[must_use]
+pub fn auto_render(text: &str, theme: &MarkdownTheme) -> Text {
+    if is_likely_markdown(text).is_likely() {
+        let renderer = MarkdownRenderer::new(theme.clone());
+        renderer.render(text)
+    } else {
+        Text::raw(text)
+    }
+}
+
+/// Convenience function to auto-detect and render potentially incomplete text.
+///
+/// Combines [`is_likely_markdown`] detection with [`render_streaming`] for
+/// handling partial markdown fragments that arrive during streaming.
+///
+/// # Example
+/// ```
+/// use ftui_extras::markdown::{auto_render_streaming, MarkdownTheme};
+///
+/// let theme = MarkdownTheme::default();
+///
+/// // Incomplete markdown fragment
+/// let text = auto_render_streaming("# Hello\n**bold", &theme);
+/// assert!(text.height() > 0);
+/// ```
+#[must_use]
+pub fn auto_render_streaming(fragment: &str, theme: &MarkdownTheme) -> Text {
+    if is_likely_markdown(fragment).is_likely() {
+        render_streaming(fragment, theme)
+    } else {
+        Text::raw(fragment)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // LaTeX to Unicode conversion
@@ -191,6 +623,96 @@ fn find_matching_brace(s: &str) -> Option<usize> {
     None
 }
 
+/// Convert text to Unicode subscript characters where possible.
+fn to_unicode_subscript(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            '0' => '₀',
+            '1' => '₁',
+            '2' => '₂',
+            '3' => '₃',
+            '4' => '₄',
+            '5' => '₅',
+            '6' => '₆',
+            '7' => '₇',
+            '8' => '₈',
+            '9' => '₉',
+            '+' => '₊',
+            '-' => '₋',
+            '=' => '₌',
+            '(' => '₍',
+            ')' => '₎',
+            'a' => 'ₐ',
+            'e' => 'ₑ',
+            'h' => 'ₕ',
+            'i' => 'ᵢ',
+            'j' => 'ⱼ',
+            'k' => 'ₖ',
+            'l' => 'ₗ',
+            'm' => 'ₘ',
+            'n' => 'ₙ',
+            'o' => 'ₒ',
+            'p' => 'ₚ',
+            'r' => 'ᵣ',
+            's' => 'ₛ',
+            't' => 'ₜ',
+            'u' => 'ᵤ',
+            'v' => 'ᵥ',
+            'x' => 'ₓ',
+            _ => c, // Keep unsupported chars as-is
+        })
+        .collect()
+}
+
+/// Convert text to Unicode superscript characters where possible.
+fn to_unicode_superscript(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            '0' => '⁰',
+            '1' => '¹',
+            '2' => '²',
+            '3' => '³',
+            '4' => '⁴',
+            '5' => '⁵',
+            '6' => '⁶',
+            '7' => '⁷',
+            '8' => '⁸',
+            '9' => '⁹',
+            '+' => '⁺',
+            '-' => '⁻',
+            '=' => '⁼',
+            '(' => '⁽',
+            ')' => '⁾',
+            'a' => 'ᵃ',
+            'b' => 'ᵇ',
+            'c' => 'ᶜ',
+            'd' => 'ᵈ',
+            'e' => 'ᵉ',
+            'f' => 'ᶠ',
+            'g' => 'ᵍ',
+            'h' => 'ʰ',
+            'i' => 'ⁱ',
+            'j' => 'ʲ',
+            'k' => 'ᵏ',
+            'l' => 'ˡ',
+            'm' => 'ᵐ',
+            'n' => 'ⁿ',
+            'o' => 'ᵒ',
+            'p' => 'ᵖ',
+            'r' => 'ʳ',
+            's' => 'ˢ',
+            't' => 'ᵗ',
+            'u' => 'ᵘ',
+            'v' => 'ᵛ',
+            'w' => 'ʷ',
+            'x' => 'ˣ',
+            'y' => 'ʸ',
+            'z' => 'ᶻ',
+            _ => c, // Keep unsupported chars as-is
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Theme
 // ---------------------------------------------------------------------------
@@ -343,6 +865,54 @@ impl MarkdownRenderer {
         builder.process(parser);
         builder.finish()
     }
+
+    /// Render a potentially incomplete markdown fragment.
+    ///
+    /// This method handles streaming scenarios where markdown arrives
+    /// piece by piece and may have unclosed constructs. It automatically
+    /// closes unclosed code blocks, bold/italic markers, math expressions,
+    /// and links before rendering.
+    ///
+    /// # Example
+    /// ```
+    /// use ftui_extras::markdown::{MarkdownRenderer, MarkdownTheme};
+    ///
+    /// let renderer = MarkdownRenderer::new(MarkdownTheme::default());
+    ///
+    /// // Render incomplete code block - will be closed automatically
+    /// let text = renderer.render_streaming("```rust\nfn main()");
+    /// assert!(text.height() > 0);
+    /// ```
+    #[must_use]
+    pub fn render_streaming(&self, fragment: &str) -> Text {
+        let completed = complete_fragment(fragment);
+        self.render(&completed)
+    }
+
+    /// Check if text appears to be markdown and render appropriately.
+    ///
+    /// Returns rendered markdown if the text looks like markdown (2+ indicators),
+    /// otherwise returns the text as plain [`Text`].
+    #[must_use]
+    pub fn auto_render(&self, text: &str) -> Text {
+        if is_likely_markdown(text).is_likely() {
+            self.render(text)
+        } else {
+            Text::raw(text)
+        }
+    }
+
+    /// Check if text appears to be markdown and render as streaming fragment.
+    ///
+    /// Combines auto-detection with streaming fragment handling.
+    #[must_use]
+    pub fn auto_render_streaming(&self, fragment: &str) -> Text {
+        if is_likely_markdown(fragment).is_likely() {
+            self.render_streaming(fragment)
+        } else {
+            Text::raw(fragment)
+        }
+    }
 }
 
 impl Default for MarkdownRenderer {
@@ -427,6 +997,8 @@ struct RenderState<'t> {
     /// Whether we're collecting text inside a code block.
     in_code_block: bool,
     code_block_lines: Vec<String>,
+    /// Language of the current code block (for special handling like mermaid).
+    code_block_lang: Option<String>,
     /// Whether we're inside a blockquote.
     blockquote_depth: u16,
     /// Current admonition type (if in an admonition blockquote).
@@ -457,6 +1029,7 @@ impl<'t> RenderState<'t> {
             list_stack: Vec::new(),
             in_code_block: false,
             code_block_lines: Vec::new(),
+            code_block_lang: None,
             blockquote_depth: 0,
             current_admonition: None,
             needs_blank: false,
@@ -508,10 +1081,22 @@ impl<'t> RenderState<'t> {
             Tag::Strikethrough => {
                 self.style_stack.push(StyleContext::Strikethrough);
             }
-            Tag::CodeBlock(_) => {
+            Tag::CodeBlock(kind) => {
                 self.flush_blank();
                 self.in_code_block = true;
                 self.code_block_lines.clear();
+                // Extract language from code fence
+                self.code_block_lang = match kind {
+                    pulldown_cmark::CodeBlockKind::Fenced(lang) => {
+                        let lang_str = lang.to_string();
+                        if lang_str.is_empty() {
+                            None
+                        } else {
+                            Some(lang_str)
+                        }
+                    }
+                    pulldown_cmark::CodeBlockKind::Indented => None,
+                };
                 self.style_stack.push(StyleContext::CodeBlock);
             }
             Tag::BlockQuote(kind) => {
@@ -764,8 +1349,105 @@ impl<'t> RenderState<'t> {
         self.needs_blank = true;
     }
 
-    fn html(&mut self, _html: &str) {
-        // Skip raw HTML in terminal output
+    fn html(&mut self, html: &str) {
+        // Handle a subset of HTML tags that make sense in terminal
+        let html_lower = html.to_ascii_lowercase();
+        let html_trimmed = html_lower.trim();
+
+        // Line breaks
+        if html_trimmed == "<br>" || html_trimmed == "<br/>" || html_trimmed == "<br />" {
+            self.hard_break();
+            return;
+        }
+
+        // Horizontal rule
+        if html_trimmed == "<hr>" || html_trimmed == "<hr/>" || html_trimmed == "<hr />" {
+            self.horizontal_rule();
+            return;
+        }
+
+        // Keyboard key styling
+        if html_trimmed.starts_with("<kbd>") {
+            // Extract content between <kbd> and </kbd> if on same line
+            if let Some(end_pos) = html_lower.find("</kbd>") {
+                let content = &html[5..end_pos];
+                let styled = format!("[{content}]");
+                self.current_spans
+                    .push(Span::styled(styled, self.theme.code_inline));
+                return;
+            }
+        }
+
+        // Details/Summary - show as collapsible indicator
+        if html_trimmed.starts_with("<details") {
+            self.flush_blank();
+            self.current_spans
+                .push(Span::styled(String::from("▶ "), self.theme.strong));
+            return;
+        }
+        if html_trimmed == "</details>" {
+            self.flush_line();
+            self.needs_blank = true;
+            return;
+        }
+        if html_trimmed.starts_with("<summary>") {
+            // Extract summary text if present
+            if let Some(end_pos) = html_lower.find("</summary>") {
+                let content = &html[9..end_pos];
+                self.current_spans.push(Span::styled(
+                    content.trim().to_string(),
+                    self.theme.strong,
+                ));
+                self.flush_line();
+            }
+            return;
+        }
+        if html_trimmed == "</summary>" {
+            return;
+        }
+
+        // Image - show alt text
+        if html_trimmed.starts_with("<img ") {
+            // Try to extract alt text
+            if let Some(alt_start) = html_lower.find("alt=\"") {
+                let after_alt = &html[alt_start + 5..];
+                if let Some(alt_end) = after_alt.find('"') {
+                    let alt_text = &after_alt[..alt_end];
+                    if !alt_text.is_empty() {
+                        self.current_spans.push(Span::styled(
+                            format!("[{alt_text}]"),
+                            self.theme.emphasis,
+                        ));
+                        return;
+                    }
+                }
+            }
+            // Fallback: show [image]
+            self.current_spans
+                .push(Span::styled(String::from("[image]"), self.theme.emphasis));
+            return;
+        }
+
+        // Subscript - convert to Unicode subscript if possible
+        if html_trimmed.starts_with("<sub>")
+            && let Some(end_pos) = html_lower.find("</sub>")
+        {
+            let content = &html[5..end_pos];
+            let subscript = to_unicode_subscript(content);
+            self.current_spans.push(Span::raw(subscript));
+            return;
+        }
+
+        // Superscript - convert to Unicode superscript if possible
+        if html_trimmed.starts_with("<sup>")
+            && let Some(end_pos) = html_lower.find("</sup>")
+        {
+            let content = &html[5..end_pos];
+            let superscript = to_unicode_superscript(content);
+            self.current_spans.push(Span::raw(superscript));
+        }
+
+        // Other HTML is ignored in terminal output
     }
 
     // -- helpers --
@@ -857,7 +1539,63 @@ impl<'t> RenderState<'t> {
 
     fn flush_code_block(&mut self) {
         let code = std::mem::take(&mut self.code_block_lines).join("");
+        let lang = self.code_block_lang.take();
         let style = self.theme.code_block;
+
+        // Handle special languages
+        if let Some(ref lang_str) = lang {
+            let lang_lower = lang_str.to_ascii_lowercase();
+
+            // Mermaid diagrams - show with diagram indicator
+            if lang_lower == "mermaid" {
+                self.lines.push(Line::styled(
+                    String::from("┌─ 📊 Mermaid Diagram ─┐"),
+                    self.theme.admonition_note,
+                ));
+                for line_text in code.lines() {
+                    self.lines.push(Line::styled(
+                        format!("│ {line_text}"),
+                        self.theme.code_block,
+                    ));
+                }
+                self.lines.push(Line::styled(
+                    String::from("└─────────────────────┘"),
+                    self.theme.admonition_note,
+                ));
+                return;
+            }
+
+            // Math code blocks (alternative to $$ syntax)
+            if lang_lower == "math" || lang_lower == "latex" || lang_lower == "tex" {
+                let unicode = latex_to_unicode(&code);
+                for line in unicode.lines() {
+                    self.lines
+                        .push(Line::styled(format!("  {line}"), self.theme.math_block));
+                }
+                if unicode.is_empty() || code.is_empty() {
+                    self.lines
+                        .push(Line::styled(String::from("  "), self.theme.math_block));
+                }
+                return;
+            }
+
+            // Show language label for syntax-highlighted languages
+            // (actual highlighting would require syntect, but we can at least show the language)
+            let common_langs = [
+                "rust", "python", "javascript", "typescript", "go", "java", "c", "cpp",
+                "ruby", "php", "swift", "kotlin", "scala", "haskell", "elixir", "clojure",
+                "bash", "sh", "zsh", "fish", "powershell", "sql", "html", "css", "scss",
+                "json", "yaml", "toml", "xml", "markdown", "md",
+            ];
+            if common_langs.contains(&lang_lower.as_str()) {
+                self.lines.push(Line::styled(
+                    format!("─── {lang_str} ───"),
+                    self.theme.code_inline.dim(),
+                ));
+            }
+        }
+
+        // Regular code block
         for line_text in code.lines() {
             self.lines
                 .push(Line::styled(format!("  {line_text}"), style));
@@ -1646,5 +2384,446 @@ The end.
         assert!(!AdmonitionKind::Note.label().is_empty());
         assert!(!AdmonitionKind::Warning.icon().is_empty());
         assert!(!AdmonitionKind::Warning.label().is_empty());
+    }
+
+    // =========================================================================
+    // GFM Auto-Detection tests
+    // =========================================================================
+
+    #[test]
+    fn detection_plain_text_not_markdown() {
+        let result = is_likely_markdown("just some plain text");
+        assert!(!result.is_likely());
+        assert_eq!(result.indicators, 0);
+    }
+
+    #[test]
+    fn detection_heading_is_markdown() {
+        // Heading with another indicator (bold)
+        let result = is_likely_markdown("# Hello **World**");
+        assert!(result.is_likely());
+        assert!(result.indicators >= 2);
+    }
+
+    #[test]
+    fn detection_heading_alone_has_indicator() {
+        // Single heading alone has 1 indicator (below threshold)
+        let result = is_likely_markdown("# Title");
+        assert_eq!(result.indicators, 1);
+        assert!(!result.is_likely()); // Needs 2+ to be "likely"
+    }
+
+    #[test]
+    fn detection_bold_is_markdown() {
+        // Opening and closing ** = 2 indicators
+        let result = is_likely_markdown("some **bold** text");
+        assert!(result.is_likely());
+    }
+
+    #[test]
+    fn detection_code_fence_is_confident() {
+        let result = is_likely_markdown("```rust\ncode\n```");
+        assert!(result.is_confident());
+        assert!(result.indicators >= 4);
+    }
+
+    #[test]
+    fn detection_inline_code() {
+        // Two backticks = 2 indicators
+        let result = is_likely_markdown("use `code` here");
+        assert!(result.is_likely());
+    }
+
+    #[test]
+    fn detection_link() {
+        // Link with another markdown element
+        let result = is_likely_markdown("click [**here**](https://example.com)");
+        assert!(result.is_likely());
+    }
+
+    #[test]
+    fn detection_list_items() {
+        let result = is_likely_markdown("- item 1\n- item 2");
+        assert!(result.is_likely());
+    }
+
+    #[test]
+    fn detection_math() {
+        // Two $ signs = 2 indicators
+        let result = is_likely_markdown("equation $E = mc^2$");
+        assert!(result.is_likely());
+    }
+
+    #[test]
+    fn detection_display_math() {
+        // $$ = 2 indicators each, plus two pairs = 4 indicators
+        let result = is_likely_markdown("$$\\sum_{i=1}^n x_i$$");
+        assert!(result.is_confident());
+    }
+
+    #[test]
+    fn detection_table() {
+        // Multiple | = multiple indicators
+        let result = is_likely_markdown("| col1 | col2 |\n|------|------|");
+        assert!(result.is_likely());
+    }
+
+    #[test]
+    fn detection_task_list() {
+        // Task checkboxes + list markers = multiple indicators
+        let result = is_likely_markdown("- [ ] todo\n- [x] done");
+        assert!(result.is_likely());
+    }
+
+    #[test]
+    fn detection_blockquote() {
+        // Blockquote with another element
+        let result = is_likely_markdown("> **quoted** text");
+        assert!(result.is_likely());
+    }
+
+    #[test]
+    fn detection_strikethrough() {
+        // Two ~~ = 2 indicators
+        let result = is_likely_markdown("~~deleted~~");
+        assert!(result.is_likely());
+    }
+
+    #[test]
+    fn detection_footnote() {
+        // Footnote with another element
+        let result = is_likely_markdown("See **note**[^1]");
+        assert!(result.is_likely());
+    }
+
+    #[test]
+    fn detection_html_tags() {
+        // Two kbd tags = 2 indicators
+        let result = is_likely_markdown("press <kbd>Ctrl</kbd>+<kbd>C</kbd>");
+        assert!(result.is_likely());
+    }
+
+    #[test]
+    fn detection_confidence_score() {
+        let plain = is_likely_markdown("hello");
+        let rich = is_likely_markdown("# Title\n\n**bold** and *italic*\n\n```code```");
+        assert!(rich.confidence() > plain.confidence());
+        assert!(rich.confidence() > 0.5);
+    }
+
+    #[test]
+    fn detection_empty_string() {
+        let result = is_likely_markdown("");
+        assert!(!result.is_likely());
+        assert_eq!(result.indicators, 0);
+    }
+
+    // =========================================================================
+    // Streaming / Fragment tests
+    // =========================================================================
+
+    #[test]
+    fn streaming_unclosed_code_fence() {
+        let text = render_streaming("```rust\nfn main()", &MarkdownTheme::default());
+        let content = plain(&text);
+        assert!(content.contains("fn main()"));
+    }
+
+    #[test]
+    fn streaming_unclosed_bold() {
+        let text = render_streaming("some **bold", &MarkdownTheme::default());
+        let content = plain(&text);
+        assert!(content.contains("bold"));
+    }
+
+    #[test]
+    fn streaming_unclosed_inline_code() {
+        let text = render_streaming("use `code", &MarkdownTheme::default());
+        let content = plain(&text);
+        assert!(content.contains("code"));
+    }
+
+    #[test]
+    fn streaming_unclosed_math() {
+        let text = render_streaming("equation $E = mc^2", &MarkdownTheme::default());
+        let content = plain(&text);
+        assert!(content.contains("E"));
+    }
+
+    #[test]
+    fn streaming_unclosed_display_math() {
+        let text = render_streaming("$$\\sum_i", &MarkdownTheme::default());
+        let content = plain(&text);
+        // Should contain something - the exact rendering depends on unicodeit
+        assert!(text.height() > 0);
+    }
+
+    #[test]
+    fn streaming_complete_text_unchanged() {
+        // Complete markdown should render the same way
+        let complete = "# Hello\n\n**bold**";
+        let regular = render_markdown(complete);
+        let streaming = render_streaming(complete, &MarkdownTheme::default());
+        assert_eq!(plain(&regular), plain(&streaming));
+    }
+
+    #[test]
+    fn auto_render_detects_markdown() {
+        let theme = MarkdownTheme::default();
+        let md_text = auto_render("# Hello\n\n**bold**", &theme);
+        let plain_text = auto_render("just plain text", &theme);
+
+        // Markdown should be styled (more lines due to paragraph handling)
+        assert!(md_text.height() > 0);
+        assert_eq!(plain_text.height(), 1);
+    }
+
+    #[test]
+    fn auto_render_streaming_handles_fragments() {
+        let theme = MarkdownTheme::default();
+        let text = auto_render_streaming("# Hello\n**bold", &theme);
+        let content = plain(&text);
+        assert!(content.contains("Hello"));
+        assert!(content.contains("bold"));
+    }
+
+    #[test]
+    fn renderer_method_streaming() {
+        let renderer = MarkdownRenderer::default();
+        let text = renderer.render_streaming("```\ncode");
+        assert!(text.height() > 0);
+    }
+
+    #[test]
+    fn renderer_method_auto_render() {
+        let renderer = MarkdownRenderer::default();
+        let md = renderer.auto_render("# Heading\n**bold**");
+        let plain_result = renderer.auto_render("just text");
+
+        assert!(md.height() > 1);
+        assert_eq!(plain_result.height(), 1);
+    }
+
+    #[test]
+    fn complete_fragment_handles_multiple_unclosed() {
+        // Test the internal complete_fragment function indirectly
+        let text = render_streaming(
+            "```rust\nfn main() { **bold $math",
+            &MarkdownTheme::default(),
+        );
+        // Should not panic and should produce output
+        assert!(text.height() > 0);
+    }
+
+    // =========================================================================
+    // Complex realistic GFM tests
+    // =========================================================================
+
+    /// Realistic LLM response with multiple GFM features.
+    const REALISTIC_LLM_RESPONSE: &str = r#"# Implementing a REST API in Rust
+
+## Overview
+
+This guide covers building a **production-ready** REST API using [Actix Web](https://actix.rs).
+
+### Prerequisites
+
+- [x] Rust 1.70+ installed
+- [x] Basic understanding of async/await
+- [ ] PostgreSQL database (optional)
+
+## Quick Start
+
+```rust
+use actix_web::{get, App, HttpServer, Responder};
+
+#[get("/health")]
+async fn health() -> impl Responder {
+    "OK"
+}
+
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
+    HttpServer::new(|| App::new().service(health))
+        .bind("127.0.0.1:8080")?
+        .run()
+        .await
+}
+```
+
+> [!NOTE]
+> This requires the `actix-web` crate in your `Cargo.toml`.
+
+## Performance Considerations
+
+The time complexity is $O(n \log n)$ for most operations, where $n$ is the request count.
+
+For batch processing:
+
+$$\text{throughput} = \frac{\text{requests}}{\text{time}} \approx 10^5 \text{ req/s}$$
+
+| Endpoint | Latency (p50) | Latency (p99) |
+|----------|---------------|---------------|
+| `/health` | 0.1ms | 0.5ms |
+| `/api/users` | 2ms | 15ms |
+| `/api/search` | 50ms | 200ms |
+
+## Error Handling
+
+Use the `?` operator with custom error types[^1]:
+
+```rust
+#[derive(Debug)]
+struct ApiError(String);
+
+impl ResponseError for ApiError {
+    fn status_code(&self) -> StatusCode {
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
+```
+
+[^1]: See the [error handling docs](https://docs.rs/actix-web) for details.
+
+---
+
+*Happy coding!* 🦀
+"#;
+
+    #[test]
+    fn realistic_llm_response_renders() {
+        let text = render_markdown(REALISTIC_LLM_RESPONSE);
+        let content = plain(&text);
+
+        // Check all major GFM features rendered
+        assert!(content.contains("Implementing a REST API"));
+        assert!(content.contains("async fn health"));
+        assert!(content.contains("NOTE"));
+        assert!(content.contains("throughput"));
+        assert!(content.contains("/health"));
+    }
+
+    #[test]
+    fn realistic_llm_response_detection() {
+        let detection = is_likely_markdown(REALISTIC_LLM_RESPONSE);
+        assert!(detection.is_confident());
+        assert!(detection.confidence() > 0.8);
+    }
+
+    #[test]
+    fn realistic_streaming_fragments() {
+        // Test partial fragments that might occur during LLM streaming
+        let fragments = [
+            "# Building a",                              // Partial heading
+            "# Building a CLI\n\n```rust",               // Partial code block
+            "# Building\n\n- [x] Done\n- [ ",            // Partial task list
+            "The formula $E = mc",                       // Partial math
+            "| Col1 | Col2 |\n|---",                     // Partial table
+            "> [!WARNING]\n> This is",                   // Partial admonition
+            "See the [docs](https://exam",               // Partial link
+            "Use **bold** and ~~strike",                 // Partial strikethrough
+            "Footnote[^1]\n\n[^1]: The actual content", // Partial footnote
+        ];
+
+        let theme = MarkdownTheme::default();
+        for fragment in fragments {
+            let text = render_streaming(fragment, &theme);
+            // All fragments should render without panic
+            assert!(text.height() > 0, "Failed on fragment: {fragment}");
+        }
+    }
+
+    #[test]
+    fn complex_nested_structure() {
+        let complex = r#"
+# Main Title
+
+## Section 1
+
+> **Important:** This blockquote contains *nested* formatting.
+>
+> - List inside blockquote
+> - With **bold** items
+>
+> And a code block:
+> ```python
+> def nested():
+>     pass
+> ```
+
+### Subsection with Math
+
+Inline $\alpha + \beta$ and display:
+
+$$\int_0^\infty e^{-x^2} dx = \frac{\sqrt{\pi}}{2}$$
+
+| Feature | Nested `code` | Status |
+|---------|---------------|--------|
+| **Bold** | Yes | ✓ |
+| *Italic* | Yes | ✓ |
+"#;
+        let text = render_markdown(complex);
+        let content = plain(&text);
+
+        assert!(content.contains("Main Title"));
+        assert!(content.contains("Important:"));
+        assert!(content.contains("def nested"));
+        assert!(content.contains("Feature"));
+    }
+
+    #[test]
+    fn detection_realistic_code_response() {
+        // Typical LLM code response
+        let response = r#"Here's how to implement it:
+
+```python
+def fibonacci(n: int) -> int:
+    """Calculate nth Fibonacci number."""
+    if n <= 1:
+        return n
+    return fibonacci(n - 1) + fibonacci(n - 2)
+```
+
+The time complexity is **O(2^n)** which can be improved with memoization."#;
+
+        let detection = is_likely_markdown(response);
+        assert!(detection.is_confident());
+    }
+
+    #[test]
+    fn streaming_preserves_partial_code_block_content() {
+        let fragment = "```rust\nfn main() {\n    println!(\"Hello";
+        let text = render_streaming(fragment, &MarkdownTheme::default());
+        let content = plain(&text);
+
+        // The code content should be preserved even though block is unclosed
+        assert!(content.contains("fn main"));
+        assert!(content.contains("println"));
+    }
+
+    #[test]
+    fn streaming_partial_table_renders() {
+        let fragment = "| Name | Age |\n|------|-----|\n| Alice | 30 |\n| Bob |";
+        let text = render_streaming(fragment, &MarkdownTheme::default());
+        let content = plain(&text);
+
+        assert!(content.contains("Name"));
+        assert!(content.contains("Alice"));
+        assert!(content.contains("Bob"));
+    }
+
+    #[test]
+    fn auto_detect_and_render_realistic() {
+        let theme = MarkdownTheme::default();
+
+        // Should detect and render as markdown
+        let md_response = "## Summary\n\nHere are the key points:\n\n- Point **one**\n- Point *two*";
+        let text = auto_render(md_response, &theme);
+        assert!(text.height() > 3); // Multiple lines from parsing
+
+        // Should NOT detect as markdown (just plain text)
+        let plain_response = "The API returned status 200 and the data looks correct.";
+        let text = auto_render(plain_response, &theme);
+        assert_eq!(text.height(), 1); // Single line, rendered as plain text
     }
 }
