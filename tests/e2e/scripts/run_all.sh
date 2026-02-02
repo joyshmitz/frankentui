@@ -120,6 +120,7 @@ else
     run_suite "input"     "$SCRIPT_DIR/test_input.sh"
     run_suite "ansi"      "$SCRIPT_DIR/test_ansi.sh"
     run_suite "unicode"   "$SCRIPT_DIR/test_unicode.sh"
+    run_suite "focus"     "$SCRIPT_DIR/test_focus_events.sh"
 fi
 
 # Finalize JSON summary

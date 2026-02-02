@@ -814,6 +814,284 @@ mod tests {
         assert!(buf.get(1, 0).unwrap().is_empty());
     }
 
+    // ========== Wide Glyph Continuation Cleanup Tests ==========
+
+    #[test]
+    fn overwrite_wide_head_with_single_clears_tails() {
+        let mut buf = Buffer::new(10, 1);
+
+        // Write a wide character (width 2) at position 0
+        buf.set(0, 0, Cell::from_char('中'));
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('中'));
+        assert!(buf.get(1, 0).unwrap().is_continuation());
+
+        // Overwrite the head with a single-width character
+        buf.set(0, 0, Cell::from_char('A'));
+
+        // Head should be replaced
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('A'));
+        // Tail (continuation) should be cleared to default
+        assert!(
+            buf.get(1, 0).unwrap().is_empty(),
+            "Continuation at x=1 should be cleared when head is overwritten"
+        );
+    }
+
+    #[test]
+    fn overwrite_continuation_with_single_clears_head_and_tails() {
+        let mut buf = Buffer::new(10, 1);
+
+        // Write a wide character at position 0
+        buf.set(0, 0, Cell::from_char('中'));
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('中'));
+        assert!(buf.get(1, 0).unwrap().is_continuation());
+
+        // Overwrite the continuation (position 1) with a single-width char
+        buf.set(1, 0, Cell::from_char('B'));
+
+        // The head at position 0 should be cleared
+        assert!(
+            buf.get(0, 0).unwrap().is_empty(),
+            "Head at x=0 should be cleared when its continuation is overwritten"
+        );
+        // Position 1 should have the new character
+        assert_eq!(buf.get(1, 0).unwrap().content.as_char(), Some('B'));
+    }
+
+    #[test]
+    fn overwrite_wide_with_another_wide() {
+        let mut buf = Buffer::new(10, 1);
+
+        // Write first wide character
+        buf.set(0, 0, Cell::from_char('中'));
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('中'));
+        assert!(buf.get(1, 0).unwrap().is_continuation());
+
+        // Overwrite with another wide character
+        buf.set(0, 0, Cell::from_char('日'));
+
+        // Should have new wide character
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('日'));
+        assert!(
+            buf.get(1, 0).unwrap().is_continuation(),
+            "Continuation should still exist for new wide char"
+        );
+    }
+
+    #[test]
+    fn overwrite_continuation_middle_of_wide_sequence() {
+        let mut buf = Buffer::new(10, 1);
+
+        // Write two adjacent wide characters: 中 at 0-1, 日 at 2-3
+        buf.set(0, 0, Cell::from_char('中'));
+        buf.set(2, 0, Cell::from_char('日'));
+
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('中'));
+        assert!(buf.get(1, 0).unwrap().is_continuation());
+        assert_eq!(buf.get(2, 0).unwrap().content.as_char(), Some('日'));
+        assert!(buf.get(3, 0).unwrap().is_continuation());
+
+        // Overwrite position 1 (continuation of first wide char)
+        buf.set(1, 0, Cell::from_char('X'));
+
+        // First wide char's head should be cleared
+        assert!(
+            buf.get(0, 0).unwrap().is_empty(),
+            "Head of first wide char should be cleared"
+        );
+        // Position 1 has new char
+        assert_eq!(buf.get(1, 0).unwrap().content.as_char(), Some('X'));
+        // Second wide char should be unaffected
+        assert_eq!(buf.get(2, 0).unwrap().content.as_char(), Some('日'));
+        assert!(buf.get(3, 0).unwrap().is_continuation());
+    }
+
+    #[test]
+    fn wide_char_overlapping_previous_wide_char() {
+        let mut buf = Buffer::new(10, 1);
+
+        // Write wide char at position 0
+        buf.set(0, 0, Cell::from_char('中'));
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('中'));
+        assert!(buf.get(1, 0).unwrap().is_continuation());
+
+        // Write another wide char at position 1 (overlaps with continuation)
+        buf.set(1, 0, Cell::from_char('日'));
+
+        // First wide char's head should be cleared (its continuation was overwritten)
+        assert!(
+            buf.get(0, 0).unwrap().is_empty(),
+            "First wide char head should be cleared when continuation is overwritten by new wide"
+        );
+        // New wide char at positions 1-2
+        assert_eq!(buf.get(1, 0).unwrap().content.as_char(), Some('日'));
+        assert!(buf.get(2, 0).unwrap().is_continuation());
+    }
+
+    #[test]
+    fn wide_char_at_end_of_buffer_atomic_reject() {
+        let mut buf = Buffer::new(5, 1);
+
+        // Try to write wide char at position 4 (would need position 5 for tail, out of bounds)
+        buf.set(4, 0, Cell::from_char('中'));
+
+        // Should be rejected atomically - nothing written
+        assert!(
+            buf.get(4, 0).unwrap().is_empty(),
+            "Wide char should be rejected when tail would be out of bounds"
+        );
+    }
+
+    #[test]
+    fn three_wide_chars_sequential_cleanup() {
+        let mut buf = Buffer::new(10, 1);
+
+        // Write three wide chars: positions 0-1, 2-3, 4-5
+        buf.set(0, 0, Cell::from_char('一'));
+        buf.set(2, 0, Cell::from_char('二'));
+        buf.set(4, 0, Cell::from_char('三'));
+
+        // Verify initial state
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('一'));
+        assert!(buf.get(1, 0).unwrap().is_continuation());
+        assert_eq!(buf.get(2, 0).unwrap().content.as_char(), Some('二'));
+        assert!(buf.get(3, 0).unwrap().is_continuation());
+        assert_eq!(buf.get(4, 0).unwrap().content.as_char(), Some('三'));
+        assert!(buf.get(5, 0).unwrap().is_continuation());
+
+        // Overwrite middle wide char's continuation with single char
+        buf.set(3, 0, Cell::from_char('M'));
+
+        // First wide char should be unaffected
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('一'));
+        assert!(buf.get(1, 0).unwrap().is_continuation());
+        // Middle wide char's head should be cleared
+        assert!(buf.get(2, 0).unwrap().is_empty());
+        // Position 3 has new char
+        assert_eq!(buf.get(3, 0).unwrap().content.as_char(), Some('M'));
+        // Third wide char should be unaffected
+        assert_eq!(buf.get(4, 0).unwrap().content.as_char(), Some('三'));
+        assert!(buf.get(5, 0).unwrap().is_continuation());
+    }
+
+    #[test]
+    fn overwrite_empty_cell_no_cleanup_needed() {
+        let mut buf = Buffer::new(10, 1);
+
+        // Write to an empty cell - no cleanup should be needed
+        buf.set(5, 0, Cell::from_char('X'));
+
+        assert_eq!(buf.get(5, 0).unwrap().content.as_char(), Some('X'));
+        // Adjacent cells should still be empty
+        assert!(buf.get(4, 0).unwrap().is_empty());
+        assert!(buf.get(6, 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn wide_char_cleanup_with_opacity() {
+        let mut buf = Buffer::new(10, 1);
+
+        // Set background
+        buf.set(0, 0, Cell::default().with_bg(PackedRgba::rgb(255, 0, 0)));
+        buf.set(1, 0, Cell::default().with_bg(PackedRgba::rgb(0, 255, 0)));
+
+        // Write wide char
+        buf.set(0, 0, Cell::from_char('中'));
+
+        // Overwrite with opacity
+        buf.push_opacity(0.5);
+        buf.set(0, 0, Cell::from_char('A'));
+        buf.pop_opacity();
+
+        // Check head is replaced
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('A'));
+        // Continuation should be cleared
+        assert!(buf.get(1, 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn wide_char_continuation_not_treated_as_head() {
+        let mut buf = Buffer::new(10, 1);
+
+        // Write a wide character
+        buf.set(0, 0, Cell::from_char('中'));
+
+        // Verify the continuation cell has zero width (not treated as a head)
+        let cont = buf.get(1, 0).unwrap();
+        assert!(cont.is_continuation());
+        assert_eq!(cont.content.width(), 0);
+
+        // Writing another wide char starting at position 1 should work correctly
+        buf.set(1, 0, Cell::from_char('日'));
+
+        // Original head should be cleared
+        assert!(buf.get(0, 0).unwrap().is_empty());
+        // New wide char at 1-2
+        assert_eq!(buf.get(1, 0).unwrap().content.as_char(), Some('日'));
+        assert!(buf.get(2, 0).unwrap().is_continuation());
+    }
+
+    #[test]
+    fn wide_char_fill_region() {
+        let mut buf = Buffer::new(10, 3);
+
+        // Fill a 4x2 region with a wide character
+        // Due to atomicity, only even x positions will have heads
+        let wide_cell = Cell::from_char('中');
+        buf.fill(Rect::new(0, 0, 4, 2), wide_cell);
+
+        // Check row 0: positions 0,1 should have wide char, 2,3 should have another
+        // Actually, fill calls set for each position, so:
+        // - set(0,0) writes '中' at 0, CONT at 1
+        // - set(1,0) overwrites CONT, clears head at 0, writes '中' at 1, CONT at 2
+        // - set(2,0) overwrites CONT, clears head at 1, writes '中' at 2, CONT at 3
+        // - set(3,0) overwrites CONT, clears head at 2, writes '中' at 3... but 4 is out of fill region
+        // Wait, fill only goes to right() which is x + width = 0 + 4 = 4, so x in 0..4
+
+        // Actually the behavior depends on whether the wide char fits.
+        // Let me trace through: fill iterates x in 0..4, y in 0..2
+        // For y=0: set(0,0), set(1,0), set(2,0), set(3,0) with wide char
+        // Each set with wide char checks if x+1 is in bounds and scissor.
+        // set(3,0) with '中' needs positions 3,4 - position 4 is in bounds (buf width 10)
+        // So it should write.
+
+        // The pattern should be: each write of a wide char disrupts previous
+        // Final state after fill: position 3 has head, position 4 has continuation
+        // (because set(3,0) is last and overwrites previous wide chars)
+
+        // This is a complex interaction - let's just verify no panics and some structure
+        // The final state at row 0, x=3 should have '中'
+        assert_eq!(buf.get(3, 0).unwrap().content.as_char(), Some('中'));
+    }
+
+    #[test]
+    fn default_buffer_dimensions() {
+        let buf = Buffer::default();
+        assert_eq!(buf.width(), 1);
+        assert_eq!(buf.height(), 1);
+        assert_eq!(buf.len(), 1);
+    }
+
+    #[test]
+    fn buffer_partial_eq_impl() {
+        let buf1 = Buffer::new(5, 5);
+        let buf2 = Buffer::new(5, 5);
+        let mut buf3 = Buffer::new(5, 5);
+        buf3.set(0, 0, Cell::from_char('X'));
+
+        assert_eq!(buf1, buf2);
+        assert_ne!(buf1, buf3);
+    }
+
+    #[test]
+    fn degradation_level_accessible() {
+        let mut buf = Buffer::new(10, 10);
+        assert_eq!(buf.degradation, DegradationLevel::Full);
+
+        buf.degradation = DegradationLevel::SimpleBorders;
+        assert_eq!(buf.degradation, DegradationLevel::SimpleBorders);
+    }
+
     // --- get_mut ---
 
     #[test]
@@ -1274,6 +1552,57 @@ mod tests {
                 buf.set(3, 3, Cell::from_char('Y'));
                 let cell = buf.get(3, 3).unwrap();
                 prop_assert_eq!(cell.content.as_char(), Some('Y'));
+            }
+
+            // --- Wide Glyph Cleanup Property Tests ---
+
+            #[test]
+            fn wide_char_overwrites_cleanup_tails(
+                width in 10u16..30,
+                x in 0u16..8,
+            ) {
+                let x = x % (width.saturating_sub(2).max(1));
+                let mut buf = Buffer::new(width, 1);
+
+                // Write wide char
+                buf.set(x, 0, Cell::from_char('中'));
+
+                // If it fit, check structure
+                if x + 1 < width {
+                    let head = buf.get(x, 0).unwrap();
+                    let tail = buf.get(x + 1, 0).unwrap();
+
+                    if head.content.as_char() == Some('中') {
+                        prop_assert!(tail.is_continuation(),
+                            "tail at x+1={} should be continuation", x + 1);
+
+                        // Overwrite head with single char
+                        buf.set(x, 0, Cell::from_char('A'));
+                        let new_head = buf.get(x, 0).unwrap();
+                        let cleared_tail = buf.get(x + 1, 0).unwrap();
+
+                        prop_assert_eq!(new_head.content.as_char(), Some('A'));
+                        prop_assert!(cleared_tail.is_empty(),
+                            "tail should be cleared after head overwrite");
+                    }
+                }
+            }
+
+            #[test]
+            fn wide_char_atomic_rejection_at_boundary(
+                width in 3u16..20,
+            ) {
+                let mut buf = Buffer::new(width, 1);
+
+                // Try to write wide char at last position (needs x and x+1)
+                let last_pos = width - 1;
+                buf.set(last_pos, 0, Cell::from_char('中'));
+
+                // Should be rejected - cell should remain empty
+                let cell = buf.get(last_pos, 0).unwrap();
+                prop_assert!(cell.is_empty(),
+                    "wide char at boundary position {} (width {}) should be rejected",
+                    last_pos, width);
             }
         }
     }

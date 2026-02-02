@@ -485,6 +485,39 @@ mod tests {
         assert_eq!(changes[1], (1, 1));
         assert_eq!(changes[2], (2, 2));
     }
+
+    #[test]
+    fn rows_with_no_changes_are_skipped() {
+        let old = Buffer::new(4, 3);
+        let mut new = old.clone();
+
+        new.set_raw(1, 1, Cell::from_char('X'));
+        new.set_raw(3, 1, Cell::from_char('Y'));
+
+        let diff = BufferDiff::compute(&old, &new);
+        assert_eq!(diff.len(), 2);
+        assert!(diff.changes().iter().all(|&(_, y)| y == 1));
+    }
+
+    #[test]
+    fn clear_retains_capacity_for_reuse() {
+        let mut diff = BufferDiff::with_capacity(16);
+        diff.changes.extend_from_slice(&[(0, 0), (1, 0), (2, 0)]);
+        let capacity = diff.changes.capacity();
+
+        diff.clear();
+
+        assert!(diff.is_empty());
+        assert!(diff.changes.capacity() >= capacity);
+    }
+
+    #[test]
+    #[should_panic(expected = "buffer widths must match")]
+    fn compute_panics_on_width_mismatch() {
+        let old = Buffer::new(5, 5);
+        let new = Buffer::new(4, 5);
+        let _ = BufferDiff::compute(&old, &new);
+    }
 }
 
 #[cfg(test)]
