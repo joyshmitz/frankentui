@@ -211,7 +211,7 @@ impl Draw for Buffer {
             }
 
             // Don't start a wide char if it won't fit
-            if cx + width as u16 > max_x {
+            if cx as u32 + width as u32 > max_x as u32 {
                 break;
             }
 

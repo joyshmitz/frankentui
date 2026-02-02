@@ -75,10 +75,10 @@ impl<T: Debug + ?Sized> Widget for Pretty<'_, T> {
         let max_x = area.right();
 
         for (row_idx, line) in text.lines().enumerate() {
-            if row_idx as u16 >= area.height {
+            if row_idx >= area.height as usize {
                 break;
             }
-            let y = area.y + row_idx as u16;
+            let y = area.y.saturating_add(row_idx as u16);
             draw_text_span(frame, area.x, y, line, self.style, max_x);
         }
     }

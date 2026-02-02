@@ -247,7 +247,7 @@ impl<W: Write> Presenter<W> {
             } else {
                 cell.content.width()
             };
-            self.cursor_x = Some(x + width as u16);
+            self.cursor_x = Some(x.saturating_add(width as u16));
         }
 
         Ok(())

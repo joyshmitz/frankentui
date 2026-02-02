@@ -120,6 +120,7 @@ impl TextInput {
         self.value = value.into();
         let max = self.grapheme_count();
         self.cursor = self.cursor.min(max);
+        self.scroll_cells = 0;
         self.selection_anchor = None;
     }
 
@@ -176,12 +177,31 @@ impl TextInput {
     ///
     /// Returns `true` if the state changed.
     pub fn handle_event(&mut self, event: &Event) -> bool {
-        if let Event::Key(key) = event
-            && (key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat)
-        {
-            return self.handle_key(key);
+        match event {
+            Event::Key(key)
+                if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat =>
+            {
+                self.handle_key(key)
+            }
+            Event::Paste(paste) => {
+                self.delete_selection();
+                for c in paste.text.chars() {
+                    // Stop if we hit max length (insert_char checks this, but we can optimize)
+                    if let Some(max) = self.max_length
+                        && self.grapheme_count() >= max
+                    {
+                        break;
+                    }
+                    // Filter control chars if needed?
+                    // Usually we want to allow standard text.
+                    if !c.is_control() {
+                        self.insert_char(c);
+                    }
+                }
+                true
+            }
+            _ => false,
         }
-        false
     }
 
     fn handle_key(&mut self, key: &KeyEvent) -> bool {
@@ -492,8 +512,8 @@ impl TextInput {
     }
 
     fn grapheme_width(&self, g: &str) -> usize {
-        if self.mask_char.is_some() {
-            1
+        if let Some(mask) = self.mask_char {
+            unicode_width::UnicodeWidthChar::width(mask).unwrap_or(1)
         } else {
             UnicodeWidthStr::width(g)
         }

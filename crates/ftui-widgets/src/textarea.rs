@@ -20,7 +20,7 @@ use ftui_text::wrap::display_width;
 use ftui_text::{CursorNavigator, CursorPosition};
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::{Widget, apply_style, draw_text_span};
+use crate::{StatefulWidget, Widget, apply_style, draw_text_span};
 
 /// Multi-line text editor widget.
 #[derive(Debug, Clone)]
@@ -460,18 +460,35 @@ impl Widget for TextArea {
         }
 
         let gutter_w = self.gutter_width();
-        let text_area_x = area.x + gutter_w;
+        let text_area_x = area.x.saturating_add(gutter_w);
         let text_area_w = area.width.saturating_sub(gutter_w) as usize;
         let vp_height = area.height as usize;
 
+        let cursor = self.editor.cursor();
         // Use a mutable copy for scroll adjustment
-        let scroll_top = if self.scroll_top == usize::MAX {
+        let mut scroll_top = if self.scroll_top == usize::MAX {
             0
         } else {
             self.scroll_top
         };
+        if vp_height > 0 {
+            if cursor.line < scroll_top {
+                scroll_top = cursor.line;
+            } else if cursor.line >= scroll_top + vp_height {
+                scroll_top = cursor.line.saturating_sub(vp_height - 1);
+            }
+        }
 
-        let cursor = self.editor.cursor();
+        let mut scroll_left = self.scroll_left;
+        if !self.soft_wrap && text_area_w > 0 {
+            let visual_col = cursor.visual_col;
+            if visual_col < scroll_left {
+                scroll_left = visual_col;
+            } else if visual_col >= scroll_left + text_area_w {
+                scroll_left = visual_col.saturating_sub(text_area_w - 1);
+            }
+        }
+
         let rope = self.editor.rope();
         let nav = CursorNavigator::new(rope);
 
@@ -516,16 +533,14 @@ impl Widget for TextArea {
             }
 
             // Line number gutter
-            if self.show_line_numbers && deg.apply_styling() {
+            if self.show_line_numbers {
+                let style = if deg.apply_styling() {
+                    self.line_number_style
+                } else {
+                    Style::default()
+                };
                 let num_str = format!("{:>width$} ", line_idx + 1, width = (gutter_w - 2) as usize);
-                draw_text_span(
-                    frame,
-                    area.x,
-                    y,
-                    &num_str,
-                    self.line_number_style,
-                    text_area_x,
-                );
+                draw_text_span(frame, area.x, y, &num_str, style, text_area_x);
             }
 
             // Cursor line highlight
@@ -559,14 +574,14 @@ impl Widget for TextArea {
                 let g_byte_len = g.len();
 
                 // Skip graphemes before horizontal scroll
-                if visual_x + g_width <= self.scroll_left {
+                if visual_x + g_width <= scroll_left {
                     visual_x += g_width;
                     grapheme_byte_offset += g_byte_len;
                     continue;
                 }
 
                 // Stop if past viewport
-                let screen_x = visual_x.saturating_sub(self.scroll_left);
+                let screen_x = visual_x.saturating_sub(scroll_left);
                 if screen_x >= text_area_w {
                     break;
                 }
@@ -598,7 +613,7 @@ impl Widget for TextArea {
             let cursor_row = cursor.line.saturating_sub(scroll_top);
             if cursor_row < vp_height {
                 let cursor_screen_x =
-                    cursor.visual_col.saturating_sub(self.scroll_left) as u16 + text_area_x;
+                    cursor.visual_col.saturating_sub(scroll_left) as u16 + text_area_x;
                 let cursor_screen_y = area.y + cursor_row as u16;
                 if cursor_screen_x < area.right() && cursor_screen_y < area.bottom() {
                     frame.set_cursor(Some((cursor_screen_x, cursor_screen_y)));
@@ -609,6 +624,16 @@ impl Widget for TextArea {
 
     fn is_essential(&self) -> bool {
         true
+    }
+}
+
+impl StatefulWidget for TextArea {
+    type State = TextAreaState;
+
+    fn render(&self, area: Rect, frame: &mut Frame, state: &mut Self::State) {
+        state.last_viewport_height = area.height;
+        state.last_viewport_width = area.width;
+        Widget::render(self, area, frame);
     }
 }
 
@@ -979,6 +1004,38 @@ mod tests {
         Widget::render(&ta, area, &mut frame);
         let cell = frame.buffer.get(0, 0).unwrap();
         assert_eq!(cell.content.as_char(), Some('a'));
+    }
+
+    #[test]
+    fn render_line_numbers_without_styling() {
+        use ftui_render::budget::DegradationLevel;
+        use ftui_render::grapheme_pool::GraphemePool;
+
+        let ta = TextArea::new().with_text("a\nb").with_line_numbers(true);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(8, 2, &mut pool);
+        frame.set_degradation(DegradationLevel::NoStyling);
+
+        Widget::render(&ta, Rect::new(0, 0, 8, 2), &mut frame);
+
+        let cell = frame.buffer.get(0, 0).unwrap();
+        assert_eq!(cell.content.as_char(), Some('1'));
+    }
+
+    #[test]
+    fn stateful_render_updates_viewport_state() {
+        use ftui_render::grapheme_pool::GraphemePool;
+
+        let ta = TextArea::new();
+        let mut state = TextAreaState::default();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 3, &mut pool);
+        let area = Rect::new(0, 0, 10, 3);
+
+        StatefulWidget::render(&ta, area, &mut frame, &mut state);
+
+        assert_eq!(state.last_viewport_height, 3);
+        assert_eq!(state.last_viewport_width, 10);
     }
 
     #[test]

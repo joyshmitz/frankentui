@@ -101,8 +101,10 @@ pub enum ItemHeight {
 /// LRU cache for measured item heights.
 #[derive(Debug, Clone)]
 pub struct HeightCache {
-    /// Height measurements indexed by item index.
+    /// Height measurements indexed by (item index - base_offset).
     cache: Vec<Option<u16>>,
+    /// Offset of the first entry in the cache (cache[0] corresponds to this item index).
+    base_offset: usize,
     /// Default height for unmeasured items.
     default_height: u16,
     /// Maximum entries to cache (for memory bounds).
@@ -247,9 +249,14 @@ impl<T> Virtualized<T> {
         if self.is_empty() {
             return;
         }
+        let max_offset = if self.visible_count > 0 {
+            self.len().saturating_sub(self.visible_count)
+        } else {
+            self.len().saturating_sub(1)
+        };
         let new_offset = (self.scroll_offset as i64 + delta as i64)
             .max(0)
-            .min(self.len().saturating_sub(1) as i64);
+            .min(max_offset as i64);
         self.scroll_offset = new_offset as usize;
 
         // Disable follow mode on manual scroll
@@ -433,6 +440,7 @@ impl HeightCache {
     pub fn new(default_height: u16, capacity: usize) -> Self {
         Self {
             cache: Vec::new(),
+            base_offset: 0,
             default_height,
             capacity,
         }
@@ -441,30 +449,49 @@ impl HeightCache {
     /// Get height for item, returning default if not cached.
     #[must_use]
     pub fn get(&self, idx: usize) -> u16 {
+        if idx < self.base_offset {
+            return self.default_height;
+        }
+        let local = idx - self.base_offset;
         self.cache
-            .get(idx)
+            .get(local)
             .and_then(|h| *h)
             .unwrap_or(self.default_height)
     }
 
     /// Set height for item.
     pub fn set(&mut self, idx: usize, height: u16) {
-        if idx >= self.cache.len() {
-            self.cache.resize(idx + 1, None);
+        if self.capacity == 0 {
+            return;
         }
-        self.cache[idx] = Some(height);
+        if idx < self.base_offset {
+            // Index has been trimmed away; ignore
+            return;
+        }
+        let mut local = idx - self.base_offset;
+        if local >= self.capacity {
+            // Large index jump: reset window to avoid huge allocations.
+            self.base_offset = idx.saturating_add(1).saturating_sub(self.capacity);
+            self.cache.clear();
+            local = idx - self.base_offset;
+        }
+        if local >= self.cache.len() {
+            self.cache.resize(local + 1, None);
+        }
+        self.cache[local] = Some(height);
 
-        // Trim if over capacity
+        // Trim if over capacity: remove oldest entries and adjust base_offset
         if self.cache.len() > self.capacity {
-            // Remove oldest entries
             let to_remove = self.cache.len() - self.capacity;
             self.cache.drain(0..to_remove);
+            self.base_offset += to_remove;
         }
     }
 
     /// Clear cached heights.
     pub fn clear(&mut self) {
         self.cache.clear();
+        self.base_offset = 0;
     }
 }
 
@@ -553,9 +580,14 @@ impl VirtualizedListState {
         if total_items == 0 {
             return;
         }
+        let max_offset = if self.visible_count > 0 {
+            total_items.saturating_sub(self.visible_count)
+        } else {
+            total_items.saturating_sub(1)
+        };
         let new_offset = (self.scroll_offset as i64 + delta as i64)
             .max(0)
-            .min(total_items.saturating_sub(1) as i64);
+            .min(max_offset as i64);
         self.scroll_offset = new_offset as usize;
 
         if delta != 0 {
@@ -762,7 +794,7 @@ impl<T: RenderItem> StatefulWidget for VirtualizedList<'_, T> {
         }
 
         // Reserve space for scrollbar if needed
-        let items_per_viewport = (area.height / self.fixed_height) as usize;
+        let items_per_viewport = (area.height / self.fixed_height.max(1)) as usize;
         let needs_scrollbar = self.show_scrollbar && total_items > items_per_viewport;
         let content_width = if needs_scrollbar {
             area.width.saturating_sub(1)
@@ -780,7 +812,7 @@ impl<T: RenderItem> StatefulWidget for VirtualizedList<'_, T> {
         // Ensure visible range includes selected item
         if let Some(selected) = state.selected {
             if selected >= state.scroll_offset + items_per_viewport {
-                state.scroll_offset = selected.saturating_sub(items_per_viewport - 1);
+                state.scroll_offset = selected.saturating_sub(items_per_viewport.saturating_sub(1));
             } else if selected < state.scroll_offset {
                 state.scroll_offset = selected;
             }
@@ -1045,6 +1077,15 @@ mod tests {
         // Other indices still default
         assert_eq!(cache.get(4), 1);
         assert_eq!(cache.get(6), 1);
+    }
+
+    #[test]
+    fn test_height_cache_large_index_window() {
+        let mut cache = HeightCache::new(1, 8);
+        cache.set(10_000, 4);
+        assert_eq!(cache.get(10_000), 4);
+        assert_eq!(cache.get(0), 1);
+        assert!(cache.cache.len() <= cache.capacity);
     }
 
     #[test]

@@ -352,7 +352,7 @@ pub(crate) fn solve_constraints(constraints: &[Constraint], available_size: u16)
         let mut violations = Vec::new();
         for &i in &grow_indices {
             if let Constraint::Max(max_val) = constraints[i]
-                && sizes[i] + shares[i] > max_val
+                && sizes[i].saturating_add(shares[i]) > max_val
             {
                 violations.push(i);
             }
@@ -361,7 +361,7 @@ pub(crate) fn solve_constraints(constraints: &[Constraint], available_size: u16)
         if violations.is_empty() {
             // No violations, commit shares and exit
             for &i in &grow_indices {
-                sizes[i] += shares[i];
+                sizes[i] = sizes[i].saturating_add(shares[i]);
             }
             break;
         }
