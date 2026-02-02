@@ -988,6 +988,412 @@ mod tests {
     }
 
     // Property tests moved to top-level `cell_proptests` module for edition 2024 compat.
+
+    // ====== PackedRgba extended coverage ======
+
+    #[test]
+    fn packed_rgba_named_constants() {
+        assert_eq!(PackedRgba::TRANSPARENT, PackedRgba(0));
+        assert_eq!(PackedRgba::TRANSPARENT.a(), 0);
+
+        assert_eq!(PackedRgba::BLACK.r(), 0);
+        assert_eq!(PackedRgba::BLACK.g(), 0);
+        assert_eq!(PackedRgba::BLACK.b(), 0);
+        assert_eq!(PackedRgba::BLACK.a(), 255);
+
+        assert_eq!(PackedRgba::WHITE.r(), 255);
+        assert_eq!(PackedRgba::WHITE.g(), 255);
+        assert_eq!(PackedRgba::WHITE.b(), 255);
+        assert_eq!(PackedRgba::WHITE.a(), 255);
+
+        assert_eq!(PackedRgba::RED, PackedRgba::rgb(255, 0, 0));
+        assert_eq!(PackedRgba::GREEN, PackedRgba::rgb(0, 255, 0));
+        assert_eq!(PackedRgba::BLUE, PackedRgba::rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn packed_rgba_default_is_transparent() {
+        assert_eq!(PackedRgba::default(), PackedRgba::TRANSPARENT);
+    }
+
+    #[test]
+    fn over_both_transparent_returns_transparent() {
+        // Exercises numer_a == 0 branch (line 508)
+        let result = PackedRgba::TRANSPARENT.over(PackedRgba::TRANSPARENT);
+        assert_eq!(result, PackedRgba::TRANSPARENT);
+    }
+
+    #[test]
+    fn over_partial_alpha_over_transparent_dst() {
+        // d_a == 0 path: src partial alpha over fully transparent
+        let src = PackedRgba::rgba(200, 100, 50, 128);
+        let result = src.over(PackedRgba::TRANSPARENT);
+        // Output alpha = src_alpha (dst contributes nothing)
+        assert_eq!(result.a(), 128);
+        // Colors should be src colors since dst has no contribution
+        assert_eq!(result.r(), 200);
+        assert_eq!(result.g(), 100);
+        assert_eq!(result.b(), 50);
+    }
+
+    #[test]
+    fn over_very_low_alpha() {
+        // Near-transparent source (alpha=1) over opaque destination
+        let src = PackedRgba::rgba(255, 0, 0, 1);
+        let dst = PackedRgba::rgba(0, 0, 255, 255);
+        let result = src.over(dst);
+        // Result should be very close to dst
+        assert_eq!(result.a(), 255);
+        assert!(result.b() > 250, "b={} should be near 255", result.b());
+        assert!(result.r() < 5, "r={} should be near 0", result.r());
+    }
+
+    #[test]
+    fn with_opacity_exact_zero() {
+        let c = PackedRgba::rgba(10, 20, 30, 200);
+        let result = c.with_opacity(0.0);
+        assert_eq!(result.a(), 0);
+        assert_eq!(result.r(), 10); // RGB preserved
+        assert_eq!(result.g(), 20);
+        assert_eq!(result.b(), 30);
+    }
+
+    #[test]
+    fn with_opacity_exact_one() {
+        let c = PackedRgba::rgba(10, 20, 30, 200);
+        let result = c.with_opacity(1.0);
+        assert_eq!(result.a(), 200); // Alpha unchanged
+        assert_eq!(result.r(), 10);
+    }
+
+    #[test]
+    fn with_opacity_preserves_rgb() {
+        let c = PackedRgba::rgba(42, 84, 168, 255);
+        let result = c.with_opacity(0.25);
+        assert_eq!(result.r(), 42);
+        assert_eq!(result.g(), 84);
+        assert_eq!(result.b(), 168);
+        assert_eq!(result.a(), 64); // 255 * 0.25 = 63.75 → 64
+    }
+
+    // ====== CellContent extended coverage ======
+
+    #[test]
+    fn cell_content_as_char_none_for_empty() {
+        assert_eq!(CellContent::EMPTY.as_char(), None);
+    }
+
+    #[test]
+    fn cell_content_as_char_none_for_continuation() {
+        assert_eq!(CellContent::CONTINUATION.as_char(), None);
+    }
+
+    #[test]
+    fn cell_content_as_char_none_for_grapheme() {
+        let id = GraphemeId::new(1, 2);
+        let c = CellContent::from_grapheme(id);
+        assert_eq!(c.as_char(), None);
+    }
+
+    #[test]
+    fn cell_content_grapheme_id_none_for_char() {
+        let c = CellContent::from_char('A');
+        assert_eq!(c.grapheme_id(), None);
+    }
+
+    #[test]
+    fn cell_content_grapheme_id_none_for_empty() {
+        assert_eq!(CellContent::EMPTY.grapheme_id(), None);
+    }
+
+    #[test]
+    fn cell_content_width_control_chars() {
+        // Control characters like NUL have UnicodeWidthChar::width() = None,
+        // so width() falls through to unwrap_or(1)
+        // Note: NUL (0x00) is CellContent::EMPTY, so test with other controls
+        let tab = CellContent::from_char('\t');
+        // Tab is not empty/continuation, and UnicodeWidthChar returns None,
+        // so it hits the unwrap_or(1) path
+        assert_eq!(tab.width(), 1);
+
+        let bel = CellContent::from_char('\x07');
+        assert_eq!(bel.width(), 1);
+    }
+
+    #[test]
+    fn cell_content_width_hint_always_1_for_chars() {
+        // width_hint is the fast path that always returns 1 for non-special chars
+        let wide = CellContent::from_char('日');
+        assert_eq!(wide.width_hint(), 1); // fast path says 1
+        assert_eq!(wide.width(), 2); // accurate path says 2
+    }
+
+    #[test]
+    fn cell_content_default_is_empty() {
+        assert_eq!(CellContent::default(), CellContent::EMPTY);
+    }
+
+    #[test]
+    fn cell_content_debug_empty() {
+        let s = format!("{:?}", CellContent::EMPTY);
+        assert_eq!(s, "CellContent::EMPTY");
+    }
+
+    #[test]
+    fn cell_content_debug_continuation() {
+        let s = format!("{:?}", CellContent::CONTINUATION);
+        assert_eq!(s, "CellContent::CONTINUATION");
+    }
+
+    #[test]
+    fn cell_content_debug_char() {
+        let s = format!("{:?}", CellContent::from_char('X'));
+        assert!(s.starts_with("CellContent::Char("), "got: {s}");
+    }
+
+    #[test]
+    fn cell_content_debug_grapheme() {
+        let id = GraphemeId::new(1, 2);
+        let s = format!("{:?}", CellContent::from_grapheme(id));
+        assert!(s.starts_with("CellContent::Grapheme("), "got: {s}");
+    }
+
+    #[test]
+    fn cell_content_raw_value() {
+        let c = CellContent::from_char('A');
+        assert_eq!(c.raw(), 'A' as u32);
+
+        let g = CellContent::from_grapheme(GraphemeId::new(5, 2));
+        assert_ne!(g.raw() & 0x8000_0000, 0);
+    }
+
+    // ====== CellAttrs extended coverage ======
+
+    #[test]
+    fn cell_attrs_default_is_none() {
+        assert_eq!(CellAttrs::default(), CellAttrs::NONE);
+    }
+
+    #[test]
+    fn cell_attrs_each_flag_isolated() {
+        let all_flags = [
+            StyleFlags::BOLD,
+            StyleFlags::DIM,
+            StyleFlags::ITALIC,
+            StyleFlags::UNDERLINE,
+            StyleFlags::BLINK,
+            StyleFlags::REVERSE,
+            StyleFlags::STRIKETHROUGH,
+            StyleFlags::HIDDEN,
+        ];
+
+        for &flag in &all_flags {
+            let a = CellAttrs::new(flag, 0);
+            assert!(a.has_flag(flag), "flag {:?} should be set", flag);
+
+            // Verify no other flags are set
+            for &other in &all_flags {
+                if other != flag {
+                    assert!(
+                        !a.has_flag(other),
+                        "flag {:?} should NOT be set when only {:?} is",
+                        other,
+                        flag
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cell_attrs_all_flags_combined() {
+        let all = StyleFlags::BOLD
+            | StyleFlags::DIM
+            | StyleFlags::ITALIC
+            | StyleFlags::UNDERLINE
+            | StyleFlags::BLINK
+            | StyleFlags::REVERSE
+            | StyleFlags::STRIKETHROUGH
+            | StyleFlags::HIDDEN;
+        let a = CellAttrs::new(all, 42);
+        assert_eq!(a.flags(), all);
+        assert!(a.has_flag(StyleFlags::BOLD));
+        assert!(a.has_flag(StyleFlags::HIDDEN));
+        assert_eq!(a.link_id(), 42);
+    }
+
+    #[test]
+    fn cell_attrs_link_id_zero() {
+        let a = CellAttrs::new(StyleFlags::BOLD, CellAttrs::LINK_ID_NONE);
+        assert_eq!(a.link_id(), 0);
+        assert!(a.has_flag(StyleFlags::BOLD));
+    }
+
+    #[test]
+    fn cell_attrs_with_link_to_none() {
+        let a = CellAttrs::new(StyleFlags::ITALIC, 500);
+        let b = a.with_link(CellAttrs::LINK_ID_NONE);
+        assert_eq!(b.link_id(), 0);
+        assert!(b.has_flag(StyleFlags::ITALIC));
+    }
+
+    #[test]
+    fn cell_attrs_with_flags_to_empty() {
+        let a = CellAttrs::new(StyleFlags::BOLD | StyleFlags::ITALIC, 123);
+        let b = a.with_flags(StyleFlags::empty());
+        assert!(b.flags().is_empty());
+        assert_eq!(b.link_id(), 123);
+    }
+
+    // ====== Cell extended coverage ======
+
+    #[test]
+    fn cell_bits_eq_detects_bg_difference() {
+        let cell1 = Cell::from_char('X');
+        let cell2 = Cell::from_char('X').with_bg(PackedRgba::RED);
+        assert!(!cell1.bits_eq(&cell2));
+    }
+
+    #[test]
+    fn cell_bits_eq_detects_attrs_difference() {
+        let cell1 = Cell::from_char('X');
+        let cell2 = Cell::from_char('X').with_attrs(CellAttrs::new(StyleFlags::BOLD, 0));
+        assert!(!cell1.bits_eq(&cell2));
+    }
+
+    #[test]
+    fn cell_with_char_preserves_colors_and_attrs() {
+        let cell = Cell::from_char('A')
+            .with_fg(PackedRgba::RED)
+            .with_bg(PackedRgba::BLUE)
+            .with_attrs(CellAttrs::new(StyleFlags::BOLD, 42));
+
+        let updated = cell.with_char('Z');
+        assert_eq!(updated.content.as_char(), Some('Z'));
+        assert_eq!(updated.fg, PackedRgba::RED);
+        assert_eq!(updated.bg, PackedRgba::BLUE);
+        assert!(updated.attrs.has_flag(StyleFlags::BOLD));
+        assert_eq!(updated.attrs.link_id(), 42);
+    }
+
+    #[test]
+    fn cell_new_vs_from_char() {
+        let a = Cell::new(CellContent::from_char('A'));
+        let b = Cell::from_char('A');
+        assert!(a.bits_eq(&b));
+    }
+
+    #[test]
+    fn cell_continuation_has_transparent_colors() {
+        assert_eq!(Cell::CONTINUATION.fg, PackedRgba::TRANSPARENT);
+        assert_eq!(Cell::CONTINUATION.bg, PackedRgba::TRANSPARENT);
+        assert_eq!(Cell::CONTINUATION.attrs, CellAttrs::NONE);
+    }
+
+    #[test]
+    fn cell_debug_format() {
+        let cell = Cell::from_char('A');
+        let s = format!("{:?}", cell);
+        assert!(s.contains("Cell"), "got: {s}");
+        assert!(s.contains("content"), "got: {s}");
+        assert!(s.contains("fg"), "got: {s}");
+        assert!(s.contains("bg"), "got: {s}");
+        assert!(s.contains("attrs"), "got: {s}");
+    }
+
+    #[test]
+    fn cell_is_empty_for_various() {
+        assert!(Cell::default().is_empty());
+        assert!(!Cell::from_char('A').is_empty());
+        assert!(!Cell::CONTINUATION.is_empty());
+    }
+
+    #[test]
+    fn cell_is_continuation_for_various() {
+        assert!(!Cell::default().is_continuation());
+        assert!(!Cell::from_char('A').is_continuation());
+        assert!(Cell::CONTINUATION.is_continuation());
+    }
+
+    #[test]
+    fn cell_width_hint_for_grapheme() {
+        let id = GraphemeId::new(100, 3);
+        let cell = Cell::new(CellContent::from_grapheme(id));
+        assert_eq!(cell.width_hint(), 3);
+    }
+
+    // ====== GraphemeId extended coverage ======
+
+    #[test]
+    fn grapheme_id_default() {
+        let id = GraphemeId::default();
+        assert_eq!(id.slot(), 0);
+        assert_eq!(id.width(), 0);
+    }
+
+    #[test]
+    fn grapheme_id_debug_format() {
+        let id = GraphemeId::new(42, 2);
+        let s = format!("{:?}", id);
+        assert!(s.contains("GraphemeId"), "got: {s}");
+        assert!(s.contains("42"), "got: {s}");
+        assert!(s.contains("2"), "got: {s}");
+    }
+
+    #[test]
+    fn grapheme_id_width_isolated_from_slot() {
+        // Verify slot bits don't leak into width field
+        let id = GraphemeId::new(0x00FF_FFFF, 0);
+        assert_eq!(id.width(), 0);
+        assert_eq!(id.slot(), 0x00FF_FFFF);
+
+        let id2 = GraphemeId::new(0, 127);
+        assert_eq!(id2.slot(), 0);
+        assert_eq!(id2.width(), 127);
+    }
+
+    // ====== StyleFlags coverage ======
+
+    #[test]
+    fn style_flags_empty_has_no_bits() {
+        assert!(StyleFlags::empty().is_empty());
+        assert_eq!(StyleFlags::empty().bits(), 0);
+    }
+
+    #[test]
+    fn style_flags_all_has_all_bits() {
+        let all = StyleFlags::all();
+        assert!(all.contains(StyleFlags::BOLD));
+        assert!(all.contains(StyleFlags::DIM));
+        assert!(all.contains(StyleFlags::ITALIC));
+        assert!(all.contains(StyleFlags::UNDERLINE));
+        assert!(all.contains(StyleFlags::BLINK));
+        assert!(all.contains(StyleFlags::REVERSE));
+        assert!(all.contains(StyleFlags::STRIKETHROUGH));
+        assert!(all.contains(StyleFlags::HIDDEN));
+    }
+
+    #[test]
+    fn style_flags_union_and_intersection() {
+        let a = StyleFlags::BOLD | StyleFlags::ITALIC;
+        let b = StyleFlags::ITALIC | StyleFlags::UNDERLINE;
+        assert_eq!(
+            a | b,
+            StyleFlags::BOLD | StyleFlags::ITALIC | StyleFlags::UNDERLINE
+        );
+        assert_eq!(a & b, StyleFlags::ITALIC);
+    }
+
+    #[test]
+    fn style_flags_from_bits_truncate() {
+        // 0xFF should give all flags
+        let all = StyleFlags::from_bits_truncate(0xFF);
+        assert_eq!(all, StyleFlags::all());
+
+        // 0x00 should give empty
+        let none = StyleFlags::from_bits_truncate(0x00);
+        assert!(none.is_empty());
+    }
 }
 
 /// Property tests for Cell types (bd-10i.13.2).

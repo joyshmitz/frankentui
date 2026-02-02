@@ -538,7 +538,15 @@ impl LogViewer {
             LogWrapMode::NoWrap => {
                 // Truncate if needed
                 if y < max_y {
-                    self.draw_text_line(line, &content, x, y, x + width, frame, effective_style);
+                    self.draw_text_line(
+                        line,
+                        &content,
+                        x,
+                        y,
+                        x.saturating_add(width),
+                        frame,
+                        effective_style,
+                    );
                 }
                 1
             }
@@ -551,7 +559,7 @@ impl LogViewer {
                             &content,
                             x,
                             y,
-                            x + width,
+                            x.saturating_add(width),
                             frame,
                             effective_style,
                         );
@@ -568,7 +576,14 @@ impl LogViewer {
                         if line_y >= max_y {
                             break;
                         }
-                        draw_text_span(frame, x, line_y, &part, effective_style, x + width);
+                        draw_text_span(
+                            frame,
+                            x,
+                            line_y,
+                            &part,
+                            effective_style,
+                            x.saturating_add(width),
+                        );
                         lines_rendered += 1;
                     }
 
@@ -741,7 +756,7 @@ impl StatefulWidget for LogViewer {
                     ind_y,
                     &search_indicator,
                     Style::new().bold(),
-                    ind_x + ind_len,
+                    ind_x.saturating_add(ind_len),
                 );
             }
         }

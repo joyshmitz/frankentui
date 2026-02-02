@@ -125,6 +125,14 @@ impl GraphemePool {
 
         // Check if already interned
         if let Some(&id) = self.lookup.get(text) {
+            debug_assert_eq!(
+                id.width() as u8,
+                width,
+                "intern() called with different width for the same text {:?}: existing={}, new={}",
+                text,
+                id.width(),
+                width
+            );
             self.retain(id);
             return id;
         }

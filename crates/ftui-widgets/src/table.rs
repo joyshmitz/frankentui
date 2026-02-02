@@ -226,10 +226,12 @@ impl<'a> StatefulWidget for Table<'a> {
 
                 // Iterate forward to find visibility boundary
                 for (i, row) in self.rows.iter().enumerate().skip(state.offset) {
-                    if current_y + row.height > max_y {
+                    if row.height > max_y.saturating_sub(current_y) {
                         break;
                     }
-                    current_y += row.height + row.bottom_margin;
+                    current_y = current_y
+                        .saturating_add(row.height)
+                        .saturating_add(row.bottom_margin);
                     last_visible = i;
                 }
 
@@ -250,7 +252,7 @@ impl<'a> StatefulWidget for Table<'a> {
                             row.height.saturating_add(row.bottom_margin)
                         };
 
-                        if accumulated_height + total_row_height > available_height {
+                        if total_row_height > available_height.saturating_sub(accumulated_height) {
                             // Cannot fit this row (i) along with subsequent rows up to selected.
                             // So the previous row (i+1) was the earliest possible start offset.
                             // If selected itself doesn't fit (accumulated_height == 0), we must show it anyway (at top).
@@ -262,7 +264,7 @@ impl<'a> StatefulWidget for Table<'a> {
                             break;
                         }
 
-                        accumulated_height += total_row_height;
+                        accumulated_height = accumulated_height.saturating_add(total_row_height);
                         new_offset = i;
                     }
                     state.offset = new_offset;
@@ -283,7 +285,7 @@ impl<'a> StatefulWidget for Table<'a> {
 
         // Render header
         if let Some(header) = &self.header {
-            if y + header.height > max_y {
+            if header.height > max_y.saturating_sub(y) {
                 return;
             }
             let row_area = Rect::new(table_area.x, y, table_area.width, header.height);
@@ -308,7 +310,7 @@ impl<'a> StatefulWidget for Table<'a> {
         // For v1 basic Table, we just render from state.offset
 
         for (i, row) in self.rows.iter().enumerate().skip(state.offset) {
-            if y + row.height > max_y {
+            if row.height > max_y.saturating_sub(y) {
                 break;
             }
 
@@ -316,7 +318,7 @@ impl<'a> StatefulWidget for Table<'a> {
             let row_area = Rect::new(table_area.x, y, table_area.width, row.height);
             let style = if deg.apply_styling() {
                 let s = if is_selected {
-                    self.highlight_style
+                    self.highlight_style.merge(&row.style)
                 } else {
                     row.style
                 };
@@ -333,7 +335,9 @@ impl<'a> StatefulWidget for Table<'a> {
                 frame.register_hit(row_area, id, HitRegion::Content, i as u64);
             }
 
-            y += row.height + row.bottom_margin;
+            y = y
+                .saturating_add(row.height)
+                .saturating_add(row.bottom_margin);
         }
     }
 }

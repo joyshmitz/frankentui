@@ -847,7 +847,10 @@ impl<T: RenderItem> StatefulWidget for VirtualizedList<'_, T> {
             }
 
             // Calculate actual render area
-            let y = area.y.saturating_add_signed(y_offset as i16);
+            // Use i32 arithmetic to avoid overflow when casting y_offset to i16
+            let y = i32::from(area.y)
+                .saturating_add(y_offset)
+                .clamp(0, i32::from(u16::MAX)) as u16;
             if y >= area.bottom() {
                 break;
             }
