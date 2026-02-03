@@ -19,6 +19,7 @@
 //! - Type to enter text in the input field
 //! - Enter: Submit command (echoed to log)
 //! - Ctrl+C / Ctrl+Q: Quit
+//! - Ctrl+T: Cycle theme
 //! - Page Up/Down: Scroll log viewer
 //! - Escape: Clear input
 
@@ -33,7 +34,9 @@ use ftui_core::event::{
 use ftui_core::geometry::Rect;
 use ftui_core::input_parser::InputParser;
 use ftui_core::terminal_session::{SessionOptions, TerminalSession};
+use ftui_extras::theme;
 use ftui_layout::{Constraint, Flex, Grid, GridArea};
+use ftui_render::cell::Cell;
 use ftui_render::frame::Frame;
 use ftui_runtime::{Cmd, Every, Model, Program, ProgramConfig, ScreenMode, Subscription};
 use ftui_style::Style;
@@ -227,6 +230,11 @@ impl AgentHarness {
         if key.modifiers.contains(Modifiers::CTRL) {
             match key.code {
                 KeyCode::Char('c') | KeyCode::Char('q') => return Cmd::Quit,
+                KeyCode::Char('t') => {
+                    let next = theme::cycle_theme();
+                    self.log_viewer.push(format!("Theme: {}", next.name()));
+                    return Cmd::None;
+                }
                 _ => {}
             }
         }
@@ -480,6 +488,7 @@ impl Model for AgentHarness {
     }
 
     fn view(&self, frame: &mut Frame) {
+        self.apply_theme_base(frame);
         match self.view_mode {
             HarnessView::Default => self.view_default(frame),
             HarnessView::LayoutFlexRow => self.view_layout_flex_row(frame),
@@ -503,6 +512,16 @@ impl Model for AgentHarness {
 }
 
 impl AgentHarness {
+    fn apply_theme_base(&self, frame: &mut Frame) {
+        let area = Rect::from_size(frame.buffer.width(), frame.buffer.height());
+        frame.buffer.fill(
+            area,
+            Cell::default()
+                .with_bg(theme::bg::DEEP.into())
+                .with_fg(theme::fg::PRIMARY.into()),
+        );
+    }
+
     fn view_default(&self, frame: &mut Frame) {
         let area = Rect::from_size(frame.buffer.width(), frame.buffer.height());
 
@@ -522,8 +541,16 @@ impl AgentHarness {
         };
 
         let status = StatusLine::new()
+            .style(
+                Style::new()
+                    .bg(theme::alpha::OVERLAY)
+                    .fg(theme::fg::SECONDARY),
+            )
+            .separator("  ")
             .left(StatusItem::text(&self.model_name))
             .center(StatusItem::text(&tool_status))
+            .right(StatusItem::text(theme::current_theme_name()))
+            .right(StatusItem::key_hint("^T", "Theme"))
             .right(StatusItem::key_hint("^C", "Quit"));
 
         status.render(chunks[0], frame);
@@ -532,7 +559,9 @@ impl AgentHarness {
         let log_block = Block::new()
             .title(" Log ")
             .borders(Borders::ALL)
-            .border_type(BorderType::Rounded);
+            .border_type(BorderType::Rounded)
+            .style(Style::new().bg(theme::alpha::SURFACE))
+            .border_style(Style::new().fg(theme::fg::MUTED));
 
         let inner = log_block.inner(chunks[1]);
         log_block.render(chunks[1], frame);
@@ -545,7 +574,9 @@ impl AgentHarness {
         let input_block = Block::new()
             .title(" Command ")
             .borders(Borders::ALL)
-            .border_type(BorderType::Rounded);
+            .border_type(BorderType::Rounded)
+            .style(Style::new().bg(theme::alpha::SURFACE))
+            .border_style(Style::new().fg(theme::fg::MUTED));
 
         let input_inner = input_block.inner(chunks[2]);
         input_block.render(chunks[2], frame);
@@ -571,7 +602,9 @@ impl AgentHarness {
         let block = Block::new()
             .title(title)
             .borders(Borders::ALL)
-            .border_type(BorderType::Rounded);
+            .border_type(BorderType::Rounded)
+            .style(Style::new().bg(theme::alpha::SURFACE))
+            .border_style(Style::new().fg(theme::fg::MUTED));
         let inner = block.inner(area);
         block.render(area, frame);
 
@@ -667,7 +700,9 @@ impl AgentHarness {
         let block = Block::new()
             .title(" Paragraph ")
             .borders(Borders::ALL)
-            .border_type(BorderType::Rounded);
+            .border_type(BorderType::Rounded)
+            .style(Style::new().bg(theme::alpha::SURFACE))
+            .border_style(Style::new().fg(theme::fg::MUTED));
         let inner = block.inner(area);
         block.render(area, frame);
 
@@ -685,7 +720,12 @@ impl AgentHarness {
             Row::new(["Beta", "2"]),
             Row::new(["Gamma", "3"]),
         ];
-        let header = Row::new(["Name", "Value"]).style(Style::new().bold());
+        let header = Row::new(["Name", "Value"]).style(
+            Style::new()
+                .bg(theme::alpha::OVERLAY)
+                .fg(theme::fg::PRIMARY)
+                .bold(),
+        );
         let table = Table::new(
             rows,
             [Constraint::Percentage(70.0), Constraint::Percentage(30.0)],
@@ -695,9 +735,16 @@ impl AgentHarness {
             Block::new()
                 .title(" Table ")
                 .borders(Borders::ALL)
-                .border_type(BorderType::Rounded),
+                .border_type(BorderType::Rounded)
+                .style(Style::new().bg(theme::alpha::SURFACE))
+                .border_style(Style::new().fg(theme::fg::MUTED)),
         )
-        .highlight_style(Style::new().bold());
+        .highlight_style(
+            Style::new()
+                .fg(theme::bg::DEEP)
+                .bg(theme::accent::PRIMARY)
+                .bold(),
+        );
 
         let mut state = TableState::default();
         state.select(Some(1));
@@ -712,9 +759,16 @@ impl AgentHarness {
                 Block::new()
                     .title(" List ")
                     .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded),
+                    .border_type(BorderType::Rounded)
+                    .style(Style::new().bg(theme::alpha::SURFACE))
+                    .border_style(Style::new().fg(theme::fg::MUTED)),
             )
-            .highlight_style(Style::new().bold())
+            .highlight_style(
+                Style::new()
+                    .fg(theme::bg::DEEP)
+                    .bg(theme::accent::PRIMARY)
+                    .bold(),
+            )
             .highlight_symbol("> ");
 
         let mut state = ListState::default();
@@ -727,7 +781,9 @@ impl AgentHarness {
         let block = Block::new()
             .title(" Input ")
             .borders(Borders::ALL)
-            .border_type(BorderType::Rounded);
+            .border_type(BorderType::Rounded)
+            .style(Style::new().bg(theme::alpha::SURFACE))
+            .border_style(Style::new().fg(theme::fg::MUTED));
         let inner = block.inner(area);
         block.render(area, frame);
         self.input.render(inner, frame);
@@ -748,12 +804,34 @@ fn main() -> std::io::Result<()> {
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(10);
 
+    let auto_ui_height = std::env::var("FTUI_HARNESS_AUTO_UI_HEIGHT")
+        .ok()
+        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+
     let screen_mode = match std::env::var("FTUI_HARNESS_SCREEN_MODE") {
         Ok(value) => match value.to_ascii_lowercase().as_str() {
             "alt" | "altscreen" | "alt-screen" | "alt_screen" => ScreenMode::AltScreen,
-            _ => ScreenMode::Inline { ui_height },
+            _ => {
+                if auto_ui_height {
+                    ScreenMode::InlineAuto {
+                        min_height: ui_height,
+                        max_height: u16::MAX,
+                    }
+                } else {
+                    ScreenMode::Inline { ui_height }
+                }
+            }
         },
-        Err(_) => ScreenMode::Inline { ui_height },
+        Err(_) => {
+            if auto_ui_height {
+                ScreenMode::InlineAuto {
+                    min_height: ui_height,
+                    max_height: u16::MAX,
+                }
+            } else {
+                ScreenMode::Inline { ui_height }
+            }
+        }
     };
 
     let view_mode = match std::env::var("FTUI_HARNESS_VIEW")

@@ -6,7 +6,7 @@ publish = false
 
 [features]
 default = []
-pty-capture = ["dep:ftui-extras", "dep:portable-pty"]
+pty-capture = ["dep:portable-pty", "ftui-extras/pty-capture"]
 
 [dependencies]
 ftui-render = { path = "../ftui-render" }
@@ -16,7 +16,7 @@ ftui-widgets = { path = "../ftui-widgets" }
 ftui-style = { path = "../ftui-style" }
 ftui-text = { path = "../ftui-text", features = ["markup"] }
 ftui-layout = { path = "../ftui-layout" }
-ftui-extras = { path = "../ftui-extras", features = ["pty-capture"], optional = true }
+ftui-extras = { path = "../ftui-extras", features = ["theme"] }
 portable-pty = { version = "0.8.1", optional = true }
 crossterm = "0.29.0"
 

@@ -38,7 +38,7 @@ pub use ftui_style::{
 // --- Runtime re-exports ----------------------------------------------------
 
 pub use ftui_runtime::{
-    App, Cmd, Model, Program, ProgramConfig, ScreenMode, TerminalWriter, UiAnchor,
+    App, Cmd, Model, Program, ProgramConfig, ResizeBehavior, ScreenMode, TerminalWriter, UiAnchor,
 };
 
 // --- Errors ---------------------------------------------------------------
