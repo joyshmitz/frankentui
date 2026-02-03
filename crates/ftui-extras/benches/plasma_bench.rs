@@ -401,6 +401,78 @@ fn bench_palettes(c: &mut Criterion) {
         })
     });
 
+    // Aurora palette (theme-derived, cool tones)
+    group.bench_function("aurora", |b| {
+        let mut fx = PlasmaFx::aurora();
+        let mut out = vec![PackedRgba::TRANSPARENT; size];
+        let ctx = FxContext {
+            width: 80,
+            height: 24,
+            frame: 1,
+            time_seconds: 1.0,
+            quality: FxQuality::Full,
+            theme: &theme,
+        };
+        b.iter(|| {
+            fx.render(black_box(ctx), &mut out);
+            black_box(&out);
+        })
+    });
+
+    // Ember palette (theme-derived, warm tones)
+    group.bench_function("ember", |b| {
+        let mut fx = PlasmaFx::ember();
+        let mut out = vec![PackedRgba::TRANSPARENT; size];
+        let ctx = FxContext {
+            width: 80,
+            height: 24,
+            frame: 1,
+            time_seconds: 1.0,
+            quality: FxQuality::Full,
+            theme: &theme,
+        };
+        b.iter(|| {
+            fx.render(black_box(ctx), &mut out);
+            black_box(&out);
+        })
+    });
+
+    // Subtle palette (theme-derived, low saturation)
+    group.bench_function("subtle", |b| {
+        let mut fx = PlasmaFx::subtle();
+        let mut out = vec![PackedRgba::TRANSPARENT; size];
+        let ctx = FxContext {
+            width: 80,
+            height: 24,
+            frame: 1,
+            time_seconds: 1.0,
+            quality: FxQuality::Full,
+            theme: &theme,
+        };
+        b.iter(|| {
+            fx.render(black_box(ctx), &mut out);
+            black_box(&out);
+        })
+    });
+
+    // Monochrome palette (theme-derived, grayscale)
+    group.bench_function("monochrome", |b| {
+        let mut fx = PlasmaFx::monochrome();
+        let mut out = vec![PackedRgba::TRANSPARENT; size];
+        let ctx = FxContext {
+            width: 80,
+            height: 24,
+            frame: 1,
+            time_seconds: 1.0,
+            quality: FxQuality::Full,
+            theme: &theme,
+        };
+        b.iter(|| {
+            fx.render(black_box(ctx), &mut out);
+            black_box(&out);
+        })
+    });
+
     group.finish();
 }
 

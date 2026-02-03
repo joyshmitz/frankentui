@@ -557,6 +557,168 @@ fn bench_buffer_reuse(c: &mut Criterion) {
 }
 
 // =============================================================================
+// Backdrop Apply Cost Benchmarks (bd-l8x9.9.1)
+// =============================================================================
+//
+// This group isolates the cost of applying a precomputed FX buffer to frame.buffer,
+// which is the unavoidable per-frame cost for any backdrop, even if effect compute is free.
+//
+// Performance budgets (apply only, excluding effect compute):
+// - 80x24 (1920 cells): < 100μs
+// - 120x40 (4800 cells): < 250μs
+// - 240x80 (19200 cells): < 1ms
+
+/// Minimal FX that fills with a constant color (near-zero compute cost).
+/// Used to isolate backdrop apply overhead from effect computation.
+#[cfg(feature = "visual-fx")]
+struct SolidFx {
+    color: PackedRgba,
+}
+
+#[cfg(feature = "visual-fx")]
+impl SolidFx {
+    fn new(color: PackedRgba) -> Self {
+        Self { color }
+    }
+}
+
+#[cfg(feature = "visual-fx")]
+impl BackdropFx for SolidFx {
+    fn name(&self) -> &'static str {
+        "solid"
+    }
+
+    fn render(&mut self, ctx: FxContext<'_>, out: &mut [PackedRgba]) {
+        if ctx.quality == FxQuality::Off {
+            return;
+        }
+        // Minimal compute: just fill with constant color
+        out.fill(self.color);
+    }
+}
+
+#[cfg(feature = "visual-fx")]
+fn bench_backdrop_apply_cost(c: &mut Criterion) {
+    use ftui_extras::visual_fx::Scrim;
+
+    let mut group = c.benchmark_group("visual_fx/backdrop_apply");
+    let theme = ThemeInputs::default_dark();
+    let solid_color = PackedRgba::rgba(100, 50, 150, 255);
+
+    // Budget targets (apply cost only):
+    // 80x24: < 100μs (~52ns/cell)
+    // 120x40: < 250μs (~52ns/cell)
+    // 240x80: < 1ms (~52ns/cell)
+
+    for &(width, height, name) in SIZES {
+        let len = width as usize * height as usize;
+        group.throughput(Throughput::Elements(len as u64));
+
+        // Baseline: Raw buffer iteration (no Backdrop widget overhead)
+        group.bench_with_input(
+            BenchmarkId::new("raw_cell_write", name),
+            &(width, height),
+            |b, &(w, h)| {
+                let mut pool = GraphemePool::new();
+                let mut frame = Frame::new(w, h, &mut pool);
+                let color = PackedRgba::rgba(100, 50, 150, 255);
+
+                b.iter(|| {
+                    for y in 0..h {
+                        for x in 0..w {
+                            if let Some(cell) = frame.buffer.get_mut(x, y) {
+                                cell.bg = color;
+                            }
+                        }
+                    }
+                    black_box(&frame.buffer);
+                });
+            },
+        );
+
+        // SolidFx backdrop (minimal compute + full apply path)
+        group.bench_with_input(
+            BenchmarkId::new("solid_backdrop", name),
+            &(width, height),
+            |b, &(w, h)| {
+                let mut backdrop = Backdrop::new(Box::new(SolidFx::new(solid_color)), theme);
+                backdrop.set_effect_opacity(0.5);
+                let mut pool = GraphemePool::new();
+                let mut frame = Frame::new(w, h, &mut pool);
+                let area = Rect::new(0, 0, w, h);
+
+                // Warm up
+                backdrop.render(area, &mut frame);
+
+                b.iter(|| {
+                    backdrop.render(black_box(area), &mut frame);
+                    black_box(&frame.buffer);
+                });
+            },
+        );
+
+        // SolidFx with scrim (additional per-cell overhead)
+        group.bench_with_input(
+            BenchmarkId::new("solid_with_scrim", name),
+            &(width, height),
+            |b, &(w, h)| {
+                let mut backdrop = Backdrop::new(Box::new(SolidFx::new(solid_color)), theme);
+                backdrop.set_effect_opacity(0.5);
+                backdrop.set_scrim(Scrim::uniform(0.4)); // 40% opacity overlay
+                let mut pool = GraphemePool::new();
+                let mut frame = Frame::new(w, h, &mut pool);
+                let area = Rect::new(0, 0, w, h);
+
+                // Warm up
+                backdrop.render(area, &mut frame);
+
+                b.iter(|| {
+                    backdrop.render(black_box(area), &mut frame);
+                    black_box(&frame.buffer);
+                });
+            },
+        );
+    }
+
+    // Per-cell cost analysis at 80x24
+    let (width, height) = (80, 24);
+    let len = width as usize * height as usize;
+    group.throughput(Throughput::Elements(len as u64));
+
+    // Full opacity (no blending)
+    group.bench_function("opacity_1.0", |b| {
+        let mut backdrop = Backdrop::new(Box::new(SolidFx::new(solid_color)), theme);
+        backdrop.set_effect_opacity(1.0);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(width, height, &mut pool);
+        let area = Rect::new(0, 0, width, height);
+        backdrop.render(area, &mut frame);
+
+        b.iter(|| {
+            backdrop.render(black_box(area), &mut frame);
+            black_box(&frame.buffer);
+        });
+    });
+
+    // Partial opacity (requires blending)
+    group.bench_function("opacity_0.5", |b| {
+        let mut backdrop = Backdrop::new(Box::new(SolidFx::new(solid_color)), theme);
+        backdrop.set_effect_opacity(0.5);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(width, height, &mut pool);
+        let area = Rect::new(0, 0, width, height);
+        backdrop.render(area, &mut frame);
+
+        b.iter(|| {
+            backdrop.render(black_box(area), &mut frame);
+            black_box(&frame.buffer);
+        });
+    });
+
+    group.finish();
+}
+
+// =============================================================================
 // Criterion Groups
 // =============================================================================
 
@@ -570,6 +732,7 @@ criterion_group!(
     bench_layering_overhead,
     bench_blend_modes,
     bench_buffer_reuse,
+    bench_backdrop_apply_cost,
 );
 
 #[cfg(not(feature = "visual-fx"))]

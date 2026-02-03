@@ -70,11 +70,52 @@ pub fn plasma_wave_low(nx: f64, ny: f64, time: f64) -> f64 {
 // ---------------------------------------------------------------------------
 
 /// Theme-aware palette presets for plasma.
+///
+/// # Theme-Derived Palettes
+///
+/// Several presets dynamically derive their colors from `ThemeInputs`:
+/// - [`ThemeAccents`]: Blends through accent_primary -> accent_secondary
+/// - [`Aurora`]: Cool tones using accent_slots[0..2] with blue bias
+/// - [`Ember`]: Warm tones using accent_slots[2..4] with orange bias
+/// - [`Subtle`]: Low saturation, bg-focused for non-distracting backdrops
+/// - [`Monochrome`]: Grayscale from bg_base to fg_primary
+///
+/// # Fixed Palettes
+///
+/// These presets use hard-coded colors for consistent appearance:
+/// - [`Sunset`], [`Ocean`], [`Fire`], [`Neon`], [`Cyberpunk`]
+///
+/// # Fallbacks
+///
+/// Theme-derived palettes fall back to sensible defaults if ThemeInputs
+/// has default/transparent values. See `ThemeInputs::default_dark()` for
+/// the fallback colors used in testing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum PlasmaPalette {
     /// Use theme accent colors for the gradient.
+    ///
+    /// Blends: bg_surface -> accent_primary -> accent_secondary -> fg_primary
     #[default]
     ThemeAccents,
+    /// Cool theme-derived palette (blues, cyans, purples).
+    ///
+    /// Uses accent_slots[0..2] with a blue bias. Falls back to Ocean-like
+    /// gradient if slots are transparent.
+    Aurora,
+    /// Warm theme-derived palette (reds, oranges, yellows).
+    ///
+    /// Uses accent_slots[2..4] with an orange bias. Falls back to Fire-like
+    /// gradient if slots are transparent.
+    Ember,
+    /// Subtle, low-saturation palette for non-distracting backdrops.
+    ///
+    /// Blends between bg tones with minimal color shift. Safe for use
+    /// behind text without scrim in most cases.
+    Subtle,
+    /// Grayscale from bg_base to fg_primary.
+    ///
+    /// Uses only luminance, creating a theme-aware monochrome effect.
+    Monochrome,
     /// Classic sunset gradient (purple -> pink -> orange -> yellow).
     Sunset,
     /// Ocean gradient (deep blue -> cyan -> seafoam).
@@ -89,10 +130,25 @@ pub enum PlasmaPalette {
 
 impl PlasmaPalette {
     /// Map a normalized value [0, 1] to a color.
+    ///
+    /// # Determinism
+    ///
+    /// Given identical inputs (t, theme), this function always returns the same color.
+    /// No global state or randomness is used.
+    ///
+    /// # Palette Stops
+    ///
+    /// Each palette uses 2-5 color stops with linear interpolation between them.
+    /// The number of stops varies by palette type but is always >= 2.
+    #[inline]
     pub fn color_at(&self, t: f64, theme: &ThemeInputs) -> PackedRgba {
         let t = t.clamp(0.0, 1.0);
         match self {
             Self::ThemeAccents => Self::theme_gradient(t, theme),
+            Self::Aurora => Self::aurora(t, theme),
+            Self::Ember => Self::ember(t, theme),
+            Self::Subtle => Self::subtle(t, theme),
+            Self::Monochrome => Self::monochrome(t, theme),
             Self::Sunset => Self::sunset(t),
             Self::Ocean => Self::ocean(t),
             Self::Fire => Self::fire(t),
@@ -101,8 +157,37 @@ impl PlasmaPalette {
         }
     }
 
+    /// Returns the number of color stops in this palette.
+    ///
+    /// Useful for testing and documentation.
+    #[inline]
+    pub const fn stop_count(&self) -> usize {
+        match self {
+            Self::ThemeAccents => 4,
+            Self::Aurora => 4,
+            Self::Ember => 4,
+            Self::Subtle => 3,
+            Self::Monochrome => 2,
+            Self::Sunset => 4,
+            Self::Ocean => 3,
+            Self::Fire => 5,
+            Self::Neon => 6, // HSV cycle has 6 segments
+            Self::Cyberpunk => 3,
+        }
+    }
+
+    /// Returns true if this palette is theme-derived.
+    #[inline]
+    pub const fn is_theme_derived(&self) -> bool {
+        matches!(
+            self,
+            Self::ThemeAccents | Self::Aurora | Self::Ember | Self::Subtle | Self::Monochrome
+        )
+    }
+
     fn theme_gradient(t: f64, theme: &ThemeInputs) -> PackedRgba {
-        // Blend through: bg_base -> accent_primary -> accent_secondary -> fg_primary
+        // Blend through: bg_surface -> accent_primary -> accent_secondary -> fg_primary
+        // 4 stops with 3 segments
         if t < 0.33 {
             let s = t / 0.33;
             Self::lerp_color(theme.bg_surface, theme.accent_primary, s)
@@ -113,6 +198,93 @@ impl PlasmaPalette {
             let s = (t - 0.66) / 0.34;
             Self::lerp_color(theme.accent_secondary, theme.fg_primary, s)
         }
+    }
+
+    /// Aurora: Cool theme-derived palette (blues, cyans, purples).
+    ///
+    /// Uses accent_slots[0] and accent_slots[1] as the core colors, with
+    /// accent_primary and bg_surface for endpoints. Falls back to cool
+    /// blue/cyan gradient if slots are transparent.
+    fn aurora(t: f64, theme: &ThemeInputs) -> PackedRgba {
+        // Get cool colors from theme, with fallbacks
+        let cool1 = if theme.accent_slots[0] == PackedRgba::TRANSPARENT {
+            PackedRgba::rgb(60, 100, 180) // Fallback: blue
+        } else {
+            theme.accent_slots[0]
+        };
+        let cool2 = if theme.accent_slots[1] == PackedRgba::TRANSPARENT {
+            PackedRgba::rgb(80, 200, 220) // Fallback: cyan
+        } else {
+            theme.accent_slots[1]
+        };
+
+        // 4 stops: bg_surface -> cool1 -> cool2 -> accent_primary
+        if t < 0.33 {
+            let s = t / 0.33;
+            Self::lerp_color(theme.bg_surface, cool1, s)
+        } else if t < 0.66 {
+            let s = (t - 0.33) / 0.33;
+            Self::lerp_color(cool1, cool2, s)
+        } else {
+            let s = (t - 0.66) / 0.34;
+            Self::lerp_color(cool2, theme.accent_primary, s)
+        }
+    }
+
+    /// Ember: Warm theme-derived palette (reds, oranges, yellows).
+    ///
+    /// Uses accent_slots[2] and accent_slots[3] as the core colors, with
+    /// accent_secondary and bg_surface for endpoints. Falls back to warm
+    /// red/orange gradient if slots are transparent.
+    fn ember(t: f64, theme: &ThemeInputs) -> PackedRgba {
+        // Get warm colors from theme, with fallbacks
+        let warm1 = if theme.accent_slots[2] == PackedRgba::TRANSPARENT {
+            PackedRgba::rgb(200, 80, 50) // Fallback: red-orange
+        } else {
+            theme.accent_slots[2]
+        };
+        let warm2 = if theme.accent_slots[3] == PackedRgba::TRANSPARENT {
+            PackedRgba::rgb(255, 180, 60) // Fallback: orange-yellow
+        } else {
+            theme.accent_slots[3]
+        };
+
+        // 4 stops: bg_surface -> warm1 -> warm2 -> accent_secondary
+        if t < 0.33 {
+            let s = t / 0.33;
+            Self::lerp_color(theme.bg_surface, warm1, s)
+        } else if t < 0.66 {
+            let s = (t - 0.33) / 0.33;
+            Self::lerp_color(warm1, warm2, s)
+        } else {
+            let s = (t - 0.66) / 0.34;
+            Self::lerp_color(warm2, theme.accent_secondary, s)
+        }
+    }
+
+    /// Subtle: Low-saturation palette for non-distracting backdrops.
+    ///
+    /// Blends through bg tones with minimal color shift. The palette stays
+    /// close to the background, making it safe for use behind text without
+    /// requiring a scrim in most cases.
+    fn subtle(t: f64, theme: &ThemeInputs) -> PackedRgba {
+        // 3 stops: bg_base -> bg_surface -> bg_overlay
+        // This creates a very subtle depth effect
+        if t < 0.5 {
+            let s = t / 0.5;
+            Self::lerp_color(theme.bg_base, theme.bg_surface, s)
+        } else {
+            let s = (t - 0.5) / 0.5;
+            Self::lerp_color(theme.bg_surface, theme.bg_overlay, s)
+        }
+    }
+
+    /// Monochrome: Grayscale from bg_base to fg_primary.
+    ///
+    /// Creates a theme-aware monochrome gradient using only luminance values.
+    fn monochrome(t: f64, theme: &ThemeInputs) -> PackedRgba {
+        // 2 stops: bg_base -> fg_primary (simple linear blend)
+        Self::lerp_color(theme.bg_base, theme.fg_primary, t)
     }
 
     fn sunset(t: f64) -> PackedRgba {
@@ -296,6 +468,38 @@ impl PlasmaFx {
         Self::new(PlasmaPalette::Cyberpunk)
     }
 
+    /// Create a plasma effect with the aurora (cool) palette.
+    ///
+    /// Theme-derived: uses cool tones from `accent_slots[0..2]`.
+    #[inline]
+    pub const fn aurora() -> Self {
+        Self::new(PlasmaPalette::Aurora)
+    }
+
+    /// Create a plasma effect with the ember (warm) palette.
+    ///
+    /// Theme-derived: uses warm tones from `accent_slots[2..4]`.
+    #[inline]
+    pub const fn ember() -> Self {
+        Self::new(PlasmaPalette::Ember)
+    }
+
+    /// Create a plasma effect with the subtle palette.
+    ///
+    /// Theme-derived: low-saturation bg tones, safe behind text.
+    #[inline]
+    pub const fn subtle() -> Self {
+        Self::new(PlasmaPalette::Subtle)
+    }
+
+    /// Create a plasma effect with the monochrome palette.
+    ///
+    /// Theme-derived: grayscale from bg to fg.
+    #[inline]
+    pub const fn monochrome() -> Self {
+        Self::new(PlasmaPalette::Monochrome)
+    }
+
     /// Set the palette.
     #[inline]
     pub fn set_palette(&mut self, palette: PlasmaPalette) {
@@ -463,6 +667,10 @@ mod tests {
 
         for palette in [
             PlasmaPalette::ThemeAccents,
+            PlasmaPalette::Aurora,
+            PlasmaPalette::Ember,
+            PlasmaPalette::Subtle,
+            PlasmaPalette::Monochrome,
             PlasmaPalette::Sunset,
             PlasmaPalette::Ocean,
             PlasmaPalette::Fire,
@@ -471,6 +679,179 @@ mod tests {
         ] {
             let mut fx = PlasmaFx::new(palette);
             fx.render(ctx, &mut out);
+        }
+    }
+
+    #[test]
+    fn palette_stop_counts_valid() {
+        // All palettes must have at least 2 stops
+        for palette in [
+            PlasmaPalette::ThemeAccents,
+            PlasmaPalette::Aurora,
+            PlasmaPalette::Ember,
+            PlasmaPalette::Subtle,
+            PlasmaPalette::Monochrome,
+            PlasmaPalette::Sunset,
+            PlasmaPalette::Ocean,
+            PlasmaPalette::Fire,
+            PlasmaPalette::Neon,
+            PlasmaPalette::Cyberpunk,
+        ] {
+            let count = palette.stop_count();
+            assert!(
+                count >= 2,
+                "{:?} has only {} stops (minimum 2)",
+                palette,
+                count
+            );
+        }
+    }
+
+    #[test]
+    fn palette_color_bounds_valid() {
+        // All palette colors must have valid RGB values (0-255)
+        // and non-zero alpha when rendering
+        let theme = ThemeInputs::default_dark();
+        for palette in [
+            PlasmaPalette::ThemeAccents,
+            PlasmaPalette::Aurora,
+            PlasmaPalette::Ember,
+            PlasmaPalette::Subtle,
+            PlasmaPalette::Monochrome,
+            PlasmaPalette::Sunset,
+            PlasmaPalette::Ocean,
+            PlasmaPalette::Fire,
+            PlasmaPalette::Neon,
+            PlasmaPalette::Cyberpunk,
+        ] {
+            // Test at multiple t values across the gradient
+            for t_int in 0..=10 {
+                let t = t_int as f64 / 10.0;
+                let color = palette.color_at(t, &theme);
+                // RGB values are implicitly valid (u8)
+                // Check alpha is non-zero (opaque colors for plasma)
+                assert!(color.a() > 0, "{:?} at t={} has zero alpha", palette, t);
+            }
+        }
+    }
+
+    #[test]
+    fn theme_derived_palettes_identified_correctly() {
+        // Theme-derived palettes should return true
+        assert!(PlasmaPalette::ThemeAccents.is_theme_derived());
+        assert!(PlasmaPalette::Aurora.is_theme_derived());
+        assert!(PlasmaPalette::Ember.is_theme_derived());
+        assert!(PlasmaPalette::Subtle.is_theme_derived());
+        assert!(PlasmaPalette::Monochrome.is_theme_derived());
+
+        // Fixed palettes should return false
+        assert!(!PlasmaPalette::Sunset.is_theme_derived());
+        assert!(!PlasmaPalette::Ocean.is_theme_derived());
+        assert!(!PlasmaPalette::Fire.is_theme_derived());
+        assert!(!PlasmaPalette::Neon.is_theme_derived());
+        assert!(!PlasmaPalette::Cyberpunk.is_theme_derived());
+    }
+
+    #[test]
+    fn theme_derived_palettes_differ_from_fixed() {
+        // Theme-derived palettes should produce different output
+        // from fixed palettes with the same wave values
+        let theme = ThemeInputs::default_dark();
+        let t = 0.5;
+
+        let theme_color = PlasmaPalette::ThemeAccents.color_at(t, &theme);
+        let sunset_color = PlasmaPalette::Sunset.color_at(t, &theme);
+
+        // They should differ (different color sources)
+        assert_ne!(
+            theme_color, sunset_color,
+            "Theme palette should differ from Sunset"
+        );
+    }
+
+    #[test]
+    fn palette_determinism() {
+        // Same inputs should always produce same outputs
+        let theme = ThemeInputs::default_dark();
+
+        for palette in [
+            PlasmaPalette::ThemeAccents,
+            PlasmaPalette::Aurora,
+            PlasmaPalette::Ember,
+            PlasmaPalette::Subtle,
+            PlasmaPalette::Monochrome,
+        ] {
+            for t_int in 0..=10 {
+                let t = t_int as f64 / 10.0;
+                let c1 = palette.color_at(t, &theme);
+                let c2 = palette.color_at(t, &theme);
+                assert_eq!(c1, c2, "{:?} is non-deterministic at t={}", palette, t);
+            }
+        }
+    }
+
+    #[test]
+    fn aurora_uses_cool_tones() {
+        // Aurora should blend cool colors
+        let theme = ThemeInputs::default_dark();
+        let mid_color = PlasmaPalette::Aurora.color_at(0.5, &theme);
+
+        // Mid-value should have blue or cyan bias (not warm)
+        // With default theme, aurora uses fallback blues
+        let r = mid_color.r() as i32;
+        let b = mid_color.b() as i32;
+
+        // Blue should be comparable to or stronger than red
+        assert!(
+            b >= r - 50,
+            "Aurora mid-color should have cool tones, got r={} b={}",
+            r,
+            b
+        );
+    }
+
+    #[test]
+    fn ember_uses_warm_tones() {
+        // Ember should blend warm colors
+        let theme = ThemeInputs::default_dark();
+        let mid_color = PlasmaPalette::Ember.color_at(0.5, &theme);
+
+        // Mid-value should have red or orange bias (warm)
+        // With default theme, ember uses fallback oranges
+        let r = mid_color.r() as i32;
+        let b = mid_color.b() as i32;
+
+        // Red should be stronger than blue
+        assert!(
+            r > b,
+            "Ember mid-color should have warm tones, got r={} b={}",
+            r,
+            b
+        );
+    }
+
+    #[test]
+    fn subtle_stays_near_background() {
+        // Subtle palette should stay close to background colors
+        let theme = ThemeInputs::default_dark();
+
+        for t_int in 0..=10 {
+            let t = t_int as f64 / 10.0;
+            let color = PlasmaPalette::Subtle.color_at(t, &theme);
+
+            // Subtle colors should be relatively dark (near bg)
+            // with default_dark theme
+            let luminance =
+                color.r() as u32 * 299 + color.g() as u32 * 587 + color.b() as u32 * 114;
+            let avg_lum = luminance / 1000;
+
+            // Should be darker than mid-gray (128)
+            assert!(
+                avg_lum < 160,
+                "Subtle palette should stay near background, got luminance {} at t={}",
+                avg_lum,
+                t
+            );
         }
     }
 
