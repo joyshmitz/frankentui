@@ -6,6 +6,50 @@
 //! behaves on different terminals. Detection is based on environment variables
 //! and known terminal program identification.
 //!
+//! # Capability Profiles (bd-k4lj.2)
+//!
+//! In addition to runtime detection, this module provides predefined terminal
+//! profiles for testing and simulation. Each profile represents a known terminal
+//! configuration with its expected capabilities.
+//!
+//! ## Predefined Profiles
+//!
+//! | Profile | Description |
+//! |---------|-------------|
+//! | `xterm_256color()` | Standard xterm with 256-color support |
+//! | `xterm()` | Basic xterm with 16 colors |
+//! | `vt100()` | VT100 terminal (minimal features) |
+//! | `dumb()` | Dumb terminal (no capabilities) |
+//! | `screen()` | GNU Screen multiplexer |
+//! | `tmux()` | tmux multiplexer |
+//! | `windows_console()` | Windows Console Host |
+//! | `modern()` | Modern terminal with all features |
+//!
+//! ## Profile Builder
+//!
+//! For custom configurations, use [`CapabilityProfileBuilder`]:
+//!
+//! ```
+//! use ftui_core::terminal_capabilities::CapabilityProfileBuilder;
+//!
+//! let custom = CapabilityProfileBuilder::new("custom")
+//!     .colors_256(true)
+//!     .true_color(true)
+//!     .mouse_sgr(true)
+//!     .build();
+//! ```
+//!
+//! ## Profile Switching
+//!
+//! Profiles can be identified by name for dynamic switching in tests:
+//!
+//! ```
+//! use ftui_core::terminal_capabilities::TerminalCapabilities;
+//!
+//! let profile = TerminalCapabilities::xterm_256color();
+//! assert_eq!(profile.profile_name(), Some("xterm-256color"));
+//! ```
+//!
 //! # Detection Strategy
 //!
 //! We detect capabilities using:
@@ -124,12 +168,127 @@ const KITTY_KEYBOARD_TERMINALS: &[&str] = &[
 /// Terminal programs that support synchronized output (DEC 2026).
 const SYNC_OUTPUT_TERMINALS: &[&str] = &["WezTerm", "Alacritty", "Ghostty", "kitty", "Contour"];
 
+/// Known terminal profile identifiers.
+///
+/// These names correspond to predefined capability configurations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TerminalProfile {
+    /// Modern terminal with all features (WezTerm, Alacritty, Ghostty, etc.)
+    Modern,
+    /// xterm with 256-color support
+    Xterm256Color,
+    /// Basic xterm with 16 colors
+    Xterm,
+    /// VT100 terminal (minimal)
+    Vt100,
+    /// Dumb terminal (no capabilities)
+    Dumb,
+    /// GNU Screen multiplexer
+    Screen,
+    /// tmux multiplexer
+    Tmux,
+    /// Zellij multiplexer
+    Zellij,
+    /// Windows Console Host
+    WindowsConsole,
+    /// Kitty terminal
+    Kitty,
+    /// Linux console (no colors, basic features)
+    LinuxConsole,
+    /// Custom profile (user-defined)
+    Custom,
+    /// Auto-detected from environment
+    Detected,
+}
+
+impl TerminalProfile {
+    /// Get the profile name as a string.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Modern => "modern",
+            Self::Xterm256Color => "xterm-256color",
+            Self::Xterm => "xterm",
+            Self::Vt100 => "vt100",
+            Self::Dumb => "dumb",
+            Self::Screen => "screen",
+            Self::Tmux => "tmux",
+            Self::Zellij => "zellij",
+            Self::WindowsConsole => "windows-console",
+            Self::Kitty => "kitty",
+            Self::LinuxConsole => "linux",
+            Self::Custom => "custom",
+            Self::Detected => "detected",
+        }
+    }
+
+    /// Parse a profile from a string name.
+    #[must_use]
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "modern" => Some(Self::Modern),
+            "xterm-256color" | "xterm256color" | "xterm-256" => Some(Self::Xterm256Color),
+            "xterm" => Some(Self::Xterm),
+            "vt100" => Some(Self::Vt100),
+            "dumb" => Some(Self::Dumb),
+            "screen" | "screen-256color" => Some(Self::Screen),
+            "tmux" | "tmux-256color" => Some(Self::Tmux),
+            "zellij" => Some(Self::Zellij),
+            "windows-console" | "windows" | "conhost" => Some(Self::WindowsConsole),
+            "kitty" | "xterm-kitty" => Some(Self::Kitty),
+            "linux" | "linux-console" => Some(Self::LinuxConsole),
+            "custom" => Some(Self::Custom),
+            "detected" | "auto" => Some(Self::Detected),
+            _ => None,
+        }
+    }
+
+    /// Get all known profile identifiers (excluding Custom and Detected).
+    #[must_use]
+    pub const fn all_predefined() -> &'static [Self] {
+        &[
+            Self::Modern,
+            Self::Xterm256Color,
+            Self::Xterm,
+            Self::Vt100,
+            Self::Dumb,
+            Self::Screen,
+            Self::Tmux,
+            Self::Zellij,
+            Self::WindowsConsole,
+            Self::Kitty,
+            Self::LinuxConsole,
+        ]
+    }
+}
+
+impl std::fmt::Display for TerminalProfile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 /// Terminal capability model.
 ///
 /// This struct describes what features a terminal supports. Use [`detect`](Self::detect)
 /// to auto-detect from the environment, or [`basic`](Self::basic) for a minimal fallback.
+///
+/// # Predefined Profiles
+///
+/// For testing and simulation, use predefined profiles:
+/// - [`modern()`](Self::modern) - Full-featured modern terminal
+/// - [`xterm_256color()`](Self::xterm_256color) - Standard xterm with 256 colors
+/// - [`xterm()`](Self::xterm) - Basic xterm with 16 colors
+/// - [`vt100()`](Self::vt100) - VT100 terminal (minimal)
+/// - [`dumb()`](Self::dumb) - No capabilities
+/// - [`screen()`](Self::screen) - GNU Screen
+/// - [`tmux()`](Self::tmux) - tmux multiplexer
+/// - [`kitty()`](Self::kitty) - Kitty terminal
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerminalCapabilities {
+    // Profile identification
+    profile: TerminalProfile,
+
     // Color support
     /// True color (24-bit RGB) support.
     pub true_color: bool,
@@ -170,6 +329,494 @@ pub struct TerminalCapabilities {
 impl Default for TerminalCapabilities {
     fn default() -> Self {
         Self::basic()
+    }
+}
+
+// ============================================================================
+// Predefined Capability Profiles (bd-k4lj.2)
+// ============================================================================
+
+impl TerminalCapabilities {
+    // ── Profile Identification ─────────────────────────────────────────
+
+    /// Get the profile identifier for this capability set.
+    #[must_use]
+    pub const fn profile(&self) -> TerminalProfile {
+        self.profile
+    }
+
+    /// Get the profile name as a string.
+    ///
+    /// Returns `None` for detected capabilities (use [`profile()`](Self::profile)
+    /// to distinguish between profiles).
+    #[must_use]
+    pub fn profile_name(&self) -> Option<&'static str> {
+        match self.profile {
+            TerminalProfile::Detected => None,
+            p => Some(p.as_str()),
+        }
+    }
+
+    /// Create capabilities from a profile identifier.
+    #[must_use]
+    pub fn from_profile(profile: TerminalProfile) -> Self {
+        match profile {
+            TerminalProfile::Modern => Self::modern(),
+            TerminalProfile::Xterm256Color => Self::xterm_256color(),
+            TerminalProfile::Xterm => Self::xterm(),
+            TerminalProfile::Vt100 => Self::vt100(),
+            TerminalProfile::Dumb => Self::dumb(),
+            TerminalProfile::Screen => Self::screen(),
+            TerminalProfile::Tmux => Self::tmux(),
+            TerminalProfile::Zellij => Self::zellij(),
+            TerminalProfile::WindowsConsole => Self::windows_console(),
+            TerminalProfile::Kitty => Self::kitty(),
+            TerminalProfile::LinuxConsole => Self::linux_console(),
+            TerminalProfile::Custom => Self::basic(),
+            TerminalProfile::Detected => Self::detect(),
+        }
+    }
+
+    // ── Predefined Profiles ────────────────────────────────────────────
+
+    /// Modern terminal with all features enabled.
+    ///
+    /// Represents terminals like WezTerm, Alacritty, Ghostty, Kitty, iTerm2.
+    /// All advanced features are enabled.
+    #[must_use]
+    pub const fn modern() -> Self {
+        Self {
+            profile: TerminalProfile::Modern,
+            true_color: true,
+            colors_256: true,
+            sync_output: true,
+            osc8_hyperlinks: true,
+            scroll_region: true,
+            in_tmux: false,
+            in_screen: false,
+            in_zellij: false,
+            kitty_keyboard: true,
+            focus_events: true,
+            bracketed_paste: true,
+            mouse_sgr: true,
+            osc52_clipboard: true,
+        }
+    }
+
+    /// xterm with 256-color support.
+    ///
+    /// Standard xterm-256color profile with common features.
+    /// No true color, no sync output, no hyperlinks.
+    #[must_use]
+    pub const fn xterm_256color() -> Self {
+        Self {
+            profile: TerminalProfile::Xterm256Color,
+            true_color: false,
+            colors_256: true,
+            sync_output: false,
+            osc8_hyperlinks: false,
+            scroll_region: true,
+            in_tmux: false,
+            in_screen: false,
+            in_zellij: false,
+            kitty_keyboard: false,
+            focus_events: false,
+            bracketed_paste: true,
+            mouse_sgr: true,
+            osc52_clipboard: false,
+        }
+    }
+
+    /// Basic xterm with 16 colors only.
+    ///
+    /// Minimal xterm without 256-color or advanced features.
+    #[must_use]
+    pub const fn xterm() -> Self {
+        Self {
+            profile: TerminalProfile::Xterm,
+            true_color: false,
+            colors_256: false,
+            sync_output: false,
+            osc8_hyperlinks: false,
+            scroll_region: true,
+            in_tmux: false,
+            in_screen: false,
+            in_zellij: false,
+            kitty_keyboard: false,
+            focus_events: false,
+            bracketed_paste: true,
+            mouse_sgr: true,
+            osc52_clipboard: false,
+        }
+    }
+
+    /// VT100 terminal (minimal capabilities).
+    ///
+    /// Classic VT100 with basic cursor control, no colors.
+    #[must_use]
+    pub const fn vt100() -> Self {
+        Self {
+            profile: TerminalProfile::Vt100,
+            true_color: false,
+            colors_256: false,
+            sync_output: false,
+            osc8_hyperlinks: false,
+            scroll_region: true,
+            in_tmux: false,
+            in_screen: false,
+            in_zellij: false,
+            kitty_keyboard: false,
+            focus_events: false,
+            bracketed_paste: false,
+            mouse_sgr: false,
+            osc52_clipboard: false,
+        }
+    }
+
+    /// Dumb terminal with no capabilities.
+    ///
+    /// Alias for [`basic()`](Self::basic) with the Dumb profile identifier.
+    #[must_use]
+    pub const fn dumb() -> Self {
+        Self {
+            profile: TerminalProfile::Dumb,
+            true_color: false,
+            colors_256: false,
+            sync_output: false,
+            osc8_hyperlinks: false,
+            scroll_region: false,
+            in_tmux: false,
+            in_screen: false,
+            in_zellij: false,
+            kitty_keyboard: false,
+            focus_events: false,
+            bracketed_paste: false,
+            mouse_sgr: false,
+            osc52_clipboard: false,
+        }
+    }
+
+    /// GNU Screen multiplexer.
+    ///
+    /// Screen with 256 colors but multiplexer-safe settings.
+    /// Sync output and scroll region disabled for passthrough safety.
+    #[must_use]
+    pub const fn screen() -> Self {
+        Self {
+            profile: TerminalProfile::Screen,
+            true_color: false,
+            colors_256: true,
+            sync_output: false,
+            osc8_hyperlinks: false,
+            scroll_region: true,
+            in_tmux: false,
+            in_screen: true,
+            in_zellij: false,
+            kitty_keyboard: false,
+            focus_events: false,
+            bracketed_paste: true,
+            mouse_sgr: true,
+            osc52_clipboard: false,
+        }
+    }
+
+    /// tmux multiplexer.
+    ///
+    /// tmux with 256 colors and multiplexer detection.
+    /// Advanced features disabled for passthrough safety.
+    #[must_use]
+    pub const fn tmux() -> Self {
+        Self {
+            profile: TerminalProfile::Tmux,
+            true_color: false,
+            colors_256: true,
+            sync_output: false,
+            osc8_hyperlinks: false,
+            scroll_region: true,
+            in_tmux: true,
+            in_screen: false,
+            in_zellij: false,
+            kitty_keyboard: false,
+            focus_events: false,
+            bracketed_paste: true,
+            mouse_sgr: true,
+            osc52_clipboard: false,
+        }
+    }
+
+    /// Zellij multiplexer.
+    ///
+    /// Zellij with true color (it has better passthrough than tmux/screen).
+    #[must_use]
+    pub const fn zellij() -> Self {
+        Self {
+            profile: TerminalProfile::Zellij,
+            true_color: true,
+            colors_256: true,
+            sync_output: false,
+            osc8_hyperlinks: false,
+            scroll_region: true,
+            in_tmux: false,
+            in_screen: false,
+            in_zellij: true,
+            kitty_keyboard: false,
+            focus_events: true,
+            bracketed_paste: true,
+            mouse_sgr: true,
+            osc52_clipboard: false,
+        }
+    }
+
+    /// Windows Console Host.
+    ///
+    /// Windows Terminal with good color support but some quirks.
+    #[must_use]
+    pub const fn windows_console() -> Self {
+        Self {
+            profile: TerminalProfile::WindowsConsole,
+            true_color: true,
+            colors_256: true,
+            sync_output: false,
+            osc8_hyperlinks: true,
+            scroll_region: true,
+            in_tmux: false,
+            in_screen: false,
+            in_zellij: false,
+            kitty_keyboard: false,
+            focus_events: true,
+            bracketed_paste: true,
+            mouse_sgr: true,
+            osc52_clipboard: true,
+        }
+    }
+
+    /// Kitty terminal.
+    ///
+    /// Kitty with full feature set including keyboard protocol.
+    #[must_use]
+    pub const fn kitty() -> Self {
+        Self {
+            profile: TerminalProfile::Kitty,
+            true_color: true,
+            colors_256: true,
+            sync_output: true,
+            osc8_hyperlinks: true,
+            scroll_region: true,
+            in_tmux: false,
+            in_screen: false,
+            in_zellij: false,
+            kitty_keyboard: true,
+            focus_events: true,
+            bracketed_paste: true,
+            mouse_sgr: true,
+            osc52_clipboard: true,
+        }
+    }
+
+    /// Linux console (framebuffer console).
+    ///
+    /// Linux console with no colors and basic features.
+    #[must_use]
+    pub const fn linux_console() -> Self {
+        Self {
+            profile: TerminalProfile::LinuxConsole,
+            true_color: false,
+            colors_256: false,
+            sync_output: false,
+            osc8_hyperlinks: false,
+            scroll_region: true,
+            in_tmux: false,
+            in_screen: false,
+            in_zellij: false,
+            kitty_keyboard: false,
+            focus_events: false,
+            bracketed_paste: true,
+            mouse_sgr: true,
+            osc52_clipboard: false,
+        }
+    }
+
+    /// Create a builder for custom capability profiles.
+    ///
+    /// Start with all capabilities disabled and enable what you need.
+    #[must_use]
+    pub fn builder() -> CapabilityProfileBuilder {
+        CapabilityProfileBuilder::new()
+    }
+}
+
+// ============================================================================
+// Capability Profile Builder (bd-k4lj.2)
+// ============================================================================
+
+/// Builder for custom terminal capability profiles.
+///
+/// Enables fine-grained control over capability configuration for testing
+/// and simulation purposes.
+///
+/// # Example
+///
+/// ```
+/// use ftui_core::terminal_capabilities::CapabilityProfileBuilder;
+///
+/// let profile = CapabilityProfileBuilder::new()
+///     .colors_256(true)
+///     .true_color(true)
+///     .mouse_sgr(true)
+///     .bracketed_paste(true)
+///     .build();
+///
+/// assert!(profile.colors_256);
+/// assert!(profile.true_color);
+/// ```
+#[derive(Debug, Clone)]
+pub struct CapabilityProfileBuilder {
+    caps: TerminalCapabilities,
+}
+
+impl Default for CapabilityProfileBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CapabilityProfileBuilder {
+    /// Create a new builder with all capabilities disabled.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            caps: TerminalCapabilities {
+                profile: TerminalProfile::Custom,
+                true_color: false,
+                colors_256: false,
+                sync_output: false,
+                osc8_hyperlinks: false,
+                scroll_region: false,
+                in_tmux: false,
+                in_screen: false,
+                in_zellij: false,
+                kitty_keyboard: false,
+                focus_events: false,
+                bracketed_paste: false,
+                mouse_sgr: false,
+                osc52_clipboard: false,
+            },
+        }
+    }
+
+    /// Start from an existing profile.
+    #[must_use]
+    pub fn from_profile(profile: TerminalProfile) -> Self {
+        let mut caps = TerminalCapabilities::from_profile(profile);
+        caps.profile = TerminalProfile::Custom;
+        Self { caps }
+    }
+
+    /// Build the final capability set.
+    #[must_use]
+    pub fn build(self) -> TerminalCapabilities {
+        self.caps
+    }
+
+    // ── Color Capabilities ─────────────────────────────────────────────
+
+    /// Set true color (24-bit RGB) support.
+    #[must_use]
+    pub const fn true_color(mut self, enabled: bool) -> Self {
+        self.caps.true_color = enabled;
+        self
+    }
+
+    /// Set 256-color palette support.
+    #[must_use]
+    pub const fn colors_256(mut self, enabled: bool) -> Self {
+        self.caps.colors_256 = enabled;
+        self
+    }
+
+    // ── Advanced Features ──────────────────────────────────────────────
+
+    /// Set synchronized output (DEC mode 2026) support.
+    #[must_use]
+    pub const fn sync_output(mut self, enabled: bool) -> Self {
+        self.caps.sync_output = enabled;
+        self
+    }
+
+    /// Set OSC 8 hyperlinks support.
+    #[must_use]
+    pub const fn osc8_hyperlinks(mut self, enabled: bool) -> Self {
+        self.caps.osc8_hyperlinks = enabled;
+        self
+    }
+
+    /// Set scroll region (DECSTBM) support.
+    #[must_use]
+    pub const fn scroll_region(mut self, enabled: bool) -> Self {
+        self.caps.scroll_region = enabled;
+        self
+    }
+
+    // ── Multiplexer Flags ──────────────────────────────────────────────
+
+    /// Set whether running inside tmux.
+    #[must_use]
+    pub const fn in_tmux(mut self, enabled: bool) -> Self {
+        self.caps.in_tmux = enabled;
+        self
+    }
+
+    /// Set whether running inside GNU screen.
+    #[must_use]
+    pub const fn in_screen(mut self, enabled: bool) -> Self {
+        self.caps.in_screen = enabled;
+        self
+    }
+
+    /// Set whether running inside Zellij.
+    #[must_use]
+    pub const fn in_zellij(mut self, enabled: bool) -> Self {
+        self.caps.in_zellij = enabled;
+        self
+    }
+
+    // ── Input Features ─────────────────────────────────────────────────
+
+    /// Set Kitty keyboard protocol support.
+    #[must_use]
+    pub const fn kitty_keyboard(mut self, enabled: bool) -> Self {
+        self.caps.kitty_keyboard = enabled;
+        self
+    }
+
+    /// Set focus event reporting support.
+    #[must_use]
+    pub const fn focus_events(mut self, enabled: bool) -> Self {
+        self.caps.focus_events = enabled;
+        self
+    }
+
+    /// Set bracketed paste mode support.
+    #[must_use]
+    pub const fn bracketed_paste(mut self, enabled: bool) -> Self {
+        self.caps.bracketed_paste = enabled;
+        self
+    }
+
+    /// Set SGR mouse protocol support.
+    #[must_use]
+    pub const fn mouse_sgr(mut self, enabled: bool) -> Self {
+        self.caps.mouse_sgr = enabled;
+        self
+    }
+
+    // ── Optional Features ──────────────────────────────────────────────
+
+    /// Set OSC 52 clipboard support.
+    #[must_use]
+    pub const fn osc52_clipboard(mut self, enabled: bool) -> Self {
+        self.caps.osc52_clipboard = enabled;
+        self
     }
 }
 
@@ -259,6 +906,7 @@ impl TerminalCapabilities {
         let osc52_clipboard = !is_dumb && !in_any_mux && (is_modern_terminal || is_kitty);
 
         Self {
+            profile: TerminalProfile::Detected,
             true_color,
             colors_256,
             sync_output,
@@ -282,6 +930,7 @@ impl TerminalCapabilities {
     #[must_use]
     pub const fn basic() -> Self {
         Self {
+            profile: TerminalProfile::Dumb,
             true_color: false,
             colors_256: false,
             sync_output: false,
