@@ -170,16 +170,43 @@ pub enum Alignment {
     SpaceBetween,
 }
 
-/// Responsive breakpoint buckets for terminal widths.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Responsive breakpoint tiers for terminal widths.
+///
+/// Ordered from smallest to largest. Each variant represents a width
+/// range determined by [`Breakpoints`].
+///
+/// | Breakpoint | Default Min Width | Typical Use               |
+/// |-----------|-------------------|---------------------------|
+/// | `Xs`      | < 60 cols         | Minimal / ultra-narrow    |
+/// | `Sm`      | 60–89 cols        | Compact layouts           |
+/// | `Md`      | 90–119 cols       | Standard terminal width   |
+/// | `Lg`      | 120–159 cols      | Wide terminals            |
+/// | `Xl`      | 160+ cols         | Ultra-wide / tiled        |
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Breakpoint {
+    /// Extra small: narrowest tier.
     Xs,
+    /// Small: compact layouts.
     Sm,
+    /// Medium: standard terminal width.
     Md,
+    /// Large: wide terminals.
     Lg,
+    /// Extra large: ultra-wide or tiled layouts.
+    Xl,
 }
 
 impl Breakpoint {
+    /// All breakpoints in ascending order.
+    pub const ALL: [Breakpoint; 5] = [
+        Breakpoint::Xs,
+        Breakpoint::Sm,
+        Breakpoint::Md,
+        Breakpoint::Lg,
+        Breakpoint::Xl,
+    ];
+
+    /// Ordinal index (0–4).
     #[inline]
     const fn index(self) -> u8 {
         match self {
@@ -187,26 +214,52 @@ impl Breakpoint {
             Breakpoint::Sm => 1,
             Breakpoint::Md => 2,
             Breakpoint::Lg => 3,
+            Breakpoint::Xl => 4,
         }
+    }
+
+    /// Short label for display.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Breakpoint::Xs => "xs",
+            Breakpoint::Sm => "sm",
+            Breakpoint::Md => "md",
+            Breakpoint::Lg => "lg",
+            Breakpoint::Xl => "xl",
+        }
+    }
+}
+
+impl std::fmt::Display for Breakpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
     }
 }
 
 /// Breakpoint thresholds for responsive layouts.
 ///
-/// Widths are in terminal columns.
+/// Each field is the minimum width (in terminal columns) for that breakpoint.
+/// Xs implicitly starts at width 0.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Breakpoints {
+    /// Minimum width for Sm.
     pub sm: u16,
+    /// Minimum width for Md.
     pub md: u16,
+    /// Minimum width for Lg.
     pub lg: u16,
+    /// Minimum width for Xl.
+    pub xl: u16,
 }
 
 impl Breakpoints {
-    /// Default breakpoints: 60 / 90 / 120 columns.
+    /// Default breakpoints: 60 / 90 / 120 / 160 columns.
     pub const DEFAULT: Self = Self {
         sm: 60,
         md: 90,
         lg: 120,
+        xl: 160,
     };
 
     /// Create breakpoints with explicit thresholds.
@@ -215,20 +268,34 @@ impl Breakpoints {
     pub const fn new(sm: u16, md: u16, lg: u16) -> Self {
         let md = if md < sm { sm } else { md };
         let lg = if lg < md { md } else { lg };
-        Self { sm, md, lg }
+        // Default xl to lg + 40 if not specified via new_with_xl.
+        let xl = if lg + 40 > lg { lg + 40 } else { u16::MAX };
+        Self { sm, md, lg, xl }
+    }
+
+    /// Create breakpoints with all four explicit thresholds.
+    ///
+    /// Values are sanitized to be monotonically non-decreasing.
+    pub const fn new_with_xl(sm: u16, md: u16, lg: u16, xl: u16) -> Self {
+        let md = if md < sm { sm } else { md };
+        let lg = if lg < md { md } else { lg };
+        let xl = if xl < lg { lg } else { xl };
+        Self { sm, md, lg, xl }
     }
 
     /// Classify a width into a breakpoint bucket.
     #[inline]
     pub const fn classify_width(self, width: u16) -> Breakpoint {
-        if width < self.sm {
-            Breakpoint::Xs
-        } else if width < self.md {
-            Breakpoint::Sm
-        } else if width < self.lg {
-            Breakpoint::Md
-        } else {
+        if width >= self.xl {
+            Breakpoint::Xl
+        } else if width >= self.lg {
             Breakpoint::Lg
+        } else if width >= self.md {
+            Breakpoint::Md
+        } else if width >= self.sm {
+            Breakpoint::Sm
+        } else {
+            Breakpoint::Xs
         }
     }
 
@@ -249,6 +316,30 @@ impl Breakpoints {
     pub const fn between(self, width: u16, min: Breakpoint, max: Breakpoint) -> bool {
         let idx = self.classify_width(width).index();
         idx >= min.index() && idx <= max.index()
+    }
+
+    /// Get the minimum width threshold for a given breakpoint.
+    #[must_use]
+    pub const fn threshold(self, bp: Breakpoint) -> u16 {
+        match bp {
+            Breakpoint::Xs => 0,
+            Breakpoint::Sm => self.sm,
+            Breakpoint::Md => self.md,
+            Breakpoint::Lg => self.lg,
+            Breakpoint::Xl => self.xl,
+        }
+    }
+
+    /// Get all thresholds as `(Breakpoint, min_width)` pairs.
+    #[must_use]
+    pub const fn thresholds(self) -> [(Breakpoint, u16); 5] {
+        [
+            (Breakpoint::Xs, 0),
+            (Breakpoint::Sm, self.sm),
+            (Breakpoint::Md, self.md),
+            (Breakpoint::Lg, self.lg),
+            (Breakpoint::Xl, self.xl),
+        ]
     }
 }
 
