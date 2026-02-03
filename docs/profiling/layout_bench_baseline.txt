@@ -1,0 +1,239 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on artifact directory
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.22
+   Compiling quote v1.0.44
+   Compiling libc v0.2.180
+   Compiling signal-hook v0.3.18
+   Compiling parking_lot_core v0.9.12
+   Compiling unicode-segmentation v1.12.0
+   Compiling rustix v1.1.3
+   Compiling autocfg v1.5.0
+   Compiling zmij v1.0.17
+   Compiling litrs v1.0.0
+   Compiling memchr v2.7.6
+   Compiling regex-syntax v0.8.8
+   Compiling num-traits v0.2.19
+   Compiling convert_case v0.10.0
+   Compiling document-features v0.2.12
+   Compiling serde_json v1.0.149
+   Compiling syn v2.0.114
+   Compiling plotters v0.3.7
+   Compiling errno v0.3.14
+   Compiling mio v1.1.1
+   Compiling is-terminal v0.4.17
+   Compiling regex-automata v0.4.13
+   Compiling signal-hook-registry v1.4.8
+   Compiling parking_lot v0.12.5
+   Compiling signal-hook-mio v0.2.5
+   Compiling regex v1.12.2
+   Compiling zerocopy-derive v0.8.37
+   Compiling derive_more-impl v2.1.1
+   Compiling serde_derive v1.0.228
+   Compiling derive_more v2.1.1
+   Compiling crossterm v0.29.0
+   Compiling zerocopy v0.8.37
+   Compiling ftui-core v0.1.0 (/data/projects/frankentui/crates/ftui-core)
+   Compiling ftui-layout v0.1.0 (/data/projects/frankentui/crates/ftui-layout)
+   Compiling serde v1.0.228
+   Compiling tinytemplate v1.2.1
+   Compiling half v2.7.1
+   Compiling ciborium-ll v0.2.2
+   Compiling ciborium v0.2.2
+   Compiling criterion v0.5.1
+    Finished `bench` profile [optimized] target(s) in 36.09s
+     Running benches/layout_bench.rs (/data/tmp/cargo-target/release/deps/layout_bench-7f37a6a47a2e391e)
+Benchmarking layout/flex_split/horizontal/3
+Benchmarking layout/flex_split/horizontal/3: Warming up for 3.0000 s
+Benchmarking layout/flex_split/horizontal/3: Collecting 100 samples in estimated 5.0001 s (62M iterations)
+Benchmarking layout/flex_split/horizontal/3: Analyzing
+layout/flex_split/horizontal/3
+                        time:   [82.654 ns 84.017 ns 85.717 ns]
+Found 7 outliers among 100 measurements (7.00%)
+  2 (2.00%) high mild
+  5 (5.00%) high severe
+Benchmarking layout/flex_split/horizontal/5
+Benchmarking layout/flex_split/horizontal/5: Warming up for 3.0000 s
+Benchmarking layout/flex_split/horizontal/5: Collecting 100 samples in estimated 5.0002 s (35M iterations)
+Benchmarking layout/flex_split/horizontal/5: Analyzing
+layout/flex_split/horizontal/5
+                        time:   [140.88 ns 141.98 ns 143.22 ns]
+Found 8 outliers among 100 measurements (8.00%)
+  1 (1.00%) high mild
+  7 (7.00%) high severe
+Benchmarking layout/flex_split/horizontal/10
+Benchmarking layout/flex_split/horizontal/10: Warming up for 3.0000 s
+Benchmarking layout/flex_split/horizontal/10: Collecting 100 samples in estimated 5.0001 s (26M iterations)
+Benchmarking layout/flex_split/horizontal/10: Analyzing
+layout/flex_split/horizontal/10
+                        time:   [195.35 ns 200.40 ns 206.66 ns]
+Found 11 outliers among 100 measurements (11.00%)
+  3 (3.00%) high mild
+  8 (8.00%) high severe
+Benchmarking layout/flex_split/horizontal/20
+Benchmarking layout/flex_split/horizontal/20: Warming up for 3.0000 s
+Benchmarking layout/flex_split/horizontal/20: Collecting 100 samples in estimated 5.0009 s (21M iterations)
+Benchmarking layout/flex_split/horizontal/20: Analyzing
+layout/flex_split/horizontal/20
+                        time:   [224.53 ns 229.48 ns 236.40 ns]
+Found 5 outliers among 100 measurements (5.00%)
+  1 (1.00%) high mild
+  4 (4.00%) high severe
+Benchmarking layout/flex_split/horizontal/50
+Benchmarking layout/flex_split/horizontal/50: Warming up for 3.0000 s
+Benchmarking layout/flex_split/horizontal/50: Collecting 100 samples in estimated 5.0022 s (11M iterations)
+Benchmarking layout/flex_split/horizontal/50: Analyzing
+layout/flex_split/horizontal/50
+                        time:   [442.26 ns 448.06 ns 455.85 ns]
+Found 6 outliers among 100 measurements (6.00%)
+  6 (6.00%) high severe
+
+Benchmarking layout/flex_vertical/split/3
+Benchmarking layout/flex_vertical/split/3: Warming up for 3.0000 s
+Benchmarking layout/flex_vertical/split/3: Collecting 100 samples in estimated 5.0002 s (61M iterations)
+Benchmarking layout/flex_vertical/split/3: Analyzing
+layout/flex_vertical/split/3
+                        time:   [79.308 ns 79.673 ns 80.066 ns]
+Found 3 outliers among 100 measurements (3.00%)
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+Benchmarking layout/flex_vertical/split/10
+Benchmarking layout/flex_vertical/split/10: Warming up for 3.0000 s
+Benchmarking layout/flex_vertical/split/10: Collecting 100 samples in estimated 5.0005 s (37M iterations)
+Benchmarking layout/flex_vertical/split/10: Analyzing
+layout/flex_vertical/split/10
+                        time:   [132.06 ns 132.99 ns 134.10 ns]
+Found 5 outliers among 100 measurements (5.00%)
+  2 (2.00%) high mild
+  3 (3.00%) high severe
+Benchmarking layout/flex_vertical/split/20
+Benchmarking layout/flex_vertical/split/20: Warming up for 3.0000 s
+Benchmarking layout/flex_vertical/split/20: Collecting 100 samples in estimated 5.0011 s (18M iterations)
+Benchmarking layout/flex_vertical/split/20: Analyzing
+layout/flex_vertical/split/20
+                        time:   [263.67 ns 264.77 ns 266.06 ns]
+Found 7 outliers among 100 measurements (7.00%)
+  3 (3.00%) high mild
+  4 (4.00%) high severe
+Benchmarking layout/flex_vertical/split/50
+Benchmarking layout/flex_vertical/split/50: Warming up for 3.0000 s
+Benchmarking layout/flex_vertical/split/50: Collecting 100 samples in estimated 5.0004 s (11M iterations)
+Benchmarking layout/flex_vertical/split/50: Analyzing
+layout/flex_vertical/split/50
+                        time:   [439.50 ns 441.90 ns 444.78 ns]
+Found 6 outliers among 100 measurements (6.00%)
+  4 (4.00%) high mild
+  2 (2.00%) high severe
+
+Benchmarking layout/flex_gap/gap/0
+Benchmarking layout/flex_gap/gap/0: Warming up for 3.0000 s
+Benchmarking layout/flex_gap/gap/0: Collecting 100 samples in estimated 5.0001 s (83M iterations)
+Benchmarking layout/flex_gap/gap/0: Analyzing
+layout/flex_gap/gap/0   time:   [60.819 ns 61.302 ns 61.866 ns]
+Found 8 outliers among 100 measurements (8.00%)
+  1 (1.00%) high mild
+  7 (7.00%) high severe
+Benchmarking layout/flex_gap/gap/1
+Benchmarking layout/flex_gap/gap/1: Warming up for 3.0000 s
+Benchmarking layout/flex_gap/gap/1: Collecting 100 samples in estimated 5.0001 s (83M iterations)
+Benchmarking layout/flex_gap/gap/1: Analyzing
+layout/flex_gap/gap/1   time:   [60.203 ns 60.885 ns 61.794 ns]
+Found 7 outliers among 100 measurements (7.00%)
+  1 (1.00%) high mild
+  6 (6.00%) high severe
+Benchmarking layout/flex_gap/gap/2
+Benchmarking layout/flex_gap/gap/2: Warming up for 3.0000 s
+Benchmarking layout/flex_gap/gap/2: Collecting 100 samples in estimated 5.0001 s (88M iterations)
+Benchmarking layout/flex_gap/gap/2: Analyzing
+layout/flex_gap/gap/2   time:   [57.009 ns 57.901 ns 59.117 ns]
+Found 7 outliers among 100 measurements (7.00%)
+  3 (3.00%) high mild
+  4 (4.00%) high severe
+Benchmarking layout/flex_gap/gap/4
+Benchmarking layout/flex_gap/gap/4: Warming up for 3.0000 s
+Benchmarking layout/flex_gap/gap/4: Collecting 100 samples in estimated 5.0001 s (83M iterations)
+Benchmarking layout/flex_gap/gap/4: Analyzing
+layout/flex_gap/gap/4   time:   [59.854 ns 61.114 ns 62.742 ns]
+Found 3 outliers among 100 measurements (3.00%)
+  3 (3.00%) high severe
+
+Benchmarking layout/flex_alignment/split/start
+Benchmarking layout/flex_alignment/split/start: Warming up for 3.0000 s
+Benchmarking layout/flex_alignment/split/start: Collecting 100 samples in estimated 5.0002 s (94M iterations)
+Benchmarking layout/flex_alignment/split/start: Analyzing
+layout/flex_alignment/split/start
+                        time:   [51.964 ns 53.581 ns 56.081 ns]
+Found 5 outliers among 100 measurements (5.00%)
+  3 (3.00%) high mild
+  2 (2.00%) high severe
+Benchmarking layout/flex_alignment/split/center
+Benchmarking layout/flex_alignment/split/center: Warming up for 3.0000 s
+Benchmarking layout/flex_alignment/split/center: Collecting 100 samples in estimated 5.0002 s (94M iterations)
+Benchmarking layout/flex_alignment/split/center: Analyzing
+layout/flex_alignment/split/center
+                        time:   [52.788 ns 53.207 ns 53.723 ns]
+Found 7 outliers among 100 measurements (7.00%)
+  4 (4.00%) high mild
+  3 (3.00%) high severe
+Benchmarking layout/flex_alignment/split/end
+Benchmarking layout/flex_alignment/split/end: Warming up for 3.0000 s
+Benchmarking layout/flex_alignment/split/end: Collecting 100 samples in estimated 5.0000 s (91M iterations)
+Benchmarking layout/flex_alignment/split/end: Analyzing
+layout/flex_alignment/split/end
+                        time:   [53.025 ns 53.361 ns 53.720 ns]
+Found 7 outliers among 100 measurements (7.00%)
+  4 (4.00%) high mild
+  3 (3.00%) high severe
+Benchmarking layout/flex_alignment/split/space_between
+Benchmarking layout/flex_alignment/split/space_between: Warming up for 3.0000 s
+Benchmarking layout/flex_alignment/split/space_between: Collecting 100 samples in estimated 5.0002 s (86M iterations)
+Benchmarking layout/flex_alignment/split/space_between: Analyzing
+layout/flex_alignment/split/space_between
+                        time:   [56.933 ns 57.379 ns 57.917 ns]
+Found 5 outliers among 100 measurements (5.00%)
+  3 (3.00%) high mild
+  2 (2.00%) high severe
+
+Benchmarking layout/nested/3col_x_10row
+Benchmarking layout/nested/3col_x_10row: Warming up for 3.0000 s
+Benchmarking layout/nested/3col_x_10row: Collecting 100 samples in estimated 5.0006 s (12M iterations)
+Benchmarking layout/nested/3col_x_10row: Analyzing
+layout/nested/3col_x_10row
+                        time:   [397.78 ns 400.10 ns 402.51 ns]
+Found 2 outliers among 100 measurements (2.00%)
+  1 (1.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking layout/grid/split_3x3
+Benchmarking layout/grid/split_3x3: Warming up for 3.0000 s
+Benchmarking layout/grid/split_3x3: Collecting 100 samples in estimated 5.0002 s (33M iterations)
+Benchmarking layout/grid/split_3x3: Analyzing
+layout/grid/split_3x3   time:   [151.09 ns 151.89 ns 152.79 ns]
+Found 5 outliers among 100 measurements (5.00%)
+  4 (4.00%) high mild
+  1 (1.00%) high severe
+Benchmarking layout/grid/split_10x10
+Benchmarking layout/grid/split_10x10: Warming up for 3.0000 s
+Benchmarking layout/grid/split_10x10: Collecting 100 samples in estimated 5.0001 s (9.8M iterations)
+Benchmarking layout/grid/split_10x10: Analyzing
+layout/grid/split_10x10 time:   [487.91 ns 490.74 ns 493.63 ns]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+Benchmarking layout/grid/split_20x20
+Benchmarking layout/grid/split_20x20: Warming up for 3.0000 s
+Benchmarking layout/grid/split_20x20: Collecting 100 samples in estimated 5.0016 s (5.6M iterations)
+Benchmarking layout/grid/split_20x20: Analyzing
+layout/grid/split_20x20 time:   [841.99 ns 847.00 ns 852.51 ns]
+Found 8 outliers among 100 measurements (8.00%)
+  6 (6.00%) high mild
+  2 (2.00%) high severe
+Benchmarking layout/grid/split_4x3_mixed
+Benchmarking layout/grid/split_4x3_mixed: Warming up for 3.0000 s
+Benchmarking layout/grid/split_4x3_mixed: Collecting 100 samples in estimated 5.0004 s (31M iterations)
+Benchmarking layout/grid/split_4x3_mixed: Analyzing
+layout/grid/split_4x3_mixed
+                        time:   [160.66 ns 161.79 ns 163.02 ns]
+Found 5 outliers among 100 measurements (5.00%)
+  5 (5.00%) high mild
+

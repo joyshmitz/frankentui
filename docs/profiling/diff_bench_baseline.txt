@@ -1,0 +1,430 @@
+   Compiling proc-macro2 v1.0.106
+   Compiling libc v0.2.180
+   Compiling quote v1.0.44
+   Compiling unicode-ident v1.0.22
+   Compiling cfg-if v1.0.4
+   Compiling rustix v1.1.3
+   Compiling linux-raw-sys v0.11.0
+   Compiling bitflags v2.10.0
+   Compiling parking_lot_core v0.9.12
+   Compiling unicode-segmentation v1.12.0
+   Compiling signal-hook v0.3.18
+   Compiling smallvec v1.15.1
+   Compiling getrandom v0.3.4
+   Compiling scopeguard v1.2.0
+   Compiling zerocopy v0.8.37
+   Compiling once_cell v1.21.3
+   Compiling log v0.4.29
+   Compiling litrs v1.0.0
+   Compiling serde_core v1.0.228
+   Compiling memchr v2.7.6
+   Compiling autocfg v1.5.0
+   Compiling serde v1.0.228
+   Compiling zmij v1.0.17
+   Compiling pin-project-lite v0.2.16
+   Compiling allocator-api2 v0.2.21
+   Compiling rayon-core v1.13.0
+   Compiling equivalent v1.0.2
+   Compiling regex-syntax v0.8.8
+   Compiling unicode-width v0.2.2
+   Compiling either v1.15.0
+   Compiling foldhash v0.1.5
+   Compiling serde_json v1.0.149
+   Compiling plotters-backend v0.3.7
+   Compiling str_indices v0.4.4
+   Compiling anstyle v1.0.13
+   Compiling ciborium-io v0.2.2
+   Compiling clap_lex v0.7.7
+   Compiling itoa v1.0.17
+   Compiling fastrand v2.3.0
+   Compiling bit-vec v0.8.0
+   Compiling quick-error v1.2.3
+   Compiling same-file v1.0.6
+   Compiling fnv v1.0.7
+   Compiling cast v0.3.0
+   Compiling rustc-hash v2.1.1
+   Compiling anes v0.1.6
+   Compiling oorandom v11.1.5
+   Compiling unarray v0.1.4
+   Compiling lock_api v0.4.14
+   Compiling crossbeam-utils v0.8.21
+   Compiling walkdir v2.5.0
+   Compiling tracing-core v0.1.36
+   Compiling ropey v1.6.1
+   Compiling itertools v0.10.5
+   Compiling plotters-svg v0.3.7
+   Compiling clap_builder v4.5.56
+   Compiling convert_case v0.10.0
+   Compiling num-traits v0.2.19
+   Compiling bit-set v0.8.0
+   Compiling hashbrown v0.15.5
+   Compiling document-features v0.2.12
+   Compiling crossbeam-epoch v0.9.18
+   Compiling crossbeam-deque v0.8.6
+   Compiling syn v2.0.114
+   Compiling lru v0.12.5
+   Compiling errno v0.3.14
+   Compiling mio v1.1.1
+   Compiling wait-timeout v0.2.1
+   Compiling is-terminal v0.4.17
+   Compiling plotters v0.3.7
+   Compiling signal-hook-registry v1.4.8
+   Compiling rand_core v0.9.5
+   Compiling rayon v1.11.0
+   Compiling parking_lot v0.12.5
+   Compiling rand_xorshift v0.4.0
+   Compiling rand v0.9.2
+   Compiling criterion-plot v0.5.0
+   Compiling signal-hook-mio v0.2.5
+   Compiling regex-automata v0.4.13
+   Compiling clap v4.5.56
+   Compiling tempfile v3.24.0
+   Compiling rusty-fork v0.3.1
+   Compiling regex v1.12.2
+   Compiling zerocopy-derive v0.8.37
+   Compiling derive_more-impl v2.1.1
+   Compiling serde_derive v1.0.228
+   Compiling tracing-attributes v0.1.31
+   Compiling derive_more v2.1.1
+   Compiling crossterm v0.29.0
+   Compiling tracing v0.1.44
+   Compiling ftui-core v0.1.0 (/data/projects/frankentui/crates/ftui-core)
+   Compiling ftui-render v0.1.0 (/data/projects/frankentui/crates/ftui-render)
+   Compiling ftui-layout v0.1.0 (/data/projects/frankentui/crates/ftui-layout)
+   Compiling ftui-style v0.1.0 (/data/projects/frankentui/crates/ftui-style)
+   Compiling ftui-text v0.1.0 (/data/projects/frankentui/crates/ftui-text)
+   Compiling tinytemplate v1.2.1
+   Compiling ftui-widgets v0.1.0 (/data/projects/frankentui/crates/ftui-widgets)
+   Compiling half v2.7.1
+   Compiling ppv-lite86 v0.2.21
+   Compiling ciborium-ll v0.2.2
+   Compiling rand_chacha v0.9.0
+   Compiling ciborium v0.2.2
+   Compiling proptest v1.9.0
+   Compiling criterion v0.5.1
+    Finished `bench` profile [optimized] target(s) in 24.86s
+     Running benches/diff_bench.rs (/data/tmp/cargo-target/release/deps/diff_bench-e54f5fa6785ba4d1)
+Benchmarking diff/identical/compute/80x24
+Benchmarking diff/identical/compute/80x24: Warming up for 3.0000 s
+Benchmarking diff/identical/compute/80x24: Collecting 100 samples in estimated 5.0046 s (2.7M iterations)
+Benchmarking diff/identical/compute/80x24: Analyzing
+diff/identical/compute/80x24
+                        time:   [1.8041 µs 1.8134 µs 1.8229 µs]
+                        thrpt:  [1.0533 Gelem/s 1.0588 Gelem/s 1.0642 Gelem/s]
+Found 4 outliers among 100 measurements (4.00%)
+  3 (3.00%) high mild
+  1 (1.00%) high severe
+Benchmarking diff/identical/compute/120x40
+Benchmarking diff/identical/compute/120x40: Warming up for 3.0000 s
+Benchmarking diff/identical/compute/120x40: Collecting 100 samples in estimated 5.0000 s (1.1M iterations)
+Benchmarking diff/identical/compute/120x40: Analyzing
+diff/identical/compute/120x40
+                        time:   [4.4289 µs 4.4542 µs 4.4804 µs]
+                        thrpt:  [1.0713 Gelem/s 1.0776 Gelem/s 1.0838 Gelem/s]
+Found 6 outliers among 100 measurements (6.00%)
+  4 (4.00%) high mild
+  2 (2.00%) high severe
+Benchmarking diff/identical/compute/200x60
+Benchmarking diff/identical/compute/200x60: Warming up for 3.0000 s
+Benchmarking diff/identical/compute/200x60: Collecting 100 samples in estimated 5.0406 s (444k iterations)
+Benchmarking diff/identical/compute/200x60: Analyzing
+diff/identical/compute/200x60
+                        time:   [11.160 µs 11.228 µs 11.297 µs]
+                        thrpt:  [1.0622 Gelem/s 1.0687 Gelem/s 1.0753 Gelem/s]
+
+Benchmarking diff/sparse_5pct/compute/80x24
+Benchmarking diff/sparse_5pct/compute/80x24: Warming up for 3.0000 s
+Benchmarking diff/sparse_5pct/compute/80x24: Collecting 100 samples in estimated 5.0049 s (2.0M iterations)
+Benchmarking diff/sparse_5pct/compute/80x24: Analyzing
+diff/sparse_5pct/compute/80x24
+                        time:   [2.5461 µs 2.5641 µs 2.5829 µs]
+                        thrpt:  [743.35 Melem/s 748.80 Melem/s 754.10 Melem/s]
+Found 3 outliers among 100 measurements (3.00%)
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+Benchmarking diff/sparse_5pct/compute/120x40
+Benchmarking diff/sparse_5pct/compute/120x40: Warming up for 3.0000 s
+Benchmarking diff/sparse_5pct/compute/120x40: Collecting 100 samples in estimated 5.0268 s (864k iterations)
+Benchmarking diff/sparse_5pct/compute/120x40: Analyzing
+diff/sparse_5pct/compute/120x40
+                        time:   [5.8255 µs 5.8854 µs 5.9468 µs]
+                        thrpt:  [807.16 Melem/s 815.58 Melem/s 823.97 Melem/s]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+Benchmarking diff/sparse_5pct/compute/200x60
+Benchmarking diff/sparse_5pct/compute/200x60: Warming up for 3.0000 s
+Benchmarking diff/sparse_5pct/compute/200x60: Collecting 100 samples in estimated 5.0646 s (394k iterations)
+Benchmarking diff/sparse_5pct/compute/200x60: Analyzing
+diff/sparse_5pct/compute/200x60
+                        time:   [12.438 µs 12.567 µs 12.712 µs]
+                        thrpt:  [943.99 Melem/s 954.85 Melem/s 964.80 Melem/s]
+Found 3 outliers among 100 measurements (3.00%)
+  3 (3.00%) high mild
+
+Benchmarking diff/heavy_50pct/compute/80x24
+Benchmarking diff/heavy_50pct/compute/80x24: Warming up for 3.0000 s
+Benchmarking diff/heavy_50pct/compute/80x24: Collecting 100 samples in estimated 5.0053 s (2.2M iterations)
+Benchmarking diff/heavy_50pct/compute/80x24: Analyzing
+diff/heavy_50pct/compute/80x24
+                        time:   [3.1680 µs 3.4341 µs 3.6946 µs]
+                        thrpt:  [519.67 Melem/s 559.10 Melem/s 606.06 Melem/s]
+Found 5 outliers among 100 measurements (5.00%)
+  4 (4.00%) high mild
+  1 (1.00%) high severe
+Benchmarking diff/heavy_50pct/compute/120x40
+Benchmarking diff/heavy_50pct/compute/120x40: Warming up for 3.0000 s
+Benchmarking diff/heavy_50pct/compute/120x40: Collecting 100 samples in estimated 5.0050 s (672k iterations)
+Benchmarking diff/heavy_50pct/compute/120x40: Analyzing
+diff/heavy_50pct/compute/120x40
+                        time:   [6.3997 µs 6.4690 µs 6.5422 µs]
+                        thrpt:  [733.70 Melem/s 742.00 Melem/s 750.03 Melem/s]
+Found 6 outliers among 100 measurements (6.00%)
+  2 (2.00%) low mild
+  2 (2.00%) high mild
+  2 (2.00%) high severe
+Benchmarking diff/heavy_50pct/compute/200x60
+Benchmarking diff/heavy_50pct/compute/200x60: Warming up for 3.0000 s
+Benchmarking diff/heavy_50pct/compute/200x60: Collecting 100 samples in estimated 5.0217 s (364k iterations)
+Benchmarking diff/heavy_50pct/compute/200x60: Analyzing
+diff/heavy_50pct/compute/200x60
+                        time:   [13.250 µs 13.423 µs 13.611 µs]
+                        thrpt:  [881.65 Melem/s 893.99 Melem/s 905.68 Melem/s]
+Found 4 outliers among 100 measurements (4.00%)
+  3 (3.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking diff/full_100pct/compute/80x24
+Benchmarking diff/full_100pct/compute/80x24: Warming up for 3.0000 s
+Benchmarking diff/full_100pct/compute/80x24: Collecting 100 samples in estimated 5.0040 s (2.1M iterations)
+Benchmarking diff/full_100pct/compute/80x24: Analyzing
+diff/full_100pct/compute/80x24
+                        time:   [2.2774 µs 2.2928 µs 2.3084 µs]
+                        thrpt:  [831.74 Melem/s 837.39 Melem/s 843.06 Melem/s]
+Found 6 outliers among 100 measurements (6.00%)
+  3 (3.00%) high mild
+  3 (3.00%) high severe
+Benchmarking diff/full_100pct/compute/120x40
+Benchmarking diff/full_100pct/compute/120x40: Warming up for 3.0000 s
+Benchmarking diff/full_100pct/compute/120x40: Collecting 100 samples in estimated 5.0156 s (808k iterations)
+Benchmarking diff/full_100pct/compute/120x40: Analyzing
+diff/full_100pct/compute/120x40
+                        time:   [5.9174 µs 5.9867 µs 6.0594 µs]
+                        thrpt:  [792.15 Melem/s 801.77 Melem/s 811.17 Melem/s]
+Found 6 outliers among 100 measurements (6.00%)
+  6 (6.00%) high mild
+Benchmarking diff/full_100pct/compute/200x60
+Benchmarking diff/full_100pct/compute/200x60: Warming up for 3.0000 s
+Benchmarking diff/full_100pct/compute/200x60: Collecting 100 samples in estimated 5.0707 s (359k iterations)
+Benchmarking diff/full_100pct/compute/200x60: Analyzing
+diff/full_100pct/compute/200x60
+                        time:   [13.887 µs 14.012 µs 14.139 µs]
+                        thrpt:  [848.71 Melem/s 856.40 Melem/s 864.10 Melem/s]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+
+Benchmarking diff/runs/coalesce/80x24@5%
+Benchmarking diff/runs/coalesce/80x24@5%: Warming up for 3.0000 s
+Benchmarking diff/runs/coalesce/80x24@5%: Collecting 100 samples in estimated 5.0023 s (9.9M iterations)
+Benchmarking diff/runs/coalesce/80x24@5%: Analyzing
+diff/runs/coalesce/80x24@5%
+                        time:   [500.05 ns 503.57 ns 507.05 ns]
+Found 3 outliers among 100 measurements (3.00%)
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+Benchmarking diff/runs/coalesce/80x24@50%
+Benchmarking diff/runs/coalesce/80x24@50%: Warming up for 3.0000 s
+Benchmarking diff/runs/coalesce/80x24@50%: Collecting 100 samples in estimated 5.0038 s (4.8M iterations)
+Benchmarking diff/runs/coalesce/80x24@50%: Analyzing
+diff/runs/coalesce/80x24@50%
+                        time:   [1.0231 µs 1.0278 µs 1.0326 µs]
+Found 8 outliers among 100 measurements (8.00%)
+  3 (3.00%) high mild
+  5 (5.00%) high severe
+Benchmarking diff/runs/coalesce/200x60@5%
+Benchmarking diff/runs/coalesce/200x60@5%: Warming up for 3.0000 s
+Benchmarking diff/runs/coalesce/200x60@5%: Collecting 100 samples in estimated 5.0001 s (2.1M iterations)
+Benchmarking diff/runs/coalesce/200x60@5%: Analyzing
+diff/runs/coalesce/200x60@5%
+                        time:   [2.3843 µs 2.3988 µs 2.4142 µs]
+Found 2 outliers among 100 measurements (2.00%)
+  2 (2.00%) high mild
+Criterion.rs ERROR: Error in Gnuplot:          line 0: Bad format character
+
+
+Criterion.rs ERROR: Error in Gnuplot:          line 0: Bad format character
+
+
+
+Benchmarking cell/bits_eq/equal
+Benchmarking cell/bits_eq/equal: Warming up for 3.0000 s
+Benchmarking cell/bits_eq/equal: Collecting 100 samples in estimated 5.0000 s (2.3B iterations)
+Benchmarking cell/bits_eq/equal: Analyzing
+cell/bits_eq/equal      time:   [2.2077 ns 2.2146 ns 2.2218 ns]
+Found 8 outliers among 100 measurements (8.00%)
+  5 (5.00%) high mild
+  3 (3.00%) high severe
+Benchmarking cell/bits_eq/different
+Benchmarking cell/bits_eq/different: Warming up for 3.0000 s
+Benchmarking cell/bits_eq/different: Collecting 100 samples in estimated 5.0000 s (2.3B iterations)
+Benchmarking cell/bits_eq/different: Analyzing
+cell/bits_eq/different  time:   [2.1961 ns 2.2223 ns 2.2510 ns]
+Found 4 outliers among 100 measurements (4.00%)
+  4 (4.00%) high severe
+
+Benchmarking cell/from_char/ascii
+Benchmarking cell/from_char/ascii: Warming up for 3.0000 s
+Benchmarking cell/from_char/ascii: Collecting 100 samples in estimated 5.0000 s (5.0B iterations)
+Benchmarking cell/from_char/ascii: Analyzing
+cell/from_char/ascii    time:   [967.12 ps 984.09 ps 1.0013 ns]
+Found 3 outliers among 100 measurements (3.00%)
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+Benchmarking cell/from_char/cjk
+Benchmarking cell/from_char/cjk: Warming up for 3.0000 s
+Benchmarking cell/from_char/cjk: Collecting 100 samples in estimated 5.0000 s (5.4B iterations)
+Benchmarking cell/from_char/cjk: Analyzing
+cell/from_char/cjk      time:   [904.69 ps 919.98 ps 936.93 ps]
+Found 8 outliers among 100 measurements (8.00%)
+  5 (5.00%) high mild
+  3 (3.00%) high severe
+Benchmarking cell/from_char/styled
+Benchmarking cell/from_char/styled: Warming up for 3.0000 s
+Benchmarking cell/from_char/styled: Collecting 100 samples in estimated 5.0000 s (5.0B iterations)
+Benchmarking cell/from_char/styled: Analyzing
+cell/from_char/styled   time:   [970.61 ps 1.0084 ns 1.0450 ns]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+
+Benchmarking cell/packed_rgba/rgb_construct
+Benchmarking cell/packed_rgba/rgb_construct: Warming up for 3.0000 s
+Benchmarking cell/packed_rgba/rgb_construct: Collecting 100 samples in estimated 5.0000 s (8.4B iterations)
+Benchmarking cell/packed_rgba/rgb_construct: Analyzing
+cell/packed_rgba/rgb_construct
+                        time:   [563.53 ps 574.64 ps 585.23 ps]
+Found 2 outliers among 100 measurements (2.00%)
+  1 (1.00%) high mild
+  1 (1.00%) high severe
+Benchmarking cell/packed_rgba/over_blend
+Benchmarking cell/packed_rgba/over_blend: Warming up for 3.0000 s
+Benchmarking cell/packed_rgba/over_blend: Collecting 100 samples in estimated 5.0000 s (1.9B iterations)
+Benchmarking cell/packed_rgba/over_blend: Analyzing
+cell/packed_rgba/over_blend
+                        time:   [2.4347 ns 2.5160 ns 2.5985 ns]
+
+Benchmarking buffer/row_cells/200x60_all_rows
+Benchmarking buffer/row_cells/200x60_all_rows: Warming up for 3.0000 s
+Benchmarking buffer/row_cells/200x60_all_rows: Collecting 100 samples in estimated 5.0000 s (115M iterations)
+Benchmarking buffer/row_cells/200x60_all_rows: Analyzing
+buffer/row_cells/200x60_all_rows
+                        time:   [45.032 ns 47.732 ns 50.532 ns]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+
+Benchmarking buffer/new/alloc/80x24
+Benchmarking buffer/new/alloc/80x24: Warming up for 3.0000 s
+Benchmarking buffer/new/alloc/80x24: Collecting 100 samples in estimated 5.0011 s (2.7M iterations)
+Benchmarking buffer/new/alloc/80x24: Analyzing
+buffer/new/alloc/80x24  time:   [1.6785 µs 1.8237 µs 1.9755 µs]
+                        thrpt:  [971.92 Melem/s 1.0528 Gelem/s 1.1439 Gelem/s]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+Benchmarking buffer/new/alloc/120x40
+Benchmarking buffer/new/alloc/120x40: Warming up for 3.0000 s
+Benchmarking buffer/new/alloc/120x40: Collecting 100 samples in estimated 5.0029 s (1.3M iterations)
+Benchmarking buffer/new/alloc/120x40: Analyzing
+buffer/new/alloc/120x40 time:   [3.1336 µs 3.3345 µs 3.5562 µs]
+                        thrpt:  [1.3498 Gelem/s 1.4395 Gelem/s 1.5318 Gelem/s]
+Found 2 outliers among 100 measurements (2.00%)
+  1 (1.00%) high mild
+  1 (1.00%) high severe
+Benchmarking buffer/new/alloc/200x60
+Benchmarking buffer/new/alloc/200x60: Warming up for 3.0000 s
+Benchmarking buffer/new/alloc/200x60: Collecting 100 samples in estimated 5.0253 s (505k iterations)
+Benchmarking buffer/new/alloc/200x60: Analyzing
+buffer/new/alloc/200x60 time:   [8.9645 µs 9.7945 µs 10.659 µs]
+                        thrpt:  [1.1259 Gelem/s 1.2252 Gelem/s 1.3386 Gelem/s]
+Found 2 outliers among 100 measurements (2.00%)
+  2 (2.00%) high mild
+
+Benchmarking buffer/clone/clone/80x24
+Benchmarking buffer/clone/clone/80x24: Warming up for 3.0000 s
+Benchmarking buffer/clone/clone/80x24: Collecting 100 samples in estimated 5.0035 s (5.4M iterations)
+Benchmarking buffer/clone/clone/80x24: Analyzing
+buffer/clone/clone/80x24
+                        time:   [853.41 ns 915.51 ns 983.66 ns]
+                        thrpt:  [1.9519 Gelem/s 2.0972 Gelem/s 2.2498 Gelem/s]
+Found 3 outliers among 100 measurements (3.00%)
+  3 (3.00%) high mild
+Benchmarking buffer/clone/clone/200x60
+Benchmarking buffer/clone/clone/200x60: Warming up for 3.0000 s
+Benchmarking buffer/clone/clone/200x60: Collecting 100 samples in estimated 5.0411 s (308k iterations)
+Benchmarking buffer/clone/clone/200x60: Analyzing
+buffer/clone/clone/200x60
+                        time:   [17.096 µs 18.306 µs 19.612 µs]
+                        thrpt:  [611.87 Melem/s 655.53 Melem/s 701.93 Melem/s]
+Found 3 outliers among 100 measurements (3.00%)
+  3 (3.00%) high mild
+
+Benchmarking buffer/fill/full/80x24
+Benchmarking buffer/fill/full/80x24: Warming up for 3.0000 s
+Benchmarking buffer/fill/full/80x24: Collecting 100 samples in estimated 5.1207 s (96k iterations)
+Benchmarking buffer/fill/full/80x24: Analyzing
+buffer/fill/full/80x24  time:   [46.366 µs 50.408 µs 55.134 µs]
+                        thrpt:  [34.824 Melem/s 38.089 Melem/s 41.410 Melem/s]
+Found 4 outliers among 100 measurements (4.00%)
+  2 (2.00%) high mild
+  2 (2.00%) high severe
+Benchmarking buffer/fill/full/200x60
+Benchmarking buffer/fill/full/200x60: Warming up for 3.0000 s
+Benchmarking buffer/fill/full/200x60: Collecting 100 samples in estimated 5.8869 s (30k iterations)
+Benchmarking buffer/fill/full/200x60: Analyzing
+buffer/fill/full/200x60 time:   [190.05 µs 191.39 µs 192.84 µs]
+                        thrpt:  [62.228 Melem/s 62.700 Melem/s 63.141 Melem/s]
+Found 4 outliers among 100 measurements (4.00%)
+  2 (2.00%) high mild
+  2 (2.00%) high severe
+
+Benchmarking buffer/clear/clear/80x24
+Benchmarking buffer/clear/clear/80x24: Warming up for 3.0000 s
+Benchmarking buffer/clear/clear/80x24: Collecting 100 samples in estimated 5.0025 s (10M iterations)
+Benchmarking buffer/clear/clear/80x24: Analyzing
+buffer/clear/clear/80x24
+                        time:   [474.78 ns 477.30 ns 480.14 ns]
+                        thrpt:  [3.9988 Gelem/s 4.0226 Gelem/s 4.0439 Gelem/s]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+Benchmarking buffer/clear/clear/200x60
+Benchmarking buffer/clear/clear/200x60: Warming up for 3.0000 s
+Benchmarking buffer/clear/clear/200x60: Collecting 100 samples in estimated 5.0113 s (1.7M iterations)
+Benchmarking buffer/clear/clear/200x60: Analyzing
+buffer/clear/clear/200x60
+                        time:   [3.0881 µs 3.1165 µs 3.1446 µs]
+                        thrpt:  [3.8161 Gelem/s 3.8505 Gelem/s 3.8859 Gelem/s]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+
+Benchmarking buffer/set/single_cell_80x24
+Benchmarking buffer/set/single_cell_80x24: Warming up for 3.0000 s
+Benchmarking buffer/set/single_cell_80x24: Collecting 100 samples in estimated 5.0000 s (315M iterations)
+Benchmarking buffer/set/single_cell_80x24: Analyzing
+buffer/set/single_cell_80x24
+                        time:   [15.247 ns 15.386 ns 15.564 ns]
+Found 7 outliers among 100 measurements (7.00%)
+  3 (3.00%) high mild
+  4 (4.00%) high severe
+Benchmarking buffer/set/full_row_80
+Benchmarking buffer/set/full_row_80: Warming up for 3.0000 s
+Benchmarking buffer/set/full_row_80: Collecting 100 samples in estimated 5.0016 s (4.0M iterations)
+Benchmarking buffer/set/full_row_80: Analyzing
+buffer/set/full_row_80  time:   [1.2424 µs 1.2493 µs 1.2560 µs]
+
+Benchmarking buffer/scissor/push_fill_pop_200x60
+Benchmarking buffer/scissor/push_fill_pop_200x60: Warming up for 3.0000 s
+Benchmarking buffer/scissor/push_fill_pop_200x60: Collecting 100 samples in estimated 5.0035 s (76k iterations)
+Benchmarking buffer/scissor/push_fill_pop_200x60: Analyzing
+buffer/scissor/push_fill_pop_200x60
+                        time:   [64.404 µs 65.721 µs 67.499 µs]
+Found 12 outliers among 100 measurements (12.00%)
+  5 (5.00%) high mild
+  7 (7.00%) high severe
+
