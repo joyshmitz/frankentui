@@ -1330,7 +1330,10 @@ mod tests {
             let mut lab = LayoutLab::new();
             lab.current_preset = preset;
 
+            // Pin theme to prevent race with parallel WCAG contrast tests
+            // that mutate the global CURRENT_THEME via set_theme().
             let checksum_a = {
+                theme::set_theme(theme::ThemeId::CyberpunkAurora);
                 let mut pool = GraphemePool::new();
                 let mut frame = Frame::new(120, 40, &mut pool);
                 lab.view(&mut frame, Rect::new(0, 0, 120, 40));
@@ -1338,6 +1341,7 @@ mod tests {
             };
 
             let checksum_b = {
+                theme::set_theme(theme::ThemeId::CyberpunkAurora);
                 let mut pool = GraphemePool::new();
                 let mut frame = Frame::new(120, 40, &mut pool);
                 lab.view(&mut frame, Rect::new(0, 0, 120, 40));
@@ -1377,7 +1381,10 @@ mod tests {
         lab.align_pos = 7;
         lab.show_debug = true;
 
+        // Pin theme to prevent race with parallel WCAG contrast tests
+        // that mutate the global CURRENT_THEME via set_theme().
         let checksum_a = {
+            theme::set_theme(theme::ThemeId::CyberpunkAurora);
             let mut pool = GraphemePool::new();
             let mut frame = Frame::new(120, 40, &mut pool);
             lab.view(&mut frame, Rect::new(0, 0, 120, 40));
@@ -1385,6 +1392,7 @@ mod tests {
         };
 
         let checksum_b = {
+            theme::set_theme(theme::ThemeId::CyberpunkAurora);
             let mut pool = GraphemePool::new();
             let mut frame = Frame::new(120, 40, &mut pool);
             lab.view(&mut frame, Rect::new(0, 0, 120, 40));
@@ -1937,7 +1945,10 @@ mod proptests {
             lab.padding_amount = padding;
             lab.show_debug = debug;
 
+            // Pin theme to prevent race with parallel WCAG contrast tests
+            // that mutate the global CURRENT_THEME via set_theme().
             let checksum_a = {
+                theme::set_theme(theme::ThemeId::CyberpunkAurora);
                 let mut pool = GraphemePool::new();
                 let mut frame = Frame::new(120, 40, &mut pool);
                 lab.view(&mut frame, Rect::new(0, 0, 120, 40));
@@ -1956,6 +1967,7 @@ mod proptests {
             };
 
             let checksum_b = {
+                theme::set_theme(theme::ThemeId::CyberpunkAurora);
                 let mut pool = GraphemePool::new();
                 let mut frame = Frame::new(120, 40, &mut pool);
                 lab.view(&mut frame, Rect::new(0, 0, 120, 40));

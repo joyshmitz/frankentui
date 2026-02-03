@@ -1595,7 +1595,10 @@ mod tests {
         for view in [ViewMode::Matrix, ViewMode::Evidence, ViewMode::Simulation] {
             screen.view = view;
             let area = Rect::new(0, 0, 120, 40);
+            // Pin theme to prevent race with parallel WCAG contrast tests
+            // that mutate the global CURRENT_THEME via set_theme().
             let checksum_first = {
+                theme::set_theme(theme::ThemeId::CyberpunkAurora);
                 let mut pool = GraphemePool::new();
                 let mut frame = Frame::new(120, 40, &mut pool);
                 screen.view(&mut frame, area);
@@ -1603,6 +1606,7 @@ mod tests {
             };
 
             let checksum_second = {
+                theme::set_theme(theme::ThemeId::CyberpunkAurora);
                 let mut pool = GraphemePool::new();
                 let mut frame = Frame::new(120, 40, &mut pool);
                 screen.view(&mut frame, area);
