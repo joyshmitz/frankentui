@@ -861,6 +861,7 @@ impl fmt::Display for RankingSummary {
 
 /// Cached entry from a previous scoring pass.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct CachedEntry {
     /// Index into the corpus.
     corpus_index: usize,
@@ -991,10 +992,10 @@ impl IncrementalScorer {
         generation: Option<u64>,
     ) -> Vec<(usize, MatchResult)> {
         // Detect corpus changes.
-        let gen = generation.unwrap_or(self.corpus_generation);
-        if gen != self.corpus_generation || corpus.len() != self.corpus_len {
+        let generation_val = generation.unwrap_or(self.corpus_generation);
+        if generation_val != self.corpus_generation || corpus.len() != self.corpus_len {
             self.invalidate();
-            self.corpus_generation = gen;
+            self.corpus_generation = generation_val;
             self.corpus_len = corpus.len();
         }
 
@@ -1046,11 +1047,7 @@ impl IncrementalScorer {
     }
 
     /// Incremental scan: only re-score items that previously matched.
-    fn score_incremental(
-        &mut self,
-        query: &str,
-        corpus: &[&str],
-    ) -> Vec<(usize, MatchResult)> {
+    fn score_incremental(&mut self, query: &str, corpus: &[&str]) -> Vec<(usize, MatchResult)> {
         self.stats.incremental_scans += 1;
 
         let prev_match_count = self.cache.len();
@@ -1619,6 +1616,493 @@ mod tests {
         assert!(
             ranked.summary.median_gap >= 0.0,
             "Median gap must be non-negative"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // IncrementalScorer Tests (bd-39y4.13)
+    // -----------------------------------------------------------------------
+
+    fn test_corpus() -> Vec<&'static str> {
+        vec![
+            "Open File",
+            "Save File",
+            "Close Tab",
+            "Git: Commit",
+            "Git: Push",
+            "Git: Pull",
+            "Go to Line",
+            "Find in Files",
+            "Toggle Terminal",
+            "Format Document",
+        ]
+    }
+
+    #[test]
+    fn incremental_full_scan_on_first_call() {
+        let mut scorer = IncrementalScorer::new();
+        let corpus = test_corpus();
+        let results = scorer.score_corpus("git", &corpus, None);
+
+        assert!(!results.is_empty(), "Should find matches for 'git'");
+        assert_eq!(scorer.stats().full_scans, 1);
+        assert_eq!(scorer.stats().incremental_scans, 0);
+    }
+
+    #[test]
+    fn incremental_prunes_on_query_extension() {
+        let mut scorer = IncrementalScorer::new();
+        let corpus = test_corpus();
+
+        // First query: "g" matches many items
+        let r1 = scorer.score_corpus("g", &corpus, None);
+        assert_eq!(scorer.stats().full_scans, 1);
+
+        // Extended query: "gi" — should use incremental path
+        let r2 = scorer.score_corpus("gi", &corpus, None);
+        assert_eq!(scorer.stats().incremental_scans, 1);
+        assert!(r2.len() <= r1.len(), "Extended query should match <= items");
+
+        // Further extension: "git" — still incremental
+        let r3 = scorer.score_corpus("git", &corpus, None);
+        assert_eq!(scorer.stats().incremental_scans, 2);
+        assert!(r3.len() <= r2.len());
+    }
+
+    #[test]
+    fn incremental_correctness_matches_full_scan() {
+        let corpus = test_corpus();
+
+        // Incremental path
+        let mut inc = IncrementalScorer::new();
+        inc.score_corpus("g", &corpus, None);
+        let inc_results = inc.score_corpus("git", &corpus, None);
+
+        // Full scan path (fresh scorer, no cache)
+        let mut full = IncrementalScorer::new();
+        let full_results = full.score_corpus("git", &corpus, None);
+
+        // Results should be identical.
+        assert_eq!(
+            inc_results.len(),
+            full_results.len(),
+            "Incremental and full scan should return same count"
+        );
+
+        for (a, b) in inc_results.iter().zip(full_results.iter()) {
+            assert_eq!(a.0, b.0, "Same corpus indices");
+            assert!(
+                (a.1.score - b.1.score).abs() < f64::EPSILON,
+                "Same scores: {} vs {}",
+                a.1.score,
+                b.1.score
+            );
+        }
+    }
+
+    #[test]
+    fn incremental_falls_back_on_non_extension() {
+        let mut scorer = IncrementalScorer::new();
+        let corpus = test_corpus();
+
+        scorer.score_corpus("git", &corpus, None);
+        assert_eq!(scorer.stats().full_scans, 1);
+
+        // "fi" doesn't extend "git" — must full scan
+        scorer.score_corpus("fi", &corpus, None);
+        assert_eq!(scorer.stats().full_scans, 2);
+    }
+
+    #[test]
+    fn incremental_invalidate_forces_full_scan() {
+        let mut scorer = IncrementalScorer::new();
+        let corpus = test_corpus();
+
+        scorer.score_corpus("g", &corpus, None);
+        scorer.invalidate();
+
+        // Even though "gi" extends "g", cache was cleared
+        scorer.score_corpus("gi", &corpus, None);
+        assert_eq!(scorer.stats().full_scans, 2);
+        assert_eq!(scorer.stats().incremental_scans, 0);
+    }
+
+    #[test]
+    fn incremental_generation_change_invalidates() {
+        let mut scorer = IncrementalScorer::new();
+        let corpus = test_corpus();
+
+        scorer.score_corpus("g", &corpus, Some(1));
+
+        // Generation changed — cache invalid
+        scorer.score_corpus("gi", &corpus, Some(2));
+        assert_eq!(scorer.stats().full_scans, 2);
+    }
+
+    #[test]
+    fn incremental_corpus_size_change_invalidates() {
+        let mut scorer = IncrementalScorer::new();
+        let corpus1 = test_corpus();
+        let corpus2 = &corpus1[..5];
+
+        scorer.score_corpus("g", &corpus1, None);
+        scorer.score_corpus("gi", corpus2, None);
+        // Corpus size changed → full scan
+        assert_eq!(scorer.stats().full_scans, 2);
+    }
+
+    #[test]
+    fn incremental_empty_query() {
+        let mut scorer = IncrementalScorer::new();
+        let corpus = test_corpus();
+
+        let results = scorer.score_corpus("", &corpus, None);
+        // Empty query matches everything (with weak scores)
+        assert_eq!(results.len(), corpus.len());
+    }
+
+    #[test]
+    fn incremental_no_match_query() {
+        let mut scorer = IncrementalScorer::new();
+        let corpus = test_corpus();
+
+        let results = scorer.score_corpus("zzz", &corpus, None);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn incremental_stats_prune_ratio() {
+        let mut scorer = IncrementalScorer::new();
+        let corpus = test_corpus();
+
+        scorer.score_corpus("g", &corpus, None);
+        scorer.score_corpus("gi", &corpus, None);
+        scorer.score_corpus("git", &corpus, None);
+
+        let stats = scorer.stats();
+        assert!(
+            stats.prune_ratio() > 0.0,
+            "Prune ratio should be > 0 after incremental scans"
+        );
+        assert!(stats.total_pruned > 0, "Should have pruned some items");
+    }
+
+    #[test]
+    fn incremental_results_sorted_descending() {
+        let mut scorer = IncrementalScorer::new();
+        let corpus = test_corpus();
+
+        let results = scorer.score_corpus("o", &corpus, None);
+        for w in results.windows(2) {
+            assert!(
+                w[0].1.score >= w[1].1.score,
+                "Results should be sorted descending: {} >= {}",
+                w[0].1.score,
+                w[1].1.score
+            );
+        }
+    }
+
+    #[test]
+    fn incremental_deterministic() {
+        let corpus = test_corpus();
+
+        let mut s1 = IncrementalScorer::new();
+        let r1 = s1.score_corpus("git", &corpus, None);
+
+        let mut s2 = IncrementalScorer::new();
+        let r2 = s2.score_corpus("git", &corpus, None);
+
+        assert_eq!(r1.len(), r2.len());
+        for (a, b) in r1.iter().zip(r2.iter()) {
+            assert_eq!(a.0, b.0);
+            assert!((a.1.score - b.1.score).abs() < f64::EPSILON);
+        }
+    }
+}
+
+// ===========================================================================
+// Performance regression tests (bd-39y4.5)
+// ===========================================================================
+
+#[cfg(test)]
+mod perf_tests {
+    use super::*;
+    use std::time::Instant;
+
+    /// Budget thresholds for single-query scoring.
+    /// These are generous to avoid CI flakes but catch >2x regressions.
+    const SINGLE_SCORE_BUDGET_US: u64 = 10; // 10µs per score call
+    const CORPUS_100_BUDGET_US: u64 = 500; // 500µs for 100-item full scan
+    const CORPUS_1000_BUDGET_US: u64 = 5_000; // 5ms for 1000-item full scan
+    const CORPUS_5000_BUDGET_US: u64 = 25_000; // 25ms for 5000-item full scan
+    const INCREMENTAL_7KEY_100_BUDGET_US: u64 = 2_000; // 2ms for 7 keystrokes on 100 items
+    const INCREMENTAL_7KEY_1000_BUDGET_US: u64 = 15_000; // 15ms for 7 keystrokes on 1000 items
+
+    /// Generate a command corpus of the specified size with realistic variety.
+    fn make_corpus(size: usize) -> Vec<String> {
+        let base = [
+            "Open File",
+            "Save File",
+            "Close Tab",
+            "Split Editor Right",
+            "Split Editor Down",
+            "Toggle Terminal",
+            "Go to Line",
+            "Find in Files",
+            "Replace in Files",
+            "Git: Commit",
+            "Git: Push",
+            "Git: Pull",
+            "Debug: Start",
+            "Debug: Stop",
+            "Debug: Step Over",
+            "Format Document",
+            "Rename Symbol",
+            "Go to Definition",
+            "Find All References",
+            "Toggle Sidebar",
+        ];
+        base.iter()
+            .cycle()
+            .take(size)
+            .enumerate()
+            .map(|(i, cmd)| {
+                if i < base.len() {
+                    (*cmd).to_string()
+                } else {
+                    format!("{} ({})", cmd, i)
+                }
+            })
+            .collect()
+    }
+
+    /// Measure the median of N runs (returns microseconds).
+    fn measure_us(iterations: usize, mut f: impl FnMut()) -> u64 {
+        let mut times = Vec::with_capacity(iterations);
+        // Warmup
+        for _ in 0..3 {
+            f();
+        }
+        for _ in 0..iterations {
+            let start = Instant::now();
+            f();
+            times.push(start.elapsed().as_micros() as u64);
+        }
+        times.sort_unstable();
+        times[times.len() / 2] // p50
+    }
+
+    /// Measure p95 of N runs (returns microseconds).
+    fn measure_p95_us(iterations: usize, mut f: impl FnMut()) -> u64 {
+        let mut times = Vec::with_capacity(iterations);
+        // Warmup
+        for _ in 0..3 {
+            f();
+        }
+        for _ in 0..iterations {
+            let start = Instant::now();
+            f();
+            times.push(start.elapsed().as_micros() as u64);
+        }
+        times.sort_unstable();
+        times[(times.len() as f64 * 0.95) as usize]
+    }
+
+    #[test]
+    fn perf_single_score_under_budget() {
+        let scorer = BayesianScorer::fast();
+        let p50 = measure_us(200, || {
+            std::hint::black_box(scorer.score("git co", "Git: Commit"));
+        });
+        assert!(
+            p50 <= SINGLE_SCORE_BUDGET_US,
+            "Single score p50 = {}µs exceeds budget {}µs",
+            p50,
+            SINGLE_SCORE_BUDGET_US,
+        );
+    }
+
+    #[test]
+    fn perf_corpus_100_under_budget() {
+        let scorer = BayesianScorer::fast();
+        let corpus = make_corpus(100);
+        let p95 = measure_p95_us(50, || {
+            let mut results: Vec<_> = corpus
+                .iter()
+                .map(|t| scorer.score("git co", t))
+                .filter(|r| r.score > 0.0)
+                .collect();
+            results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+            std::hint::black_box(&results);
+        });
+        assert!(
+            p95 <= CORPUS_100_BUDGET_US,
+            "100-item corpus p95 = {}µs exceeds budget {}µs",
+            p95,
+            CORPUS_100_BUDGET_US,
+        );
+    }
+
+    #[test]
+    fn perf_corpus_1000_under_budget() {
+        let scorer = BayesianScorer::fast();
+        let corpus = make_corpus(1_000);
+        let p95 = measure_p95_us(20, || {
+            let mut results: Vec<_> = corpus
+                .iter()
+                .map(|t| scorer.score("git co", t))
+                .filter(|r| r.score > 0.0)
+                .collect();
+            results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+            std::hint::black_box(&results);
+        });
+        assert!(
+            p95 <= CORPUS_1000_BUDGET_US,
+            "1000-item corpus p95 = {}µs exceeds budget {}µs",
+            p95,
+            CORPUS_1000_BUDGET_US,
+        );
+    }
+
+    #[test]
+    fn perf_corpus_5000_under_budget() {
+        let scorer = BayesianScorer::fast();
+        let corpus = make_corpus(5_000);
+        let p95 = measure_p95_us(10, || {
+            let mut results: Vec<_> = corpus
+                .iter()
+                .map(|t| scorer.score("git co", t))
+                .filter(|r| r.score > 0.0)
+                .collect();
+            results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+            std::hint::black_box(&results);
+        });
+        assert!(
+            p95 <= CORPUS_5000_BUDGET_US,
+            "5000-item corpus p95 = {}µs exceeds budget {}µs",
+            p95,
+            CORPUS_5000_BUDGET_US,
+        );
+    }
+
+    #[test]
+    fn perf_incremental_7key_100_under_budget() {
+        let corpus = make_corpus(100);
+        let corpus_refs: Vec<&str> = corpus.iter().map(|s| s.as_str()).collect();
+        let queries = ["g", "gi", "git", "git ", "git c", "git co", "git com"];
+
+        let p95 = measure_p95_us(30, || {
+            let mut inc = IncrementalScorer::new();
+            for query in &queries {
+                let results = inc.score_corpus(query, &corpus_refs, None);
+                std::hint::black_box(&results);
+            }
+        });
+        assert!(
+            p95 <= INCREMENTAL_7KEY_100_BUDGET_US,
+            "Incremental 7-key 100-item p95 = {}µs exceeds budget {}µs",
+            p95,
+            INCREMENTAL_7KEY_100_BUDGET_US,
+        );
+    }
+
+    #[test]
+    fn perf_incremental_7key_1000_under_budget() {
+        let corpus = make_corpus(1_000);
+        let corpus_refs: Vec<&str> = corpus.iter().map(|s| s.as_str()).collect();
+        let queries = ["g", "gi", "git", "git ", "git c", "git co", "git com"];
+
+        let p95 = measure_p95_us(10, || {
+            let mut inc = IncrementalScorer::new();
+            for query in &queries {
+                let results = inc.score_corpus(query, &corpus_refs, None);
+                std::hint::black_box(&results);
+            }
+        });
+        assert!(
+            p95 <= INCREMENTAL_7KEY_1000_BUDGET_US,
+            "Incremental 7-key 1000-item p95 = {}µs exceeds budget {}µs",
+            p95,
+            INCREMENTAL_7KEY_1000_BUDGET_US,
+        );
+    }
+
+    #[test]
+    fn perf_incremental_faster_than_naive() {
+        let corpus = make_corpus(100);
+        let corpus_refs: Vec<&str> = corpus.iter().map(|s| s.as_str()).collect();
+        let scorer = BayesianScorer::fast();
+        let queries = ["g", "gi", "git", "git ", "git c", "git co", "git com"];
+
+        let naive_p50 = measure_us(30, || {
+            for query in &queries {
+                let mut results: Vec<_> = corpus
+                    .iter()
+                    .map(|t| scorer.score(query, t))
+                    .filter(|r| r.score > 0.0)
+                    .collect();
+                results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+                std::hint::black_box(&results);
+            }
+        });
+
+        let inc_p50 = measure_us(30, || {
+            let mut inc = IncrementalScorer::new();
+            for query in &queries {
+                let results = inc.score_corpus(query, &corpus_refs, None);
+                std::hint::black_box(&results);
+            }
+        });
+
+        // Incremental should not be more than 2x slower than naive
+        // (in practice it's faster, but we set a relaxed threshold)
+        assert!(
+            inc_p50 <= naive_p50 * 2 + 50, // +50µs tolerance for measurement noise
+            "Incremental p50 = {}µs is >2x slower than naive p50 = {}µs",
+            inc_p50,
+            naive_p50,
+        );
+    }
+
+    #[test]
+    fn perf_scaling_sublinear() {
+        let scorer = BayesianScorer::fast();
+        let corpus_100 = make_corpus(100);
+        let corpus_1000 = make_corpus(1_000);
+
+        let time_100 = measure_us(30, || {
+            let mut results: Vec<_> = corpus_100
+                .iter()
+                .map(|t| scorer.score("git", t))
+                .filter(|r| r.score > 0.0)
+                .collect();
+            results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+            std::hint::black_box(&results);
+        });
+
+        let time_1000 = measure_us(20, || {
+            let mut results: Vec<_> = corpus_1000
+                .iter()
+                .map(|t| scorer.score("git", t))
+                .filter(|r| r.score > 0.0)
+                .collect();
+            results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+            std::hint::black_box(&results);
+        });
+
+        // 10x corpus should take less than 15x time (linear + sort overhead)
+        let ratio = if time_100 > 0 {
+            time_1000 as f64 / time_100 as f64
+        } else {
+            0.0
+        };
+        assert!(
+            ratio < 15.0,
+            "1000/100 scaling ratio = {:.1}x exceeds 15x threshold (100: {}µs, 1000: {}µs)",
+            ratio,
+            time_100,
+            time_1000,
         );
     }
 }

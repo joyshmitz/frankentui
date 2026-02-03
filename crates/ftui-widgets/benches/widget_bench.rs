@@ -14,6 +14,7 @@ use ftui_widgets::StatefulWidget;
 use ftui_widgets::Widget;
 use ftui_widgets::block::Block;
 use ftui_widgets::borders::Borders;
+use ftui_widgets::command_palette::{BayesianScorer, IncrementalScorer};
 use ftui_widgets::log_ring::LogRing;
 use ftui_widgets::log_viewer::{LogViewer, LogViewerState};
 use ftui_widgets::paragraph::Paragraph;
@@ -306,6 +307,178 @@ fn bench_log_viewer_search(c: &mut Criterion) {
     group.finish();
 }
 
+// ============================================================================
+// Command Palette scorer benchmarks (bd-39y4.13)
+// ============================================================================
+
+fn make_command_corpus(size: usize) -> Vec<String> {
+    let base_commands = [
+        "Open File",
+        "Save File",
+        "Close Tab",
+        "Split Editor Right",
+        "Split Editor Down",
+        "Toggle Terminal",
+        "Go to Line",
+        "Find in Files",
+        "Replace in Files",
+        "Git: Commit",
+        "Git: Push",
+        "Git: Pull",
+        "Debug: Start",
+        "Debug: Stop",
+        "Debug: Step Over",
+        "Format Document",
+        "Rename Symbol",
+        "Go to Definition",
+        "Find All References",
+        "Toggle Sidebar",
+        "Toggle Minimap",
+        "Change Language Mode",
+        "Select Color Theme",
+        "Keyboard Shortcuts",
+        "User Settings",
+        "Extensions: Install",
+        "Terminal: New",
+        "View: Zoom In",
+        "View: Zoom Out",
+        "Editor: Font Size",
+    ];
+    base_commands
+        .iter()
+        .cycle()
+        .take(size)
+        .enumerate()
+        .map(|(i, cmd)| {
+            if i < base_commands.len() {
+                (*cmd).to_string()
+            } else {
+                format!("{} ({})", cmd, i)
+            }
+        })
+        .collect()
+}
+
+fn bench_scorer_single(c: &mut Criterion) {
+    let mut group = c.benchmark_group("command_palette/score_single");
+    let scorer = BayesianScorer::new();
+    let scorer_fast = BayesianScorer::fast();
+
+    let cases = [
+        ("exact", "Open File", "Open File"),
+        ("prefix", "ope", "Open File"),
+        ("word_start", "of", "Open File"),
+        ("substring", "en f", "Open File"),
+        ("fuzzy", "opfl", "Open File"),
+        ("no_match", "xyz", "Open File"),
+    ];
+
+    for (label, query, title) in cases {
+        group.bench_function(BenchmarkId::new("tracked", label), |b| {
+            b.iter(|| black_box(scorer.score(black_box(query), black_box(title))))
+        });
+        group.bench_function(BenchmarkId::new("fast", label), |b| {
+            b.iter(|| black_box(scorer_fast.score(black_box(query), black_box(title))))
+        });
+    }
+
+    group.finish();
+}
+
+fn bench_scorer_corpus(c: &mut Criterion) {
+    let mut group = c.benchmark_group("command_palette/score_corpus");
+    let scorer = BayesianScorer::fast();
+
+    for (size, label) in [
+        (30, "30"),
+        (100, "100"),
+        (500, "500"),
+        (1000, "1K"),
+        (5000, "5K"),
+    ] {
+        let corpus = make_command_corpus(size);
+
+        group.bench_function(BenchmarkId::new("full_scan", label), |b| {
+            b.iter(|| {
+                let query = black_box("git co");
+                let mut results: Vec<_> = corpus
+                    .iter()
+                    .map(|title| scorer.score(query, title))
+                    .filter(|r| r.score > 0.0)
+                    .collect();
+                results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+                black_box(&results);
+            })
+        });
+    }
+
+    group.finish();
+}
+
+fn bench_scorer_incremental_query(c: &mut Criterion) {
+    let mut group = c.benchmark_group("command_palette/incremental_query");
+    let scorer = BayesianScorer::fast();
+    let corpus = make_command_corpus(100);
+    let corpus_refs: Vec<&str> = corpus.iter().map(|s| s.as_str()).collect();
+
+    // Simulate typing "git commit" one character at a time
+    let queries = ["g", "gi", "git", "git ", "git c", "git co", "git com"];
+
+    group.bench_function("naive_rescans", |b| {
+        b.iter(|| {
+            for query in &queries {
+                let mut results: Vec<_> = corpus
+                    .iter()
+                    .map(|title| scorer.score(black_box(query), title))
+                    .filter(|r| r.score > 0.0)
+                    .collect();
+                results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+                black_box(&results);
+            }
+        })
+    });
+
+    group.bench_function("incremental_scorer", |b| {
+        b.iter(|| {
+            let mut inc = IncrementalScorer::new();
+            for query in &queries {
+                let results = inc.score_corpus(black_box(query), &corpus_refs, None);
+                black_box(&results);
+            }
+        })
+    });
+
+    group.finish();
+}
+
+fn bench_scorer_incremental_corpus_sizes(c: &mut Criterion) {
+    let mut group = c.benchmark_group("command_palette/incremental_corpus_size");
+    let queries = ["g", "gi", "git", "git ", "git c"];
+
+    for (size, label) in [
+        (30, "30"),
+        (100, "100"),
+        (500, "500"),
+        (1000, "1K"),
+        (5000, "5K"),
+    ] {
+        let corpus = make_command_corpus(size);
+        let corpus_refs: Vec<&str> = corpus.iter().map(|s| s.as_str()).collect();
+
+        group.bench_function(BenchmarkId::new("incremental", label), |b| {
+            b.iter(|| {
+                let mut inc = IncrementalScorer::new();
+                for query in &queries {
+                    let results = inc.score_corpus(black_box(query), &corpus_refs, None);
+                    black_box(&results);
+                }
+            })
+        });
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_block_render,
@@ -317,6 +490,10 @@ criterion_group!(
     bench_virtualized_scroll,
     bench_log_viewer_render,
     bench_log_viewer_search,
+    bench_scorer_single,
+    bench_scorer_corpus,
+    bench_scorer_incremental_query,
+    bench_scorer_incremental_corpus_sizes,
 );
 
 criterion_main!(benches);
