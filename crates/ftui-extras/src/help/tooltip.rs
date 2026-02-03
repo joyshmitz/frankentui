@@ -518,8 +518,8 @@ mod tests {
         let screen = Rect::new(0, 0, 80, 24);
         let (x, y) = tooltip.calculate_position(screen);
 
-        assert!(x == 0 || x > 0, "X should not underflow");
-        assert!(y == 0 || y > 0, "Y should not underflow (clamped)");
+        assert!(x >= 0, "X should not underflow");
+        assert!(y >= 0, "Y should not underflow (clamped)");
     }
 
     // ── Wrapping tests ────────────────────────────────────────────────
@@ -562,8 +562,8 @@ mod tests {
         let tooltip = Tooltip::new("Hi").config(TooltipConfig::default().max_width(20).padding(2));
 
         let size = tooltip.content_size();
-        assert!(size.width >= 2 + 4, "Width should include padding");
-        assert!(size.height >= 1 + 4, "Height should include padding");
+        assert!(size.width > 2 + 3, "Width should include padding");
+        assert!(size.height > 4, "Height should include padding");
     }
 
     #[test]

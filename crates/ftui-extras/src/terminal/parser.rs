@@ -582,6 +582,7 @@ mod tests {
 
     /// Test handler that records all events.
     #[derive(Default)]
+    #[allow(clippy::type_complexity)]
     struct TestHandler {
         printed: RefCell<Vec<char>>,
         executed: RefCell<Vec<u8>>,

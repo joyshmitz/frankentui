@@ -1194,7 +1194,7 @@ mod tests {
             let mut stream = Vec::new();
             stream.extend(make_synced_frame(b"Frame 1"));
             let gap_len = 3 + rng.next_range(10);
-            stream.extend(std::iter::repeat_n(b'Z', gap_len as usize));
+            stream.extend(std::iter::repeat_n(b'Z', gap_len));
             stream.extend(make_synced_frame(b"Frame 2"));
             let analysis = analyze_stream(&stream);
             assert!(
