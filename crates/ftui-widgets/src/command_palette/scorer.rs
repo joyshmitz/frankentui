@@ -110,7 +110,7 @@ pub struct EvidenceEntry {
     /// Values > 1.0 support relevance, < 1.0 oppose it.
     pub bayes_factor: f64,
     /// Human-readable explanation.
-    pub description: String,
+    pub description: EvidenceDescription,
 }
 
 /// Types of evidence that contribute to match scoring.
@@ -147,6 +147,30 @@ impl fmt::Display for EvidenceEntry {
     }
 }
 
+/// Human-readable evidence description (lazy formatting).
+#[derive(Debug, Clone)]
+pub enum EvidenceDescription {
+    Static(&'static str),
+    TitleLengthChars { len: usize },
+    FirstMatchPos { pos: usize },
+    WordBoundaryCount { count: usize },
+    GapTotal { total: usize },
+    CoveragePercent { percent: f64 },
+}
+
+impl fmt::Display for EvidenceDescription {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Static(msg) => write!(f, "{msg}"),
+            Self::TitleLengthChars { len } => write!(f, "title length {} chars", len),
+            Self::FirstMatchPos { pos } => write!(f, "first match at position {}", pos),
+            Self::WordBoundaryCount { count } => write!(f, "{} word boundary matches", count),
+            Self::GapTotal { total } => write!(f, "total gap of {} characters", total),
+            Self::CoveragePercent { percent } => write!(f, "query covers {:.0}% of title", percent),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Evidence Ledger
 // ---------------------------------------------------------------------------
@@ -167,11 +191,11 @@ impl EvidenceLedger {
     }
 
     /// Add an evidence entry.
-    pub fn add(&mut self, kind: EvidenceKind, bayes_factor: f64, description: impl Into<String>) {
+    pub fn add(&mut self, kind: EvidenceKind, bayes_factor: f64, description: EvidenceDescription) {
         self.entries.push(EvidenceEntry {
             kind,
             bayes_factor,
-            description: description.into(),
+            description,
         });
     }
 
@@ -249,7 +273,11 @@ impl MatchResult {
     /// Create a no-match result.
     pub fn no_match() -> Self {
         let mut evidence = EvidenceLedger::new();
-        evidence.add(EvidenceKind::MatchType, 0.0, "no matching characters found");
+        evidence.add(
+            EvidenceKind::MatchType,
+            0.0,
+            EvidenceDescription::Static("no matching characters found"),
+        );
         Self {
             score: 0.0,
             match_type: MatchType::NoMatch,
@@ -389,7 +417,7 @@ impl BayesianScorer {
             result.evidence.add(
                 EvidenceKind::TagMatch,
                 3.0, // 3:1 in favor
-                "query matches tag",
+                EvidenceDescription::Static("query matches tag"),
             );
             result.score = result.evidence.posterior_probability();
         }
@@ -403,7 +431,7 @@ impl BayesianScorer {
         evidence.add(
             EvidenceKind::MatchType,
             1.0, // Neutral prior
-            "empty query matches all",
+            EvidenceDescription::Static("empty query matches all"),
         );
 
         // Shorter titles are more specific, slight preference
@@ -411,7 +439,7 @@ impl BayesianScorer {
         evidence.add(
             EvidenceKind::TitleLength,
             length_factor,
-            format!("title length {} chars", title.len()),
+            EvidenceDescription::TitleLengthChars { len: title.len() },
         );
 
         MatchResult {
