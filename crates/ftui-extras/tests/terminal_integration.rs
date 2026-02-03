@@ -735,7 +735,9 @@ fn full_pipeline_pty_to_widget() {
         let mut line = String::new();
         for x in 0..40 {
             if let Some(cell) = frame.buffer.get(x, y) {
-                line.push_str(&cell.grapheme());
+                if let Some(c) = cell.content.as_char() {
+                    line.push(c);
+                }
             }
         }
         if line.contains("TESTOUTPUT") {
@@ -810,7 +812,7 @@ fn terminal_smaller_than_area() {
 
     // Content should appear at (0,0)
     let cell = frame.buffer.get(0, 0).expect("cell should exist");
-    assert_eq!(cell.grapheme(), "X");
+    assert_eq!(cell.content.as_char(), Some('X'));
 }
 
 #[test]
@@ -828,5 +830,5 @@ fn area_offset_respected() {
 
     // Content should appear at (5,3)
     let cell = frame.buffer.get(5, 3).expect("cell should exist");
-    assert_eq!(cell.grapheme(), "Z");
+    assert_eq!(cell.content.as_char(), Some('Z'));
 }
