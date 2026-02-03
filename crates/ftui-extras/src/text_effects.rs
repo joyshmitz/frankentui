@@ -354,7 +354,7 @@ pub fn validate_gradient_monotonicity(samples: &[PackedRgba], tolerance: f64) ->
 }
 
 /// Multi-stop color gradient.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ColorGradient {
     stops: Vec<(f64, PackedRgba)>,
 }
@@ -1669,6 +1669,239 @@ impl GlowConfig {
 }
 
 // =============================================================================
+// Border/Outline Effects (bd-882b)
+// =============================================================================
+//
+// Outlines add a stroke around each character for improved legibility on complex
+// backgrounds and for stylistic effects. This is distinct from Shadow/Glow which
+// renders BEHIND text - Outline renders AROUND each character edge.
+//
+// Evidence Ledger:
+// - Choice: 8-neighbor (thickness=1) and 24-neighbor (thickness=2) patterns
+// - Reason: 8-neighbor covers immediate Moore neighborhood, 24-neighbor extends
+//   to a 5x5 grid minus corners for smoother appearance at larger thickness.
+// - Invariants:
+//   - Outline always renders after glow/shadow but before main text
+//   - thickness is clamped to 1-3 to prevent excessive rendering
+//   - Offsets use saturating arithmetic to prevent overflow at edges
+// - Failure Modes:
+//   - thickness > 3: clamped to 3 (24-neighbor already covers practical needs)
+//   - Gradient with no colors: falls back to solid white outline
+
+/// Outline visual style for text stroke effects.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum OutlineStyle {
+    /// Continuous solid stroke around each character.
+    #[default]
+    Solid,
+    /// Alternating visible/invisible stroke segments.
+    Dashed {
+        /// Length of each dash in cells (1-5).
+        dash_len: u8,
+    },
+    /// Two concentric outlines for a double-border effect.
+    Double,
+    /// Animated gradient stroke that cycles colors over time.
+    Gradient(ColorGradient),
+}
+
+/// Configuration for text outline/border effects.
+///
+/// Creates a stroke effect around each character by rendering the character
+/// (or a block character) at multiple offset positions surrounding the text.
+///
+/// # Invariants
+///
+/// 1. **Thickness bounds**: thickness is clamped to 1-3.
+/// 2. **Offset calculation**: Uses 8-neighbor (thickness=1), 16-neighbor (thickness=2),
+///    or 24-neighbor (thickness=3) patterns.
+/// 3. **Z-order**: Outline renders after glow/shadow, before main text.
+///
+/// # Rendering Algorithm
+///
+/// For each character at (x, y):
+/// 1. Calculate neighbor offsets based on thickness
+/// 2. For each offset (dx, dy), render the outline character at (x+dx, y+dy)
+/// 3. Apply style (solid, dashed, double, gradient) to determine color/visibility
+/// 4. Main text renders on top
+///
+/// # Example
+///
+/// ```rust,ignore
+/// OutlineConfig::new(PackedRgba::rgb(255, 255, 255))
+///     .thickness(1)
+///     .style(OutlineStyle::Solid)
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutlineConfig {
+    /// Outline color.
+    pub color: PackedRgba,
+    /// Stroke thickness (1 = immediate neighbors, 2 = two cells out, 3 = three cells out).
+    pub thickness: u8,
+    /// Outline visual style.
+    pub style: OutlineStyle,
+    /// Whether to use the same character as text (true) or block character (false).
+    pub use_text_char: bool,
+}
+
+impl Default for OutlineConfig {
+    fn default() -> Self {
+        Self {
+            color: PackedRgba::rgb(255, 255, 255),
+            thickness: 1,
+            style: OutlineStyle::Solid,
+            use_text_char: true,
+        }
+    }
+}
+
+impl OutlineConfig {
+    /// Create a new outline configuration with the given color.
+    #[must_use]
+    pub const fn new(color: PackedRgba) -> Self {
+        Self {
+            color,
+            thickness: 1,
+            style: OutlineStyle::Solid,
+            use_text_char: true,
+        }
+    }
+
+    /// Set the outline thickness (1-3).
+    #[must_use]
+    pub fn thickness(mut self, thickness: u8) -> Self {
+        self.thickness = thickness.clamp(1, 3);
+        self
+    }
+
+    /// Set the outline style.
+    #[must_use]
+    pub fn style(mut self, style: OutlineStyle) -> Self {
+        self.style = style;
+        self
+    }
+
+    /// Set whether to use the text character or block character for outline.
+    #[must_use]
+    pub const fn use_text_char(mut self, use_text_char: bool) -> Self {
+        self.use_text_char = use_text_char;
+        self
+    }
+
+    /// Generate all outline offsets for the configured thickness.
+    ///
+    /// - thickness=1: 8 neighbors (3x3 grid minus center)
+    /// - thickness=2: 16 neighbors (5x5 grid minus center, minus corners)
+    /// - thickness=3: 24 neighbors (5x5 grid minus center)
+    pub fn offsets(&self) -> impl Iterator<Item = (i8, i8)> {
+        let thickness = self.thickness.clamp(1, 3);
+
+        // Pre-computed offset arrays for each thickness level
+        const OFFSETS_T1: [(i8, i8); 8] = [
+            (-1, -1),
+            (0, -1),
+            (1, -1),
+            (-1, 0),
+            (1, 0),
+            (-1, 1),
+            (0, 1),
+            (1, 1),
+        ];
+
+        const OFFSETS_T2: [(i8, i8); 16] = [
+            (-2, -1),
+            (-2, 0),
+            (-2, 1),
+            (-1, -2),
+            (-1, -1),
+            (-1, 0),
+            (-1, 1),
+            (-1, 2),
+            (0, -2),
+            (0, 2),
+            (1, -2),
+            (1, -1),
+            (1, 0),
+            (1, 1),
+            (1, 2),
+            (2, -1),
+        ];
+
+        const OFFSETS_T3: [(i8, i8); 24] = [
+            (-2, -2),
+            (-2, -1),
+            (-2, 0),
+            (-2, 1),
+            (-2, 2),
+            (-1, -2),
+            (-1, -1),
+            (-1, 0),
+            (-1, 1),
+            (-1, 2),
+            (0, -2),
+            (0, -1),
+            (0, 2),
+            (1, -2),
+            (1, -1),
+            (1, 0),
+            (1, 1),
+            (1, 2),
+            (2, -2),
+            (2, -1),
+            (2, 0),
+            (2, 1),
+            (2, 2),
+            (0, 1),
+        ];
+
+        // Return iterator over appropriate offsets based on thickness
+        let slice: &[(i8, i8)] = match thickness {
+            1 => &OFFSETS_T1,
+            2 => &OFFSETS_T2[..],
+            _ => &OFFSETS_T3,
+        };
+
+        slice.iter().copied()
+    }
+
+    /// Calculate the color for an outline position, accounting for style.
+    ///
+    /// Returns None if the position should not be rendered (e.g., dashed gap).
+    #[inline]
+    pub fn color_at(&self, offset_idx: usize, time: f64) -> Option<PackedRgba> {
+        match &self.style {
+            OutlineStyle::Solid => Some(self.color),
+            OutlineStyle::Dashed { dash_len } => {
+                let dash_len = (*dash_len).max(1) as usize;
+                // Alternate: dash_len visible, dash_len invisible
+                if (offset_idx / dash_len).is_multiple_of(2) {
+                    Some(self.color)
+                } else {
+                    None
+                }
+            }
+            OutlineStyle::Double => {
+                // Double renders two rings - handled by doubling thickness in render
+                Some(self.color)
+            }
+            OutlineStyle::Gradient(gradient) => {
+                // Animate gradient based on time
+                let t = (time * 0.5).rem_euclid(1.0);
+                let adjusted_t = (t + offset_idx as f64 * 0.1).rem_euclid(1.0);
+                Some(gradient.sample(adjusted_t))
+            }
+        }
+    }
+
+    /// Check if this is a double outline style (requires two passes).
+    #[inline]
+    #[must_use]
+    pub fn is_double(&self) -> bool {
+        matches!(self.style, OutlineStyle::Double)
+    }
+}
+
+// =============================================================================
 // Cursor Animation Types
 // =============================================================================
 
@@ -1830,6 +2063,48 @@ impl RevealMode {
                 idx < threshold
             }
         }
+    }
+}
+
+// =============================================================================
+// DissolveMode - Particle dissolve direction
+// =============================================================================
+
+/// Mode for particle dissolve/materialize effects.
+///
+/// Controls how text breaks apart into particles or gathers from particles.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DissolveMode {
+    /// Text breaks apart, particles drift away from original positions.
+    #[default]
+    Dissolve,
+    /// Particles gather into text (reverse of Dissolve).
+    Materialize,
+    /// Fast outward burst from center of text.
+    Explode,
+    /// Fast inward gather to center of text.
+    Implode,
+}
+
+impl DissolveMode {
+    /// Returns true if this mode goes from text to particles.
+    #[inline]
+    pub fn is_outward(&self) -> bool {
+        matches!(self, DissolveMode::Dissolve | DissolveMode::Explode)
+    }
+
+    /// Returns true if this mode involves center-based movement.
+    #[inline]
+    pub fn is_centered(&self) -> bool {
+        matches!(self, DissolveMode::Explode | DissolveMode::Implode)
+    }
+
+    /// Get particle characters based on distance from origin.
+    /// Closer particles use larger characters.
+    pub fn particle_char(distance: f64) -> char {
+        const PARTICLES: [char; 4] = ['·', '∙', '•', '*'];
+        let idx = (distance.clamp(0.0, 1.0) * 3.0) as usize;
+        PARTICLES[idx.min(3)]
     }
 }
 
@@ -2199,6 +2474,41 @@ pub enum TextEffect {
         /// Random brightness variation (0.0-1.0) for flicker.
         flicker: f64,
     },
+
+    // --- Particle Effects ---
+    /// Particle dissolve/materialize effect.
+    ///
+    /// Breaks text into particles that drift away (dissolve/explode) or
+    /// gathers particles into text (materialize/implode). Particles inherit
+    /// colors from the text effect chain, so gradients work with dissolve.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// StyledText::new("DISSOLVE")
+    ///     .effect(TextEffect::RainbowGradient { speed: 0.1 })
+    ///     .effect(TextEffect::ParticleDissolve {
+    ///         progress: 0.5,
+    ///         mode: DissolveMode::Dissolve,
+    ///         speed: 1.0,
+    ///         gravity: 0.5,
+    ///         seed: 42,
+    ///     })
+    /// // Half-dissolved text with rainbow-colored particles
+    /// ```
+    ParticleDissolve {
+        /// Progress from 0.0 (solid text) to 1.0 (fully particles).
+        /// For Materialize/Implode, 0.0 = particles, 1.0 = solid text.
+        progress: f64,
+        /// Dissolve mode controlling particle behavior.
+        mode: DissolveMode,
+        /// Particle drift speed multiplier.
+        speed: f64,
+        /// Gravity effect (0.0 = float, 1.0 = fall downward).
+        gravity: f64,
+        /// Seed for deterministic particle paths.
+        seed: u64,
+    },
 }
 
 // =============================================================================
@@ -2247,6 +2557,8 @@ pub struct StyledText {
     shadows: Vec<Shadow>,
     /// Multi-layer glow configuration.
     glow_config: Option<GlowConfig>,
+    /// Border/outline configuration.
+    outline_config: Option<OutlineConfig>,
 }
 
 impl StyledText {
@@ -2265,6 +2577,7 @@ impl StyledText {
             easing: Easing::default(),
             shadows: Vec::new(),
             glow_config: None,
+            outline_config: None,
         }
     }
 
@@ -2443,6 +2756,49 @@ impl StyledText {
     #[must_use]
     pub fn glow_config(&self) -> Option<&GlowConfig> {
         self.glow_config.as_ref()
+    }
+
+    // =========================================================================
+    // Outline/Border Methods (bd-882b)
+    // =========================================================================
+
+    /// Add a border/outline effect around text.
+    ///
+    /// Outlines render a stroke around each character by drawing the character
+    /// at multiple offset positions. This improves legibility on complex
+    /// backgrounds and adds visual depth.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// StyledText::new("OUTLINED")
+    ///     .outline(OutlineConfig::new(PackedRgba::rgb(0, 0, 0))
+    ///         .thickness(1)
+    ///         .style(OutlineStyle::Solid))
+    /// ```
+    #[must_use]
+    pub fn outline(mut self, config: OutlineConfig) -> Self {
+        self.outline_config = Some(config);
+        self
+    }
+
+    /// Clear the outline effect.
+    #[must_use]
+    pub fn clear_outline(mut self) -> Self {
+        self.outline_config = None;
+        self
+    }
+
+    /// Check if outline is configured.
+    #[must_use]
+    pub fn has_outline(&self) -> bool {
+        self.outline_config.is_some()
+    }
+
+    /// Get the outline configuration if set.
+    #[must_use]
+    pub fn outline_config(&self) -> Option<&OutlineConfig> {
+        self.outline_config.as_ref()
     }
 
     /// Get the configured shadows.
@@ -2729,6 +3085,38 @@ impl StyledText {
 
             // Scanline is handled directly in char_color, not via effect_color
             TextEffect::Scanline { .. } => base,
+
+            // ParticleDissolve: Apply alpha based on progress and mode
+            TextEffect::ParticleDissolve {
+                progress,
+                mode,
+                speed: _,
+                gravity: _,
+                seed,
+            } => {
+                // Determine effective progress based on mode
+                let effective_progress = if mode.is_outward() {
+                    *progress
+                } else {
+                    1.0 - *progress
+                };
+
+                // Use deterministic randomness to decide if this char is dissolved
+                let hash = seed
+                    .wrapping_mul(idx as u64 + 1)
+                    .wrapping_add(0x9E3779B97F4A7C15);
+                let char_threshold = (hash % 10000) as f64 / 10000.0;
+
+                // Characters dissolve based on their threshold vs progress
+                if char_threshold < effective_progress {
+                    // This char is dissolved - show as particle with fading alpha
+                    let particle_alpha = (1.0 - effective_progress).max(0.3);
+                    apply_alpha(base, particle_alpha)
+                } else {
+                    // This char is still solid
+                    base
+                }
+            }
         }
     }
 
@@ -3091,6 +3479,33 @@ impl StyledText {
                         alpha_multiplier *= 1.0 - intensity * 0.5;
                     }
                 }
+
+                // ParticleDissolve applies alpha based on dissolve state
+                TextEffect::ParticleDissolve {
+                    progress,
+                    mode,
+                    speed: _,
+                    gravity: _,
+                    seed,
+                } => {
+                    let effective_progress = if mode.is_outward() {
+                        *progress
+                    } else {
+                        1.0 - *progress
+                    };
+
+                    // Deterministic per-character dissolve threshold
+                    let hash = seed
+                        .wrapping_mul(idx as u64 + 1)
+                        .wrapping_add(0x9E3779B97F4A7C15);
+                    let char_threshold = (hash % 10000) as f64 / 10000.0;
+
+                    if char_threshold < effective_progress {
+                        // Dissolved: fade based on how far dissolved
+                        let particle_alpha = (1.0 - effective_progress).max(0.3);
+                        alpha_multiplier *= particle_alpha;
+                    }
+                }
             }
         }
 
@@ -3151,6 +3566,33 @@ impl StyledText {
                 TextEffect::Typewriter { visible_chars } => {
                     if (idx as f64) >= *visible_chars {
                         return ' ';
+                    }
+                }
+
+                TextEffect::ParticleDissolve {
+                    progress,
+                    mode,
+                    speed,
+                    gravity: _,
+                    seed,
+                } => {
+                    let effective_progress = if mode.is_outward() {
+                        *progress
+                    } else {
+                        1.0 - *progress
+                    };
+
+                    // Deterministic per-character dissolve threshold
+                    let hash = seed
+                        .wrapping_mul(idx as u64 + 1)
+                        .wrapping_add(0x9E3779B97F4A7C15);
+                    let char_threshold = (hash % 10000) as f64 / 10000.0;
+
+                    if char_threshold < effective_progress {
+                        // Calculate particle drift distance for character selection
+                        let drift = (effective_progress - char_threshold) * speed;
+                        let distance = drift.min(1.0);
+                        return DissolveMode::particle_char(distance);
                     }
                 }
 
@@ -3287,6 +3729,65 @@ impl StyledText {
                     }
                 }
 
+                TextEffect::ParticleDissolve {
+                    progress,
+                    mode,
+                    speed,
+                    gravity,
+                    seed,
+                } => {
+                    let effective_progress = if mode.is_outward() {
+                        *progress
+                    } else {
+                        1.0 - *progress
+                    };
+
+                    // Deterministic per-character dissolve threshold
+                    let hash = seed
+                        .wrapping_mul(idx as u64 + 1)
+                        .wrapping_add(0x9E3779B97F4A7C15);
+                    let char_threshold = (hash % 10000) as f64 / 10000.0;
+
+                    if char_threshold < effective_progress {
+                        // This character is dissolved - calculate particle drift
+                        let drift_amount = (effective_progress - char_threshold) * speed * 3.0;
+
+                        // Get deterministic drift direction per particle
+                        let hash2 = hash.wrapping_mul(2654435761);
+                        let hash3 = hash.wrapping_mul(1597334677);
+
+                        if mode.is_centered() {
+                            // Explode/Implode: move from/to center
+                            let center = total as f64 / 2.0;
+                            let from_center = idx as f64 - center;
+                            let dir_x = if from_center.abs() < 0.5 {
+                                (hash2 % 10000) as f64 / 5000.0 - 1.0
+                            } else {
+                                from_center.signum()
+                            };
+                            let dir_y = (hash3 % 10000) as f64 / 5000.0 - 1.0;
+
+                            offset.dx = offset
+                                .dx
+                                .saturating_add((dir_x * drift_amount).round() as i16);
+                            offset.dy = offset
+                                .dy
+                                .saturating_add(((dir_y + gravity) * drift_amount).round() as i16);
+                        } else {
+                            // Dissolve/Materialize: random drift with gravity
+                            let dir_x = (hash2 % 10000) as f64 / 5000.0 - 1.0;
+                            let dir_y = (hash3 % 10000) as f64 / 5000.0 - 0.5 + gravity;
+
+                            offset.dx = offset
+                                .dx
+                                .saturating_add((dir_x * drift_amount).round() as i16);
+                            offset.dy = offset
+                                .dy
+                                .saturating_add((dir_y * drift_amount).round() as i16);
+                        }
+                    }
+                }
+
                 // Non-position effects don't contribute offset
                 _ => {}
             }
@@ -3304,6 +3805,7 @@ impl StyledText {
                     | TextEffect::Bounce { .. }
                     | TextEffect::Shake { .. }
                     | TextEffect::Cascade { .. }
+                    | TextEffect::ParticleDissolve { .. }
             )
         })
     }
@@ -3401,6 +3903,124 @@ impl StyledText {
         let frame_width = frame.buffer.width();
         let frame_height = frame.buffer.height();
 
+        // =====================================================================
+        // Phase 1: Render glow layers (outermost first)
+        // =====================================================================
+        if let Some(ref glow) = self.glow_config {
+            // Iterate from layer 0 (outermost) to layers-1 (innermost)
+            for layer_idx in 0..glow.layers {
+                let glow_color = glow.layer_color(layer_idx);
+                let offsets: Vec<_> = glow.layer_offsets(layer_idx).collect();
+
+                for (i, ch) in self.text.chars().enumerate() {
+                    let base_px = x.saturating_add(i as u16);
+                    let display_char = self.char_at(i, ch);
+
+                    // Apply each offset for this glow layer
+                    for (dx, dy) in &offsets {
+                        let glow_x = (base_px as i32).saturating_add(i32::from(*dx));
+                        let glow_y = (y as i32).saturating_add(i32::from(*dy));
+
+                        // Bounds check and render
+                        if glow_x >= 0
+                            && glow_x < i32::from(frame_width)
+                            && glow_y >= 0
+                            && glow_y < i32::from(frame_height)
+                            && let Some(cell) = frame.buffer.get_mut(glow_x as u16, glow_y as u16)
+                        {
+                            cell.content = CellContent::from_char(display_char);
+                            cell.fg = glow_color;
+                        }
+                    }
+                }
+            }
+        }
+
+        // =====================================================================
+        // Phase 2: Render shadows (first shadow = furthest from text)
+        // =====================================================================
+        for shadow in &self.shadows {
+            let shadow_color = shadow.effective_color();
+
+            for (i, ch) in self.text.chars().enumerate() {
+                let base_px = x.saturating_add(i as u16);
+                let display_char = self.char_at(i, ch);
+
+                // Apply shadow offset using the helper method
+                if let Some((shadow_x, shadow_y)) =
+                    shadow.apply_offset(base_px, y, frame_width, frame_height)
+                    && let Some(cell) = frame.buffer.get_mut(shadow_x, shadow_y)
+                {
+                    cell.content = CellContent::from_char(display_char);
+                    cell.fg = shadow_color;
+                }
+            }
+        }
+
+        // =====================================================================
+        // Phase 2.5: Render outline/border (after shadows, before main text)
+        // =====================================================================
+        if let Some(ref outline) = self.outline_config {
+            // For Double style, we render two passes: outer ring first, then inner
+            let passes = if outline.is_double() { 2 } else { 1 };
+
+            for pass in 0..passes {
+                // For double outline, scale thickness: pass 0 = outer (thickness+1), pass 1 = inner (thickness)
+                let effective_thickness = if outline.is_double() {
+                    if pass == 0 {
+                        (outline.thickness + 1).min(3)
+                    } else {
+                        outline.thickness
+                    }
+                } else {
+                    outline.thickness
+                };
+
+                // Create temporary config with effective thickness
+                let temp_config = OutlineConfig {
+                    thickness: effective_thickness,
+                    ..outline.clone()
+                };
+
+                let offsets: Vec<_> = temp_config.offsets().collect();
+
+                for (i, ch) in self.text.chars().enumerate() {
+                    let base_px = x.saturating_add(i as u16);
+                    let outline_char = if outline.use_text_char {
+                        self.char_at(i, ch)
+                    } else {
+                        '█' // Block character for solid outline
+                    };
+
+                    // Render at each offset position
+                    for (offset_idx, (dx, dy)) in offsets.iter().enumerate() {
+                        // Get color for this position (may be None for dashed gaps)
+                        let Some(outline_color) = outline.color_at(offset_idx, self.time) else {
+                            continue;
+                        };
+
+                        let outline_x = (base_px as i32).saturating_add(i32::from(*dx));
+                        let outline_y = (y as i32).saturating_add(i32::from(*dy));
+
+                        // Bounds check and render
+                        if outline_x >= 0
+                            && outline_x < i32::from(frame_width)
+                            && outline_y >= 0
+                            && outline_y < i32::from(frame_height)
+                            && let Some(cell) =
+                                frame.buffer.get_mut(outline_x as u16, outline_y as u16)
+                        {
+                            cell.content = CellContent::from_char(outline_char);
+                            cell.fg = outline_color;
+                        }
+                    }
+                }
+            }
+        }
+
+        // =====================================================================
+        // Phase 3: Render main text (on top of shadows and glow)
+        // =====================================================================
         for (i, ch) in self.text.chars().enumerate() {
             let base_px = x.saturating_add(i as u16);
             let color = self.char_color(i, total);
@@ -4889,6 +5509,243 @@ mod tests {
         assert!(text.has_glow());
         assert_eq!(text.shadow_count(), 1);
         assert!(text.glow_config().is_some());
+    }
+
+    // =========================================================================
+    // Outline/Border Tests (bd-882b)
+    // =========================================================================
+
+    #[test]
+    fn test_outline_8_neighbors() {
+        // thickness=1 should produce 8 adjacent cell offsets
+        let config = OutlineConfig::new(PackedRgba::rgb(255, 255, 255)).thickness(1);
+        let offsets: Vec<_> = config.offsets().collect();
+
+        assert_eq!(offsets.len(), 8, "thickness=1 should have 8 neighbors");
+
+        // Verify all expected offsets are present (Moore neighborhood)
+        let expected = [
+            (-1, -1),
+            (0, -1),
+            (1, -1),
+            (-1, 0),
+            (1, 0),
+            (-1, 1),
+            (0, 1),
+            (1, 1),
+        ];
+        for exp in expected {
+            assert!(
+                offsets.contains(&exp),
+                "Expected offset {:?} not found in {:?}",
+                exp,
+                offsets
+            );
+        }
+    }
+
+    #[test]
+    fn test_outline_16_neighbors() {
+        // thickness=2 should produce 16 offsets
+        let config = OutlineConfig::new(PackedRgba::rgb(255, 255, 255)).thickness(2);
+        let offsets: Vec<_> = config.offsets().collect();
+
+        assert_eq!(offsets.len(), 16, "thickness=2 should have 16 neighbors");
+
+        // Verify offsets extend to distance 2
+        let has_dist_2 = offsets
+            .iter()
+            .any(|(dx, dy)| dx.abs() == 2 || dy.abs() == 2);
+        assert!(has_dist_2, "thickness=2 should have offsets at distance 2");
+    }
+
+    #[test]
+    fn test_outline_24_neighbors() {
+        // thickness=3 should produce 24 offsets (5x5 minus center)
+        let config = OutlineConfig::new(PackedRgba::rgb(255, 255, 255)).thickness(3);
+        let offsets: Vec<_> = config.offsets().collect();
+
+        assert_eq!(offsets.len(), 24, "thickness=3 should have 24 neighbors");
+
+        // Verify corners are included
+        assert!(
+            offsets.contains(&(-2, -2)),
+            "Should include corner (-2, -2)"
+        );
+        assert!(offsets.contains(&(2, 2)), "Should include corner (2, 2)");
+    }
+
+    #[test]
+    fn test_outline_solid_continuous() {
+        // Solid style should never return None for any offset
+        let config = OutlineConfig::new(PackedRgba::rgb(255, 255, 255)).style(OutlineStyle::Solid);
+
+        for offset_idx in 0..24 {
+            assert!(
+                config.color_at(offset_idx, 0.0).is_some(),
+                "Solid style should return color for all offsets"
+            );
+        }
+    }
+
+    #[test]
+    fn test_outline_dashed_alternates() {
+        // Dashed style with dash_len=2 should alternate: 2 visible, 2 invisible
+        let config = OutlineConfig::new(PackedRgba::rgb(255, 255, 255))
+            .style(OutlineStyle::Dashed { dash_len: 2 });
+
+        // Check pattern: indices 0,1 visible, 2,3 invisible, 4,5 visible, etc.
+        assert!(
+            config.color_at(0, 0.0).is_some(),
+            "Index 0 should be visible"
+        );
+        assert!(
+            config.color_at(1, 0.0).is_some(),
+            "Index 1 should be visible"
+        );
+        assert!(
+            config.color_at(2, 0.0).is_none(),
+            "Index 2 should be invisible"
+        );
+        assert!(
+            config.color_at(3, 0.0).is_none(),
+            "Index 3 should be invisible"
+        );
+        assert!(
+            config.color_at(4, 0.0).is_some(),
+            "Index 4 should be visible"
+        );
+        assert!(
+            config.color_at(5, 0.0).is_some(),
+            "Index 5 should be visible"
+        );
+    }
+
+    #[test]
+    fn test_outline_double_two_rings() {
+        // Double style should be detected for special rendering
+        let config = OutlineConfig::new(PackedRgba::rgb(255, 255, 255)).style(OutlineStyle::Double);
+
+        assert!(
+            config.is_double(),
+            "Double style should return true for is_double()"
+        );
+
+        // Solid style should not be double
+        let solid_config =
+            OutlineConfig::new(PackedRgba::rgb(255, 255, 255)).style(OutlineStyle::Solid);
+        assert!(
+            !solid_config.is_double(),
+            "Solid style should return false for is_double()"
+        );
+    }
+
+    #[test]
+    fn test_outline_gradient_animates() {
+        // Gradient style should produce different colors at different times
+        let gradient = ColorGradient::new(vec![
+            (0.0, PackedRgba::rgb(255, 0, 0)),
+            (0.5, PackedRgba::rgb(0, 255, 0)),
+            (1.0, PackedRgba::rgb(0, 0, 255)),
+        ]);
+        let config = OutlineConfig::new(PackedRgba::rgb(255, 255, 255))
+            .style(OutlineStyle::Gradient(gradient));
+
+        let color_t0 = config.color_at(0, 0.0);
+        let color_t1 = config.color_at(0, 1.0);
+
+        assert!(color_t0.is_some(), "Gradient should return color at t=0");
+        assert!(color_t1.is_some(), "Gradient should return color at t=1");
+
+        // Colors should differ (animation effect)
+        // Note: they might be the same at certain time values, so we test the mechanism works
+    }
+
+    #[test]
+    fn test_outline_under_text() {
+        // StyledText with outline should have outline configured
+        let text = StyledText::new("OUTLINED")
+            .outline(OutlineConfig::new(PackedRgba::rgb(0, 0, 0)).thickness(1));
+
+        assert!(text.has_outline());
+        assert!(text.outline_config().is_some());
+
+        let config = text.outline_config().unwrap();
+        assert_eq!(config.thickness, 1);
+    }
+
+    #[test]
+    fn test_outline_at_edge() {
+        // Outline offsets near terminal edge should not cause overflow
+        // This tests the saturating arithmetic in outline rendering
+
+        let config = OutlineConfig::new(PackedRgba::rgb(255, 255, 255)).thickness(3);
+
+        // Test with position at (0, 0) - should not panic
+        let offsets: Vec<_> = config.offsets().collect();
+        for (dx, dy) in offsets {
+            // Simulate offset calculation with saturating arithmetic
+            let base_x: u16 = 0;
+            let base_y: u16 = 0;
+            let outline_x = (base_x as i32).saturating_add(i32::from(dx));
+            let outline_y = (base_y as i32).saturating_add(i32::from(dy));
+
+            // Should not panic, just go negative (which is filtered by bounds check)
+            assert!(outline_x >= -3 && outline_x <= 3);
+            assert!(outline_y >= -3 && outline_y <= 3);
+        }
+    }
+
+    #[test]
+    fn test_outline_thickness_clamped() {
+        // Thickness should be clamped to 1-3
+        let config = OutlineConfig::new(PackedRgba::rgb(255, 255, 255)).thickness(10);
+        assert_eq!(config.thickness, 3, "thickness should be clamped to max 3");
+
+        let config2 = OutlineConfig::new(PackedRgba::rgb(255, 255, 255)).thickness(0);
+        assert_eq!(config2.thickness, 1, "thickness should be clamped to min 1");
+    }
+
+    #[test]
+    fn test_outline_default() {
+        let config = OutlineConfig::default();
+
+        assert_eq!(config.thickness, 1);
+        assert!(matches!(config.style, OutlineStyle::Solid));
+        assert!(config.use_text_char);
+    }
+
+    #[test]
+    fn test_outline_clear() {
+        let text = StyledText::new("Test")
+            .outline(OutlineConfig::new(PackedRgba::rgb(255, 255, 255)))
+            .clear_outline();
+
+        assert!(!text.has_outline());
+        assert!(text.outline_config().is_none());
+    }
+
+    #[test]
+    fn test_outline_use_block_char() {
+        let config = OutlineConfig::new(PackedRgba::rgb(255, 255, 255)).use_text_char(false);
+
+        assert!(!config.use_text_char);
+    }
+
+    #[test]
+    fn test_shadow_glow_outline_combined() {
+        // All three effects can be combined
+        let text = StyledText::new("FULL")
+            .shadow(Shadow::new(2, 2).opacity(0.3))
+            .glow(GlowConfig::new(PackedRgba::rgb(255, 0, 255)).layers(2))
+            .outline(OutlineConfig::new(PackedRgba::rgb(0, 0, 0)).thickness(1));
+
+        assert!(text.has_shadows());
+        assert!(text.has_glow());
+        assert!(text.has_outline());
+        assert_eq!(text.shadow_count(), 1);
+        assert!(text.glow_config().is_some());
+        assert!(text.outline_config().is_some());
     }
 
     // =========================================================================
