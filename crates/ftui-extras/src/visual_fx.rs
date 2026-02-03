@@ -38,6 +38,10 @@ pub mod gpu;
 pub use effects::{
     metaballs::{Metaball, MetaballsFx, MetaballsPalette, MetaballsParams},
     plasma::{PlasmaFx, PlasmaPalette, plasma_wave, plasma_wave_low},
+    sampling::{
+        BallState, CoordCache, FnSampler, MetaballFieldSampler, PlasmaSampler, Sampler,
+        cell_to_normalized, fill_normalized_coords,
+    },
 };
 
 /// Quality hint for FX implementations.
