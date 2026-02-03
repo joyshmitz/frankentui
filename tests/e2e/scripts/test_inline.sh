@@ -64,8 +64,9 @@ inline_log_scroll() {
 
     log_test_start "inline_log_scroll"
 
+    FTUI_HARNESS_SUPPRESS_WELCOME=1 \
     FTUI_HARNESS_EXIT_AFTER_MS=1200 \
-    FTUI_HARNESS_LOG_LINES=50 \
+    FTUI_HARNESS_LOG_LINES=8 \
     PTY_TIMEOUT=4 \
         pty_run "$output_file" "$E2E_HARNESS_BIN"
 

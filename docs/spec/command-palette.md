@@ -387,6 +387,35 @@ pub struct CommandPaletteState {
 
 ---
 
+## 16) Docs + Demo Script (bd-39y4.6)
+
+### 16.1 Quickstart (Demo Showcase)
+- Run the demo: `cargo run -p ftui-demo-showcase`
+- Open the palette: `Ctrl+K` (demo binding; `Ctrl+P` is reserved for the performance sparkline)
+- Close: `Esc`
+- Execute: `Enter`
+- Navigate: `Up/Down`, `PageUp/PageDown`, `Home/End`
+
+### 16.2 Action Registration (Demo)
+- Global action registry lives in `crates/ftui-demo-showcase/src/app.rs`.
+- Widget implementation lives in `crates/ftui-widgets/src/command_palette/mod.rs`.
+- The demo uses the global registry to power the overlay (open from any screen).
+
+### 16.3 Demo Script (E2E + Logs)
+Use the dedicated script for repeatable PTY + JSONL logs:
+
+```bash
+./scripts/command_palette_e2e.sh
+./scripts/command_palette_e2e.sh --quick
+LOG_DIR=/tmp/ftui_palette_e2e ./scripts/command_palette_e2e.sh --verbose
+```
+
+Outputs:
+- `e2e.jsonl` with step timings + metadata
+- `e2e_stderr.jsonl` with test stderr (when running integration tests)
+
+---
+
 ## Changelog
 
 | Version | Date       | Author      | Changes                                |
