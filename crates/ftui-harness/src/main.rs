@@ -944,10 +944,7 @@ impl AgentHarness {
             .child(
                 TreeNode::new("Task")
                     .expanded(true)
-                    .child(TreeNode::new(&format!(
-                        "running: {}",
-                        self.task_running
-                    )))
+                    .child(TreeNode::new(&format!("running: {}", self.task_running)))
                     .child(TreeNode::new(&format!(
                         "tool: {}",
                         self.current_tool.as_deref().unwrap_or("none")
@@ -962,26 +959,22 @@ impl AgentHarness {
             .child(
                 TreeNode::new("Input")
                     .expanded(true)
-                    .child(TreeNode::new(&format!(
-                        "value: \"{}\"",
-                        self.input.value()
-                    )))
-                    .child(TreeNode::new(&format!(
-                        "cursor: {}",
-                        self.input.cursor_position()
-                    ))),
+                    .child(TreeNode::new(&format!("value: \"{}\"", self.input.value())))
+                    .child(TreeNode::new(&format!("cursor: {}", self.input.cursor()))),
             );
 
-        let tree = Tree::new(tree_root).block(
-            Block::new()
-                .title(" Tree View (Esc Esc to close) ")
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .style(Style::new().bg(theme::alpha::SURFACE))
-                .border_style(Style::new().fg(theme::accent::SECONDARY)),
-        );
+        // Render block first, then tree inside it
+        let tree_block = Block::new()
+            .title(" Tree View (Esc Esc to close) ")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .style(Style::new().bg(theme::alpha::SURFACE))
+            .border_style(Style::new().fg(theme::accent::SECONDARY));
+        let tree_inner = tree_block.inner(chunks[0]);
+        tree_block.render(chunks[0], frame);
 
-        tree.render(chunks[0], frame);
+        let tree = Tree::new(tree_root);
+        tree.render(tree_inner, frame);
 
         // Info panel
         let info_text = format!(
@@ -1005,8 +998,9 @@ impl AgentHarness {
         let info_inner = info_block.inner(chunks[1]);
         info_block.render(chunks[1], frame);
 
-        let info_paragraph =
-            Paragraph::new(info_text).wrap(WrapMode::Word).alignment(Alignment::Left);
+        let info_paragraph = Paragraph::new(info_text)
+            .wrap(WrapMode::Word)
+            .alignment(Alignment::Left);
         info_paragraph.render(info_inner, frame);
     }
 }

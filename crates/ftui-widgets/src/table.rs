@@ -444,12 +444,9 @@ impl MeasurableWidget for Table<'_> {
             .map(|h| h.height.saturating_add(h.bottom_margin))
             .unwrap_or(0);
 
-        let rows_height: u16 = self
-            .rows
-            .iter()
-            .fold(0u16, |acc, r| {
-                acc.saturating_add(r.height.saturating_add(r.bottom_margin))
-            });
+        let rows_height: u16 = self.rows.iter().fold(0u16, |acc, r| {
+            acc.saturating_add(r.height.saturating_add(r.bottom_margin))
+        });
 
         let content_height = header_height.saturating_add(rows_height);
 

@@ -243,6 +243,18 @@ impl LogViewer {
         self
     }
 
+    /// Returns the total number of log lines.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.virt.len()
+    }
+
+    /// Returns true if there are no log lines.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.virt.is_empty()
+    }
+
     /// Append a single log line.
     ///
     /// # Performance

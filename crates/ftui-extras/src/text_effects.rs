@@ -1618,7 +1618,8 @@ impl StyledText {
                     // when a channel is 0 (e.g., pure green has r=0)
                     if mask_color != color {
                         let max_original = color.r().max(color.g()).max(color.b()).max(1) as f64;
-                        let max_masked = mask_color.r().max(mask_color.g()).max(mask_color.b()) as f64;
+                        let max_masked =
+                            mask_color.r().max(mask_color.g()).max(mask_color.b()) as f64;
                         alpha_multiplier *= max_masked / max_original;
                     }
                 }
@@ -1912,8 +1913,7 @@ impl StyledText {
                                 RevealMode::LeftToRight => (*progress * total as f64) as usize,
                                 RevealMode::RightToLeft => {
                                     // Cursor at the left edge of revealed portion
-                                    let hidden = ((1.0 - *progress) * total as f64) as usize;
-                                    hidden
+                                    ((1.0 - *progress) * total as f64) as usize
                                 }
                                 _ => (*progress * total as f64) as usize,
                             };
@@ -4614,9 +4614,21 @@ mod tests {
         let c0 = text.char_color(0, 9); // Edge
         let c8 = text.char_color(8, 9); // Edge
 
-        assert_ne!(c4, PackedRgba::TRANSPARENT, "Center should be visible first");
-        assert_eq!(c0, PackedRgba::TRANSPARENT, "Left edge should be hidden at low progress");
-        assert_eq!(c8, PackedRgba::TRANSPARENT, "Right edge should be hidden at low progress");
+        assert_ne!(
+            c4,
+            PackedRgba::TRANSPARENT,
+            "Center should be visible first"
+        );
+        assert_eq!(
+            c0,
+            PackedRgba::TRANSPARENT,
+            "Left edge should be hidden at low progress"
+        );
+        assert_eq!(
+            c8,
+            PackedRgba::TRANSPARENT,
+            "Right edge should be hidden at low progress"
+        );
     }
 
     #[test]

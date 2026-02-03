@@ -708,31 +708,49 @@ impl Screen for ActionTimeline {
                     self.show_details = !self.show_details;
                 }
                 (KeyCode::Up, _) | (KeyCode::Char('k'), Modifiers::NONE) => {
+                    if self.follow {
+                        self.record_follow_drop_decision("key: Up");
+                    }
                     self.follow = false;
                     self.selected = self.selected.saturating_sub(1);
                     self.sync_selection();
                 }
                 (KeyCode::Down, _) | (KeyCode::Char('j'), Modifiers::NONE) => {
+                    if self.follow {
+                        self.record_follow_drop_decision("key: Down");
+                    }
                     self.follow = false;
                     self.selected = self.selected.saturating_add(1);
                     self.sync_selection();
                 }
                 (KeyCode::PageUp, _) => {
+                    if self.follow {
+                        self.record_follow_drop_decision("key: PageUp");
+                    }
                     self.follow = false;
                     self.selected = self.selected.saturating_sub(self.viewport_height);
                     self.sync_selection();
                 }
                 (KeyCode::PageDown, _) => {
+                    if self.follow {
+                        self.record_follow_drop_decision("key: PageDown");
+                    }
                     self.follow = false;
                     self.selected = self.selected.saturating_add(self.viewport_height);
                     self.sync_selection();
                 }
                 (KeyCode::Home, _) => {
+                    if self.follow {
+                        self.record_follow_drop_decision("key: Home");
+                    }
                     self.follow = false;
                     self.selected = 0;
                     self.sync_selection();
                 }
                 (KeyCode::End, _) => {
+                    if self.follow {
+                        self.record_follow_drop_decision("key: End");
+                    }
                     self.follow = false;
                     self.selected = usize::MAX / 2;
                     self.sync_selection();

@@ -137,12 +137,16 @@ impl TerminalEmulator {
             match cursor.shape {
                 CursorShape::Block | CursorShape::Bar => {
                     // Invert colors for block/bar cursor
-                    let new_attrs = cell.attrs.with_flags(cell.attrs.flags() | StyleFlags::REVERSE);
+                    let new_attrs = cell
+                        .attrs
+                        .with_flags(cell.attrs.flags() | StyleFlags::REVERSE);
                     cell.attrs = new_attrs;
                 }
                 CursorShape::Underline => {
                     // Add underline for underline cursor
-                    let new_attrs = cell.attrs.with_flags(cell.attrs.flags() | StyleFlags::UNDERLINE);
+                    let new_attrs = cell
+                        .attrs
+                        .with_flags(cell.attrs.flags() | StyleFlags::UNDERLINE);
                     cell.attrs = new_attrs;
                 }
             }

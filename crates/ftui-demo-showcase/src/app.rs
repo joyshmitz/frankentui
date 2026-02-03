@@ -646,6 +646,18 @@ impl AppModel {
                         .record_event(&event, filter_controls);
                 }
 
+                let source_label = match source {
+                    EventSource::User => "user",
+                    EventSource::Playback => "playback",
+                };
+                let screen_title = self.current_screen.title();
+                self.screens.action_timeline.record_input_event(
+                    self.tick_count,
+                    &event,
+                    source_label,
+                    screen_title,
+                );
+
                 // When the command palette is visible, route events to it first.
                 if self.command_palette.is_visible() {
                     if let Some(action) = self.command_palette.handle_event(&event) {
@@ -1174,7 +1186,7 @@ mod tests {
         assert_eq!(app.current_screen, ScreenId::Dashboard);
 
         app.update(AppMsg::PrevScreen);
-        assert_eq!(app.current_screen, ScreenId::Notifications);
+        assert_eq!(app.current_screen, ScreenId::IntrinsicSizing);
     }
 
     #[test]
@@ -1252,7 +1264,7 @@ mod tests {
     fn screen_next_prev_wraps() {
         assert_eq!(ScreenId::Dashboard.next(), ScreenId::Shakespeare);
         assert_eq!(ScreenId::VisualEffects.next(), ScreenId::ResponsiveDemo);
-        assert_eq!(ScreenId::Dashboard.prev(), ScreenId::ActionTimeline);
+        assert_eq!(ScreenId::Dashboard.prev(), ScreenId::IntrinsicSizing);
         assert_eq!(ScreenId::Shakespeare.prev(), ScreenId::Dashboard);
     }
 
@@ -1431,7 +1443,7 @@ mod tests {
     /// Verify all screens have the expected count.
     #[test]
     fn all_screens_count() {
-        assert_eq!(ScreenId::ALL.len(), 17);
+        assert_eq!(ScreenId::ALL.len(), 18);
     }
 
     // -----------------------------------------------------------------------
