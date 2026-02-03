@@ -352,6 +352,24 @@ pub struct BocpdEvidence {
     /// Expected run-length (mean of posterior).
     pub expected_run_length: f64,
 
+    /// Run-length posterior variance.
+    pub run_length_variance: f64,
+
+    /// Run-length posterior mode (argmax).
+    pub run_length_mode: usize,
+
+    /// 95th percentile of run-length posterior.
+    pub run_length_p95: usize,
+
+    /// Tail mass at the truncation bucket (r = K).
+    pub run_length_tail_mass: f64,
+
+    /// Recommended delay based on current regime (ms), if provided.
+    pub recommended_delay_ms: Option<u64>,
+
+    /// Whether a hard deadline forced the decision, if provided.
+    pub hard_deadline_forced: Option<bool>,
+
     /// Number of observations processed.
     pub observation_count: u64,
 
@@ -363,8 +381,18 @@ impl BocpdEvidence {
     /// Generate JSONL representation for logging.
     #[must_use]
     pub fn to_jsonl(&self) -> String {
+        const SCHEMA_VERSION: &str = "bocpd-v1";
+        let delay_ms = self
+            .recommended_delay_ms
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "null".to_string());
+        let forced = self
+            .hard_deadline_forced
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "null".to_string());
         format!(
-            r#"{{"event":"bocpd","p_burst":{:.4},"log_bf":{:.3},"obs_ms":{:.1},"regime":"{}","ll_steady":{:.6},"ll_burst":{:.6},"e_runlen":{:.1},"n_obs":{}}}"#,
+            r#"{{"schema_version":"{}","event":"bocpd","p_burst":{:.4},"log_bf":{:.3},"obs_ms":{:.1},"regime":"{}","ll_steady":{:.6},"ll_burst":{:.6},"runlen_mean":{:.1},"runlen_var":{:.3},"runlen_mode":{},"runlen_p95":{},"runlen_tail":{:.4},"delay_ms":{},"forced_deadline":{},"n_obs":{}}}"#,
+            SCHEMA_VERSION,
             self.p_burst,
             self.log_bayes_factor,
             self.observation_ms,
@@ -372,6 +400,12 @@ impl BocpdEvidence {
             self.likelihood_steady,
             self.likelihood_burst,
             self.expected_run_length,
+            self.run_length_variance,
+            self.run_length_mode,
+            self.run_length_p95,
+            self.run_length_tail_mass,
+            delay_ms,
+            forced,
             self.observation_count,
         )
     }
@@ -399,6 +433,15 @@ impl fmt::Display for BocpdEvidence {
         writeln!(f, "  E[run-length]: {:.1}", self.expected_run_length)?;
         write!(f, "  Observations: {}", self.observation_count)
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RunLengthSummary {
+    mean: f64,
+    variance: f64,
+    mode: usize,
+    p95: usize,
+    tail_mass: f64,
 }
 
 // =============================================================================
@@ -518,9 +561,67 @@ impl BocpdDetector {
             .sum()
     }
 
+    fn run_length_summary(&self) -> RunLengthSummary {
+        let mean = self.expected_run_length();
+        let mut variance = 0.0;
+        let mut mode = 0;
+        let mut mode_p = -1.0;
+        let mut cumulative = 0.0;
+        let mut p95 = self.config.max_run_length;
+
+        for (r, p) in self.run_length_posterior.iter().enumerate() {
+            if *p > mode_p {
+                mode_p = *p;
+                mode = r;
+            }
+            let diff = r as f64 - mean;
+            variance += p * diff * diff;
+            if cumulative < 0.95 {
+                cumulative += p;
+                if cumulative >= 0.95 {
+                    p95 = r;
+                }
+            }
+        }
+
+        RunLengthSummary {
+            mean,
+            variance,
+            mode,
+            p95,
+            tail_mass: self.run_length_posterior[self.config.max_run_length],
+        }
+    }
+
     /// Get the last evidence.
     pub fn last_evidence(&self) -> Option<&BocpdEvidence> {
         self.last_evidence.as_ref()
+    }
+
+    /// Update the last evidence with decision context (delay + deadline).
+    ///
+    /// Call this after a decision is made (e.g., in the coalescer) to
+    /// include chosen delay and hard-deadline forcing in JSONL logs.
+    pub fn set_decision_context(
+        &mut self,
+        steady_delay_ms: u64,
+        burst_delay_ms: u64,
+        hard_deadline_forced: bool,
+    ) {
+        let recommended_delay = self.recommended_delay(steady_delay_ms, burst_delay_ms);
+        if let Some(ref mut evidence) = self.last_evidence {
+            evidence.recommended_delay_ms = Some(recommended_delay);
+            evidence.hard_deadline_forced = Some(hard_deadline_forced);
+        }
+    }
+
+    /// Return the latest JSONL evidence entry if logging is enabled.
+    #[must_use]
+    pub fn evidence_jsonl(&self) -> Option<String> {
+        if !self.config.enable_logging {
+            return None;
+        }
+        self.last_evidence.as_ref().map(BocpdEvidence::to_jsonl)
     }
 
     /// Get observation count.
@@ -618,6 +719,7 @@ impl BocpdDetector {
         self.p_burst = (posterior_odds / (1.0 + posterior_odds)).clamp(0.001, 0.999);
 
         // Store evidence
+        let summary = self.run_length_summary();
         self.last_evidence = Some(BocpdEvidence {
             p_burst: self.p_burst,
             log_bayes_factor: log_bf,
@@ -625,7 +727,13 @@ impl BocpdDetector {
             regime: self.regime(),
             likelihood_steady: ll_steady,
             likelihood_burst: ll_burst,
-            expected_run_length: self.expected_run_length(),
+            expected_run_length: summary.mean,
+            run_length_variance: summary.variance,
+            run_length_mode: summary.mode,
+            run_length_p95: summary.p95,
+            run_length_tail_mass: summary.tail_mass,
+            recommended_delay_ms: None,
+            hard_deadline_forced: None,
             observation_count: self.observation_count,
             timestamp: now,
         });
@@ -916,9 +1024,24 @@ mod tests {
         let evidence = detector.last_evidence().unwrap();
         let jsonl = evidence.to_jsonl();
 
-        assert!(jsonl.contains("bocpd"));
+        assert!(jsonl.contains("bocpd-v1"));
         assert!(jsonl.contains("p_burst"));
         assert!(jsonl.contains("regime"));
+        assert!(jsonl.contains("runlen_mean"));
+        assert!(jsonl.contains("runlen_mode"));
+        assert!(jsonl.contains("runlen_p95"));
+    }
+
+    #[test]
+    fn evidence_jsonl_respects_config() {
+        let mut detector = BocpdDetector::with_defaults();
+        let t = Instant::now();
+        detector.observe_event(t);
+
+        assert!(detector.evidence_jsonl().is_none());
+
+        detector.config.enable_logging = true;
+        assert!(detector.evidence_jsonl().is_some());
     }
 
     // Property test: expected run-length is non-negative

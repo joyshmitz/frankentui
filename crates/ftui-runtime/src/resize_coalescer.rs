@@ -62,6 +62,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crate::bocpd::{BocpdConfig, BocpdDetector, BocpdRegime};
+use crate::evidence_sink::EvidenceSink;
 
 /// FNV-1a 64-bit offset basis.
 const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
@@ -484,6 +485,10 @@ pub struct ResizeCoalescer {
 
     /// Decision logs (if logging enabled).
     logs: Vec<DecisionLog>,
+    /// Evidence sink for JSONL decision logs.
+    evidence_sink: Option<EvidenceSink>,
+    /// Whether config has been logged to the evidence sink.
+    config_logged: bool,
 
     // --- Telemetry integration (bd-1rz0.7) ---
     /// Telemetry hooks for external observability.
@@ -551,6 +556,8 @@ impl ResizeCoalescer {
             event_count: 0,
             log_start: None,
             logs: Vec::new(),
+            evidence_sink: None,
+            config_logged: false,
             telemetry_hooks: None,
             regime_transitions: 0,
             events_in_window: 0,
@@ -564,6 +571,20 @@ impl ResizeCoalescer {
     pub fn with_telemetry_hooks(mut self, hooks: TelemetryHooks) -> Self {
         self.telemetry_hooks = Some(hooks);
         self
+    }
+
+    /// Attach an evidence sink for JSONL decision logs.
+    #[must_use]
+    pub fn with_evidence_sink(mut self, sink: EvidenceSink) -> Self {
+        self.evidence_sink = Some(sink);
+        self.config_logged = false;
+        self
+    }
+
+    /// Set or clear the evidence sink.
+    pub fn set_evidence_sink(&mut self, sink: Option<EvidenceSink>) {
+        self.evidence_sink = sink;
+        self.config_logged = false;
     }
 
     /// Set the last render time (for deterministic testing).
@@ -829,6 +850,7 @@ impl ResizeCoalescer {
     pub fn clear_logs(&mut self) {
         self.logs.clear();
         self.log_start = None;
+        self.config_logged = false;
     }
 
     /// Get statistics about the coalescer.
@@ -1114,6 +1136,16 @@ impl ResizeCoalescer {
             coalesce_ms,
             forced,
         });
+
+        if let Some(ref sink) = self.evidence_sink {
+            if !self.config_logged {
+                let _ = sink.write_jsonl(&self.config.to_jsonl());
+                self.config_logged = true;
+            }
+            if let Some(entry) = self.logs.last() {
+                let _ = sink.write_jsonl(&entry.to_jsonl());
+            }
+        }
     }
 }
 

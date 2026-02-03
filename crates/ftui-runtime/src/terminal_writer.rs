@@ -49,6 +49,7 @@
 
 use std::io::{self, BufWriter, Write};
 
+use crate::evidence_sink::EvidenceSink;
 use ftui_core::inline_mode::InlineStrategy;
 use ftui_core::terminal_capabilities::TerminalCapabilities;
 use ftui_render::buffer::Buffer;
@@ -296,6 +297,8 @@ pub struct TerminalWriter<W: Write> {
     /// Runtime diff configuration.
     #[allow(dead_code)] // runtime toggles wired up in follow-up work
     diff_config: RuntimeDiffConfig,
+    /// Evidence JSONL sink for diff decisions.
+    evidence_sink: Option<EvidenceSink>,
     /// Last diff strategy selected during present.
     last_diff_strategy: Option<DiffStrategy>,
 }
@@ -383,6 +386,7 @@ impl<W: Write> TerminalWriter<W> {
             diff_strategy,
             full_redraw_probe: 0,
             diff_config,
+            evidence_sink: None,
             last_diff_strategy: None,
         }
     }
@@ -419,6 +423,11 @@ impl<W: Write> TerminalWriter<W> {
     /// Get the current diff configuration.
     pub fn diff_config(&self) -> &RuntimeDiffConfig {
         &self.diff_config
+    }
+
+    /// Set the evidence JSONL sink for diff decision logging.
+    pub fn set_evidence_sink(&mut self, sink: Option<EvidenceSink>) {
+        self.evidence_sink = sink;
     }
 
     /// Get mutable access to the diff strategy selector.
@@ -899,6 +908,25 @@ impl<W: Write> TerminalWriter<W> {
                 dirty_rows_enabled = self.diff_config.dirty_rows_enabled,
                 "diff strategy selected"
             );
+            if let Some(ref sink) = self.evidence_sink {
+                let line = format!(
+                    r#"{{"event":"diff_decision","strategy":"{}","cost_full":{:.6},"cost_dirty":{:.6},"cost_redraw":{:.6},"posterior_mean":{:.6},"posterior_variance":{:.6},"alpha":{:.6},"beta":{:.6},"dirty_rows":{},"total_rows":{},"total_cells":{},"bayesian_enabled":{},"dirty_rows_enabled":{}}}"#,
+                    strategy,
+                    evidence.cost_full,
+                    evidence.cost_dirty,
+                    evidence.cost_redraw,
+                    evidence.posterior_mean,
+                    evidence.posterior_variance,
+                    evidence.alpha,
+                    evidence.beta,
+                    evidence.dirty_rows,
+                    evidence.total_rows,
+                    evidence.total_cells,
+                    self.diff_config.bayesian_enabled,
+                    self.diff_config.dirty_rows_enabled,
+                );
+                let _ = sink.write_jsonl(&line);
+            }
         }
 
         self.last_diff_strategy = Some(strategy);

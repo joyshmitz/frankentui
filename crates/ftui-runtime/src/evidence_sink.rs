@@ -110,6 +110,12 @@ pub struct EvidenceSink {
     inner: Arc<Mutex<EvidenceSinkInner>>,
 }
 
+impl std::fmt::Debug for EvidenceSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EvidenceSink").finish()
+    }
+}
+
 impl EvidenceSink {
     /// Build an evidence sink from config. Returns `Ok(None)` when disabled.
     pub fn from_config(config: &EvidenceSinkConfig) -> io::Result<Option<Self>> {

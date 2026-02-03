@@ -59,6 +59,7 @@
 
 use std::collections::VecDeque;
 
+use crate::evidence_sink::EvidenceSink;
 /// Minimum wealth floor.
 const E_MIN: f64 = 1e-15;
 /// Maximum wealth ceiling.
@@ -122,6 +123,21 @@ impl BudgetConfig {
             window_size: 100,
         }
     }
+
+    /// Serialize configuration to JSONL format.
+    #[must_use]
+    pub fn to_jsonl(&self) -> String {
+        format!(
+            r#"{{"event":"allocation_budget_config","alpha":{:.6},"mu_0":{:.6},"sigma_sq":{:.6},"cusum_k":{:.6},"cusum_h":{:.6},"lambda":{:.6},"window_size":{}}}"#,
+            self.alpha,
+            self.mu_0,
+            self.sigma_sq,
+            self.cusum_k,
+            self.cusum_h,
+            self.lambda,
+            self.window_size
+        )
+    }
 }
 
 /// CUSUM state for one direction.
@@ -150,6 +166,23 @@ pub struct BudgetEvidence {
     pub e_value: f64,
     /// Whether this observation triggered an alert.
     pub alert: bool,
+}
+
+impl BudgetEvidence {
+    /// Serialize evidence to JSONL format.
+    #[must_use]
+    pub fn to_jsonl(&self) -> String {
+        format!(
+            r#"{{"event":"allocation_budget_evidence","frame":{},"x":{:.6},"residual":{:.6},"cusum_plus":{:.6},"cusum_minus":{:.6},"e_value":{:.6},"alert":{}}}"#,
+            self.frame,
+            self.x,
+            self.residual,
+            self.cusum_plus,
+            self.cusum_minus,
+            self.e_value,
+            self.alert
+        )
+    }
 }
 
 /// Alert information when a leak/regression is detected.
@@ -189,6 +222,10 @@ pub struct AllocationBudget {
     ledger: VecDeque<BudgetEvidence>,
     /// Max ledger size.
     ledger_max: usize,
+    /// Evidence sink for JSONL logging.
+    evidence_sink: Option<EvidenceSink>,
+    /// Whether config has been logged to the sink.
+    config_logged: bool,
 }
 
 impl AllocationBudget {
@@ -204,7 +241,23 @@ impl AllocationBudget {
             total_alerts: 0,
             ledger: VecDeque::new(),
             ledger_max: 500,
+            evidence_sink: None,
+            config_logged: false,
         }
+    }
+
+    /// Attach an evidence sink for JSONL logging.
+    #[must_use]
+    pub fn with_evidence_sink(mut self, sink: EvidenceSink) -> Self {
+        self.evidence_sink = Some(sink);
+        self.config_logged = false;
+        self
+    }
+
+    /// Set or clear the evidence sink.
+    pub fn set_evidence_sink(&mut self, sink: Option<EvidenceSink>) {
+        self.evidence_sink = sink;
+        self.config_logged = false;
     }
 
     /// Observe an allocation count/byte measurement for the current frame.
@@ -255,9 +308,18 @@ impl AllocationBudget {
             e_value: self.e_value,
             alert,
         };
+        let entry_json = entry.to_jsonl();
         self.ledger.push_back(entry);
         if self.ledger.len() > self.ledger_max {
             self.ledger.pop_front();
+        }
+
+        if let Some(ref sink) = self.evidence_sink {
+            if !self.config_logged {
+                let _ = sink.write_jsonl(&self.config.to_jsonl());
+                self.config_logged = true;
+            }
+            let _ = sink.write_jsonl(&entry_json);
         }
 
         if alert {
@@ -329,6 +391,7 @@ impl AllocationBudget {
         self.window.clear();
         self.total_alerts = 0;
         self.ledger.clear();
+        self.config_logged = false;
     }
 
     /// Summary for diagnostics.
@@ -357,6 +420,24 @@ pub struct BudgetSummary {
     pub running_mean: f64,
     pub mu_0: f64,
     pub drift: f64,
+}
+
+impl BudgetSummary {
+    /// Serialize summary to JSONL format.
+    #[must_use]
+    pub fn to_jsonl(&self) -> String {
+        format!(
+            r#"{{"event":"allocation_budget_summary","frames":{},"total_alerts":{},"e_value":{:.6},"cusum_plus":{:.6},"cusum_minus":{:.6},"running_mean":{:.6},"mu_0":{:.6},"drift":{:.6}}}"#,
+            self.frames,
+            self.total_alerts,
+            self.e_value,
+            self.cusum_plus,
+            self.cusum_minus,
+            self.running_mean,
+            self.mu_0,
+            self.drift
+        )
+    }
 }
 
 #[cfg(test)]
