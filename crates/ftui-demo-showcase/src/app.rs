@@ -376,7 +376,6 @@ impl ScreenStates {
                 ScreenId::Notifications => self.notifications.view(frame, area),
                 ScreenId::ActionTimeline => self.action_timeline.view(frame, area),
                 ScreenId::IntrinsicSizing => self.intrinsic_sizing.view(frame, area),
-                ScreenId::MousePlayground => self.mouse_playground.view(frame, area),
             }
         }));
 

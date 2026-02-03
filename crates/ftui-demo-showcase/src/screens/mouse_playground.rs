@@ -248,7 +248,9 @@ impl Screen for MousePlayground {
     fn view(&self, frame: &mut Frame, area: Rect) {
         // Main layout: left panel (targets) + right panel (event log)
         let chunks =
-            Flex::horizontal([Constraint::Percentage(60.0), Constraint::Percentage(40.0)]).split(area);
+            Flex::horizontal()
+            .constraints([Constraint::Percentage(60.0), Constraint::Percentage(40.0)])
+            .split(area);
 
         let left_area = chunks[0];
         let right_area = chunks[1];
@@ -266,7 +268,8 @@ impl Screen for MousePlayground {
         self.render_target_grid(frame, inner_left);
 
         // --- Right Panel: Event Log + Stats ---
-        let right_chunks = Flex::vertical([Constraint::Percentage(70.0), Constraint::Percentage(30.0)])
+        let right_chunks = Flex::vertical()
+            .constraints([Constraint::Percentage(70.0), Constraint::Percentage(30.0)])
             .split(right_area);
 
         // Event log
