@@ -40,6 +40,34 @@ fn lerp_color(a: PackedRgba, b: PackedRgba, t: f64) -> PackedRgba {
     PackedRgba::rgba(r, g, bv, av)
 }
 
+/// Heatmap gradient for normalized values (0.0 to 1.0).
+///
+/// Cold → Hot: Navy → Blue → Teal → Green → Gold → Orange → Red → Hot Pink.
+pub fn heatmap_gradient(value: f64) -> PackedRgba {
+    const STOPS: [(f64, PackedRgba); 8] = [
+        (0.000, PackedRgba::rgb(30, 30, 80)),   // Navy
+        (0.143, PackedRgba::rgb(50, 50, 180)),  // Blue
+        (0.286, PackedRgba::rgb(50, 150, 150)), // Teal
+        (0.429, PackedRgba::rgb(80, 180, 80)),  // Green
+        (0.571, PackedRgba::rgb(220, 180, 50)), // Gold
+        (0.714, PackedRgba::rgb(255, 140, 50)), // Orange
+        (0.857, PackedRgba::rgb(255, 80, 80)),  // Red
+        (1.000, PackedRgba::rgb(255, 100, 180)), // Hot Pink
+    ];
+
+    let clamped = value.clamp(0.0, 1.0);
+    for window in STOPS.windows(2) {
+        let (t0, c0) = window[0];
+        let (t1, c1) = window[1];
+        if clamped <= t1 {
+            let t = if t1 > t0 { (clamped - t0) / (t1 - t0) } else { 0.0 };
+            return lerp_color(c0, c1, t);
+        }
+    }
+
+    STOPS[STOPS.len() - 1].1
+}
+
 /// Apply a Style's fg/bg to a Cell.
 fn style_cell(cell: &mut Cell, style: Style) {
     if let Some(fg) = style.fg {
@@ -863,6 +891,44 @@ mod tests {
         let b = PackedRgba::rgb(200, 200, 200);
         assert_eq!(lerp_color(a, b, -1.0), a);
         assert_eq!(lerp_color(a, b, 2.0), b);
+    }
+
+    // ===== Heatmap Gradient =====
+
+    #[test]
+    fn heatmap_zero_is_cold() {
+        let color = heatmap_gradient(0.0);
+        assert!(color.b() > color.r());
+    }
+
+    #[test]
+    fn heatmap_one_is_hot() {
+        let color = heatmap_gradient(1.0);
+        assert!(color.r() > color.b());
+    }
+
+    #[test]
+    fn heatmap_mid_is_intermediate() {
+        let color = heatmap_gradient(0.5);
+        assert!(color.g() > 100);
+    }
+
+    #[test]
+    fn heatmap_clamps_out_of_range() {
+        assert_eq!(heatmap_gradient(-0.5), heatmap_gradient(0.0));
+        assert_eq!(heatmap_gradient(1.5), heatmap_gradient(1.0));
+    }
+
+    #[test]
+    fn heatmap_gradient_is_monotonic() {
+        let mut prev_warmth = i32::MIN;
+        for i in 0..=10 {
+            let value = i as f64 / 10.0;
+            let color = heatmap_gradient(value);
+            let warmth = color.r() as i32 - color.b() as i32;
+            assert!(warmth >= prev_warmth - 10, "Gradient should be monotonic");
+            prev_warmth = warmth;
+        }
     }
 
     // ===== Sparkline =====
