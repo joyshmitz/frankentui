@@ -24,9 +24,11 @@ use crate::theme::{self, ThemeId};
 
 /// Focus panel in the Theme Studio.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum Focus {
+pub enum Focus {
+    /// Focus on presets panel.
     #[default]
     Presets,
+    /// Focus on token inspector panel.
     TokenInspector,
 }
 
@@ -69,8 +71,8 @@ pub struct ThemeStudioDemo {
     pub preset_index: usize,
     /// Selected token index.
     pub token_index: usize,
-    /// List of color tokens for inspection.
-    pub tokens: Vec<ColorToken>,
+    /// List of color tokens for inspection (private, implementation detail).
+    tokens: Vec<ColorToken>,
     /// Tick counter for animations.
     pub tick_count: u64,
     /// Export status message.
@@ -187,7 +189,7 @@ impl ThemeStudioDemo {
     }
 
     /// Get WCAG rating for a contrast ratio.
-    fn wcag_rating(ratio: f32) -> (&'static str, PackedRgba) {
+    pub fn wcag_rating(ratio: f32) -> (&'static str, PackedRgba) {
         if ratio >= 7.0 {
             ("AAA", PackedRgba::rgb(0, 200, 83)) // Green
         } else if ratio >= 4.5 {
@@ -200,12 +202,12 @@ impl ThemeStudioDemo {
     }
 
     /// Format color as hex string.
-    fn color_hex(c: PackedRgba) -> String {
+    pub fn color_hex(c: PackedRgba) -> String {
         format!("#{:02X}{:02X}{:02X}", c.r(), c.g(), c.b())
     }
 
     /// Export current theme to JSON format.
-    fn export_json(&self) -> String {
+    pub fn export_json(&self) -> String {
         let theme_id = theme::current_theme();
         let palette = theme::palette(theme_id);
         format!(
@@ -510,6 +512,38 @@ impl Screen for ThemeStudioDemo {
                         if self.token_index < self.tokens.len() - 1 {
                             self.token_index += 1;
                         }
+                    }
+                },
+                // Home: Jump to first item
+                KeyCode::Home | KeyCode::Char('g') if !modifiers.contains(Modifiers::SHIFT) => {
+                    match self.focus {
+                        Focus::Presets => self.preset_index = 0,
+                        Focus::TokenInspector => self.token_index = 0,
+                    }
+                }
+                // End: Jump to last item (or G for vim-style)
+                KeyCode::End | KeyCode::Char('G') => match self.focus {
+                    Focus::Presets => self.preset_index = ThemeId::ALL.len().saturating_sub(1),
+                    Focus::TokenInspector => self.token_index = self.tokens.len().saturating_sub(1),
+                },
+                // PageUp: Move up by 10 items
+                KeyCode::PageUp => match self.focus {
+                    Focus::Presets => {
+                        self.preset_index = self.preset_index.saturating_sub(10);
+                    }
+                    Focus::TokenInspector => {
+                        self.token_index = self.token_index.saturating_sub(10);
+                    }
+                },
+                // PageDown: Move down by 10 items
+                KeyCode::PageDown => match self.focus {
+                    Focus::Presets => {
+                        self.preset_index =
+                            (self.preset_index + 10).min(ThemeId::ALL.len().saturating_sub(1));
+                    }
+                    Focus::TokenInspector => {
+                        self.token_index =
+                            (self.token_index + 10).min(self.tokens.len().saturating_sub(1));
                     }
                 },
                 // Apply preset
