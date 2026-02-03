@@ -678,11 +678,12 @@ mod tests {
         interp.feed(&esc(), t);
         let action = interp.feed(&esc(), t + MS_50);
 
-        if let KeySequenceAction::EmitSequence { keys, .. } = action {
-            // Buffer should contain both escape keys that formed the sequence
-            // Note: current implementation only adds first key to buffer
-            // The second key completes the sequence
-            assert!(!keys.is_empty());
+        if let KeySequenceAction::EmitSequence { keys, kind } = action {
+            // Buffer should contain BOTH escape keys that formed the sequence
+            assert_eq!(keys.len(), 2, "Sequence should capture both keys");
+            assert_eq!(keys[0].code, KeyCode::Escape);
+            assert_eq!(keys[1].code, KeyCode::Escape);
+            assert_eq!(kind, KeySequenceKind::DoubleEscape);
         } else {
             panic!("Expected EmitSequence");
         }
