@@ -873,9 +873,14 @@ impl AppModel {
     /// Create a new application model with default state.
     pub fn new() -> Self {
         let base_theme = theme::ThemeId::CyberpunkAurora;
-        theme::set_theme(base_theme);
-        theme::set_motion_scale(1.0);
-        theme::set_large_text(false);
+        // Only set theme in non-test builds to avoid race conditions with
+        // tests that use ScopedThemeLock for deterministic rendering.
+        #[cfg(not(test))]
+        {
+            theme::set_theme(base_theme);
+            theme::set_motion_scale(1.0);
+            theme::set_large_text(false);
+        }
         let mut palette = CommandPalette::new().with_max_visible(12);
         Self::register_palette_actions(&mut palette);
         Self {

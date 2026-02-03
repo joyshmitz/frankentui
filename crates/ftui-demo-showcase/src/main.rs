@@ -4,6 +4,7 @@
 
 use ftui_demo_showcase::app::{AppModel, ScreenId};
 use ftui_demo_showcase::cli;
+use ftui_render::budget::FrameBudgetConfig;
 use ftui_runtime::{Program, ProgramConfig, ScreenMode};
 
 fn main() {
@@ -12,6 +13,10 @@ fn main() {
     let screen_mode = match opts.screen_mode.as_str() {
         "inline" => ScreenMode::Inline {
             ui_height: opts.ui_height,
+        },
+        "inline-auto" | "inline_auto" | "auto" => ScreenMode::InlineAuto {
+            min_height: opts.ui_min_height,
+            max_height: opts.ui_max_height,
         },
         _ => ScreenMode::AltScreen,
     };
@@ -30,9 +35,19 @@ fn main() {
     model.current_screen = start_screen;
     model.exit_after_ms = opts.exit_after_ms;
 
+    let budget = match screen_mode {
+        ScreenMode::AltScreen => {
+            let mut cfg = FrameBudgetConfig::relaxed();
+            cfg.allow_frame_skip = false;
+            cfg
+        }
+        _ => FrameBudgetConfig::default(),
+    };
+
     let config = ProgramConfig {
         screen_mode,
         mouse: opts.mouse,
+        budget,
         ..ProgramConfig::default()
     };
     match Program::with_config(model, config) {

@@ -17,8 +17,10 @@ USAGE:
     ftui-demo-showcase [OPTIONS]
 
 OPTIONS:
-    --screen-mode=MODE   Screen mode: 'alt' (default) or 'inline'
+    --screen-mode=MODE   Screen mode: 'alt', 'inline', or 'inline-auto' (default: alt)
     --ui-height=N        UI height in rows for inline mode (default: 20)
+    --ui-min-height=N    Min UI height for inline-auto (default: 12)
+    --ui-max-height=N    Max UI height for inline-auto (default: 40)
     --screen=N           Start on screen N, 1-indexed (default: 1)
     --no-mouse           Disable mouse event capture
     --help, -h           Show this help message
@@ -62,8 +64,10 @@ KEYBINDINGS:
     q / Ctrl+C      Quit
 
 ENVIRONMENT VARIABLES:
-    FTUI_DEMO_SCREEN_MODE     Override --screen-mode (alt|inline)
+    FTUI_DEMO_SCREEN_MODE     Override --screen-mode (alt|inline|inline-auto)
     FTUI_DEMO_UI_HEIGHT       Override --ui-height
+    FTUI_DEMO_UI_MIN_HEIGHT   Override --ui-min-height
+    FTUI_DEMO_UI_MAX_HEIGHT   Override --ui-max-height
     FTUI_DEMO_SCREEN          Override --screen
     FTUI_DEMO_EXIT_AFTER_MS   Auto-quit after N milliseconds (for testing)";
 
@@ -73,6 +77,10 @@ pub struct Opts {
     pub screen_mode: String,
     /// UI height for inline mode.
     pub ui_height: u16,
+    /// Minimum UI height for inline-auto mode.
+    pub ui_min_height: u16,
+    /// Maximum UI height for inline-auto mode.
+    pub ui_max_height: u16,
     /// Starting screen (1-indexed).
     pub start_screen: u16,
     /// Whether mouse events are enabled.
@@ -86,6 +94,8 @@ impl Default for Opts {
         Self {
             screen_mode: "alt".into(),
             ui_height: 20,
+            ui_min_height: 12,
+            ui_max_height: 40,
             start_screen: 1,
             mouse: true,
             exit_after_ms: 0,
@@ -109,6 +119,16 @@ impl Opts {
             && let Ok(n) = val.parse()
         {
             opts.ui_height = n;
+        }
+        if let Ok(val) = env::var("FTUI_DEMO_UI_MIN_HEIGHT")
+            && let Ok(n) = val.parse()
+        {
+            opts.ui_min_height = n;
+        }
+        if let Ok(val) = env::var("FTUI_DEMO_UI_MAX_HEIGHT")
+            && let Ok(n) = val.parse()
+        {
+            opts.ui_max_height = n;
         }
         if let Ok(val) = env::var("FTUI_DEMO_SCREEN")
             && let Ok(n) = val.parse()
@@ -147,6 +167,22 @@ impl Opts {
                             Ok(n) => opts.ui_height = n,
                             Err(_) => {
                                 eprintln!("Invalid --ui-height value: {val}");
+                                process::exit(1);
+                            }
+                        }
+                    } else if let Some(val) = other.strip_prefix("--ui-min-height=") {
+                        match val.parse() {
+                            Ok(n) => opts.ui_min_height = n,
+                            Err(_) => {
+                                eprintln!("Invalid --ui-min-height value: {val}");
+                                process::exit(1);
+                            }
+                        }
+                    } else if let Some(val) = other.strip_prefix("--ui-max-height=") {
+                        match val.parse() {
+                            Ok(n) => opts.ui_max_height = n,
+                            Err(_) => {
+                                eprintln!("Invalid --ui-max-height value: {val}");
                                 process::exit(1);
                             }
                         }
@@ -189,6 +225,8 @@ mod tests {
         let opts = Opts::default();
         assert_eq!(opts.screen_mode, "alt");
         assert_eq!(opts.ui_height, 20);
+        assert_eq!(opts.ui_min_height, 12);
+        assert_eq!(opts.ui_max_height, 40);
         assert_eq!(opts.start_screen, 1);
         assert!(opts.mouse);
         assert_eq!(opts.exit_after_ms, 0);
@@ -238,5 +276,7 @@ mod tests {
     fn help_text_contains_env_vars() {
         assert!(HELP_TEXT.contains("FTUI_DEMO_SCREEN_MODE"));
         assert!(HELP_TEXT.contains("FTUI_DEMO_EXIT_AFTER_MS"));
+        assert!(HELP_TEXT.contains("FTUI_DEMO_UI_MIN_HEIGHT"));
+        assert!(HELP_TEXT.contains("FTUI_DEMO_UI_MAX_HEIGHT"));
     }
 }

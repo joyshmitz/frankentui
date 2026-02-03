@@ -59,3 +59,7 @@ harness = false
 [[bench]]
 name = "theme_studio_bench"
 harness = false
+
+[[bench]]
+name = "perf_hud_bench"
+harness = false
