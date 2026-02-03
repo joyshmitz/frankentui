@@ -852,6 +852,261 @@ impl TerminalCapabilities {
     }
 }
 
+// =========================================================================
+// Evidence Ledger: Bayesian capability confidence (bd-4kq0.7.2)
+// =========================================================================
+
+/// A single piece of evidence for or against a capability.
+#[derive(Debug, Clone)]
+pub struct EvidenceEntry {
+    /// What kind of evidence this is.
+    pub source: EvidenceSource,
+    /// Log-odds contribution (positive = supports, negative = refutes).
+    pub log_odds: f64,
+}
+
+/// Source of a capability evidence observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvidenceSource {
+    /// Environment variable detection (e.g., COLORTERM=truecolor).
+    Environment,
+    /// DA1 primary device attributes response.
+    Da1Response,
+    /// DA2 secondary device attributes response.
+    Da2Response,
+    /// DECRPM mode report.
+    DecrpmResponse,
+    /// OSC 11 background color probe.
+    OscResponse,
+    /// Probe timed out — weak negative evidence.
+    Timeout,
+    /// Conservative prior (no evidence).
+    Prior,
+}
+
+/// Bayesian evidence ledger for a single capability.
+///
+/// Maintains a log-odds representation of confidence:
+/// - `log_odds = 0.0` → 50% confidence (no evidence)
+/// - `log_odds > 0` → more likely supported
+/// - `log_odds < 0` → more likely unsupported
+///
+/// The ledger accumulates evidence entries, each contributing an
+/// additive log-odds factor. The total log-odds is the sum.
+///
+/// # Confidence Interpretation
+///
+/// | Log-odds | Probability | Interpretation |
+/// |----------|-------------|----------------|
+/// | -4.6     | ~1%         | Very unlikely  |
+/// | -2.2     | ~10%        | Unlikely       |
+/// | 0.0      | 50%         | No evidence    |
+/// | +2.2     | ~90%        | Likely         |
+/// | +4.6     | ~99%        | Very likely    |
+///
+/// # Fail-Open Default
+///
+/// Missing data yields `log_odds = 0.0` (agnostic). The consumer
+/// decides the threshold for enabling a feature (typically > 0).
+#[derive(Debug, Clone)]
+pub struct CapabilityLedger {
+    /// The capability this ledger tracks.
+    pub capability: ProbeableCapability,
+    /// Accumulated log-odds (sum of all evidence).
+    total_log_odds: f64,
+    /// Individual evidence entries for inspection.
+    entries: Vec<EvidenceEntry>,
+}
+
+impl CapabilityLedger {
+    /// Create a new ledger with an agnostic prior (log-odds = 0).
+    #[must_use]
+    pub fn new(capability: ProbeableCapability) -> Self {
+        Self {
+            capability,
+            total_log_odds: 0.0,
+            entries: Vec::new(),
+        }
+    }
+
+    /// Create a ledger with a custom prior log-odds.
+    ///
+    /// Use negative values for conservative priors (assume unsupported).
+    #[must_use]
+    pub fn with_prior(capability: ProbeableCapability, prior_log_odds: f64) -> Self {
+        let mut ledger = Self::new(capability);
+        if prior_log_odds.abs() > f64::EPSILON {
+            ledger.record(EvidenceSource::Prior, prior_log_odds);
+        }
+        ledger
+    }
+
+    /// Record a new piece of evidence.
+    pub fn record(&mut self, source: EvidenceSource, log_odds: f64) {
+        self.total_log_odds += log_odds;
+        self.entries.push(EvidenceEntry { source, log_odds });
+    }
+
+    /// Total accumulated log-odds.
+    #[must_use]
+    pub fn log_odds(&self) -> f64 {
+        self.total_log_odds
+    }
+
+    /// Convert log-odds to probability (0.0–1.0).
+    ///
+    /// Uses the logistic function: `P = 1 / (1 + e^(-log_odds))`.
+    #[must_use]
+    pub fn probability(&self) -> f64 {
+        logistic(self.total_log_odds)
+    }
+
+    /// Whether the evidence supports the capability (log-odds > 0).
+    #[must_use]
+    pub fn is_supported(&self) -> bool {
+        self.total_log_odds > 0.0
+    }
+
+    /// Whether confidence exceeds a threshold probability.
+    #[must_use]
+    pub fn confident_at(&self, threshold: f64) -> bool {
+        self.probability() >= threshold
+    }
+
+    /// Number of evidence entries.
+    #[must_use]
+    pub fn evidence_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Inspect all evidence entries.
+    pub fn entries(&self) -> &[EvidenceEntry] {
+        &self.entries
+    }
+
+    /// Reset to agnostic state.
+    pub fn clear(&mut self) {
+        self.total_log_odds = 0.0;
+        self.entries.clear();
+    }
+}
+
+/// Logistic function: maps log-odds to probability.
+fn logistic(log_odds: f64) -> f64 {
+    // Clamp to avoid overflow in exp.
+    let clamped = log_odds.clamp(-20.0, 20.0);
+    1.0 / (1.0 + (-clamped).exp())
+}
+
+// --- Standard evidence weights (Bayes factors as log-odds) ---
+
+/// Evidence weights for common probe outcomes.
+///
+/// These are log Bayes factors: `ln(P(data|H) / P(data|¬H))`.
+pub mod evidence_weights {
+    /// Environment variable explicitly indicates support (e.g., COLORTERM=truecolor).
+    /// Strong positive: ~95% likelihood ratio.
+    pub const ENV_POSITIVE: f64 = 3.0;
+
+    /// Environment variable absent but not definitive.
+    /// Weak negative: ~40% likelihood ratio.
+    pub const ENV_ABSENT: f64 = -0.4;
+
+    /// DA2 terminal type matches known-good terminal.
+    /// Moderate positive: ~85% likelihood ratio.
+    pub const DA2_KNOWN_TERMINAL: f64 = 1.8;
+
+    /// DA1 attribute code confirms feature.
+    /// Strong positive: ~97% likelihood ratio.
+    pub const DA1_CONFIRMED: f64 = 3.5;
+
+    /// DECRPM confirms mode is recognized (status 1–4).
+    /// Very strong: terminal explicitly reports capability.
+    pub const DECRPM_CONFIRMED: f64 = 4.6;
+
+    /// DECRPM denies mode (status 0).
+    /// Very strong negative.
+    pub const DECRPM_DENIED: f64 = -4.6;
+
+    /// Probe timed out — weak negative evidence (could be slow terminal).
+    pub const TIMEOUT: f64 = -0.7;
+
+    /// Multiplexer detected — slight negative for passthrough features.
+    pub const MUX_PENALTY: f64 = -0.5;
+}
+
+/// Convenience: build a complete evidence ledger from a `CapabilityProber` state.
+///
+/// This is the primary integration point between the probe lifecycle
+/// and the Bayesian confidence model.
+impl CapabilityProber {
+    /// Build evidence ledgers for all probeable capabilities using
+    /// current confirmed/denied/timeout state plus environment data.
+    pub fn build_ledgers(
+        &self,
+        caps: &TerminalCapabilities,
+    ) -> Vec<CapabilityLedger> {
+        ProbeableCapability::ALL
+            .iter()
+            .map(|&cap| self.build_ledger_for(cap, caps))
+            .collect()
+    }
+
+    /// Build an evidence ledger for a single capability.
+    fn build_ledger_for(
+        &self,
+        cap: ProbeableCapability,
+        caps: &TerminalCapabilities,
+    ) -> CapabilityLedger {
+        let mut ledger = CapabilityLedger::new(cap);
+
+        // 1. Environment evidence.
+        if self.capability_already_detected(cap, caps) {
+            ledger.record(EvidenceSource::Environment, evidence_weights::ENV_POSITIVE);
+        } else {
+            ledger.record(EvidenceSource::Environment, evidence_weights::ENV_ABSENT);
+        }
+
+        // 2. Probe evidence.
+        if self.is_confirmed(cap) {
+            // Determine the strongest source.
+            let weight = match cap {
+                ProbeableCapability::Sixel => evidence_weights::DA1_CONFIRMED,
+                ProbeableCapability::SynchronizedOutput | ProbeableCapability::FocusEvents => {
+                    evidence_weights::DECRPM_CONFIRMED
+                }
+                _ => evidence_weights::DA2_KNOWN_TERMINAL,
+            };
+            let source = match cap {
+                ProbeableCapability::Sixel => EvidenceSource::Da1Response,
+                ProbeableCapability::SynchronizedOutput | ProbeableCapability::FocusEvents => {
+                    EvidenceSource::DecrpmResponse
+                }
+                _ => EvidenceSource::Da2Response,
+            };
+            ledger.record(source, weight);
+        } else if self.is_denied(cap) {
+            ledger.record(EvidenceSource::DecrpmResponse, evidence_weights::DECRPM_DENIED);
+        }
+        // Note: probes that timed out are no longer in pending after check_timeouts().
+        // We don't add timeout evidence here because we can't distinguish
+        // "timed out" from "never probed". The caller should use
+        // `record_timeout` explicitly if needed.
+
+        // 3. Multiplexer penalty.
+        if caps.in_any_mux() {
+            ledger.record(EvidenceSource::Environment, evidence_weights::MUX_PENALTY);
+        }
+
+        ledger
+    }
+
+    /// Record timeout evidence for a capability that didn't respond.
+    pub fn record_timeout_evidence(&self, ledger: &mut CapabilityLedger) {
+        ledger.record(EvidenceSource::Timeout, evidence_weights::TIMEOUT);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1507,5 +1762,656 @@ mod tests {
         std::thread::sleep(Duration::from_millis(2));
         prober.check_timeouts();
         assert_eq!(prober.pending_count(), 0);
+    }
+
+    // --- Evidence Ledger tests (bd-4kq0.7.2) ---
+
+    #[test]
+    fn unit_prior_update_positive() {
+        let mut ledger = CapabilityLedger::new(ProbeableCapability::TrueColor);
+        assert!((ledger.probability() - 0.5).abs() < 0.01, "Agnostic prior should be 50%");
+
+        ledger.record(EvidenceSource::Da2Response, evidence_weights::DA2_KNOWN_TERMINAL);
+        assert!(
+            ledger.probability() > 0.5,
+            "Positive evidence should increase probability: got {}",
+            ledger.probability()
+        );
+    }
+
+    #[test]
+    fn unit_prior_update_negative() {
+        let mut ledger = CapabilityLedger::new(ProbeableCapability::SynchronizedOutput);
+        ledger.record(EvidenceSource::DecrpmResponse, evidence_weights::DECRPM_DENIED);
+        assert!(
+            ledger.probability() < 0.5,
+            "Negative evidence should decrease probability: got {}",
+            ledger.probability()
+        );
+    }
+
+    #[test]
+    fn unit_confidence_monotone_with_evidence() {
+        let mut ledger = CapabilityLedger::new(ProbeableCapability::TrueColor);
+        let mut prev_prob = ledger.probability();
+
+        // Adding positive evidence should monotonically increase probability.
+        for _ in 0..5 {
+            ledger.record(EvidenceSource::Da2Response, 1.0);
+            let new_prob = ledger.probability();
+            assert!(
+                new_prob >= prev_prob,
+                "Probability should be monotone: {} < {}",
+                new_prob,
+                prev_prob
+            );
+            prev_prob = new_prob;
+        }
+
+        // Final probability should be high.
+        assert!(ledger.probability() > 0.95);
+    }
+
+    #[test]
+    fn unit_confidence_bounds_saturate() {
+        let mut ledger = CapabilityLedger::new(ProbeableCapability::TrueColor);
+
+        // Extreme positive evidence.
+        ledger.record(EvidenceSource::Da1Response, 100.0);
+        assert!(
+            (ledger.probability() - 1.0).abs() < 0.001,
+            "Extreme positive should saturate near 1.0"
+        );
+
+        // Extreme negative evidence.
+        let mut ledger2 = CapabilityLedger::new(ProbeableCapability::TrueColor);
+        ledger2.record(EvidenceSource::Timeout, -100.0);
+        assert!(
+            ledger2.probability() < 0.001,
+            "Extreme negative should saturate near 0.0"
+        );
+    }
+
+    #[test]
+    fn unit_logistic_identity() {
+        // logistic(0) = 0.5
+        assert!((logistic(0.0) - 0.5).abs() < f64::EPSILON);
+
+        // logistic is symmetric: logistic(x) + logistic(-x) = 1.0
+        for &x in &[0.5, 1.0, 2.0, 5.0, 10.0] {
+            let sum = logistic(x) + logistic(-x);
+            assert!(
+                (sum - 1.0).abs() < 1e-10,
+                "logistic({}) + logistic({}) = {} (expected 1.0)",
+                x,
+                -x,
+                sum
+            );
+        }
+    }
+
+    #[test]
+    fn unit_ledger_with_prior() {
+        // Conservative prior: slightly negative.
+        let ledger = CapabilityLedger::with_prior(ProbeableCapability::Sixel, -1.0);
+        assert!(ledger.probability() < 0.5);
+        assert_eq!(ledger.evidence_count(), 1);
+        assert_eq!(ledger.entries()[0].source, EvidenceSource::Prior);
+    }
+
+    #[test]
+    fn unit_ledger_clear_resets() {
+        let mut ledger = CapabilityLedger::new(ProbeableCapability::TrueColor);
+        ledger.record(EvidenceSource::Da2Response, 3.0);
+        assert!(ledger.probability() > 0.9);
+
+        ledger.clear();
+        assert!((ledger.probability() - 0.5).abs() < 0.01);
+        assert_eq!(ledger.evidence_count(), 0);
+    }
+
+    #[test]
+    fn unit_ledger_entries_inspectable() {
+        let mut ledger = CapabilityLedger::new(ProbeableCapability::TrueColor);
+        ledger.record(EvidenceSource::Environment, evidence_weights::ENV_POSITIVE);
+        ledger.record(EvidenceSource::Da2Response, evidence_weights::DA2_KNOWN_TERMINAL);
+        ledger.record(EvidenceSource::Timeout, evidence_weights::TIMEOUT);
+
+        assert_eq!(ledger.evidence_count(), 3);
+
+        let entries = ledger.entries();
+        assert_eq!(entries[0].source, EvidenceSource::Environment);
+        assert!(entries[0].log_odds > 0.0);
+        assert_eq!(entries[1].source, EvidenceSource::Da2Response);
+        assert!(entries[1].log_odds > 0.0);
+        assert_eq!(entries[2].source, EvidenceSource::Timeout);
+        assert!(entries[2].log_odds < 0.0);
+
+        // Log-odds should sum correctly.
+        let expected_sum: f64 = entries.iter().map(|e| e.log_odds).sum();
+        assert!((ledger.log_odds() - expected_sum).abs() < 1e-10);
+    }
+
+    #[test]
+    fn unit_ledger_deterministic() {
+        // Same evidence in same order → same result.
+        let build = || {
+            let mut ledger = CapabilityLedger::new(ProbeableCapability::Hyperlinks);
+            ledger.record(EvidenceSource::Environment, evidence_weights::ENV_POSITIVE);
+            ledger.record(EvidenceSource::Da2Response, evidence_weights::DA2_KNOWN_TERMINAL);
+            ledger.record(EvidenceSource::Timeout, evidence_weights::TIMEOUT);
+            ledger.probability()
+        };
+
+        let p1 = build();
+        let p2 = build();
+        assert!((p1 - p2).abs() < f64::EPSILON, "Ledger must be deterministic");
+    }
+
+    #[test]
+    fn unit_evidence_weights_signs() {
+        // Positive evidence weights are positive.
+        assert!(evidence_weights::ENV_POSITIVE > 0.0);
+        assert!(evidence_weights::DA2_KNOWN_TERMINAL > 0.0);
+        assert!(evidence_weights::DA1_CONFIRMED > 0.0);
+        assert!(evidence_weights::DECRPM_CONFIRMED > 0.0);
+
+        // Negative evidence weights are negative.
+        assert!(evidence_weights::ENV_ABSENT < 0.0);
+        assert!(evidence_weights::DECRPM_DENIED < 0.0);
+        assert!(evidence_weights::TIMEOUT < 0.0);
+        assert!(evidence_weights::MUX_PENALTY < 0.0);
+    }
+
+    #[test]
+    fn unit_confident_at_threshold() {
+        let mut ledger = CapabilityLedger::new(ProbeableCapability::TrueColor);
+        assert!(!ledger.confident_at(0.9));
+
+        ledger.record(EvidenceSource::Da2Response, evidence_weights::DA2_KNOWN_TERMINAL);
+        ledger.record(EvidenceSource::Environment, evidence_weights::ENV_POSITIVE);
+        assert!(ledger.confident_at(0.9));
+    }
+
+    #[test]
+    fn unit_build_ledgers_basic_caps() {
+        let prober = CapabilityProber::new(Duration::from_millis(200));
+        let caps = TerminalCapabilities::basic();
+        let ledgers = prober.build_ledgers(&caps);
+
+        assert_eq!(ledgers.len(), ProbeableCapability::ALL.len());
+
+        // With basic caps (nothing detected, nothing confirmed), all should
+        // have slightly negative log-odds (ENV_ABSENT only).
+        for ledger in &ledgers {
+            assert!(
+                ledger.log_odds() < 0.0,
+                "{:?} should have negative log-odds with basic caps, got {}",
+                ledger.capability,
+                ledger.log_odds()
+            );
+        }
+    }
+
+    #[test]
+    fn unit_build_ledgers_with_env_detection() {
+        let prober = CapabilityProber::new(Duration::from_millis(200));
+        let mut caps = TerminalCapabilities::basic();
+        caps.true_color = true;
+
+        let ledgers = prober.build_ledgers(&caps);
+        let tc_ledger = ledgers.iter().find(|l| l.capability == ProbeableCapability::TrueColor).unwrap();
+
+        // Should have positive log-odds from environment detection.
+        assert!(
+            tc_ledger.log_odds() > 0.0,
+            "TrueColor with env detection should be positive, got {}",
+            tc_ledger.log_odds()
+        );
+        assert!(tc_ledger.is_supported());
+    }
+
+    #[test]
+    fn unit_build_ledgers_with_probe_confirmation() {
+        let mut prober = CapabilityProber::new(Duration::from_millis(200));
+        prober.process_response(b"\x1b[>41;354;0c"); // xterm DA2
+        let caps = TerminalCapabilities::basic();
+
+        let ledgers = prober.build_ledgers(&caps);
+        let tc_ledger = ledgers.iter().find(|l| l.capability == ProbeableCapability::TrueColor).unwrap();
+
+        // Probe confirmation should add strong positive evidence.
+        assert!(
+            tc_ledger.probability() > 0.8,
+            "Confirmed TrueColor should have high confidence, got {}",
+            tc_ledger.probability()
+        );
+    }
+
+    #[test]
+    fn unit_build_ledgers_with_denial() {
+        let mut prober = CapabilityProber::new(Duration::from_millis(200));
+        prober.process_response(b"\x1b[?2026;0$y"); // sync output denied
+        let caps = TerminalCapabilities::basic();
+
+        let ledgers = prober.build_ledgers(&caps);
+        let sync_ledger = ledgers
+            .iter()
+            .find(|l| l.capability == ProbeableCapability::SynchronizedOutput)
+            .unwrap();
+
+        assert!(
+            sync_ledger.probability() < 0.05,
+            "Denied SyncOutput should have very low confidence, got {}",
+            sync_ledger.probability()
+        );
+    }
+
+    #[test]
+    fn unit_build_ledgers_mux_penalty() {
+        let prober = CapabilityProber::new(Duration::from_millis(200));
+        let mut caps = TerminalCapabilities::basic();
+        caps.in_tmux = true;
+
+        let ledgers = prober.build_ledgers(&caps);
+
+        // All ledgers should have the mux penalty applied.
+        for ledger in &ledgers {
+            let has_mux_entry = ledger
+                .entries()
+                .iter()
+                .any(|e| e.source == EvidenceSource::Environment && e.log_odds < -0.1);
+            assert!(
+                has_mux_entry,
+                "{:?} should have mux penalty entry",
+                ledger.capability
+            );
+        }
+    }
+
+    #[test]
+    fn unit_record_timeout_evidence() {
+        let prober = CapabilityProber::new(Duration::from_millis(200));
+        let mut ledger = CapabilityLedger::new(ProbeableCapability::Sixel);
+        let before = ledger.probability();
+
+        prober.record_timeout_evidence(&mut ledger);
+        let after = ledger.probability();
+
+        assert!(
+            after < before,
+            "Timeout evidence should decrease probability: {} -> {}",
+            before,
+            after
+        );
+    }
+}
+
+// =========================================================================
+// Mock Terminal Harness + E2E Tests (bd-4kq0.7.3)
+// =========================================================================
+
+#[cfg(test)]
+mod mock_harness_tests {
+    use super::*;
+
+    /// Mock terminal responses for deterministic probing.
+    struct MockTerminal {
+        /// DA1 response (None = timeout).
+        da1: Option<&'static [u8]>,
+        /// DA2 response (None = timeout).
+        da2: Option<&'static [u8]>,
+        /// DECRPM responses keyed by mode number.
+        decrpm: Vec<(u32, u32)>,
+    }
+
+    impl MockTerminal {
+        fn xterm() -> Self {
+            Self {
+                da1: Some(b"\x1b[?1;2;4;6;22c"),
+                da2: Some(b"\x1b[>41;354;0c"),
+                decrpm: vec![(2026, 1), (1004, 1)],
+            }
+        }
+
+        fn minimal_vt100() -> Self {
+            Self {
+                da1: Some(b"\x1b[?1c"),
+                da2: Some(b"\x1b[>0;115;0c"),
+                decrpm: vec![(2026, 0), (1004, 0)],
+            }
+        }
+
+        fn all_timeout() -> Self {
+            Self {
+                da1: None,
+                da2: None,
+                decrpm: vec![],
+            }
+        }
+
+        fn mintty() -> Self {
+            Self {
+                da1: Some(b"\x1b[?1;2;6;22c"),
+                da2: Some(b"\x1b[>77;30600;0c"),
+                decrpm: vec![(2026, 2), (1004, 1)],
+            }
+        }
+
+        /// Feed all available responses into a CapabilityProber.
+        fn feed_responses(&self, prober: &mut CapabilityProber) {
+            if let Some(da1) = self.da1 {
+                prober.process_response(da1);
+            }
+            if let Some(da2) = self.da2 {
+                prober.process_response(da2);
+            }
+            for &(mode, status) in &self.decrpm {
+                let response = format!("\x1b[?{};{}$y", mode, status);
+                prober.process_response(response.as_bytes());
+            }
+        }
+    }
+
+    /// JSONL log record for E2E tracing.
+    #[derive(Debug)]
+    struct ProbeLogEntry {
+        capability: &'static str,
+        probe: &'static str,
+        response: String,
+        decision: &'static str,
+        confidence: f64,
+        timeout: bool,
+    }
+
+    impl ProbeLogEntry {
+        fn to_jsonl(&self) -> String {
+            format!(
+                r#"{{"capability":"{}","probe":"{}","response":"{}","decision":"{}","confidence":{:.4},"timeout":{}}}"#,
+                self.capability, self.probe, self.response, self.decision, self.confidence, self.timeout,
+            )
+        }
+    }
+
+    fn cap_name(cap: ProbeableCapability) -> &'static str {
+        match cap {
+            ProbeableCapability::TrueColor => "TrueColor",
+            ProbeableCapability::SynchronizedOutput => "SynchronizedOutput",
+            ProbeableCapability::Hyperlinks => "Hyperlinks",
+            ProbeableCapability::KittyKeyboard => "KittyKeyboard",
+            ProbeableCapability::Sixel => "Sixel",
+            ProbeableCapability::FocusEvents => "FocusEvents",
+        }
+    }
+
+    fn build_log(
+        ledgers: &[CapabilityLedger],
+        terminal_name: &'static str,
+    ) -> Vec<ProbeLogEntry> {
+        ledgers
+            .iter()
+            .map(|l| {
+                let decision = if l.confident_at(0.9) {
+                    "enable"
+                } else if l.probability() < 0.1 {
+                    "disable"
+                } else {
+                    "unknown"
+                };
+                ProbeLogEntry {
+                    capability: cap_name(l.capability),
+                    probe: terminal_name,
+                    response: format!("log_odds={:.2}", l.log_odds()),
+                    decision,
+                    confidence: l.probability(),
+                    timeout: l.entries().iter().any(|e| e.source == EvidenceSource::Timeout),
+                }
+            })
+            .collect()
+    }
+
+    // --- E2E tests ---
+
+    #[test]
+    fn e2e_mock_probe_success_xterm() {
+        let mock = MockTerminal::xterm();
+        let mut prober = CapabilityProber::new(Duration::from_millis(200));
+        let caps = TerminalCapabilities::basic();
+
+        mock.feed_responses(&mut prober);
+        let ledgers = prober.build_ledgers(&caps);
+
+        // xterm should enable TrueColor, Hyperlinks, FocusEvents, Sixel, SyncOutput.
+        let tc = ledgers.iter().find(|l| l.capability == ProbeableCapability::TrueColor).unwrap();
+        assert!(tc.confident_at(0.8), "TrueColor confidence: {:.2}", tc.probability());
+
+        let hl = ledgers.iter().find(|l| l.capability == ProbeableCapability::Hyperlinks).unwrap();
+        assert!(hl.confident_at(0.8), "Hyperlinks confidence: {:.2}", hl.probability());
+
+        let fe = ledgers.iter().find(|l| l.capability == ProbeableCapability::FocusEvents).unwrap();
+        assert!(fe.confident_at(0.8), "FocusEvents confidence: {:.2}", fe.probability());
+
+        let sx = ledgers.iter().find(|l| l.capability == ProbeableCapability::Sixel).unwrap();
+        assert!(sx.confident_at(0.8), "Sixel confidence: {:.2}", sx.probability());
+
+        let so = ledgers.iter().find(|l| l.capability == ProbeableCapability::SynchronizedOutput).unwrap();
+        assert!(so.confident_at(0.8), "SyncOutput confidence: {:.2}", so.probability());
+
+        // JSONL output validation.
+        let log = build_log(&ledgers, "xterm");
+        for entry in &log {
+            let line = entry.to_jsonl();
+            assert!(line.starts_with('{') && line.ends_with('}'), "Bad JSONL: {}", line);
+        }
+    }
+
+    #[test]
+    fn e2e_mock_timeout_all() {
+        let mock = MockTerminal::all_timeout();
+        let mut prober = CapabilityProber::new(Duration::from_millis(200));
+        let caps = TerminalCapabilities::basic();
+
+        mock.feed_responses(&mut prober);
+
+        // Add timeout evidence for all capabilities.
+        let mut ledgers = prober.build_ledgers(&caps);
+        for ledger in &mut ledgers {
+            prober.record_timeout_evidence(ledger);
+        }
+
+        // With timeout + no env detection, all should be uncertain or disabled.
+        for ledger in &ledgers {
+            assert!(
+                !ledger.confident_at(0.9),
+                "{:?} should not be confidently enabled after timeout, confidence: {:.2}",
+                ledger.capability,
+                ledger.probability()
+            );
+            // Evidence should include timeout entry.
+            assert!(
+                ledger.entries().iter().any(|e| e.source == EvidenceSource::Timeout),
+                "{:?} missing timeout evidence",
+                ledger.capability
+            );
+        }
+
+        // JSONL log shows timeout flag.
+        let log = build_log(&ledgers, "timeout");
+        for entry in &log {
+            assert!(entry.timeout, "{} should have timeout flag", entry.capability);
+        }
+    }
+
+    #[test]
+    fn e2e_mock_minimal_terminal() {
+        let mock = MockTerminal::minimal_vt100();
+        let mut prober = CapabilityProber::new(Duration::from_millis(200));
+        let caps = TerminalCapabilities::basic();
+
+        mock.feed_responses(&mut prober);
+        let ledgers = prober.build_ledgers(&caps);
+
+        // VT100 doesn't support modern features. SyncOutput and FocusEvents should be denied.
+        let so = ledgers.iter().find(|l| l.capability == ProbeableCapability::SynchronizedOutput).unwrap();
+        assert!(
+            so.probability() < 0.1,
+            "VT100 SyncOutput should be denied: {:.2}",
+            so.probability()
+        );
+    }
+
+    #[test]
+    fn property_probe_ordering_independent() {
+        // Feed DA2 before DA1 vs DA1 before DA2 → same result.
+        let da1 = b"\x1b[?1;2;4;6;22c";
+        let da2 = b"\x1b[>41;354;0c";
+        let decrpm_sync = b"\x1b[?2026;1$y";
+        let decrpm_focus = b"\x1b[?1004;1$y";
+
+        let caps = TerminalCapabilities::basic();
+
+        // Order A: DA1, DA2, DECRPM
+        let mut prober_a = CapabilityProber::new(Duration::from_millis(200));
+        prober_a.process_response(da1);
+        prober_a.process_response(da2);
+        prober_a.process_response(decrpm_sync);
+        prober_a.process_response(decrpm_focus);
+        let ledgers_a = prober_a.build_ledgers(&caps);
+
+        // Order B: DECRPM, DA2, DA1
+        let mut prober_b = CapabilityProber::new(Duration::from_millis(200));
+        prober_b.process_response(decrpm_focus);
+        prober_b.process_response(decrpm_sync);
+        prober_b.process_response(da2);
+        prober_b.process_response(da1);
+        let ledgers_b = prober_b.build_ledgers(&caps);
+
+        // Order C: DA2, DECRPM, DA1
+        let mut prober_c = CapabilityProber::new(Duration::from_millis(200));
+        prober_c.process_response(da2);
+        prober_c.process_response(decrpm_sync);
+        prober_c.process_response(decrpm_focus);
+        prober_c.process_response(da1);
+        let ledgers_c = prober_c.build_ledgers(&caps);
+
+        // All orderings should produce the same decisions.
+        for i in 0..ledgers_a.len() {
+            let pa = ledgers_a[i].probability();
+            let pb = ledgers_b[i].probability();
+            let pc = ledgers_c[i].probability();
+
+            assert!(
+                (pa - pb).abs() < 1e-10 && (pb - pc).abs() < 1e-10,
+                "{:?}: ordering matters! A={:.4}, B={:.4}, C={:.4}",
+                ledgers_a[i].capability,
+                pa,
+                pb,
+                pc,
+            );
+        }
+    }
+
+    #[test]
+    fn property_probe_ordering_many_permutations() {
+        // Test 6 permutations of 3 response types.
+        let responses: [&[u8]; 3] = [
+            b"\x1b[?1;2;4c",        // DA1
+            b"\x1b[>41;354;0c",     // DA2
+            b"\x1b[?2026;1$y",      // DECRPM
+        ];
+        let caps = TerminalCapabilities::basic();
+
+        let permutations: [[usize; 3]; 6] = [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ];
+
+        let mut reference: Option<Vec<f64>> = None;
+
+        for perm in &permutations {
+            let mut prober = CapabilityProber::new(Duration::from_millis(200));
+            for &idx in perm {
+                prober.process_response(responses[idx]);
+            }
+            let ledgers = prober.build_ledgers(&caps);
+            let probs: Vec<f64> = ledgers.iter().map(|l| l.probability()).collect();
+
+            if let Some(ref r) = reference {
+                for (i, (&a, &b)) in r.iter().zip(probs.iter()).enumerate() {
+                    assert!(
+                        (a - b).abs() < 1e-10,
+                        "Permutation {:?}: cap {} differs: {:.4} vs {:.4}",
+                        perm,
+                        i,
+                        a,
+                        b,
+                    );
+                }
+            } else {
+                reference = Some(probs);
+            }
+        }
+    }
+
+    #[test]
+    fn e2e_mock_mintty() {
+        let mock = MockTerminal::mintty();
+        let mut prober = CapabilityProber::new(Duration::from_millis(200));
+        let caps = TerminalCapabilities::basic();
+
+        mock.feed_responses(&mut prober);
+        let ledgers = prober.build_ledgers(&caps);
+
+        let tc = ledgers.iter().find(|l| l.capability == ProbeableCapability::TrueColor).unwrap();
+        assert!(tc.confident_at(0.8), "mintty TrueColor: {:.2}", tc.probability());
+
+        let hl = ledgers.iter().find(|l| l.capability == ProbeableCapability::Hyperlinks).unwrap();
+        assert!(hl.confident_at(0.8), "mintty Hyperlinks: {:.2}", hl.probability());
+
+        let so = ledgers.iter().find(|l| l.capability == ProbeableCapability::SynchronizedOutput).unwrap();
+        assert!(so.confident_at(0.8), "mintty SyncOutput: {:.2}", so.probability());
+    }
+
+    #[test]
+    fn e2e_jsonl_schema_valid() {
+        // Validate that all JSONL fields are present.
+        let mock = MockTerminal::xterm();
+        let mut prober = CapabilityProber::new(Duration::from_millis(200));
+        let caps = TerminalCapabilities::basic();
+        mock.feed_responses(&mut prober);
+        let ledgers = prober.build_ledgers(&caps);
+
+        let log = build_log(&ledgers, "xterm");
+        for entry in &log {
+            let line = entry.to_jsonl();
+            assert!(line.contains("\"capability\":"));
+            assert!(line.contains("\"probe\":"));
+            assert!(line.contains("\"response\":"));
+            assert!(line.contains("\"decision\":"));
+            assert!(line.contains("\"confidence\":"));
+            assert!(line.contains("\"timeout\":"));
+        }
+    }
+
+    #[test]
+    fn e2e_env_plus_probe_stacking() {
+        // When env detection + probe confirmation agree, confidence should be very high.
+        let mock = MockTerminal::xterm();
+        let mut prober = CapabilityProber::new(Duration::from_millis(200));
+        mock.feed_responses(&mut prober);
+
+        let mut caps = TerminalCapabilities::basic();
+        caps.true_color = true; // env says true
+        caps.osc8_hyperlinks = true;
+
+        let ledgers = prober.build_ledgers(&caps);
+        let tc = ledgers.iter().find(|l| l.capability == ProbeableCapability::TrueColor).unwrap();
+
+        // Both env + DA2 confirm → very high confidence.
+        assert!(tc.probability() > 0.98, "Stacked evidence: {:.4}", tc.probability());
     }
 }

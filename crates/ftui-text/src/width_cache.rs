@@ -1776,3 +1776,478 @@ mod tinylfu_impl_tests {
         assert!(cache.capacity() >= 2);
     }
 }
+
+// ---------------------------------------------------------------------------
+// bd-4kq0.6.3: WidthCache Tests + Perf Gates
+// ---------------------------------------------------------------------------
+
+/// Deterministic LCG for test reproducibility (no external rand dependency).
+#[cfg(test)]
+struct Lcg(u64);
+
+#[cfg(test)]
+impl Lcg {
+    fn new(seed: u64) -> Self {
+        Self(seed)
+    }
+    fn next_u64(&mut self) -> u64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1);
+        self.0
+    }
+    fn next_usize(&mut self, max: usize) -> usize {
+        (self.next_u64() % (max as u64)) as usize
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 1. Property: cache equivalence (cached width == computed width)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod property_cache_equivalence {
+    use super::*;
+    use proptest::prelude::*;
+    use unicode_width::UnicodeWidthStr;
+
+    proptest! {
+        #[test]
+        fn tinylfu_cached_equals_computed(s in "[a-zA-Z0-9 ]{1,80}") {
+            let mut cache = TinyLfuWidthCache::new(200);
+            let cached = cache.get_or_compute(&s);
+            let direct = s.width();
+            prop_assert_eq!(cached, direct,
+                "TinyLFU returned {} but UnicodeWidthStr says {} for {:?}", cached, direct, s);
+        }
+
+        #[test]
+        fn tinylfu_second_access_same_value(s in "[a-zA-Z0-9]{1,40}") {
+            let mut cache = TinyLfuWidthCache::new(200);
+            let first = cache.get_or_compute(&s);
+            let second = cache.get_or_compute(&s);
+            prop_assert_eq!(first, second,
+                "First access returned {} but second returned {} for {:?}", first, second, s);
+        }
+
+        #[test]
+        fn tinylfu_never_exceeds_capacity(
+            strings in prop::collection::vec("[a-z]{1,5}", 10..200),
+            capacity in 10usize..50
+        ) {
+            let mut cache = TinyLfuWidthCache::new(capacity);
+            for s in &strings {
+                cache.get_or_compute(s);
+                prop_assert!(cache.len() <= capacity,
+                    "Cache size {} exceeded capacity {}", cache.len(), capacity);
+            }
+        }
+
+        #[test]
+        fn tinylfu_custom_fn_matches(s in "[a-z]{1,20}") {
+            let mut cache = TinyLfuWidthCache::new(100);
+            let custom_fn = |text: &str| text.len(); // byte length as custom metric
+            let cached = cache.get_or_compute_with(&s, custom_fn);
+            prop_assert_eq!(cached, s.len(),
+                "Custom fn: cached {} != expected {} for {:?}", cached, s.len(), s);
+        }
+    }
+
+    #[test]
+    fn deterministic_seed_equivalence() {
+        // Same workload with same seed → same results every time.
+        let mut rng = super::Lcg::new(0xDEAD_BEEF);
+
+        let mut cache1 = TinyLfuWidthCache::new(50);
+        let mut results1 = Vec::new();
+        for _ in 0..500 {
+            let idx = rng.next_usize(100);
+            let s = format!("key_{}", idx);
+            results1.push(cache1.get_or_compute(&s));
+        }
+
+        let mut rng2 = super::Lcg::new(0xDEAD_BEEF);
+        let mut cache2 = TinyLfuWidthCache::new(50);
+        let mut results2 = Vec::new();
+        for _ in 0..500 {
+            let idx = rng2.next_usize(100);
+            let s = format!("key_{}", idx);
+            results2.push(cache2.get_or_compute(&s));
+        }
+
+        assert_eq!(
+            results1, results2,
+            "Deterministic seed must produce identical results"
+        );
+    }
+
+    #[test]
+    fn both_caches_agree_on_widths() {
+        // WidthCache (plain LRU) and TinyLfuWidthCache must return the same
+        // widths for any input.
+        let mut lru = WidthCache::new(200);
+        let mut tlfu = TinyLfuWidthCache::new(200);
+
+        let inputs = [
+            "",
+            "hello",
+            "日本語テスト",
+            "café résumé",
+            "a\tb",
+            "🎉🎊🎈",
+            "mixed日本eng",
+            "    spaces    ",
+            "AAAAAAAAAAAAAAAAAAAAAAAAA",
+            "x",
+        ];
+
+        for &s in &inputs {
+            let w1 = lru.get_or_compute(s);
+            let w2 = tlfu.get_or_compute(s);
+            assert_eq!(
+                w1, w2,
+                "Width mismatch for {:?}: LRU={}, TinyLFU={}",
+                s, w1, w2
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 2. E2E cache replay: deterministic workload, log hit rate + latency (JSONL)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod e2e_cache_replay {
+    use super::*;
+    use std::time::Instant;
+
+    /// A single replay record, serialisable to JSONL.
+    #[derive(Debug)]
+    struct ReplayRecord {
+        step: usize,
+        key: String,
+        width: usize,
+        hit: bool,
+        latency_ns: u128,
+    }
+
+    impl ReplayRecord {
+        fn to_jsonl(&self) -> String {
+            format!(
+                r#"{{"step":{},"key":"{}","width":{},"hit":{},"latency_ns":{}}}"#,
+                self.step, self.key, self.width, self.hit, self.latency_ns,
+            )
+        }
+    }
+
+    fn zipfian_workload(rng: &mut super::Lcg, n: usize, universe: usize) -> Vec<String> {
+        // Approximate Zipfian: lower indices are much more frequent.
+        (0..n)
+            .map(|_| {
+                let raw = rng.next_usize(universe * universe);
+                let idx = (raw as f64).sqrt() as usize % universe;
+                format!("item_{}", idx)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn replay_zipfian_tinylfu() {
+        let mut rng = super::Lcg::new(0x1234_5678);
+        let workload = zipfian_workload(&mut rng, 2000, 200);
+
+        let mut cache = TinyLfuWidthCache::new(50);
+        let mut records = Vec::with_capacity(workload.len());
+
+        for (i, key) in workload.iter().enumerate() {
+            let stats_before = cache.stats();
+            let t0 = Instant::now();
+            let width = cache.get_or_compute(key);
+            let elapsed = t0.elapsed().as_nanos();
+            let stats_after = cache.stats();
+            let hit = stats_after.hits > stats_before.hits;
+
+            records.push(ReplayRecord {
+                step: i,
+                key: key.clone(),
+                width,
+                hit,
+                latency_ns: elapsed,
+            });
+        }
+
+        // Validate JSONL serialisation is parseable.
+        for r in &records[..5] {
+            let line = r.to_jsonl();
+            assert!(
+                line.starts_with('{') && line.ends_with('}'),
+                "Bad JSONL: {}",
+                line
+            );
+        }
+
+        // Compute aggregate stats.
+        let total = records.len();
+        let hits = records.iter().filter(|r| r.hit).count();
+        let hit_rate = hits as f64 / total as f64;
+
+        // Zipfian workload with 50-entry cache over 200-item universe
+        // should get a meaningful hit rate (> 10%).
+        assert!(
+            hit_rate > 0.10,
+            "Zipfian hit rate too low: {:.2}% ({}/{})",
+            hit_rate * 100.0,
+            hits,
+            total
+        );
+    }
+
+    #[test]
+    fn replay_zipfian_lru_comparison() {
+        let mut rng = super::Lcg::new(0x1234_5678);
+        let workload = zipfian_workload(&mut rng, 2000, 200);
+
+        let mut tlfu = TinyLfuWidthCache::new(50);
+        let mut lru = WidthCache::new(50);
+
+        for key in &workload {
+            tlfu.get_or_compute(key);
+            lru.get_or_compute(key);
+        }
+
+        let tlfu_stats = tlfu.stats();
+        let lru_stats = lru.stats();
+
+        // Both must have correct total operations.
+        assert_eq!(tlfu_stats.hits + tlfu_stats.misses, 2000);
+        assert_eq!(lru_stats.hits + lru_stats.misses, 2000);
+
+        // TinyLFU should be at least competitive with plain LRU on Zipfian.
+        // (In practice TinyLFU often wins, but we just check both work.)
+        assert!(
+            tlfu_stats.hit_rate() >= lru_stats.hit_rate() * 0.8,
+            "TinyLFU hit rate {:.2}% much worse than LRU {:.2}%",
+            tlfu_stats.hit_rate() * 100.0,
+            lru_stats.hit_rate() * 100.0,
+        );
+    }
+
+    #[test]
+    fn replay_deterministic_reproduction() {
+        // Two identical replays must produce identical hit/miss sequences.
+        let run = |seed: u64| -> Vec<bool> {
+            let mut rng = super::Lcg::new(seed);
+            let workload = zipfian_workload(&mut rng, 500, 100);
+            let mut cache = TinyLfuWidthCache::new(30);
+            let mut hits = Vec::with_capacity(500);
+            for key in &workload {
+                let before = cache.stats().hits;
+                cache.get_or_compute(key);
+                hits.push(cache.stats().hits > before);
+            }
+            hits
+        };
+
+        let run1 = run(0xABCD_EF01);
+        let run2 = run(0xABCD_EF01);
+        assert_eq!(run1, run2, "Deterministic replay diverged");
+    }
+
+    #[test]
+    fn replay_uniform_workload() {
+        // Uniform access pattern: every key equally likely. Hit rate should be
+        // roughly cache_size / universe_size for large N.
+        let mut rng = super::Lcg::new(0x9999);
+        let universe = 100;
+        let cache_size = 25;
+        let n = 5000;
+
+        let mut cache = TinyLfuWidthCache::new(cache_size);
+
+        // Warm up: access each key once.
+        for i in 0..universe {
+            cache.get_or_compute(&format!("u_{}", i));
+        }
+
+        cache.reset_stats();
+        for _ in 0..n {
+            let idx = rng.next_usize(universe);
+            cache.get_or_compute(&format!("u_{}", idx));
+        }
+
+        let stats = cache.stats();
+        let hit_rate = stats.hit_rate();
+        // Theoretical: ~25/100 = 25%. Allow range 10%–60%.
+        assert!(
+            hit_rate > 0.10 && hit_rate < 0.60,
+            "Uniform hit rate {:.2}% outside expected range",
+            hit_rate * 100.0,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 3. Perf gates: cache operations < 1us p95
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod perf_cache_overhead {
+    use super::*;
+    use std::time::Instant;
+
+    /// Collect latencies for N operations, return sorted Vec<u128> in nanoseconds.
+    fn measure_latencies<F: FnMut(usize)>(n: usize, mut op: F) -> Vec<u128> {
+        let mut latencies = Vec::with_capacity(n);
+        for i in 0..n {
+            let t0 = Instant::now();
+            op(i);
+            latencies.push(t0.elapsed().as_nanos());
+        }
+        latencies.sort_unstable();
+        latencies
+    }
+
+    fn p95(sorted: &[u128]) -> u128 {
+        let idx = (sorted.len() as f64 * 0.95) as usize;
+        sorted[idx.min(sorted.len() - 1)]
+    }
+
+    fn p99(sorted: &[u128]) -> u128 {
+        let idx = (sorted.len() as f64 * 0.99) as usize;
+        sorted[idx.min(sorted.len() - 1)]
+    }
+
+    fn median(sorted: &[u128]) -> u128 {
+        sorted[sorted.len() / 2]
+    }
+
+    #[test]
+    fn perf_lru_hit_latency() {
+        let mut cache = WidthCache::new(1000);
+        // Warm up.
+        for i in 0..100 {
+            cache.get_or_compute(&format!("warm_{}", i));
+        }
+
+        let keys: Vec<String> = (0..100).map(|i| format!("warm_{}", i)).collect();
+        let latencies = measure_latencies(10_000, |i| {
+            let _ = cache.get_or_compute(&keys[i % 100]);
+        });
+
+        let p95_ns = p95(&latencies);
+        // Budget: < 1us (1000ns) p95 for cache hits.
+        // Use generous 5us to account for CI variability.
+        assert!(
+            p95_ns < 5_000,
+            "LRU hit p95 = {}ns exceeds 5us budget (median={}ns, p99={}ns)",
+            p95_ns,
+            median(&latencies),
+            p99(&latencies),
+        );
+    }
+
+    #[test]
+    fn perf_tinylfu_hit_latency() {
+        let mut cache = TinyLfuWidthCache::new(1000);
+        // Warm up: access each key multiple times to ensure promotion to main.
+        for _ in 0..5 {
+            for i in 0..100 {
+                cache.get_or_compute(&format!("warm_{}", i));
+            }
+        }
+
+        let keys: Vec<String> = (0..100).map(|i| format!("warm_{}", i)).collect();
+        let latencies = measure_latencies(10_000, |i| {
+            let _ = cache.get_or_compute(&keys[i % 100]);
+        });
+
+        let p95_ns = p95(&latencies);
+        // Budget: < 1us p95 for hits (5us CI-safe threshold).
+        assert!(
+            p95_ns < 5_000,
+            "TinyLFU hit p95 = {}ns exceeds 5us budget (median={}ns, p99={}ns)",
+            p95_ns,
+            median(&latencies),
+            p99(&latencies),
+        );
+    }
+
+    #[test]
+    fn perf_tinylfu_miss_latency() {
+        let mut cache = TinyLfuWidthCache::new(100);
+        let keys: Vec<String> = (0..10_000).map(|i| format!("miss_{}", i)).collect();
+
+        let latencies = measure_latencies(10_000, |i| {
+            let _ = cache.get_or_compute(&keys[i]);
+        });
+
+        let p95_ns = p95(&latencies);
+        // Misses include unicode width computation. Budget: < 5us p95.
+        // Use 20us CI-safe threshold (computation dominates).
+        assert!(
+            p95_ns < 20_000,
+            "TinyLFU miss p95 = {}ns exceeds 20us budget (median={}ns, p99={}ns)",
+            p95_ns,
+            median(&latencies),
+            p99(&latencies),
+        );
+    }
+
+    #[test]
+    fn perf_cms_increment_latency() {
+        let mut cms = CountMinSketch::with_defaults();
+        let hashes: Vec<u64> = (0..10_000).map(|i| hash_text(&format!("k{}", i))).collect();
+
+        let latencies = measure_latencies(10_000, |i| {
+            cms.increment(hashes[i]);
+        });
+
+        let p95_ns = p95(&latencies);
+        // CMS increment should be very fast: < 500ns p95.
+        assert!(
+            p95_ns < 2_000,
+            "CMS increment p95 = {}ns exceeds 2us budget (median={}ns)",
+            p95_ns,
+            median(&latencies),
+        );
+    }
+
+    #[test]
+    fn perf_doorkeeper_latency() {
+        let mut dk = Doorkeeper::with_defaults();
+        let hashes: Vec<u64> = (0..10_000).map(|i| hash_text(&format!("d{}", i))).collect();
+
+        let latencies = measure_latencies(10_000, |i| {
+            let _ = dk.check_and_set(hashes[i]);
+        });
+
+        let p95_ns = p95(&latencies);
+        // Doorkeeper bit ops: < 200ns p95.
+        assert!(
+            p95_ns < 1_000,
+            "Doorkeeper p95 = {}ns exceeds 1us budget (median={}ns)",
+            p95_ns,
+            median(&latencies),
+        );
+    }
+
+    #[test]
+    fn perf_fingerprint_hash_latency() {
+        let keys: Vec<String> = (0..10_000).map(|i| format!("fp_{}", i)).collect();
+
+        let latencies = measure_latencies(10_000, |i| {
+            let _ = fingerprint_hash(&keys[i]);
+        });
+
+        let p95_ns = p95(&latencies);
+        // FNV hash: < 200ns p95.
+        assert!(
+            p95_ns < 1_000,
+            "fingerprint_hash p95 = {}ns exceeds 1us budget (median={}ns)",
+            p95_ns,
+            median(&latencies),
+        );
+    }
+}
