@@ -393,7 +393,7 @@ impl Screen for LogSearch {
     fn tick(&mut self, tick_count: u64) {
         self.tick_count = tick_count;
 
-        if !self.paused && tick_count % LOG_BURST_INTERVAL == 0 {
+        if !self.paused && tick_count.is_multiple_of(LOG_BURST_INTERVAL) {
             for _ in 0..LOG_BURST_SIZE {
                 self.viewer.push(generate_log_line(self.lines_generated));
                 self.lines_generated += 1;
@@ -560,11 +560,9 @@ mod tests {
 
         let initial_info = screen.viewer.search_info();
         screen.update(&key_press(KeyCode::Char('n')));
-        if let Some((_, total)) = initial_info {
-            if total > 1 {
-                let (current, _) = screen.viewer.search_info().unwrap();
-                assert_eq!(current, 2);
-            }
+        if let Some((_, total)) = initial_info && total > 1 {
+            let (current, _) = screen.viewer.search_info().unwrap();
+            assert_eq!(current, 2);
         }
     }
 

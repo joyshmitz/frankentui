@@ -310,10 +310,9 @@ impl Screen for ResponsiveDemo {
             kind: KeyEventKind::Press,
             ..
         }) = event
+            && let (KeyCode::Char('b'), Modifiers::NONE) = (*code, *modifiers)
         {
-            if let (KeyCode::Char('b'), Modifiers::NONE) = (*code, *modifiers) {
-                self.use_custom_breakpoints = !self.use_custom_breakpoints;
-            }
+            self.use_custom_breakpoints = !self.use_custom_breakpoints;
         }
         if let Event::Resize { width, height } = event {
             self.width = *width;
