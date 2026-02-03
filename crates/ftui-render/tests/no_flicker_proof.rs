@@ -883,10 +883,10 @@ fn e2e_proof_verification_jsonl() {
 
     let caps = caps_with_sync();
     let scenarios: &[(u16, u16, u64, &str)] = &[
-        (80, 24, 0xDA00F_0001, "standard_terminal"),
-        (120, 40, 0xDA00F_0002, "large_terminal"),
-        (40, 10, 0xDA00F_0003, "small_terminal"),
-        (200, 50, 0xDA00F_0004, "ultrawide"),
+        (80, 24, 0x000D_A00F_0001, "standard_terminal"),
+        (120, 40, 0x000D_A00F_0002, "large_terminal"),
+        (40, 10, 0x000D_A00F_0003, "small_terminal"),
+        (200, 50, 0x000D_A00F_0004, "ultrawide"),
     ];
 
     for &(width, height, seed, label) in scenarios {

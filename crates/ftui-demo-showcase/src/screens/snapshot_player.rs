@@ -632,6 +632,11 @@ impl SnapshotPlayer {
         self.playback_state
     }
 
+    /// Whether the diagnostic panel is currently visible.
+    pub fn diagnostics_visible(&self) -> bool {
+        self.show_diagnostics
+    }
+
     /// Get current frame buffer.
     pub fn current_buffer(&self) -> Option<&Buffer> {
         self.frames.get(self.current_frame)
@@ -966,11 +971,12 @@ impl SnapshotPlayer {
         lines.push(String::new());
         lines.push("── Controls ──".to_string());
         lines.push("Space: Play/Pause".to_string());
-        lines.push("←/→: Step".to_string());
-        lines.push("Home/End: First/Last".to_string());
+        lines.push("←/→ or h/l: Step".to_string());
+        lines.push("Home/End or g/G: First/Last".to_string());
         lines.push("M: Toggle marker".to_string());
         lines.push("R: Toggle record".to_string());
         lines.push("C: Clear".to_string());
+        lines.push("D: Diagnostics".to_string());
 
         for (i, line) in lines.iter().enumerate() {
             if i as u16 >= inner.height {

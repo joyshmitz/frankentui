@@ -55,6 +55,7 @@ use crate::StorageResult;
 use crate::input_fairness::{FairnessEventType, InputFairnessGuard};
 use crate::input_macro::{EventRecorder, InputMacro};
 use crate::locale::LocaleContext;
+use crate::resize_coalescer::{CoalesceAction, CoalescerConfig, ResizeCoalescer};
 use crate::state_persistence::StateRegistry;
 use crate::subscription::SubscriptionManager;
 use crate::terminal_writer::{ScreenMode, TerminalWriter, UiAnchor};
@@ -292,22 +293,13 @@ impl<M> Cmd<M> {
 pub enum ResizeBehavior {
     /// Apply resize immediately (no debounce, no placeholder).
     Immediate,
-    /// Debounce resize events but keep rendering the previous frame.
+    /// Coalesce resize events for continuous reflow.
     Throttled,
-    /// Debounce resize events and show a resize placeholder.
-    Placeholder,
 }
 
 impl ResizeBehavior {
-    const fn uses_debounce(self) -> bool {
-        matches!(
-            self,
-            ResizeBehavior::Throttled | ResizeBehavior::Placeholder
-        )
-    }
-
-    const fn shows_placeholder(self) -> bool {
-        matches!(self, ResizeBehavior::Placeholder)
+    const fn uses_coalescer(self) -> bool {
+        matches!(self, ResizeBehavior::Throttled)
     }
 }
 
@@ -402,9 +394,9 @@ pub struct ProgramConfig {
     pub locale_context: LocaleContext,
     /// Input poll timeout.
     pub poll_timeout: Duration,
-    /// Debounce duration for resize events.
-    pub resize_debounce: Duration,
-    /// Resize handling behavior (immediate/throttled/placeholder).
+    /// Resize coalescer configuration.
+    pub resize_coalescer: CoalescerConfig,
+    /// Resize handling behavior (immediate/throttled).
     pub resize_behavior: ResizeBehavior,
     /// Enable mouse support.
     pub mouse: bool,
@@ -426,8 +418,8 @@ impl Default for ProgramConfig {
             budget: FrameBudgetConfig::default(),
             locale_context: LocaleContext::global(),
             poll_timeout: Duration::from_millis(100),
-            resize_debounce: Duration::from_millis(100),
-            resize_behavior: ResizeBehavior::Placeholder,
+            resize_coalescer: CoalescerConfig::default(),
+            resize_behavior: ResizeBehavior::Throttled,
             mouse: false,
             bracketed_paste: true,
             focus_reporting: false,
@@ -489,9 +481,9 @@ impl ProgramConfig {
         self
     }
 
-    /// Set the resize debounce duration.
-    pub fn with_resize_debounce(mut self, debounce: Duration) -> Self {
-        self.resize_debounce = debounce;
+    /// Set the resize coalescer configuration.
+    pub fn with_resize_coalescer(mut self, config: CoalescerConfig) -> Self {
+        self.resize_coalescer = config;
         self
     }
 
@@ -522,88 +514,7 @@ impl ProgramConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ResizeAction {
-    None,
-    ShowPlaceholder,
-    ApplyResize {
-        width: u16,
-        height: u16,
-        elapsed: Duration,
-    },
-}
-
-#[derive(Debug)]
-struct ResizeDebouncer {
-    debounce: Duration,
-    last_resize: Option<Instant>,
-    pending_size: Option<(u16, u16)>,
-    last_applied: (u16, u16),
-}
-
-impl ResizeDebouncer {
-    fn new(debounce: Duration, initial_size: (u16, u16)) -> Self {
-        Self {
-            debounce,
-            last_resize: None,
-            pending_size: None,
-            last_applied: initial_size,
-        }
-    }
-
-    fn handle_resize(&mut self, width: u16, height: u16) -> ResizeAction {
-        self.handle_resize_at(width, height, Instant::now())
-    }
-
-    fn apply_immediate(&mut self, width: u16, height: u16) {
-        self.pending_size = None;
-        self.last_resize = None;
-        self.last_applied = (width, height);
-    }
-
-    fn handle_resize_at(&mut self, width: u16, height: u16, now: Instant) -> ResizeAction {
-        if self.pending_size.is_none() && (width, height) == self.last_applied {
-            return ResizeAction::None;
-        }
-        self.pending_size = Some((width, height));
-        self.last_resize = Some(now);
-        ResizeAction::ShowPlaceholder
-    }
-
-    fn tick(&mut self) -> ResizeAction {
-        self.tick_at(Instant::now())
-    }
-
-    fn tick_at(&mut self, now: Instant) -> ResizeAction {
-        let Some(pending) = self.pending_size else {
-            return ResizeAction::None;
-        };
-        let Some(last) = self.last_resize else {
-            return ResizeAction::None;
-        };
-
-        let elapsed = now.saturating_duration_since(last);
-        if elapsed >= self.debounce {
-            self.pending_size = None;
-            self.last_resize = None;
-            self.last_applied = pending;
-            return ResizeAction::ApplyResize {
-                width: pending.0,
-                height: pending.1,
-                elapsed,
-            };
-        }
-
-        ResizeAction::None
-    }
-
-    fn time_until_apply(&self, now: Instant) -> Option<Duration> {
-        let _pending = self.pending_size?;
-        let last = self.last_resize?;
-        let elapsed = now.saturating_duration_since(last);
-        Some(self.debounce.saturating_sub(elapsed))
-    }
-}
+// removed: legacy ResizeDebouncer (superseded by ResizeCoalescer)
 
 /// The program runtime that manages the update/view loop.
 pub struct Program<M: Model, W: Write + Send = Stdout> {
@@ -633,12 +544,10 @@ pub struct Program<M: Model, W: Write + Send = Stdout> {
     locale_context: LocaleContext,
     /// Last observed locale version.
     locale_version: u64,
-    /// Resize debouncer for rapid resize events.
-    resize_debouncer: ResizeDebouncer,
+    /// Resize coalescer for rapid resize events.
+    resize_coalescer: ResizeCoalescer,
     /// Resize handling behavior.
     resize_behavior: ResizeBehavior,
-    /// Whether the resize placeholder should be shown.
-    resizing: bool,
     /// Input fairness guard for scheduler integration.
     fairness_guard: InputFairnessGuard,
     /// Optional event recorder for macro capture.
@@ -692,7 +601,7 @@ impl<M: Model> Program<M, Stdout> {
         let budget = RenderBudget::from_config(&config.budget);
         let locale_context = config.locale_context.clone();
         let locale_version = locale_context.version();
-        let resize_debouncer = ResizeDebouncer::new(config.resize_debounce, (width, height));
+        let resize_coalescer = ResizeCoalescer::new(config.resize_coalescer.clone(), (width, height));
         let subscriptions = SubscriptionManager::new();
         let (task_sender, task_receiver) = std::sync::mpsc::channel();
 
@@ -710,9 +619,8 @@ impl<M: Model> Program<M, Stdout> {
             budget,
             locale_context,
             locale_version,
-            resize_debouncer,
+            resize_coalescer,
             resize_behavior: config.resize_behavior,
-            resizing: false,
             fairness_guard: InputFairnessGuard::new(),
             event_recorder: None,
             subscriptions,
@@ -791,7 +699,7 @@ impl<M: Model, W: Write + Send> Program<M, W> {
             self.process_task_results()?;
             self.reap_finished_tasks();
 
-            self.process_resize_debounce()?;
+            self.process_resize_coalescer()?;
 
             // Check for tick - deliver to model so periodic logic can run
             if self.should_tick() {
@@ -910,8 +818,9 @@ impl<M: Model, W: Write + Send> Program<M, W> {
                         // Clamp to minimum 1 to prevent Buffer::new panic on zero dimensions
                         let width = width.max(1);
                         let height = height.max(1);
-                        self.resize_debouncer.apply_immediate(width, height);
-                        let result = self.apply_resize(width, height, Duration::ZERO);
+                        self.resize_coalescer
+                            .record_external_apply(width, height, Instant::now());
+                        let result = self.apply_resize(width, height, Duration::ZERO, false);
                         self.fairness_guard.event_processed(
                             fairness_event_type,
                             event_start.elapsed(),
@@ -919,26 +828,25 @@ impl<M: Model, W: Write + Send> Program<M, W> {
                         );
                         return result;
                     }
-                    ResizeBehavior::Throttled | ResizeBehavior::Placeholder => {
-                        let action = self.resize_debouncer.handle_resize(width, height);
-                        if self.resize_behavior.shows_placeholder()
-                            && matches!(action, ResizeAction::ShowPlaceholder)
+                    ResizeBehavior::Throttled => {
+                        let action = self.resize_coalescer.handle_resize(width, height);
+                        if let CoalesceAction::ApplyResize {
+                            width,
+                            height,
+                            coalesce_time,
+                            forced_by_deadline,
+                        } = action
                         {
-                            let was_resizing = self.resizing;
-                            self.resizing = true;
-                            if !was_resizing {
-                                debug!("Showing resize placeholder");
-                            }
-                            // Clamp to minimum 1 to prevent Buffer::new panic on zero dimensions
-                            let width = width.max(1);
-                            let height = height.max(1);
-                            self.width = width;
-                            self.height = height;
-                            self.writer.set_size(width, height);
-                            self.mark_dirty();
-                        } else if !self.resize_behavior.shows_placeholder() {
-                            self.resizing = false;
+                            let result =
+                                self.apply_resize(width, height, coalesce_time, forced_by_deadline);
+                            self.fairness_guard.event_processed(
+                                fairness_event_type,
+                                event_start.elapsed(),
+                                Instant::now(),
+                            );
+                            return result;
                         }
+
                         self.fairness_guard.event_processed(
                             fairness_event_type,
                             event_start.elapsed(),
@@ -1153,12 +1061,6 @@ impl<M: Model, W: Write + Send> Program<M, W> {
         // Reset budget for new frame, potentially upgrading quality
         self.budget.next_frame();
 
-        if self.resizing {
-            self.render_resize_placeholder()?;
-            self.dirty = false;
-            return Ok(());
-        }
-
         // Early skip if budget says to skip this frame entirely
         if self.budget.exhausted() {
             debug!(
@@ -1283,16 +1185,16 @@ impl<M: Model, W: Write + Send> Program<M, W> {
         if let Some(tick_rate) = self.tick_rate {
             let elapsed = self.last_tick.elapsed();
             let mut timeout = tick_rate.saturating_sub(elapsed);
-            if self.resize_behavior.uses_debounce()
-                && let Some(resize_timeout) = self.resize_debouncer.time_until_apply(Instant::now())
+            if self.resize_behavior.uses_coalescer()
+                && let Some(resize_timeout) = self.resize_coalescer.time_until_apply(Instant::now())
             {
                 timeout = timeout.min(resize_timeout);
             }
             timeout
         } else {
             let mut timeout = self.poll_timeout;
-            if self.resize_behavior.uses_debounce()
-                && let Some(resize_timeout) = self.resize_debouncer.time_until_apply(Instant::now())
+            if self.resize_behavior.uses_coalescer()
+                && let Some(resize_timeout) = self.resize_coalescer.time_until_apply(Instant::now())
             {
                 timeout = timeout.min(resize_timeout);
             }
@@ -1311,8 +1213,8 @@ impl<M: Model, W: Write + Send> Program<M, W> {
         false
     }
 
-    fn process_resize_debounce(&mut self) -> io::Result<()> {
-        if !self.resize_behavior.uses_debounce() {
+    fn process_resize_coalescer(&mut self) -> io::Result<()> {
+        if !self.resize_behavior.uses_coalescer() {
             return Ok(());
         }
 
@@ -1329,18 +1231,24 @@ impl<M: Model, W: Write + Send> Program<M, W> {
             return Ok(());
         }
 
-        match self.resize_debouncer.tick() {
-            ResizeAction::ApplyResize {
+        match self.resize_coalescer.tick() {
+            CoalesceAction::ApplyResize {
                 width,
                 height,
-                elapsed,
-            } => self.apply_resize(width, height, elapsed),
+                coalesce_time,
+                forced_by_deadline,
+            } => self.apply_resize(width, height, coalesce_time, forced_by_deadline),
             _ => Ok(()),
         }
     }
 
-    fn apply_resize(&mut self, width: u16, height: u16, elapsed: Duration) -> io::Result<()> {
-        self.resizing = false;
+    fn apply_resize(
+        &mut self,
+        width: u16,
+        height: u16,
+        coalesce_time: Duration,
+        forced_by_deadline: bool,
+    ) -> io::Result<()> {
         // Clamp to minimum 1 to prevent Buffer::new panic on zero dimensions
         let width = width.max(1);
         let height = height.max(1);
@@ -1350,7 +1258,8 @@ impl<M: Model, W: Write + Send> Program<M, W> {
         info!(
             width = width,
             height = height,
-            debounce_ms = elapsed.as_millis() as u64,
+            coalesce_ms = coalesce_time.as_millis() as u64,
+            forced = forced_by_deadline,
             "Resize applied"
         );
 
@@ -1360,32 +1269,7 @@ impl<M: Model, W: Write + Send> Program<M, W> {
         self.execute_cmd(cmd)
     }
 
-    fn render_resize_placeholder(&mut self) -> io::Result<()> {
-        const PLACEHOLDER_TEXT: &str = "Resizing...";
-
-        // Use ui_height() to get effective visible height in inline mode.
-        let frame_height = self.writer.ui_height();
-        let buffer = {
-            let buffer = self.writer.take_render_buffer(self.width, frame_height);
-            let mut frame = Frame::from_buffer(buffer, self.writer.pool_mut());
-            let text_width = PLACEHOLDER_TEXT.chars().count().min(self.width as usize) as u16;
-            let x_start = self.width.saturating_sub(text_width) / 2;
-            let y = frame_height / 2;
-
-            for (offset, ch) in PLACEHOLDER_TEXT.chars().enumerate() {
-                let x = x_start.saturating_add(offset as u16);
-                if x >= self.width {
-                    break;
-                }
-                frame.buffer.set_raw(x, y, Cell::from_char(ch));
-            }
-            frame.buffer
-        };
-
-        self.writer.present_ui_owned(buffer, None)?;
-
-        Ok(())
-    }
+    // removed: resize placeholder rendering (continuous reflow preferred)
 
     /// Get a reference to the model.
     pub fn model(&self) -> &M {
