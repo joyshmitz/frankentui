@@ -3131,4 +3131,20 @@ mod tests {
         }
         // Should complete without panic
     }
+
+    // -----------------------------------------------------------------------
+    // Evidence Ledger tests (bd-1rz0.27)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn toggle_evidence_ledger() {
+        let mut app = AppModel::new();
+        assert!(!app.evidence_ledger_visible);
+
+        app.update(AppMsg::ToggleEvidenceLedger);
+        assert!(app.evidence_ledger_visible);
+
+        app.update(AppMsg::ToggleEvidenceLedger);
+        assert!(!app.evidence_ledger_visible);
+    }
 }
