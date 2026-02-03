@@ -896,10 +896,10 @@ impl AppModel {
 
         emit_a11y_jsonl(
             match kind {
-                A11yEventKind::PanelToggled => "panel_toggle",
-                A11yEventKind::HighContrastToggled => "high_contrast_toggle",
-                A11yEventKind::ReducedMotionToggled => "reduced_motion_toggle",
-                A11yEventKind::LargeTextToggled => "large_text_toggle",
+                A11yEventKind::Panel => "panel_toggle",
+                A11yEventKind::HighContrast => "high_contrast_toggle",
+                A11yEventKind::ReducedMotion => "reduced_motion_toggle",
+                A11yEventKind::LargeText => "large_text_toggle",
             },
             &[
                 ("tick", &event.tick.to_string()),
@@ -1084,7 +1084,7 @@ impl AppModel {
                     "Toggle A11y panel",
                     vec![("state".to_string(), state.to_string())],
                 );
-                self.emit_a11y_event(A11yEventKind::PanelToggled);
+                self.emit_a11y_event(A11yEventKind::Panel);
                 Cmd::None
             }
 
@@ -1100,7 +1100,7 @@ impl AppModel {
                     "Toggle high contrast",
                     vec![("state".to_string(), state.to_string())],
                 );
-                self.emit_a11y_event(A11yEventKind::HighContrastToggled);
+                self.emit_a11y_event(A11yEventKind::HighContrast);
                 Cmd::None
             }
 
@@ -1117,7 +1117,7 @@ impl AppModel {
                     "Toggle reduced motion",
                     vec![("state".to_string(), state.to_string())],
                 );
-                self.emit_a11y_event(A11yEventKind::ReducedMotionToggled);
+                self.emit_a11y_event(A11yEventKind::ReducedMotion);
                 Cmd::None
             }
 
@@ -1130,7 +1130,7 @@ impl AppModel {
                     "Toggle large text",
                     vec![("state".to_string(), state.to_string())],
                 );
-                self.emit_a11y_event(A11yEventKind::LargeTextToggled);
+                self.emit_a11y_event(A11yEventKind::LargeText);
                 Cmd::None
             }
 
@@ -2038,10 +2038,10 @@ mod tests {
         assert_eq!(
             collected.as_slice(),
             &[
-                A11yEventKind::PanelToggled,
-                A11yEventKind::HighContrastToggled,
-                A11yEventKind::ReducedMotionToggled,
-                A11yEventKind::LargeTextToggled,
+                A11yEventKind::Panel,
+                A11yEventKind::HighContrast,
+                A11yEventKind::ReducedMotion,
+                A11yEventKind::LargeText,
             ]
         );
     }

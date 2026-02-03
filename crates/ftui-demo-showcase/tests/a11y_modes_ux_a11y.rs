@@ -102,11 +102,21 @@ fn keybinding_shift_a_toggles_panel() {
     assert!(!app.a11y_panel_visible, "A11y panel should start hidden");
 
     let _ = app.update(AppMsg::ScreenEvent(shift_char('A')));
-    log_jsonl("keybinding_shift_a", "toggle_on", app.a11y_panel_visible, "");
+    log_jsonl(
+        "keybinding_shift_a",
+        "toggle_on",
+        app.a11y_panel_visible,
+        "",
+    );
     assert!(app.a11y_panel_visible, "Shift+A should open the A11y panel");
 
     let _ = app.update(AppMsg::ScreenEvent(shift_char('A')));
-    log_jsonl("keybinding_shift_a", "toggle_off", !app.a11y_panel_visible, "");
+    log_jsonl(
+        "keybinding_shift_a",
+        "toggle_off",
+        !app.a11y_panel_visible,
+        "",
+    );
     assert!(
         !app.a11y_panel_visible,
         "Shift+A should close the A11y panel"
@@ -120,11 +130,21 @@ fn keybinding_panel_shortcuts_toggle_modes() {
     assert!(app.a11y_panel_visible);
 
     let _ = app.update(AppMsg::ScreenEvent(shift_char('H')));
-    log_jsonl("keybinding_panel", "high_contrast", app.a11y.high_contrast, "");
+    log_jsonl(
+        "keybinding_panel",
+        "high_contrast",
+        app.a11y.high_contrast,
+        "",
+    );
     assert!(app.a11y.high_contrast, "Shift+H toggles high contrast");
 
     let _ = app.update(AppMsg::ScreenEvent(shift_char('M')));
-    log_jsonl("keybinding_panel", "reduced_motion", app.a11y.reduced_motion, "");
+    log_jsonl(
+        "keybinding_panel",
+        "reduced_motion",
+        app.a11y.reduced_motion,
+        "",
+    );
     assert!(app.a11y.reduced_motion, "Shift+M toggles reduced motion");
 
     let _ = app.update(AppMsg::ScreenEvent(shift_char('L')));
@@ -139,7 +159,12 @@ fn keybinding_escape_closes_panel() {
     assert!(app.a11y_panel_visible);
 
     let _ = app.update(AppMsg::ScreenEvent(key_press(KeyCode::Escape)));
-    log_jsonl("keybinding_escape", "panel_closed", !app.a11y_panel_visible, "");
+    log_jsonl(
+        "keybinding_escape",
+        "panel_closed",
+        !app.a11y_panel_visible,
+        "",
+    );
     assert!(
         !app.a11y_panel_visible,
         "Escape should close the A11y panel"
@@ -179,7 +204,10 @@ fn focus_help_overlay_accessible_with_panel() {
 
     let _ = app.update(AppMsg::ScreenEvent(key_press(KeyCode::Char('?'))));
     log_jsonl("focus", "help_visible", app.help_visible, "");
-    assert!(app.help_visible, "Help overlay should open while panel is visible");
+    assert!(
+        app.help_visible,
+        "Help overlay should open while panel is visible"
+    );
 }
 
 // =============================================================================
@@ -206,7 +234,12 @@ fn legibility_panel_text_and_states_rendered() {
     log_jsonl("legibility", "high_contrast_label", has_high_contrast, "");
     log_jsonl("legibility", "reduced_motion_label", has_reduced_motion, "");
     log_jsonl("legibility", "large_text_label", has_large_text, "");
-    log_jsonl("legibility", "state_text_off", has_off, "Expect OFF for default modes");
+    log_jsonl(
+        "legibility",
+        "state_text_off",
+        has_off,
+        "Expect OFF for default modes",
+    );
 
     assert!(has_title, "Panel title should render");
     assert!(has_high_contrast, "High Contrast label should render");
@@ -227,6 +260,11 @@ fn legibility_state_text_on_visible() {
 
     let text = frame_text(&app, 120, 40);
     let has_on = text.contains("ON");
-    log_jsonl("legibility", "state_text_on", has_on, "High contrast should show ON");
+    log_jsonl(
+        "legibility",
+        "state_text_on",
+        has_on,
+        "High contrast should show ON",
+    );
     assert!(has_on, "ON state should be visible as text");
 }
