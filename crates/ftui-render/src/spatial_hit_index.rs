@@ -141,12 +141,6 @@ impl Bucket {
     fn clear(&mut self) {
         self.entries.clear();
     }
-
-    /// Check if empty.
-    #[inline]
-    fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -349,13 +343,7 @@ impl SpatialHitIndex {
     }
 
     /// Register with default z-order (0).
-    pub fn register_simple(
-        &mut self,
-        id: HitId,
-        rect: Rect,
-        region: HitRegion,
-        data: HitData,
-    ) {
+    pub fn register_simple(&mut self, id: HitId, rect: Rect, region: HitRegion, data: HitData) {
         self.register(id, rect, region, data, 0);
     }
 
@@ -572,14 +560,8 @@ impl SpatialHitIndex {
         let cell_size = self.config.cell_size;
         let bx_start = rect.x / cell_size;
         let by_start = rect.y / cell_size;
-        let bx_end = rect
-            .x
-            .saturating_add(rect.width.saturating_sub(1))
-            / cell_size;
-        let by_end = rect
-            .y
-            .saturating_add(rect.height.saturating_sub(1))
-            / cell_size;
+        let bx_end = rect.x.saturating_add(rect.width.saturating_sub(1)) / cell_size;
+        let by_end = rect.y.saturating_add(rect.height.saturating_sub(1)) / cell_size;
         (
             bx_start.min(self.grid_width.saturating_sub(1)),
             by_start.min(self.grid_height.saturating_sub(1)),
@@ -618,11 +600,18 @@ impl SpatialHitIndex {
             bucket.clear();
         }
 
+        // Collect entries to re-add (to avoid borrow conflict)
+        let to_add: Vec<(u32, Rect)> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.id != HitId::default())
+            .map(|(idx, e)| (idx as u32, e.rect))
+            .collect();
+
         // Re-add all valid entries
-        for (idx, entry) in self.entries.iter().enumerate() {
-            if entry.id != HitId::default() {
-                self.add_to_buckets_internal(idx as u32, entry.rect);
-            }
+        for (idx, rect) in to_add {
+            self.add_to_buckets_internal(idx, rect);
         }
 
         self.dirty.clear();
@@ -672,7 +661,12 @@ mod tests {
     #[test]
     fn register_and_hit_test() {
         let mut idx = index();
-        idx.register_simple(HitId::new(1), Rect::new(10, 5, 20, 3), HitRegion::Button, 42);
+        idx.register_simple(
+            HitId::new(1),
+            Rect::new(10, 5, 20, 3),
+            HitRegion::Button,
+            42,
+        );
 
         // Inside rect
         let result = idx.hit_test(15, 6);
@@ -717,8 +711,20 @@ mod tests {
         let mut idx = index();
 
         // Same z-order, later registration wins
-        idx.register(HitId::new(1), Rect::new(0, 0, 10, 10), HitRegion::Content, 1, 0);
-        idx.register(HitId::new(2), Rect::new(5, 5, 10, 10), HitRegion::Border, 2, 0);
+        idx.register(
+            HitId::new(1),
+            Rect::new(0, 0, 10, 10),
+            HitRegion::Content,
+            1,
+            0,
+        );
+        idx.register(
+            HitId::new(2),
+            Rect::new(5, 5, 10, 10),
+            HitRegion::Border,
+            2,
+            0,
+        );
 
         // In overlap, widget 2 (later) should win
         let result = idx.hit_test(7, 7);
@@ -728,7 +734,12 @@ mod tests {
     #[test]
     fn hit_test_border_inclusive() {
         let mut idx = index();
-        idx.register_simple(HitId::new(1), Rect::new(10, 10, 5, 5), HitRegion::Content, 0);
+        idx.register_simple(
+            HitId::new(1),
+            Rect::new(10, 10, 5, 5),
+            HitRegion::Content,
+            0,
+        );
 
         // Corners should hit
         assert!(idx.hit_test(10, 10).is_some()); // Top-left
@@ -746,26 +757,36 @@ mod tests {
     #[test]
     fn update_widget_rect() {
         let mut idx = index();
-        idx.register_simple(HitId::new(1), Rect::new(0, 0, 10, 10), HitRegion::Content, 0);
+        idx.register_simple(
+            HitId::new(1),
+            Rect::new(0, 0, 10, 10),
+            HitRegion::Content,
+            0,
+        );
 
         // Should hit at original position
         assert!(idx.hit_test(5, 5).is_some());
 
-        // Update position
-        let updated = idx.update(HitId::new(1), Rect::new(50, 50, 10, 10));
+        // Update position (staying within 80x24 bounds)
+        let updated = idx.update(HitId::new(1), Rect::new(50, 10, 10, 10));
         assert!(updated);
 
         // Should no longer hit at original position
         assert!(idx.hit_test(5, 5).is_none());
 
         // Should hit at new position
-        assert!(idx.hit_test(55, 55).is_some());
+        assert!(idx.hit_test(55, 15).is_some());
     }
 
     #[test]
     fn remove_widget() {
         let mut idx = index();
-        idx.register_simple(HitId::new(1), Rect::new(0, 0, 10, 10), HitRegion::Content, 0);
+        idx.register_simple(
+            HitId::new(1),
+            Rect::new(0, 0, 10, 10),
+            HitRegion::Content,
+            0,
+        );
 
         assert!(idx.hit_test(5, 5).is_some());
 
@@ -779,8 +800,18 @@ mod tests {
     #[test]
     fn clear_all() {
         let mut idx = index();
-        idx.register_simple(HitId::new(1), Rect::new(0, 0, 10, 10), HitRegion::Content, 0);
-        idx.register_simple(HitId::new(2), Rect::new(20, 20, 10, 10), HitRegion::Button, 1);
+        idx.register_simple(
+            HitId::new(1),
+            Rect::new(0, 0, 10, 10),
+            HitRegion::Content,
+            0,
+        );
+        idx.register_simple(
+            HitId::new(2),
+            Rect::new(20, 20, 10, 10),
+            HitRegion::Button,
+            1,
+        );
 
         assert_eq!(idx.len(), 2);
 
@@ -803,7 +834,12 @@ mod tests {
                 ..Default::default()
             },
         );
-        idx.register_simple(HitId::new(1), Rect::new(0, 0, 10, 10), HitRegion::Content, 0);
+        idx.register_simple(
+            HitId::new(1),
+            Rect::new(0, 0, 10, 10),
+            HitRegion::Content,
+            0,
+        );
 
         // First query - miss
         idx.hit_test(5, 5);
@@ -829,7 +865,12 @@ mod tests {
                 ..Default::default()
             },
         );
-        idx.register_simple(HitId::new(1), Rect::new(0, 0, 10, 10), HitRegion::Content, 0);
+        idx.register_simple(
+            HitId::new(1),
+            Rect::new(0, 0, 10, 10),
+            HitRegion::Content,
+            0,
+        );
 
         // Prime cache
         idx.hit_test(5, 5);
@@ -897,7 +938,12 @@ mod tests {
     #[test]
     fn out_of_bounds_returns_none() {
         let mut idx = index();
-        idx.register_simple(HitId::new(1), Rect::new(0, 0, 10, 10), HitRegion::Content, 0);
+        idx.register_simple(
+            HitId::new(1),
+            Rect::new(0, 0, 10, 10),
+            HitRegion::Content,
+            0,
+        );
 
         assert!(idx.hit_test(100, 100).is_none());
         assert!(idx.hit_test(80, 0).is_none());
@@ -907,7 +953,12 @@ mod tests {
     #[test]
     fn zero_size_rect_ignored() {
         let mut idx = index();
-        idx.register_simple(HitId::new(1), Rect::new(10, 10, 0, 0), HitRegion::Content, 0);
+        idx.register_simple(
+            HitId::new(1),
+            Rect::new(10, 10, 0, 0),
+            HitRegion::Content,
+            0,
+        );
 
         // Should not hit even at the exact position
         assert!(idx.hit_test(10, 10).is_none());
@@ -917,7 +968,12 @@ mod tests {
     fn large_rect_spans_many_buckets() {
         let mut idx = index();
         // Rect spans multiple buckets (80x24 with 8x8 cells = 10x3 buckets)
-        idx.register_simple(HitId::new(1), Rect::new(0, 0, 80, 24), HitRegion::Content, 0);
+        idx.register_simple(
+            HitId::new(1),
+            Rect::new(0, 0, 80, 24),
+            HitRegion::Content,
+            0,
+        );
 
         // Should hit everywhere
         assert!(idx.hit_test(0, 0).is_some());
@@ -960,7 +1016,12 @@ mod tests {
     #[test]
     fn invalidate_region() {
         let mut idx = index();
-        idx.register_simple(HitId::new(1), Rect::new(0, 0, 10, 10), HitRegion::Content, 0);
+        idx.register_simple(
+            HitId::new(1),
+            Rect::new(0, 0, 10, 10),
+            HitRegion::Content,
+            0,
+        );
 
         // Prime cache
         idx.hit_test(5, 5);
@@ -974,7 +1035,12 @@ mod tests {
     #[test]
     fn invalidate_all() {
         let mut idx = index();
-        idx.register_simple(HitId::new(1), Rect::new(0, 0, 10, 10), HitRegion::Content, 0);
+        idx.register_simple(
+            HitId::new(1),
+            Rect::new(0, 0, 10, 10),
+            HitRegion::Content,
+            0,
+        );
 
         idx.hit_test(5, 5);
         assert!(idx.cache.valid);

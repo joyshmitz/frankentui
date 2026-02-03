@@ -18,6 +18,7 @@
 pub mod allocation_budget;
 pub mod asciicast;
 pub mod eprocess_throttle;
+pub mod flake_detector;
 pub mod input_macro;
 pub mod log_sink;
 pub mod program;
@@ -46,7 +47,8 @@ pub use input_macro::{
 };
 pub use log_sink::LogSink;
 pub use program::{
-    App, AppBuilder, BatchController, Cmd, Model, Program, ProgramConfig, ResizeBehavior,
+    App, AppBuilder, BatchController, Cmd, Model, PersistenceConfig, Program, ProgramConfig,
+    ResizeBehavior,
 };
 pub use simulator::ProgramSimulator;
 pub use string_model::{StringModel, StringModelAdapter};
@@ -65,6 +67,7 @@ pub use allocation_budget::{
 pub use eprocess_throttle::{
     EProcessThrottle, ThrottleConfig, ThrottleDecision, ThrottleLog, ThrottleStats,
 };
+pub use flake_detector::{EvidenceLog, FlakeConfig, FlakeDecision, FlakeDetector, FlakeSummary};
 pub use reactive::{BatchScope, Binding, BindingScope, Computed, Observable, TwoWayBinding};
 pub use resize_coalescer::{
     CoalesceAction, CoalescerConfig, CoalescerStats, DecisionLog, Regime, ResizeCoalescer,

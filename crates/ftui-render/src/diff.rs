@@ -1388,6 +1388,156 @@ mod proptests {
                 prop_assert_eq!(fr, dr, "run mismatch");
             }
         }
+
+        // ========== Idempotence Property (bd-1rz0.6) ==========
+
+        /// Property: Diff is idempotent - computing diff between identical buffers
+        /// produces empty diff, and applying diff twice has no additional effect.
+        ///
+        /// Invariant: For any buffers A and B:
+        ///   apply(apply(A, diff(A,B)), diff(A,B)) == apply(A, diff(A,B))
+        #[test]
+        fn diff_is_idempotent(
+            width in 5u16..60,
+            height in 5u16..30,
+            num_changes in 0usize..100,
+        ) {
+            let mut buf_a = Buffer::new(width, height);
+            let mut buf_b = Buffer::new(width, height);
+
+            // Make buf_b different from buf_a
+            for i in 0..num_changes {
+                let x = (i * 13 + 7) as u16 % width;
+                let y = (i * 17 + 3) as u16 % height;
+                buf_b.set_raw(x, y, Cell::from_char('X'));
+            }
+
+            // Compute diff from A to B
+            let diff = BufferDiff::compute(&buf_a, &buf_b);
+
+            // Apply diff to A once
+            for (x, y) in diff.iter() {
+                let cell = *buf_b.get_unchecked(x, y);
+                buf_a.set_raw(x, y, cell);
+            }
+
+            // Now buf_a should equal buf_b
+            let diff_after_first = BufferDiff::compute(&buf_a, &buf_b);
+            prop_assert!(
+                diff_after_first.is_empty(),
+                "After applying diff once, buffers should be identical (diff was {} changes)",
+                diff_after_first.len()
+            );
+
+            // Apply diff again (should be no-op since buffers are now equal)
+            let before_second = buf_a.clone();
+            for (x, y) in diff.iter() {
+                let cell = *buf_b.get_unchecked(x, y);
+                buf_a.set_raw(x, y, cell);
+            }
+
+            // Verify no change from second application
+            let diff_after_second = BufferDiff::compute(&before_second, &buf_a);
+            prop_assert!(
+                diff_after_second.is_empty(),
+                "Second diff application should be a no-op"
+            );
+        }
+
+        // ========== No-Ghosting After Clear Property (bd-1rz0.6) ==========
+
+        /// Property: After a full buffer clear (simulating resize), diffing
+        /// against a blank old buffer captures all content cells.
+        ///
+        /// This simulates the no-ghosting invariant: when terminal shrinks,
+        /// we present against a fresh blank buffer, ensuring no old content
+        /// persists. The key is that all non-blank cells in the new buffer
+        /// appear in the diff.
+        ///
+        /// Failure mode: If we diff against stale buffer state after resize,
+        /// some cells might be incorrectly marked as unchanged.
+        #[test]
+        fn no_ghosting_after_clear(
+            width in 10u16..80,
+            height in 5u16..30,
+            num_content_cells in 1usize..200,
+        ) {
+            // Old buffer is blank (simulating post-resize cleared state)
+            let old = Buffer::new(width, height);
+
+            // New buffer has content (the UI to render)
+            let mut new = Buffer::new(width, height);
+            let mut expected_changes = std::collections::HashSet::new();
+
+            for i in 0..num_content_cells {
+                let x = (i * 13 + 7) as u16 % width;
+                let y = (i * 17 + 3) as u16 % height;
+                new.set_raw(x, y, Cell::from_char('#'));
+                expected_changes.insert((x, y));
+            }
+
+            let diff = BufferDiff::compute(&old, &new);
+
+            // Every non-blank cell should be in the diff
+            // This ensures no "ghosting" - all visible content is explicitly rendered
+            for (x, y) in expected_changes {
+                let in_diff = diff.iter().any(|(dx, dy)| dx == x && dy == y);
+                prop_assert!(
+                    in_diff,
+                    "Content cell at ({}, {}) missing from diff - would ghost", x, y
+                );
+            }
+
+            // Also verify the diff doesn't include any extra cells
+            for (x, y) in diff.iter() {
+                let old_cell = old.get_unchecked(x, y);
+                let new_cell = new.get_unchecked(x, y);
+                prop_assert!(
+                    !old_cell.bits_eq(new_cell),
+                    "Diff includes unchanged cell at ({}, {})", x, y
+                );
+            }
+        }
+
+        // ========== Monotonicity Property (bd-1rz0.6) ==========
+
+        /// Property: Diff changes are monotonically ordered (row-major).
+        /// This ensures deterministic iteration order for presentation.
+        ///
+        /// Invariant: For consecutive changes (x1,y1) and (x2,y2):
+        ///   y1 < y2 OR (y1 == y2 AND x1 < x2)
+        #[test]
+        fn diff_changes_are_monotonic(
+            width in 10u16..80,
+            height in 5u16..30,
+            num_changes in 1usize..200,
+        ) {
+            let old = Buffer::new(width, height);
+            let mut new = old.clone();
+
+            // Apply changes in random positions
+            for i in 0..num_changes {
+                let x = (i * 37 + 11) as u16 % width;
+                let y = (i * 53 + 7) as u16 % height;
+                new.set_raw(x, y, Cell::from_char('M'));
+            }
+
+            let diff = BufferDiff::compute(&old, &new);
+            let changes: Vec<_> = diff.iter().collect();
+
+            // Verify monotonic ordering
+            for window in changes.windows(2) {
+                let (x1, y1) = window[0];
+                let (x2, y2) = window[1];
+
+                let is_monotonic = y1 < y2 || (y1 == y2 && x1 < x2);
+                prop_assert!(
+                    is_monotonic,
+                    "Changes not monotonic: ({}, {}) should come before ({}, {})",
+                    x1, y1, x2, y2
+                );
+            }
+        }
     }
 
     // ========== Dirty-Aware Diff Tests (bd-4kq0.1.1) ==========

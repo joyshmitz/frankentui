@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-//! Terminal capability detection model.
+//! Terminal capability detection model with tear-free output strategies.
 //!
 //! This module provides detection of terminal capabilities to inform how ftui
 //! behaves on different terminals. Detection is based on environment variables
@@ -15,6 +15,49 @@
 //! - `NO_COLOR`: de-facto standard for disabling color
 //! - `TMUX`, `STY`, `ZELLIJ`: multiplexer detection
 //! - `KITTY_WINDOW_ID`: Kitty terminal detection
+//!
+//! # Invariants (bd-1rz0.6)
+//!
+//! 1. **Sync-output safety**: `use_sync_output()` returns `false` for any
+//!    multiplexer environment (tmux, screen, zellij) because CSI ?2026 h/l
+//!    sequences are unreliable through passthrough.
+//!
+//! 2. **Scroll region safety**: `use_scroll_region()` returns `false` in
+//!    multiplexers because DECSTBM behavior varies across versions.
+//!
+//! 3. **Capability monotonicity**: Once a capability is detected as absent,
+//!    it remains absent for the session. We never upgrade capabilities.
+//!
+//! 4. **Fallback ordering**: Capabilities degrade in this order:
+//!    `sync_output` → `scroll_region` → `overlay_redraw`
+//!
+//! 5. **Detection determinism**: Given the same environment variables,
+//!    `TerminalCapabilities::detect()` always produces the same result.
+//!
+//! # Failure Modes
+//!
+//! | Mode | Condition | Fallback Behavior |
+//! |------|-----------|-------------------|
+//! | Dumb terminal | `TERM=dumb` or empty | All advanced features disabled |
+//! | Unknown mux | Nested or chained mux | Conservative: disable sync/scroll |
+//! | False positive mux | Non-mux with `TMUX` env | Unnecessary fallback (safe) |
+//! | Missing env vars | Env cleared by parent | Conservative defaults |
+//! | Conflicting signals | e.g., modern term inside screen | Mux detection wins |
+//!
+//! # Decision Rules
+//!
+//! The policy methods (`use_sync_output()`, `use_scroll_region()`, etc.)
+//! implement an evidence-based decision rule:
+//!
+//! ```text
+//! IF in_any_mux() THEN disable_advanced_features
+//! ELSE IF capability_detected THEN enable_feature
+//! ELSE use_conservative_default
+//! ```
+//!
+//! This fail-safe approach means false negatives (disabling a feature that
+//! would work) are preferred over false positives (enabling a feature that
+//! corrupts output).
 //!
 //! # Future: Runtime Probing
 //!
@@ -459,6 +502,17 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "windows")]
+    fn detect_windows_terminal_from_wt_session() {
+        let mut env = make_env("", "", "");
+        env.wt_session = true;
+        let caps = TerminalCapabilities::detect_from_inputs(&env);
+        assert!(caps.true_color, "WT_SESSION implies true color");
+        assert!(caps.colors_256, "WT_SESSION implies 256-color");
+        assert!(caps.osc8_hyperlinks, "WT_SESSION implies OSC 8 support");
+    }
+
+    #[test]
     fn no_color_disables_color_and_links() {
         let env = DetectInputs {
             no_color: true,
@@ -670,6 +724,15 @@ mod tests {
         assert!(caps.kitty_keyboard, "WezTerm supports kitty keyboard");
         assert!(caps.focus_events);
         assert!(caps.osc52_clipboard);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn detect_iterm2_from_term_program() {
+        let env = make_env("xterm-256color", "iTerm.app", "truecolor");
+        let caps = TerminalCapabilities::detect_from_inputs(&env);
+        assert!(caps.true_color, "iTerm2 implies truecolor");
+        assert!(caps.osc8_hyperlinks, "iTerm2 supports OSC 8 hyperlinks");
     }
 
     #[test]
