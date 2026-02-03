@@ -12,6 +12,7 @@ set -euo pipefail
 # {"event":"resize","run_id":"...","seq":N,"from":"WxH","to":"WxH","delay_ms":N,"timestamp":"..."}
 # {"event":"frame_capture","run_id":"...","seq":N,"width":N,"height":N,"checksum":"sha256:...","bytes":N}
 # {"event":"artifact_check","run_id":"...","check":"...","result":"pass|fail","details":"..."}
+# {"event":"flicker_analysis","run_id":"...","flicker_free":true,"jsonl":"path","exit_code":0}
 # {"event":"complete","run_id":"...","outcome":"pass|fail","total_resizes":N,"total_ms":N,"checksums":[...]}
 #
 # Usage:
@@ -103,6 +104,17 @@ log_artifact_check() {
     local details="$4"
     cat >> "$STORM_JSONL" <<EOF
 {"event":"artifact_check","run_id":"$run_id","check":"$check","result":"$result","details":"$details"}
+EOF
+}
+
+# Log flicker analysis result
+log_flicker_analysis() {
+    local run_id="$1"
+    local flicker_free="$2"
+    local jsonl_path="$3"
+    local exit_code="$4"
+    cat >> "$STORM_JSONL" <<EOF
+{"event":"flicker_analysis","run_id":"$run_id","flicker_free":$flicker_free,"jsonl":"$jsonl_path","exit_code":$exit_code}
 EOF
 }
 
@@ -380,6 +392,31 @@ run_storm_scenario() {
         outcome="fail"
     else
         log_artifact_check "$run_id" "tearing" "pass" "no incomplete sequences"
+    fi
+
+    # Flicker detection analysis (uses harness analyzer)
+    local flicker_jsonl="$STORM_LOG_DIR/storm_${pattern}_flicker.jsonl"
+    local flicker_exit=0
+    if ! FTUI_HARNESS_FLICKER_ANALYZE=1 \
+        FTUI_HARNESS_FLICKER_INPUT="$output_file" \
+        FTUI_HARNESS_FLICKER_RUN_ID="$run_id" \
+        FTUI_HARNESS_FLICKER_JSONL="$flicker_jsonl" \
+        "$E2E_HARNESS_BIN" >/dev/null 2>&1; then
+        flicker_exit=$?
+    fi
+
+    local flicker_free="null"
+    if [[ -f "$flicker_jsonl" ]]; then
+        if command -v jq >/dev/null 2>&1; then
+            flicker_free=$(jq -r 'select(.event_type=="analysis_complete") | .details.stats.flicker_free' "$flicker_jsonl" | tail -n1)
+        else
+            flicker_free=$(grep -a '"event_type":"analysis_complete"' "$flicker_jsonl" | tail -n1 | sed -E 's/.*"flicker_free":(true|false).*/\\1/')
+        fi
+    fi
+
+    log_flicker_analysis "$run_id" "${flicker_free:-null}" "$flicker_jsonl" "$flicker_exit"
+    if [[ "$flicker_free" != "true" ]]; then
+        outcome="fail"
     fi
 
     log_storm_complete "$run_id" "$outcome" "$seq" "$duration_ms" "$checksums"

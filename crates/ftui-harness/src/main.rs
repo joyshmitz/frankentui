@@ -556,6 +556,30 @@ fn run_input_trace(exit_after: Option<Duration>) -> io::Result<()> {
     Ok(())
 }
 
+fn run_flicker_analysis() -> io::Result<()> {
+    let input_path = std::env::var("FTUI_HARNESS_FLICKER_INPUT").map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "FTUI_HARNESS_FLICKER_INPUT must be set",
+        )
+    })?;
+    let run_id = std::env::var("FTUI_HARNESS_FLICKER_RUN_ID").unwrap_or_else(|_| "flicker".into());
+    let bytes = std::fs::read(&input_path)?;
+    let analysis = flicker_detection::analyze_stream_with_id(&run_id, &bytes);
+
+    if let Ok(output_path) = std::env::var("FTUI_HARNESS_FLICKER_JSONL") {
+        std::fs::write(&output_path, analysis.jsonl.as_bytes())?;
+    } else {
+        print!("{}", analysis.jsonl);
+    }
+
+    if !analysis.flicker_free {
+        std::process::exit(2);
+    }
+
+    Ok(())
+}
+
 impl Model for AgentHarness {
     type Message = Msg;
 

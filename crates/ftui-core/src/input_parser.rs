@@ -897,9 +897,7 @@ impl InputParser {
                 let remaining = 6 - tail_len;
                 if remaining > 0 {
                     let start = paste_len - remaining;
-                    for i in 0..remaining {
-                        last_bytes[i] = self.paste_buffer[start + i];
-                    }
+                    last_bytes[..remaining].copy_from_slice(&self.paste_buffer[start..(remaining + start)]);
                 }
                 
                 if last_bytes == END_SEQ {

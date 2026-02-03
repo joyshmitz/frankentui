@@ -3,6 +3,11 @@
 //! Canvas widget for arbitrary pixel/shape drawing using Braille, block,
 //! or half-block characters.
 //!
+//! ## Metaball Rendering
+//!
+//! The [`Painter::render_metaball_field`] method provides sub-pixel metaball
+//! rendering using the shared sampling API from [`crate::visual_fx::effects::sampling`].
+//!
 //! Each terminal cell maps to a grid of sub-pixels whose resolution depends
 //! on the chosen [`Mode`]:
 //!
@@ -243,6 +248,102 @@ impl Painter {
         self.point(cx - y, cy + x);
         self.point(cx + y, cy - x);
         self.point(cx - y, cy - x);
+    }
+
+    // -----------------------------------------------------------------------
+    // Metaball Field Rendering (requires visual-fx feature)
+    // -----------------------------------------------------------------------
+
+    /// Render a metaball field to the painter at sub-pixel resolution.
+    ///
+    /// This method uses the shared sampling API from [`crate::visual_fx::effects::sampling`]
+    /// to render metaballs with sub-pixel precision using the canvas's resolution mode.
+    ///
+    /// # Arguments
+    ///
+    /// - `sampler`: A [`MetaballFieldSampler`] containing ball positions and radii
+    /// - `threshold`: Field intensity for full color (typically 1.0)
+    /// - `glow_threshold`: Field intensity where glow begins (typically 0.6)
+    /// - `quality`: Quality level affecting how many balls contribute
+    /// - `color_fn`: Function mapping (hue, intensity) to a color
+    ///
+    /// # Coordinate Mapping
+    ///
+    /// Sub-pixel coordinates are mapped to normalized `[0.0, 1.0]` space using
+    /// [`cell_to_normalized`](crate::visual_fx::effects::sampling::cell_to_normalized),
+    /// ensuring consistent sampling regardless of canvas resolution.
+    ///
+    /// # Performance
+    ///
+    /// - Allocation-free in steady state (after initial Painter setup)
+    /// - O(width × height × balls) complexity
+    /// - Quality parameter allows graceful degradation
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use ftui_extras::canvas::{Painter, Mode};
+    /// use ftui_extras::visual_fx::effects::sampling::{MetaballFieldSampler, BallState};
+    /// use ftui_extras::visual_fx::FxQuality;
+    /// use ftui_render::cell::PackedRgba;
+    ///
+    /// let balls = vec![
+    ///     BallState { x: 0.3, y: 0.5, r2: 0.04, hue: 0.0 },
+    ///     BallState { x: 0.7, y: 0.5, r2: 0.04, hue: 0.5 },
+    /// ];
+    /// let sampler = MetaballFieldSampler::new(balls);
+    ///
+    /// let mut painter = Painter::for_area(area, Mode::Braille);
+    /// painter.render_metaball_field(
+    ///     &sampler,
+    ///     1.0,  // threshold
+    ///     0.6,  // glow_threshold
+    ///     FxQuality::Full,
+    ///     |hue, intensity| {
+    ///         let r = (hue * 255.0) as u8;
+    ///         let a = (intensity * 255.0) as u8;
+    ///         PackedRgba::rgba(r, 100, 200, a)
+    ///     },
+    /// );
+    /// ```
+    #[cfg(feature = "visual-fx")]
+    pub fn render_metaball_field<F>(
+        &mut self,
+        sampler: &crate::visual_fx::effects::sampling::MetaballFieldSampler,
+        threshold: f64,
+        glow_threshold: f64,
+        quality: crate::visual_fx::FxQuality,
+        color_fn: F,
+    ) where
+        F: Fn(f64, f64) -> PackedRgba,
+    {
+        use crate::visual_fx::effects::sampling::cell_to_normalized;
+
+        if !quality.is_enabled() || self.width == 0 || self.height == 0 {
+            return;
+        }
+
+        let threshold = threshold.max(glow_threshold + 0.0001);
+
+        for py in 0..self.height {
+            let ny = cell_to_normalized(py, self.height);
+            for px in 0..self.width {
+                let nx = cell_to_normalized(px, self.width);
+
+                let (field_sum, avg_hue) = sampler.sample_field(nx, ny, quality);
+
+                if field_sum > glow_threshold {
+                    let intensity = if field_sum >= threshold {
+                        1.0
+                    } else {
+                        (field_sum - glow_threshold) / (threshold - glow_threshold)
+                    };
+
+                    let color = color_fn(avg_hue, intensity);
+                    self.point_colored(px as i32, py as i32, color);
+                }
+            }
+        }
     }
 
     /// Get the sub-pixel dimensions.
