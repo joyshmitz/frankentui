@@ -184,6 +184,42 @@ impl LayoutRecord {
         }
         s
     }
+
+    /// Generate a JSONL-formatted record for structured logging.
+    ///
+    /// Returns a single-line JSON object suitable for appending to a log file.
+    #[must_use]
+    pub fn to_jsonl(&self) -> String {
+        let constraints_json: Vec<String> = self
+            .constraints
+            .iter()
+            .map(|c| format!("\"{}\"", Self::format_constraint(c)))
+            .collect();
+        let sizes_json: Vec<String> = self.computed_sizes.iter().map(|s| s.to_string()).collect();
+        let solve_time_us = self
+            .solve_time
+            .map(|d| d.as_micros() as u64)
+            .unwrap_or(0);
+
+        format!(
+            r#"{{"event":"layout_solve","name":"{}","direction":"{:?}","alignment":"{:?}","available_size":{},"gap":{},"margin":{{"top":{},"right":{},"bottom":{},"left":{}}},"constraints":[{}],"computed_sizes":[{}],"utilization":{:.1},"has_overflow":{},"has_underflow":{},"solve_time_us":{}}}"#,
+            self.name,
+            self.direction,
+            self.alignment,
+            self.available_size,
+            self.gap,
+            self.margin.top,
+            self.margin.right,
+            self.margin.bottom,
+            self.margin.left,
+            constraints_json.join(","),
+            sizes_json.join(","),
+            self.utilization(),
+            self.has_overflow(),
+            self.has_underflow(),
+            solve_time_us
+        )
+    }
 }
 
 /// A record of a grid layout solve operation.
@@ -234,17 +270,180 @@ impl GridLayoutRecord {
     pub fn has_col_overflow(&self) -> bool {
         self.col_widths.iter().sum::<u16>() > self.available_width
     }
+
+    /// Generate a JSONL-formatted record for structured logging.
+    #[must_use]
+    pub fn to_jsonl(&self) -> String {
+        let row_heights_json: Vec<String> =
+            self.row_heights.iter().map(|h| h.to_string()).collect();
+        let col_widths_json: Vec<String> = self.col_widths.iter().map(|w| w.to_string()).collect();
+        let solve_time_us = self
+            .solve_time
+            .map(|d| d.as_micros() as u64)
+            .unwrap_or(0);
+
+        format!(
+            r#"{{"event":"grid_layout_solve","name":"{}","available_width":{},"available_height":{},"row_heights":[{}],"col_widths":[{}],"has_row_overflow":{},"has_col_overflow":{},"solve_time_us":{}}}"#,
+            self.name,
+            self.available_width,
+            self.available_height,
+            row_heights_json.join(","),
+            col_widths_json.join(","),
+            self.has_row_overflow(),
+            self.has_col_overflow(),
+            solve_time_us
+        )
+    }
+}
+
+/// Telemetry hooks for layout debugging observability (bd-32my.5).
+///
+/// Provides callback-based notifications for layout events, enabling
+/// external observability systems to monitor layout performance.
+///
+/// # Example
+///
+/// ```
+/// use ftui_layout::debug::{LayoutDebugger, LayoutTelemetryHooks, LayoutRecord};
+///
+/// let hooks = LayoutTelemetryHooks::new()
+///     .on_layout_solve(|record| {
+///         println!("Layout solved: {} ({:.1}% util)", record.name, record.utilization());
+///     })
+///     .on_overflow(|record| {
+///         eprintln!("OVERFLOW in {}", record.name);
+///     });
+///
+/// let debugger = LayoutDebugger::new();
+/// debugger.set_telemetry_hooks(hooks);
+/// ```
+pub struct LayoutTelemetryHooks {
+    on_layout_solve: Option<Box<dyn Fn(&LayoutRecord) + Send + Sync>>,
+    on_grid_solve: Option<Box<dyn Fn(&GridLayoutRecord) + Send + Sync>>,
+    on_overflow: Option<Box<dyn Fn(&LayoutRecord) + Send + Sync>>,
+    on_underflow: Option<Box<dyn Fn(&LayoutRecord) + Send + Sync>>,
+}
+
+impl Default for LayoutTelemetryHooks {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Debug for LayoutTelemetryHooks {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LayoutTelemetryHooks")
+            .field("on_layout_solve", &self.on_layout_solve.is_some())
+            .field("on_grid_solve", &self.on_grid_solve.is_some())
+            .field("on_overflow", &self.on_overflow.is_some())
+            .field("on_underflow", &self.on_underflow.is_some())
+            .finish()
+    }
+}
+
+impl LayoutTelemetryHooks {
+    /// Create a new hooks instance with no callbacks attached.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            on_layout_solve: None,
+            on_grid_solve: None,
+            on_overflow: None,
+            on_underflow: None,
+        }
+    }
+
+    /// Attach a callback for flex layout solve events.
+    #[must_use]
+    pub fn on_layout_solve<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&LayoutRecord) + Send + Sync + 'static,
+    {
+        self.on_layout_solve = Some(Box::new(f));
+        self
+    }
+
+    /// Attach a callback for grid layout solve events.
+    #[must_use]
+    pub fn on_grid_solve<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&GridLayoutRecord) + Send + Sync + 'static,
+    {
+        self.on_grid_solve = Some(Box::new(f));
+        self
+    }
+
+    /// Attach a callback for layout overflow detection.
+    #[must_use]
+    pub fn on_overflow<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&LayoutRecord) + Send + Sync + 'static,
+    {
+        self.on_overflow = Some(Box::new(f));
+        self
+    }
+
+    /// Attach a callback for layout underflow detection.
+    #[must_use]
+    pub fn on_underflow<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&LayoutRecord) + Send + Sync + 'static,
+    {
+        self.on_underflow = Some(Box::new(f));
+        self
+    }
+
+    /// Fire the layout solve callback if attached.
+    pub fn fire_layout_solve(&self, record: &LayoutRecord) {
+        if let Some(ref f) = self.on_layout_solve {
+            f(record);
+        }
+    }
+
+    /// Fire the grid solve callback if attached.
+    pub fn fire_grid_solve(&self, record: &GridLayoutRecord) {
+        if let Some(ref f) = self.on_grid_solve {
+            f(record);
+        }
+    }
+
+    /// Fire the overflow callback if attached.
+    pub fn fire_overflow(&self, record: &LayoutRecord) {
+        if let Some(ref f) = self.on_overflow {
+            f(record);
+        }
+    }
+
+    /// Fire the underflow callback if attached.
+    pub fn fire_underflow(&self, record: &LayoutRecord) {
+        if let Some(ref f) = self.on_underflow {
+            f(record);
+        }
+    }
 }
 
 /// Layout constraint debugger.
 ///
 /// Collects layout solve records for introspection. Thread-safe via internal
 /// synchronization; can be shared across the application.
-#[derive(Debug)]
+///
+/// Supports optional telemetry hooks for external observability (bd-32my.5).
 pub struct LayoutDebugger {
     enabled: AtomicBool,
     records: Mutex<Vec<LayoutRecord>>,
     grid_records: Mutex<Vec<GridLayoutRecord>>,
+    telemetry_hooks: Mutex<Option<LayoutTelemetryHooks>>,
+}
+
+impl std::fmt::Debug for LayoutDebugger {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LayoutDebugger")
+            .field("enabled", &self.enabled.load(Ordering::Relaxed))
+            .field("records_count", &self.records.lock().map(|r| r.len()).unwrap_or(0))
+            .field("grid_records_count", &self.grid_records.lock().map(|r| r.len()).unwrap_or(0))
+            .field("has_telemetry_hooks", &self.telemetry_hooks.lock().map(|h| h.is_some()).unwrap_or(false))
+            .finish()
+    }
 }
 
 impl LayoutDebugger {
@@ -254,7 +453,22 @@ impl LayoutDebugger {
             enabled: AtomicBool::new(false),
             records: Mutex::new(Vec::new()),
             grid_records: Mutex::new(Vec::new()),
+            telemetry_hooks: Mutex::new(None),
         })
+    }
+
+    /// Attach telemetry hooks for external observability.
+    pub fn set_telemetry_hooks(&self, hooks: LayoutTelemetryHooks) {
+        if let Ok(mut h) = self.telemetry_hooks.lock() {
+            *h = Some(hooks);
+        }
+    }
+
+    /// Remove telemetry hooks.
+    pub fn clear_telemetry_hooks(&self) {
+        if let Ok(mut h) = self.telemetry_hooks.lock() {
+            *h = None;
+        }
     }
 
     /// Check if debugging is enabled.
@@ -284,20 +498,49 @@ impl LayoutDebugger {
     }
 
     /// Record a flex layout solve.
+    ///
+    /// Also fires telemetry hooks if attached:
+    /// - `on_layout_solve` for every recorded layout
+    /// - `on_overflow` if overflow detected
+    /// - `on_underflow` if underflow detected
     pub fn record(&self, record: LayoutRecord) {
         if !self.enabled() {
             return;
         }
+
+        // Fire telemetry hooks before recording
+        if let Ok(hooks) = self.telemetry_hooks.lock() {
+            if let Some(ref h) = *hooks {
+                h.fire_layout_solve(&record);
+                if record.has_overflow() {
+                    h.fire_overflow(&record);
+                }
+                if record.has_underflow() {
+                    h.fire_underflow(&record);
+                }
+            }
+        }
+
         if let Ok(mut records) = self.records.lock() {
             records.push(record);
         }
     }
 
     /// Record a grid layout solve.
+    ///
+    /// Also fires telemetry hooks if attached.
     pub fn record_grid(&self, record: GridLayoutRecord) {
         if !self.enabled() {
             return;
         }
+
+        // Fire telemetry hooks before recording
+        if let Ok(hooks) = self.telemetry_hooks.lock() {
+            if let Some(ref h) = *hooks {
+                h.fire_grid_solve(&record);
+            }
+        }
+
         if let Ok(mut grid_records) = self.grid_records.lock() {
             grid_records.push(record);
         }

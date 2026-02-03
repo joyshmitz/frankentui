@@ -1384,13 +1384,6 @@ mod tests {
     #[test]
     fn a11y_settings_is_copy() {
         let a = A11ySettings::all();
-        let b = a; // Copy
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn a11y_settings_is_copy() {
-        let a = A11ySettings::all();
         let b = a; // A11ySettings implements Copy
         assert_eq!(a, b);
     }
@@ -1597,8 +1590,10 @@ mod tests {
         let style = Style::new().fg(fg::PRIMARY).attrs(StyleFlags::UNDERLINE);
         let result = apply_large_text(style);
 
-        // Should have some attributes set (exact behavior depends on ftui_style implementation)
-        let _attrs = result.attrs.unwrap_or(StyleFlags::NONE);
+        // Should preserve underline and add bold.
+        let attrs = result.attrs.unwrap_or(StyleFlags::NONE);
+        assert!(attrs.contains(StyleFlags::UNDERLINE));
+        assert!(attrs.contains(StyleFlags::BOLD));
 
         set_large_text(initial);
     }

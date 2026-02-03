@@ -1621,7 +1621,10 @@ mod tests {
                 }
             }
 
-            /// Property: event count invariant - coalescer tracks all events.
+            /// Property: event count invariant - coalescer tracks all incoming events.
+            ///
+            /// The `event_count` field tracks ALL resize events for rate calculation
+            /// and telemetry, including same-size events that are skipped.
             #[test]
             fn event_count_invariant(
                 events in resize_sequence(100)
@@ -1630,23 +1633,16 @@ mod tests {
                 let mut c = ResizeCoalescer::new(config, (80, 24));
                 let base = Instant::now();
 
-                let mut same_size_count = 0u64;
-                let mut last_size = (80u16, 24u16);
-
                 for (w, h, delay) in &events {
-                    if *w == last_size.0 && *h == last_size.1 {
-                        same_size_count += 1;
-                    }
-                    last_size = (*w, *h);
                     c.handle_resize_at(*w, *h, base + Duration::from_millis(*delay));
                 }
 
                 let stats = c.stats();
-                // Event count should not exceed distinct-size count.
-                let max_events = (events.len() as u64).saturating_sub(same_size_count);
-                prop_assert!(
-                    stats.event_count <= max_events,
-                    "Event count should not exceed distinct-size count"
+                // Event count should equal total incoming events (for rate calculation).
+                prop_assert_eq!(
+                    stats.event_count,
+                    events.len() as u64,
+                    "Event count should match total incoming events"
                 );
             }
         }

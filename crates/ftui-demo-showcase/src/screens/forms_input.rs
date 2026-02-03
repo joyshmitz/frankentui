@@ -279,9 +279,23 @@ impl FormsInput {
         self.form
             .set_label_style(Style::new().fg(theme::fg::SECONDARY));
         self.form
-            .set_focused_style(Style::new().fg(theme::accent::PRIMARY));
+            .set_focused_style(
+                Style::new()
+                    .fg(theme::fg::PRIMARY)
+                    .bg(theme::alpha::HIGHLIGHT)
+                    .attrs(StyleFlags::BOLD),
+            );
         self.form
             .set_error_style(Style::new().fg(theme::accent::ERROR));
+        self.form
+            .set_success_style(Style::new().fg(theme::accent::SUCCESS));
+        self.form.set_disabled_style(
+            Style::new()
+                .fg(theme::fg::MUTED)
+                .attrs(StyleFlags::DIM),
+        );
+        self.form
+            .set_required_style(Style::new().fg(theme::accent::WARNING));
 
         let input_style = Style::new()
             .fg(theme::fg::PRIMARY)
@@ -621,12 +635,13 @@ impl FormsInput {
         let mut state = self.form_state.borrow_mut();
         StatefulWidget::render(&self.form, chunks[0], frame, &mut state);
 
+        let legend = "Legend: * required | red=error | green=valid | dim=disabled";
         let hint = if state.submitted {
-            "Form submitted successfully!"
+            format!("Form submitted successfully!\n{legend}")
         } else if state.cancelled {
-            "Form cancelled"
+            format!("Form cancelled\n{legend}")
         } else {
-            "Tab: next | Enter: submit | Esc: cancel"
+            format!("Tab: next | Enter: submit | Esc: cancel\n{legend}")
         };
         let hint_style = if state.submitted {
             Style::new().fg(theme::accent::SUCCESS)
@@ -769,10 +784,11 @@ impl Screen for FormsInput {
             return Cmd::None;
         }
 
+        let mut form_changed = false;
         match self.focus {
             FocusPanel::Form => {
                 let mut state = self.form_state.borrow_mut();
-                state.handle_event(&mut self.form, event);
+                form_changed = state.handle_event(&mut self.form, event);
             }
             FocusPanel::SearchInput => {
                 self.search_input.handle_event(event);
@@ -783,6 +799,11 @@ impl Screen for FormsInput {
             FocusPanel::TextEditor => {
                 self.textarea.handle_event(event);
             }
+        }
+
+        if form_changed {
+            let show_all = self.form_state.borrow().submitted;
+            self.update_form_validation(show_all);
         }
 
         let after = self.snapshot();

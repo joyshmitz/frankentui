@@ -857,6 +857,82 @@ impl MousePlayground {
     }
 
     // -------------------------------------------------------------------------
+    // Keyboard Navigation (bd-bksf.6 UX/A11y)
+    // -------------------------------------------------------------------------
+
+    /// Move target focus up (previous row).
+    fn move_target_up(&mut self) {
+        if self.focused_target_index >= GRID_COLS {
+            self.focused_target_index -= GRID_COLS;
+        }
+    }
+
+    /// Move target focus down (next row).
+    fn move_target_down(&mut self) {
+        let new_index = self.focused_target_index + GRID_COLS;
+        if new_index < self.targets.len() {
+            self.focused_target_index = new_index;
+        }
+    }
+
+    /// Move target focus left (previous column).
+    fn move_target_left(&mut self) {
+        if self.focused_target_index % GRID_COLS > 0 {
+            self.focused_target_index -= 1;
+        }
+    }
+
+    /// Move target focus right (next column).
+    fn move_target_right(&mut self) {
+        if self.focused_target_index % GRID_COLS < GRID_COLS - 1
+            && self.focused_target_index + 1 < self.targets.len()
+        {
+            self.focused_target_index += 1;
+        }
+    }
+
+    /// Jump to first target.
+    fn jump_to_first_target(&mut self) {
+        self.focused_target_index = 0;
+    }
+
+    /// Jump to last target.
+    fn jump_to_last_target(&mut self) {
+        self.focused_target_index = self.targets.len().saturating_sub(1);
+    }
+
+    /// Move focus up by a page (one full row at a time).
+    fn page_up_targets(&mut self) {
+        // Move up by 2 rows (or GRID_ROWS - 1 for larger grids)
+        let rows_to_move = GRID_ROWS.saturating_sub(1).max(1);
+        for _ in 0..rows_to_move {
+            self.move_target_up();
+        }
+    }
+
+    /// Move focus down by a page (one full row at a time).
+    fn page_down_targets(&mut self) {
+        // Move down by 2 rows (or GRID_ROWS - 1 for larger grids)
+        let rows_to_move = GRID_ROWS.saturating_sub(1).max(1);
+        for _ in 0..rows_to_move {
+            self.move_target_down();
+        }
+    }
+
+    /// Activate (click) the currently focused target via keyboard.
+    fn activate_focused_target(&mut self) {
+        if let Some(target) = self.targets.get_mut(self.focused_target_index) {
+            target.clicks += 1;
+
+            // Record diagnostic
+            let diag = DiagnosticEntry::new(DiagnosticEventKind::TargetClick, self.tick_count)
+                .with_target(Some(target.id))
+                .with_context(format!("keyboard_click={}", target.clicks));
+            self.record_diagnostic(diag);
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Public accessors for testing
     // -------------------------------------------------------------------------
 
@@ -899,6 +975,144 @@ impl Screen for MousePlayground {
             Event::Mouse(mouse_event) => {
                 self.handle_mouse(*mouse_event);
             }
+            // Tab: Cycle focus forward
+            Event::Key(KeyEvent {
+                code: KeyCode::Tab,
+                kind: KeyEventKind::Press,
+                modifiers,
+            }) if !modifiers.contains(ftui_core::event::Modifiers::SHIFT) => {
+                self.focus = self.focus.next();
+            }
+            // Shift+Tab: Cycle focus backward
+            Event::Key(KeyEvent {
+                code: KeyCode::BackTab,
+                kind: KeyEventKind::Press,
+                ..
+            })
+            | Event::Key(KeyEvent {
+                code: KeyCode::Tab,
+                kind: KeyEventKind::Press,
+                modifiers,
+            }) if modifiers.contains(ftui_core::event::Modifiers::SHIFT) => {
+                self.focus = self.focus.prev();
+            }
+            // Arrow keys for target navigation (when Targets panel focused)
+            Event::Key(KeyEvent {
+                code: KeyCode::Up,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.focus == Focus::Targets => {
+                self.move_target_up();
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Down,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.focus == Focus::Targets => {
+                self.move_target_down();
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Left,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.focus == Focus::Targets => {
+                self.move_target_left();
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Right,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.focus == Focus::Targets => {
+                self.move_target_right();
+            }
+            // Vim-style navigation for targets (h/j/k/l)
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('k'),
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.focus == Focus::Targets => {
+                self.move_target_up();
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('j'),
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.focus == Focus::Targets => {
+                self.move_target_down();
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('h'),
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.focus == Focus::Targets => {
+                self.move_target_left();
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('l'),
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.focus == Focus::Targets => {
+                self.move_target_right();
+            }
+            // Home: Jump to first target
+            Event::Key(KeyEvent {
+                code: KeyCode::Home,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.focus == Focus::Targets => {
+                self.jump_to_first_target();
+            }
+            // End: Jump to last target
+            Event::Key(KeyEvent {
+                code: KeyCode::End,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.focus == Focus::Targets => {
+                self.jump_to_last_target();
+            }
+            // g: Jump to first target (vim-style)
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('g'),
+                kind: KeyEventKind::Press,
+                modifiers,
+            }) if self.focus == Focus::Targets
+                && !modifiers.contains(ftui_core::event::Modifiers::SHIFT) =>
+            {
+                self.jump_to_first_target();
+            }
+            // G: Jump to last target (vim-style)
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('G'),
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.focus == Focus::Targets => {
+                self.jump_to_last_target();
+            }
+            // PageUp: Move up by page
+            Event::Key(KeyEvent {
+                code: KeyCode::PageUp,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.focus == Focus::Targets => {
+                self.page_up_targets();
+            }
+            // PageDown: Move down by page
+            Event::Key(KeyEvent {
+                code: KeyCode::PageDown,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.focus == Focus::Targets => {
+                self.page_down_targets();
+            }
+            // Space/Enter: Activate (click) focused target
+            Event::Key(KeyEvent {
+                code: KeyCode::Char(' ') | KeyCode::Enter,
+                kind: KeyEventKind::Press,
+                ..
+            }) if self.focus == Focus::Targets => {
+                self.activate_focused_target();
+            }
+            // O: Toggle overlay
             Event::Key(KeyEvent {
                 code: KeyCode::Char('o') | KeyCode::Char('O'),
                 kind: KeyEventKind::Press,
@@ -906,13 +1120,15 @@ impl Screen for MousePlayground {
             }) => {
                 self.toggle_overlay();
             }
+            // J: Toggle jitter stats (only when NOT on Targets panel to avoid conflict with vim nav)
             Event::Key(KeyEvent {
-                code: KeyCode::Char('j') | KeyCode::Char('J'),
+                code: KeyCode::Char('J'),
                 kind: KeyEventKind::Press,
                 ..
             }) => {
                 self.toggle_jitter_stats();
             }
+            // C: Clear log
             Event::Key(KeyEvent {
                 code: KeyCode::Char('c') | KeyCode::Char('C'),
                 kind: KeyEventKind::Press,
@@ -980,8 +1196,28 @@ impl Screen for MousePlayground {
     fn keybindings(&self) -> Vec<HelpEntry> {
         vec![
             HelpEntry {
+                key: "Tab",
+                action: "Cycle focus",
+            },
+            HelpEntry {
+                key: "↑↓←→/hjkl",
+                action: "Navigate targets",
+            },
+            HelpEntry {
+                key: "Space/Enter",
+                action: "Click target",
+            },
+            HelpEntry {
+                key: "Home/g",
+                action: "First target",
+            },
+            HelpEntry {
+                key: "End/G",
+                action: "Last target",
+            },
+            HelpEntry {
                 key: "O",
-                action: "Toggle hit-test overlay",
+                action: "Toggle overlay",
             },
             HelpEntry {
                 key: "J",
@@ -989,7 +1225,7 @@ impl Screen for MousePlayground {
             },
             HelpEntry {
                 key: "C",
-                action: "Clear event log",
+                action: "Clear log",
             },
         ]
     }
