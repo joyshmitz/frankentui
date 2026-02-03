@@ -16,7 +16,7 @@ use ftui_i18n::plural::PluralForms;
 use ftui_layout::{Constraint, Flex, FlowDirection};
 use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
-use ftui_style::{Color, Style};
+use ftui_style::Style;
 use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
 use ftui_widgets::borders::{BorderType, Borders};
@@ -191,7 +191,7 @@ impl I18nDemo {
 
         // Split into two columns for LTR/RTL demonstration.
         let cols = Flex::horizontal()
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .constraints([Constraint::Percentage(50.0), Constraint::Percentage(50.0)])
             .flow_direction(flow)
             .gap(1)
             .split(area);
@@ -342,7 +342,7 @@ impl I18nDemo {
         // Show side-by-side LTR vs RTL layout.
         let rows = Flex::vertical()
             .constraints([
-                Constraint::Length(3),
+                Constraint::Fixed(3),
                 Constraint::Fill(1),
                 Constraint::Fill(1),
             ])
@@ -397,9 +397,9 @@ impl I18nDemo {
 
         let cols = Flex::horizontal()
             .constraints([
-                Constraint::Percentage(30),
-                Constraint::Percentage(40),
-                Constraint::Percentage(30),
+                Constraint::Percentage(30.0),
+                Constraint::Percentage(40.0),
+                Constraint::Percentage(30.0),
             ])
             .flow_direction(flow)
             .gap(1)
@@ -499,9 +499,9 @@ impl Screen for I18nDemo {
 
         let rows = Flex::vertical()
             .constraints([
-                Constraint::Length(3), // locale bar
+                Constraint::Fixed(3), // locale bar
                 Constraint::Fill(1),  // main content
-                Constraint::Length(1), // status bar
+                Constraint::Fixed(1), // status bar
             ])
             .split(area);
 
