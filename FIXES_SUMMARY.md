@@ -11,3 +11,9 @@
 
 ## 60. Final Codebase State
 All tasks are complete. The codebase has been extensively refactored for Unicode correctness, hardened for security/reliability, and enhanced with hyperlink support. No further issues detected in the sampled files.
+
+## 61. Presenter Cost Model Overflow
+**File:** `crates/ftui-render/src/presenter.rs`
+**Issue:** `digit_count` function capped return value at 3 for any input >= 100. This caused incorrect cost estimation for terminal dimensions >= 1000, potentially leading to suboptimal cursor movement strategies on large displays (e.g. 4K).
+**Fix:**
+    - Extended `digit_count` to handle 4 and 5 digit numbers (up to `u16::MAX`).
