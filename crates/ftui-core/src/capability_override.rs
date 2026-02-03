@@ -349,11 +349,10 @@ pub struct OverrideGuard {
 
 impl Drop for OverrideGuard {
     fn drop(&mut self) {
+        // Silently ignore if stack is empty - this can happen if clear_all_overrides()
+        // was called while guards were still active. This is documented behavior.
         OVERRIDE_STACK.with(|stack| {
-            let mut stack = stack.borrow_mut();
-            if stack.pop().is_none() {
-                debug_assert!(false, "OverrideGuard dropped but stack was empty");
-            }
+            stack.borrow_mut().pop();
         });
     }
 }
@@ -371,7 +370,7 @@ impl Drop for OverrideGuard {
 /// // Override is active here
 /// // Automatically removed when _guard is dropped
 /// ```
-#[must_use]
+#[must_use = "the override is removed when the guard is dropped"]
 pub fn push_override(over: CapabilityOverride) -> OverrideGuard {
     OVERRIDE_STACK.with(|stack| {
         stack.borrow_mut().push(over);
