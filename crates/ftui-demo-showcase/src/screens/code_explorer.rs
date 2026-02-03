@@ -173,6 +173,8 @@ pub struct CodeExplorer {
     current_hotspot: usize,
     /// Feature spotlight index.
     feature_index: usize,
+    /// Current view mode.
+    mode: ExplorerMode,
     /// Focused panel for interaction.
     focus: FocusPanel,
     /// Layout hit areas for mouse focus.
@@ -242,6 +244,7 @@ impl CodeExplorer {
             hotspots,
             current_hotspot: 0,
             feature_index: 0,
+            mode: ExplorerMode::Source,
             focus: FocusPanel::Code,
             layout_input: Cell::new(Rect::default()),
             layout_code: Cell::new(Rect::default()),
@@ -495,6 +498,47 @@ impl CodeExplorer {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExplorerMode {
+    Source,
+    QueryLab,
+    ExecutionPlan,
+}
+
+impl ExplorerMode {
+    fn next(self) -> Self {
+        match self {
+            Self::Source => Self::QueryLab,
+            Self::QueryLab => Self::ExecutionPlan,
+            Self::ExecutionPlan => Self::Source,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            Self::Source => Self::ExecutionPlan,
+            Self::QueryLab => Self::Source,
+            Self::ExecutionPlan => Self::QueryLab,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Source => "Source",
+            Self::QueryLab => "Query Lab",
+            Self::ExecutionPlan => "Exec Plan",
+        }
+    }
+
+    fn subtitle(self) -> &'static str {
+        match self {
+            Self::Source => "Explorer + hotspots",
+            Self::QueryLab => "SQL studio + live preview",
+            Self::ExecutionPlan => "Plan graph + IO telemetry",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FocusPanel {
     Input,
     Code,
@@ -621,6 +665,12 @@ impl Screen for CodeExplorer {
                 (KeyCode::Char('f'), Modifiers::NONE) => {
                     self.feature_index = (self.feature_index + 1) % FEATURE_SPOTLIGHT.len();
                 }
+                (KeyCode::Char('m'), Modifiers::NONE) => {
+                    self.mode = self.mode.next();
+                }
+                (KeyCode::Char('M'), _) | (KeyCode::Char('m'), Modifiers::SHIFT) => {
+                    self.mode = self.mode.prev();
+                }
                 (KeyCode::Down, _) => match self.focus {
                     FocusPanel::Hotspots => self.next_hotspot(),
                     FocusPanel::Radar => self.next_match(),
@@ -703,6 +753,13 @@ impl Screen for CodeExplorer {
         self.render_code_panel(frame, h_chunks[0]);
         self.render_sidebar(frame, h_chunks[1]);
         self.render_status_bar(frame, status_area);
+
+        chrome::register_pane_hit(frame, h_chunks[0], ScreenId::CodeExplorer);
+        chrome::register_pane_hit(frame, h_chunks[1], ScreenId::CodeExplorer);
+        chrome::register_pane_hit(frame, status_area, ScreenId::CodeExplorer);
+        if self.search_active || self.goto_active {
+            chrome::register_pane_hit(frame, v_chunks[0], ScreenId::CodeExplorer);
+        }
     }
 
     fn keybindings(&self) -> Vec<HelpEntry> {
@@ -726,6 +783,10 @@ impl Screen for CodeExplorer {
             HelpEntry {
                 key: "n/N",
                 action: "Next/prev match",
+            },
+            HelpEntry {
+                key: "m/M",
+                action: "Cycle view mode",
             },
             HelpEntry {
                 key: "[/]",
@@ -803,7 +864,10 @@ impl CodeExplorer {
             .time(self.time);
         title.render(header_cols[0], frame);
 
-        let ctx_hint = truncate_to_width("hotspots: [ ] · feature: f", header_cols[1].width);
+        let ctx_hint = truncate_to_width(
+            &format!("mode: {} · hotspots: [ ] · feature: f", self.mode.label()),
+            header_cols[1].width,
+        );
         let ctx = StyledText::new(ctx_hint)
             .effect(TextEffect::ColorWave {
                 color1: theme::accent::PRIMARY.into(),
@@ -880,13 +944,13 @@ impl CodeExplorer {
         } else if self.search_active {
             "Live search mode"
         } else {
-            "Scroll + hotspots"
+            self.mode.subtitle()
         };
-        Paragraph::new(mode)
+        Paragraph::new(format!("Mode: {mode}"))
             .style(theme::muted())
             .render(footer_cols[0], frame);
 
-        let nav = truncate_to_width("Enter/Tab next · Ctrl+G goto", footer_cols[1].width);
+        let nav = truncate_to_width("M switches mode · Enter/Tab next", footer_cols[1].width);
         Paragraph::new(nav)
             .style(theme::muted())
             .render(footer_cols[1], frame);
@@ -1277,9 +1341,19 @@ impl CodeExplorer {
         if area.is_empty() {
             return;
         }
-        let rows = Flex::vertical()
-            .constraints([Constraint::Fixed(1), Constraint::Min(1)])
-            .split(area);
+        let rows = if area.height >= 3 {
+            Flex::vertical()
+                .constraints([
+                    Constraint::Fixed(1),
+                    Constraint::Fixed(1),
+                    Constraint::Min(1),
+                ])
+                .split(area)
+        } else {
+            Flex::vertical()
+                .constraints([Constraint::Fixed(1), Constraint::Min(1)])
+                .split(area)
+        };
         let hint = if self.search_matches.is_empty() {
             "Type / for instant highlights".to_string()
         } else {
@@ -1293,13 +1367,24 @@ impl CodeExplorer {
             .style(theme::muted())
             .render(rows[0], frame);
 
-        if !rows[1].is_empty() {
+        if rows.len() > 2 && !rows[1].is_empty() && !self.match_density.is_empty() {
+            Sparkline::new(&self.match_density)
+                .style(Style::new().fg(theme::accent::PRIMARY))
+                .gradient(
+                    theme::accent::PRIMARY.into(),
+                    theme::accent::ACCENT_8.into(),
+                )
+                .render(rows[1], frame);
+        }
+
+        let list_area = if rows.len() > 2 { rows[2] } else { rows[1] };
+        if !list_area.is_empty() {
             let mut lines = Vec::new();
             if self.search_matches.is_empty() {
                 lines.push("Awaiting query...".to_owned());
             } else {
                 let start = self.current_match.saturating_sub(2);
-                let end = (start + rows[1].height as usize).min(self.search_matches.len());
+                let end = (start + list_area.height as usize).min(self.search_matches.len());
                 for (i, idx) in self.search_matches[start..end].iter().enumerate() {
                     let marker = if start + i == self.current_match {
                         "▶"
@@ -1310,12 +1395,12 @@ impl CodeExplorer {
                 }
             }
             for (i, line) in lines.iter().enumerate() {
-                if i as u16 >= rows[1].height {
+                if i as u16 >= list_area.height {
                     break;
                 }
-                let y = rows[1].y + i as u16;
-                let line_area = Rect::new(rows[1].x, y, rows[1].width, 1);
-                Paragraph::new(truncate_to_width(line, rows[1].width))
+                let y = list_area.y + i as u16;
+                let line_area = Rect::new(list_area.x, y, list_area.width, 1);
+                Paragraph::new(truncate_to_width(line, list_area.width))
                     .style(Style::new().fg(theme::fg::SECONDARY))
                     .render(line_area, frame);
             }
@@ -1424,8 +1509,12 @@ impl CodeExplorer {
         let pct = (self.scroll_offset * 100).checked_div(total).unwrap_or(0);
         let size = filesize::decimal(SQLITE_SOURCE.len() as u64);
 
-        let status = format!(" Line {pos}/{total} ({pct}%) | {size} | C");
-        Paragraph::new(status)
+        let status = format!(
+            " Mode: {} · Line {pos}/{total} ({pct}%) · Matches: {} | {size} | C",
+            self.mode.label(),
+            self.search_matches.len()
+        );
+        Paragraph::new(truncate_to_width(&status, area.width))
             .style(Style::new().fg(theme::fg::MUTED).bg(theme::alpha::SURFACE))
             .render(area, frame);
     }
