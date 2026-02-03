@@ -9,6 +9,8 @@
 //! - [`Subscription`]: RAII guard that automatically unsubscribes on drop.
 //! - [`Computed`]: A lazily-evaluated, memoized value derived from one or
 //!   more `Observable` dependencies.
+//! - [`BatchScope`]: RAII guard that defers all `Observable` notifications
+//!   until the scope exits, preventing intermediate renders.
 //!
 //! # Architecture
 //!
@@ -19,6 +21,9 @@
 //! `Computed<T>` subscribes to its sources via `Observable::subscribe()`,
 //! marking itself dirty on change. Recomputation is deferred until `get()`.
 //!
+//! `BatchScope` uses a thread-local context to defer notifications. Nested
+//! scopes are supported; only the outermost scope triggers flush.
+//!
 //! # Invariants
 //!
 //! 1. Version increments exactly once per mutation that changes the value.
@@ -28,9 +33,13 @@
 //! 4. Dropping a [`Subscription`] removes the callback before the next
 //!    notification cycle.
 //! 5. `Computed::get()` never returns a stale value.
+//! 6. Within a `BatchScope`, values are updated immediately but notifications
+//!    are deferred until the outermost scope exits.
 
+pub mod batch;
 pub mod computed;
 pub mod observable;
 
+pub use batch::BatchScope;
 pub use computed::Computed;
 pub use observable::{Observable, Subscription};

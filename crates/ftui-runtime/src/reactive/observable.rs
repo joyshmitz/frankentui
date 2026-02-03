@@ -183,6 +183,9 @@ impl<T: Clone + PartialEq + 'static> Observable<T> {
     }
 
     /// Notify live subscribers and prune dead ones.
+    ///
+    /// If a batch scope is active (see [`super::batch::BatchScope`]),
+    /// notifications are deferred until the batch exits.
     fn notify(&self) {
         // Collect live callbacks first (to avoid holding the borrow during calls).
         let callbacks: Vec<CallbackRc<T>> = {
@@ -196,10 +199,24 @@ impl<T: Clone + PartialEq + 'static> Observable<T> {
                 .collect()
         };
 
-        // Now call each callback outside the borrow.
+        if callbacks.is_empty() {
+            return;
+        }
+
+        // Clone the value once for all callbacks.
         let value = self.inner.borrow().value.clone();
-        for cb in &callbacks {
-            cb(&value);
+
+        if super::batch::is_batching() {
+            // Defer each callback to the batch queue.
+            for cb in callbacks {
+                let v = value.clone();
+                super::batch::defer_or_run(move || cb(&v));
+            }
+        } else {
+            // Fire immediately.
+            for cb in &callbacks {
+                cb(&value);
+            }
         }
     }
 }
