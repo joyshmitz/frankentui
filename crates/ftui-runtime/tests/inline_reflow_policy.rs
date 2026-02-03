@@ -560,7 +560,7 @@ fn inline_reflow_strat2_overlay_no_scroll_region() {
         );
         w.set_size(10, 10);
         let buf = Buffer::new(10, 5);
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
 
     let regions = parse_decstbm(&output);
@@ -585,7 +585,7 @@ fn inline_reflow_strat2_scroll_region_emits_decstbm() {
         );
         w.set_size(80, 24);
         let buf = Buffer::new(80, 5);
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
 
     let regions = parse_decstbm(&output);
@@ -617,7 +617,7 @@ fn inline_reflow_strat2_sync_output_wraps_present() {
         );
         w.set_size(10, 10);
         let buf = Buffer::new(10, 5);
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
 
     assert!(contains(&output, SYNC_BEGIN), "Should have sync begin");
@@ -649,7 +649,7 @@ fn inline_reflow_strat2_no_sync_without_capability() {
         );
         w.set_size(10, 10);
         let buf = Buffer::new(10, 5);
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
 
     assert!(
@@ -680,7 +680,7 @@ fn inline_reflow_cursor1_save_restore_pair() {
         );
         w.set_size(10, 10);
         let buf = Buffer::new(10, 5);
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
 
     let saves = count_occurrences(&output, CURSOR_SAVE);
@@ -705,9 +705,9 @@ fn inline_reflow_cursor1_multiple_presents() {
         );
         w.set_size(10, 10);
         let buf = Buffer::new(10, 5);
-        w.present_ui(&buf, None).unwrap();
-        w.present_ui(&buf, None).unwrap();
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
 
     let saves = count_occurrences(&output, CURSOR_SAVE);
@@ -728,7 +728,7 @@ fn inline_reflow_cursor1_save_before_restore() {
         );
         w.set_size(10, 10);
         let buf = Buffer::new(10, 5);
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
 
     let save_pos = output
@@ -759,7 +759,7 @@ fn inline_reflow_cursor1_altscreen_no_cursor_gymnastics() {
         );
         w.set_size(10, 10);
         let buf = Buffer::new(10, 10);
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
 
     // AltScreen should not use DEC cursor save/restore for present_ui
@@ -796,12 +796,12 @@ fn inline_reflow_ghost1_shrink_clears_stale_rows() {
         // First present at height 8
         let buf = make_buffer_with_pattern(10, 8, '#');
         w.set_auto_ui_height(8);
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
 
         // Shrink to height 3
         w.set_auto_ui_height(3);
         let buf2 = make_buffer_with_pattern(10, 3, '.');
-        w.present_ui(&buf2, None).unwrap();
+        w.present_ui(&buf2, None, false).unwrap();
     }
 
     // Use second cursor save as marker for the shrink present phase.
@@ -834,8 +834,8 @@ fn inline_reflow_ghost1_no_full_screen_clear_in_inline() {
         );
         w.set_size(10, 10);
         let buf = Buffer::new(10, 5);
-        w.present_ui(&buf, None).unwrap();
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
 
     assert!(
@@ -860,11 +860,11 @@ fn inline_reflow_ghost1_buffer_shorter_than_ui_height() {
 
         // First present with full-height buffer
         let buf_full = make_buffer_with_pattern(10, 10, 'X');
-        w.present_ui(&buf_full, None).unwrap();
+        w.present_ui(&buf_full, None, false).unwrap();
 
         // Second present with short buffer (3 rows for a 10-row UI)
         let buf_short = make_buffer_with_pattern(10, 3, '.');
-        w.present_ui(&buf_short, None).unwrap();
+        w.present_ui(&buf_short, None, false).unwrap();
     }
 
     // Use second cursor save as marker for the short-buffer present phase.
@@ -903,7 +903,7 @@ fn inline_reflow_scroll1_activate_on_present() {
     assert!(!w.scroll_region_active(), "Not active before present");
 
     let buf = Buffer::new(80, 5);
-    w.present_ui(&buf, None).unwrap();
+    w.present_ui(&buf, None, false).unwrap();
 
     assert!(
         w.scroll_region_active(),
@@ -925,7 +925,7 @@ fn inline_reflow_scroll1_resize_deactivates() {
     w.set_size(80, 24);
 
     let buf = Buffer::new(80, 5);
-    w.present_ui(&buf, None).unwrap();
+    w.present_ui(&buf, None, false).unwrap();
     assert!(w.scroll_region_active());
 
     w.set_size(100, 30);
@@ -949,7 +949,7 @@ fn inline_reflow_scroll1_cleanup_resets() {
         );
         w.set_size(80, 24);
         let buf = Buffer::new(80, 5);
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
         // Drop triggers cleanup
     }
 
@@ -973,7 +973,7 @@ fn inline_reflow_scroll1_top_anchor_region() {
         );
         w.set_size(80, 24);
         let buf = Buffer::new(80, 5);
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
 
     // Top anchor: UI is rows 1-5, log region is rows 6-24
@@ -1002,14 +1002,14 @@ fn inline_reflow_scroll1_reactivate_after_resize() {
         w.set_size(80, 24);
 
         let buf = Buffer::new(80, 5);
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
         assert!(w.scroll_region_active());
 
         w.set_size(80, 40);
         assert!(!w.scroll_region_active());
 
         let buf2 = Buffer::new(80, 5);
-        w.present_ui(&buf2, None).unwrap();
+        w.present_ui(&buf2, None, false).unwrap();
         assert!(
             w.scroll_region_active(),
             "Scroll region should reactivate after resize + present"
@@ -1048,7 +1048,7 @@ fn inline_reflow_idem1_same_buffer_twice() {
         );
         w.set_size(10, 10);
         let buf = make_buffer_with_pattern(10, 5, 'A');
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
 
     // Second sequence: present same buffer after first present
@@ -1061,7 +1061,7 @@ fn inline_reflow_idem1_same_buffer_twice() {
         );
         w.set_size(10, 10);
         let buf = make_buffer_with_pattern(10, 5, 'A');
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
 
     // Both should produce same output for the same initial state
@@ -1089,7 +1089,7 @@ fn inline_reflow_idem1_diff_minimal_on_repeat() {
         );
         w.set_size(10, 10);
         let buf = make_buffer_with_pattern(10, 5, 'A');
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
 
     // Run twice: measure combined output for two presents
@@ -1103,8 +1103,8 @@ fn inline_reflow_idem1_diff_minimal_on_repeat() {
         );
         w.set_size(10, 10);
         let buf = make_buffer_with_pattern(10, 5, 'A');
-        w.present_ui(&buf, None).unwrap();
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
 
     // The second present (diff) should add less than the first present
@@ -1215,7 +1215,7 @@ fn inline_reflow_anchor_bottom_ui_at_bottom() {
         );
         w.set_size(80, 24);
         let buf = make_buffer_with_pattern(80, 5, 'B');
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
 
     // UI start row = 24 - 5 = 19 (0-indexed) → row 20 (1-indexed)
@@ -1241,7 +1241,7 @@ fn inline_reflow_anchor_top_ui_at_top() {
         );
         w.set_size(80, 24);
         let buf = make_buffer_with_pattern(80, 5, 'T');
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
 
     // UI start row = 0 (0-indexed) → row 1 (1-indexed)
@@ -1272,10 +1272,10 @@ fn inline_reflow_log_write_does_not_corrupt_ui_region() {
         w.set_size(80, 24);
 
         let buf = make_buffer_with_pattern(80, 5, 'U');
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
         w.write_log("log line 1\n").unwrap();
         w.write_log("log line 2\n").unwrap();
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
 
     // Log write cursor positions should be in log region (row <= 19 for bottom-anchor)
@@ -1326,7 +1326,7 @@ fn inline_reflow_cleanup_resets_all_state() {
         );
         w.set_size(80, 24);
         let buf = Buffer::new(80, 5);
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
         // Drop triggers cleanup
     }
 
@@ -1359,7 +1359,7 @@ fn inline_reflow_cleanup_ends_sync_block() {
         // The normal present_ui properly closes sync, but we test
         // that cleanup handles it anyway by doing a present and dropping
         let buf = Buffer::new(80, 5);
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
 
     // After cleanup, sync should be closed
@@ -1388,7 +1388,7 @@ fn inline_reflow_golden_fixed_10x5() {
         );
         w.set_size(10, 10);
         let buf = make_buffer_with_pattern(10, 5, 'G');
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
 
     let checksum = compute_output_checksum(&output);
@@ -1412,7 +1412,7 @@ fn inline_reflow_golden_fixed_10x5() {
         );
         w.set_size(10, 10);
         let buf = make_buffer_with_pattern(10, 5, 'G');
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
 
     let checksum2 = compute_output_checksum(&output2);
@@ -1433,7 +1433,7 @@ fn inline_reflow_golden_80x24_bottom() {
         );
         w.set_size(80, 24);
         let buf = make_buffer_with_pattern(80, 10, '#');
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
 
     let chk = compute_output_checksum(&output);
@@ -1449,7 +1449,7 @@ fn inline_reflow_golden_80x24_bottom() {
         );
         w.set_size(80, 24);
         let buf = make_buffer_with_pattern(80, 10, '#');
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
 
     assert_eq!(chk, compute_output_checksum(&out2));
@@ -1482,7 +1482,7 @@ fn inline_reflow_golden_strategies_differ() {
             );
             w.set_size(80, 24);
             let buf = make_buffer_with_pattern(80, 5, 'S');
-            w.present_ui(&buf, None).unwrap();
+            w.present_ui(&buf, None, false).unwrap();
         }
 
         let chk = compute_output_checksum(&output);
@@ -1518,7 +1518,7 @@ fn inline_reflow_edge_zero_height_ui() {
         // (the writer's visible_height clamps to 0 for ui_height=0)
         let buf = Buffer::new(10, 1);
         // Should not crash — zero ui_height means nothing visible
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
 
     // With ui_height=0, no full screen clear should occur
@@ -1541,7 +1541,7 @@ fn inline_reflow_edge_ui_larger_than_terminal() {
 
         let buf = make_buffer_with_pattern(10, 100, 'X');
         // Should not crash, should clamp
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
 
     // Verify no cursor row exceeds terminal height
@@ -1565,7 +1565,7 @@ fn inline_reflow_edge_single_row_terminal() {
         );
         w.set_size(10, 1);
         let buf = make_buffer_with_pattern(10, 1, '-');
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
     // Should not crash
     log_jsonl("pass", &[("test", "edge_single_row")]);
@@ -1598,9 +1598,93 @@ fn inline_reflow_edge_rapid_resize_sequence() {
         );
 
         let buf = make_buffer_with_pattern(w_size, w.render_height_hint(), '.');
-        w.present_ui(&buf, None).unwrap();
+        w.present_ui(&buf, None, false).unwrap();
     }
     log_jsonl("pass", &[("test", "edge_rapid_resize")]);
+}
+
+#[test]
+fn inline_reflow_large_screen_burst_logs_inline_and_altscreen() {
+    log_jsonl("start", &[("test", "large_screen_burst_logs")]);
+
+    // Inline mode with burst log output + resize storm sequence.
+    let mut inline_output = Vec::new();
+    {
+        let mut inline = TerminalWriter::new(
+            &mut inline_output,
+            ScreenMode::Inline { ui_height: 12 },
+            UiAnchor::Bottom,
+            modern_caps(),
+        );
+        let inline_sizes = [(240, 80), (200, 60), (40, 12), (240, 80)];
+        for (idx, &(w_size, h_size)) in inline_sizes.iter().enumerate() {
+            inline.set_size(w_size, h_size);
+            let buf = make_buffer_with_pattern(w_size, inline.render_height_hint(), '#');
+            inline.present_ui(&buf, None, false).unwrap();
+
+            if idx == 0 || idx == 2 {
+                for i in 0..25 {
+                    inline.write_log(&format!("burst {idx}-{i}\n")).unwrap();
+                }
+            }
+        }
+    }
+
+    // Inline mode should never emit full screen clear.
+    assert!(
+        !contains(&inline_output, FULL_CLEAR),
+        "Inline mode must not emit full screen clear (ED2)"
+    );
+
+    // Alt-screen mode with large sizes (no log output expected).
+    let mut alt_output = Vec::new();
+    let mut alt = TerminalWriter::new(
+        &mut alt_output,
+        ScreenMode::AltScreen,
+        UiAnchor::Bottom,
+        modern_caps(),
+    );
+    let alt_sizes = [(240, 80), (200, 60), (40, 12)];
+    for &(w_size, h_size) in &alt_sizes {
+        alt.set_size(w_size, h_size);
+        let buf = make_buffer_with_pattern(w_size, h_size, '@');
+        alt.present_ui(&buf, None, false).unwrap();
+    }
+
+    log_jsonl("pass", &[("test", "large_screen_burst_logs")]);
+}
+
+#[test]
+fn inline_reflow_inline_auto_remeasure_churn_large() {
+    log_jsonl("start", &[("test", "inline_auto_churn_large")]);
+
+    let mut output = Vec::new();
+    let mut w = TerminalWriter::new(
+        &mut output,
+        ScreenMode::InlineAuto {
+            min_height: 4,
+            max_height: 20,
+        },
+        UiAnchor::Bottom,
+        modern_caps(),
+    );
+    w.set_size(240, 80);
+
+    let heights = [4u16, 8, 12, 18, 6, 20, 10];
+    for (idx, height) in heights.iter().enumerate() {
+        w.set_auto_ui_height(*height);
+        let effective = w.auto_ui_height().unwrap_or(0);
+        assert!(
+            (4..=20).contains(&effective),
+            "auto ui height {effective} out of bounds"
+        );
+
+        let ch = if idx % 2 == 0 { 'U' } else { 'V' };
+        let buf = make_buffer_with_pattern(240, w.render_height_hint(), ch);
+        w.present_ui(&buf, None, false).unwrap();
+    }
+
+    log_jsonl("pass", &[("test", "inline_auto_churn_large")]);
 }
 
 // =============================================================================

@@ -392,13 +392,18 @@ fn help_hints_focus_change_storm_e2e() {
     times_us.sort();
     dirty_cells.sort();
     dirty_counts.sort();
-    let p50 = times_us[times_us.len() / 2];
-    let p95 = times_us[(times_us.len() as f64 * 0.95) as usize];
-    let p99 = times_us[(times_us.len() as f64 * 0.99) as usize];
-    let dirty_p50 = dirty_cells[dirty_cells.len() / 2];
-    let dirty_p95 = dirty_cells[(dirty_cells.len() as f64 * 0.95) as usize];
-    let dirty_rect_p50 = dirty_counts[dirty_counts.len() / 2];
-    let dirty_rect_p95 = dirty_counts[(dirty_counts.len() as f64 * 0.95) as usize];
+    let len = times_us.len();
+    let p50 = times_us[len / 2];
+    let p95 = times_us[((len as f64 * 0.95) as usize).min(len.saturating_sub(1))];
+    let p99 = times_us[((len as f64 * 0.99) as usize).min(len.saturating_sub(1))];
+    let dirty_len = dirty_cells.len();
+    let dirty_p50 = dirty_cells[dirty_len / 2];
+    let dirty_p95 =
+        dirty_cells[((dirty_len as f64 * 0.95) as usize).min(dirty_len.saturating_sub(1))];
+    let counts_len = dirty_counts.len();
+    let dirty_rect_p50 = dirty_counts[counts_len / 2];
+    let dirty_rect_p95 =
+        dirty_counts[((counts_len as f64 * 0.95) as usize).min(counts_len.saturating_sub(1))];
 
     if log_enabled {
         log_jsonl(

@@ -760,9 +760,10 @@ fn e2e_focus_change_storm_performance() {
     }
 
     times_us.sort();
-    let p50 = times_us[times_us.len() / 2];
-    let p95 = times_us[(times_us.len() as f64 * 0.95) as usize];
-    let p99 = times_us[(times_us.len() as f64 * 0.99) as usize];
+    let len = times_us.len();
+    let p50 = times_us[len / 2];
+    let p95 = times_us[((len as f64 * 0.95) as usize).min(len.saturating_sub(1))];
+    let p99 = times_us[((len as f64 * 0.99) as usize).min(len.saturating_sub(1))];
 
     log_jsonl(
         "perf_summary",

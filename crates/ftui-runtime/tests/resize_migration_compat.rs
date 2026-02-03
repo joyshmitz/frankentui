@@ -115,6 +115,8 @@ fn burst_regime_transition() {
         burst_delay_ms: 50,
         hard_deadline_ms: 100,
         enable_logging: true,
+        enable_bocpd: false,
+        bocpd_config: None,
     };
     let mut coalescer = ResizeCoalescer::new(cfg, (80, 24));
 
@@ -151,6 +153,8 @@ fn burst_cooldown_hysteresis() {
         burst_delay_ms: 50,
         hard_deadline_ms: 5000, // High enough to never trigger in this test
         enable_logging: false,
+        enable_bocpd: false,
+        bocpd_config: None,
     };
     let base = Instant::now();
     let mut coalescer = ResizeCoalescer::new(cfg, (80, 24)).with_last_render(base);

@@ -749,10 +749,12 @@ fn scenario5_computation_overhead() {
     pi_times.sort();
     mpc_times.sort();
 
-    let pi_p50 = pi_times[pi_times.len() / 2];
-    let pi_p95 = pi_times[(pi_times.len() as f64 * 0.95) as usize];
-    let mpc_p50 = mpc_times[mpc_times.len() / 2];
-    let mpc_p95 = mpc_times[(mpc_times.len() as f64 * 0.95) as usize];
+    let pi_len = pi_times.len();
+    let pi_p50 = pi_times[pi_len / 2];
+    let pi_p95 = pi_times[((pi_len as f64 * 0.95) as usize).min(pi_len.saturating_sub(1))];
+    let mpc_len = mpc_times.len();
+    let mpc_p50 = mpc_times[mpc_len / 2];
+    let mpc_p95 = mpc_times[((mpc_len as f64 * 0.95) as usize).min(mpc_len.saturating_sub(1))];
 
     eprintln!(
         "{{\"test\":\"compute_overhead\",\"controller\":\"pi\",\"p50_ns\":{},\"p95_ns\":{}}}",
