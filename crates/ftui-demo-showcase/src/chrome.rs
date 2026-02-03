@@ -357,6 +357,7 @@ pub fn accent_for(id: ScreenId) -> theme::ColorToken {
         ScreenId::IntrinsicSizing => theme::screen_accent::INTRINSIC_SIZING,
         ScreenId::AdvancedTextEditor => theme::screen_accent::ADVANCED,
         ScreenId::MousePlayground => theme::screen_accent::PERFORMANCE,
+        ScreenId::FormValidation => theme::screen_accent::FORMS_INPUT,
     }
 }
 

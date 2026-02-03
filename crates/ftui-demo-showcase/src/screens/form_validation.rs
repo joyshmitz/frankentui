@@ -20,7 +20,9 @@ use ftui_runtime::Cmd;
 use ftui_style::Style;
 use ftui_widgets::block::{Alignment, Block};
 use ftui_widgets::borders::{BorderType, Borders};
-use ftui_widgets::notification_queue::{NotificationPriority, NotificationQueue, QueueConfig};
+use ftui_widgets::notification_queue::{
+    NotificationPriority, NotificationQueue, NotificationStack, QueueConfig,
+};
 use ftui_widgets::paragraph::Paragraph;
 use ftui_widgets::toast::{Toast, ToastIcon, ToastPosition, ToastStyle};
 use ftui_widgets::{StatefulWidget, Widget};
@@ -440,11 +442,6 @@ impl Screen for FormValidationDemo {
     type Message = ();
 
     fn update(&mut self, event: &Event) -> Cmd<Self::Message> {
-        // Handle notification queue events
-        if let Some(_action_id) = self.notifications.handle_event(event) {
-            // Could handle action buttons here if needed
-        }
-
         // Check for mode toggle key
         if let Event::Key(KeyEvent {
             code: KeyCode::Char('m' | 'M'),
@@ -485,7 +482,7 @@ impl Screen for FormValidationDemo {
     fn view(&self, frame: &mut Frame, area: Rect) {
         // Main layout: form (left) | error summary (right)
         let main_chunks = Flex::horizontal()
-            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .constraints([Constraint::Percentage(60.0), Constraint::Percentage(40.0)])
             .split(area);
 
         // Left side: form + indicators
@@ -514,7 +511,7 @@ impl Screen for FormValidationDemo {
 
         // Render form
         let mut state = self.form_state.borrow_mut();
-        self.form.render(form_inner, frame, &mut state);
+        StatefulWidget::render(&self.form, form_inner, frame, &mut state);
         drop(state);
 
         // State indicators
@@ -529,7 +526,7 @@ impl Screen for FormValidationDemo {
         self.render_error_summary(frame, main_chunks[1]);
 
         // Notification overlay
-        self.notifications.render(area, frame);
+        NotificationStack::new(&self.notifications).render(area, frame);
     }
 
     fn tick(&mut self, tick_count: u64) {
