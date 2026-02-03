@@ -115,6 +115,85 @@ fn bench_diff_runs(c: &mut Criterion) {
     group.finish();
 }
 
+// ============================================================================
+// Full vs Dirty diff comparison (bd-3e1t.1.6)
+// ============================================================================
+
+/// Compare compute() vs compute_dirty() on sparse changes.
+/// This validates that dirty-row optimization provides speedup on large screens.
+fn bench_full_vs_dirty(c: &mut Criterion) {
+    let mut group = c.benchmark_group("diff/full_vs_dirty");
+
+    // Large screen sizes as specified in bd-3e1t.1.6
+    for (w, h) in [(200, 60), (240, 80)] {
+        let cells = w as u64 * h as u64;
+        group.throughput(Throughput::Elements(cells));
+
+        // Sparse 5% changes - dirty diff should win
+        let (old, new) = make_pair(w, h, 5.0);
+
+        group.bench_with_input(
+            BenchmarkId::new("compute", format!("{w}x{h}@5%")),
+            &(&old, &new),
+            |b, (old, new)| b.iter(|| black_box(BufferDiff::compute(old, new))),
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("compute_dirty", format!("{w}x{h}@5%")),
+            &(&old, &new),
+            |b, (old, new)| b.iter(|| black_box(BufferDiff::compute_dirty(old, new))),
+        );
+
+        // Single-row change - dirty diff should massively win
+        let mut single_row = old.clone();
+        for x in 0..w {
+            single_row.set_raw(x, 0, Cell::from_char('X').with_fg(PackedRgba::RED));
+        }
+
+        group.bench_with_input(
+            BenchmarkId::new("compute", format!("{w}x{h}@1row")),
+            &(&old, &single_row),
+            |b, (old, new)| b.iter(|| black_box(BufferDiff::compute(old, new))),
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("compute_dirty", format!("{w}x{h}@1row")),
+            &(&old, &single_row),
+            |b, (old, new)| b.iter(|| black_box(BufferDiff::compute_dirty(old, new))),
+        );
+    }
+
+    group.finish();
+}
+
+/// Large screen benchmarks for regression detection.
+fn bench_diff_large_screen(c: &mut Criterion) {
+    let mut group = c.benchmark_group("diff/large_screen");
+
+    // Test 4K-like terminal sizes
+    for (w, h) in [(320, 90), (400, 100)] {
+        let cells = w as u64 * h as u64;
+        group.throughput(Throughput::Elements(cells));
+
+        // Sparse changes (typical use case)
+        let (old, new) = make_pair(w, h, 2.0);
+
+        group.bench_with_input(
+            BenchmarkId::new("compute", format!("{w}x{h}@2%")),
+            &(&old, &new),
+            |b, (old, new)| b.iter(|| black_box(BufferDiff::compute(old, new))),
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("compute_dirty", format!("{w}x{h}@2%")),
+            &(&old, &new),
+            |b, (old, new)| b.iter(|| black_box(BufferDiff::compute_dirty(old, new))),
+        );
+    }
+
+    group.finish();
+}
+
 fn bench_bits_eq(c: &mut Criterion) {
     let mut group = c.benchmark_group("cell/bits_eq");
 
@@ -313,6 +392,9 @@ criterion_group!(
     bench_diff_heavy,
     bench_diff_full,
     bench_diff_runs,
+    // Full vs dirty comparison (bd-3e1t.1.6)
+    bench_full_vs_dirty,
+    bench_diff_large_screen,
     // Cell benchmarks
     bench_bits_eq,
     bench_cell_from_char,
