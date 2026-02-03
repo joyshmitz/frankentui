@@ -140,6 +140,8 @@ pub mod log_ring;
 pub mod log_viewer;
 /// Intrinsic sizing support for content-aware layout.
 pub mod measurable;
+/// Measure cache for memoizing widget measure results.
+pub mod measure_cache;
 pub mod padding;
 pub mod paginator;
 pub mod panel;
@@ -184,6 +186,9 @@ pub use virtualized::{
 
 // Measurable widget support for intrinsic sizing
 pub use measurable::{MeasurableWidget, SizeConstraints};
+
+// Measure cache for memoizing measure() results
+pub use measure_cache::{CacheStats, MeasureCache, WidgetId};
 
 // UI Inspector for debugging
 pub use inspector::{
