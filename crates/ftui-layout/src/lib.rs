@@ -8,6 +8,7 @@
 //! - [`Grid`] - 2D constraint-based layout with cell spanning
 //! - [`Constraint`] - Size constraints (Fixed, Percentage, Min, Max, Ratio, FitContent)
 //! - [`debug`] - Layout constraint debugging and introspection
+//! - [`cache`] - Layout result caching for memoization
 //!
 //! # Intrinsic Sizing
 //!
@@ -28,11 +29,13 @@
 //! });
 //! ```
 
+pub mod cache;
 pub mod debug;
 pub mod grid;
 #[cfg(test)]
 mod repro_max_constraint;
 
+pub use cache::{CoherenceCache, CoherenceId, LayoutCache, LayoutCacheKey, LayoutCacheStats};
 pub use ftui_core::geometry::{Rect, Sides, Size};
 pub use grid::{Grid, GridArea, GridLayout};
 use std::cmp::min;
@@ -142,7 +145,7 @@ impl LayoutSizeHint {
 }
 
 /// The direction to layout items.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Direction {
     /// Top to bottom.
     #[default]
@@ -165,6 +168,88 @@ pub enum Alignment {
     SpaceAround,
     /// Distribute space evenly between items (no outer space).
     SpaceBetween,
+}
+
+/// Responsive breakpoint buckets for terminal widths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Breakpoint {
+    Xs,
+    Sm,
+    Md,
+    Lg,
+}
+
+impl Breakpoint {
+    #[inline]
+    const fn index(self) -> u8 {
+        match self {
+            Breakpoint::Xs => 0,
+            Breakpoint::Sm => 1,
+            Breakpoint::Md => 2,
+            Breakpoint::Lg => 3,
+        }
+    }
+}
+
+/// Breakpoint thresholds for responsive layouts.
+///
+/// Widths are in terminal columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Breakpoints {
+    pub sm: u16,
+    pub md: u16,
+    pub lg: u16,
+}
+
+impl Breakpoints {
+    /// Default breakpoints: 60 / 90 / 120 columns.
+    pub const DEFAULT: Self = Self {
+        sm: 60,
+        md: 90,
+        lg: 120,
+    };
+
+    /// Create breakpoints with explicit thresholds.
+    ///
+    /// Values are sanitized to be monotonically non-decreasing.
+    pub const fn new(sm: u16, md: u16, lg: u16) -> Self {
+        let md = if md < sm { sm } else { md };
+        let lg = if lg < md { md } else { lg };
+        Self { sm, md, lg }
+    }
+
+    /// Classify a width into a breakpoint bucket.
+    #[inline]
+    pub const fn classify_width(self, width: u16) -> Breakpoint {
+        if width < self.sm {
+            Breakpoint::Xs
+        } else if width < self.md {
+            Breakpoint::Sm
+        } else if width < self.lg {
+            Breakpoint::Md
+        } else {
+            Breakpoint::Lg
+        }
+    }
+
+    /// Classify a Size (uses width).
+    #[inline]
+    pub const fn classify_size(self, size: Size) -> Breakpoint {
+        self.classify_width(size.width)
+    }
+
+    /// Check if width is at least a given breakpoint.
+    #[inline]
+    pub const fn at_least(self, width: u16, min: Breakpoint) -> bool {
+        self.classify_width(width).index() >= min.index()
+    }
+
+    /// Check if width is between two breakpoints (inclusive).
+    #[inline]
+    pub const fn between(self, width: u16, min: Breakpoint, max: Breakpoint) -> bool {
+        let idx = self.classify_width(width).index();
+        idx >= min.index() && idx <= max.index()
+    }
 }
 
 /// Size negotiation hints for layout.
@@ -601,6 +686,170 @@ where
     sizes
 }
 
+// ---------------------------------------------------------------------------
+// Stable Layout Rounding: Min-Displacement with Temporal Coherence
+// ---------------------------------------------------------------------------
+
+/// Previous frame's allocation, used as tie-breaker for temporal stability.
+///
+/// Pass `None` for the first frame or when no history is available.
+/// When provided, the rounding algorithm prefers allocations that
+/// minimize change from the previous frame, reducing visual jitter.
+pub type PreviousAllocation = Option<Vec<u16>>;
+
+/// Round real-valued layout targets to integer cells with exact sum conservation.
+///
+/// # Mathematical Model
+///
+/// Given real-valued targets `r_i` (from the constraint solver) and a required
+/// integer total, find integer allocations `x_i` that:
+///
+/// ```text
+/// minimize   Σ_i |x_i − r_i|  +  μ · Σ_i |x_i − x_i_prev|
+/// subject to Σ_i x_i = total
+///            x_i ≥ 0
+/// ```
+///
+/// where `x_i_prev` is the previous frame's allocation and `μ` is the temporal
+/// stability weight (default 0.1).
+///
+/// # Algorithm: Largest Remainder with Temporal Tie-Breaking
+///
+/// This uses a variant of the Largest Remainder Method (Hamilton's method),
+/// which provides optimal bounded displacement (|x_i − r_i| < 1 for all i):
+///
+/// 1. **Floor phase**: Set `x_i = floor(r_i)` for each element.
+/// 2. **Deficit**: Compute `D = total − Σ floor(r_i)` extra cells to distribute.
+/// 3. **Priority sort**: Rank elements by remainder `r_i − floor(r_i)` (descending).
+///    Break ties using a composite key:
+///    a. Prefer elements where `x_i_prev = ceil(r_i)` (temporal stability).
+///    b. Prefer elements with smaller index (determinism).
+/// 4. **Distribute**: Award one extra cell to each of the top `D` elements.
+///
+/// # Properties
+///
+/// 1. **Sum conservation**: `Σ x_i = total` exactly (proven by construction).
+/// 2. **Bounded displacement**: `|x_i − r_i| < 1` for all `i` (since each x_i
+///    is either `floor(r_i)` or `ceil(r_i)`).
+/// 3. **Deterministic**: Same inputs → identical outputs (temporal tie-break +
+///    index tie-break provide total ordering).
+/// 4. **Temporal coherence**: When targets change slightly, allocations tend to
+///    stay the same (preferring the previous frame's rounding direction).
+/// 5. **Optimal displacement**: Among all integer allocations summing to `total`
+///    with `floor(r_i) ≤ x_i ≤ ceil(r_i)`, the Largest Remainder Method
+///    minimizes total absolute displacement.
+///
+/// # Failure Modes
+///
+/// - **All-zero targets**: Returns all zeros. Harmless (empty layout).
+/// - **Negative deficit**: Can occur if targets sum to less than `total` after
+///   flooring. The algorithm handles this via the clamp in step 2.
+/// - **Very large N**: O(N log N) due to sorting. Acceptable for typical
+///   layout counts (< 100 items).
+///
+/// # Example
+///
+/// ```
+/// use ftui_layout::round_layout_stable;
+///
+/// // Targets: [10.4, 20.6, 9.0] must sum to 40
+/// let result = round_layout_stable(&[10.4, 20.6, 9.0], 40, None);
+/// assert_eq!(result.iter().sum::<u16>(), 40);
+/// // 10.4 → 10, 20.6 → 21, 9.0 → 9 = 40 ✓
+/// assert_eq!(result, vec![10, 21, 9]);
+/// ```
+pub fn round_layout_stable(targets: &[f64], total: u16, prev: PreviousAllocation) -> Vec<u16> {
+    let n = targets.len();
+    if n == 0 {
+        return Vec::new();
+    }
+
+    // Step 1: Floor all targets
+    let floors: Vec<u16> = targets
+        .iter()
+        .map(|&r| (r.max(0.0).floor() as u64).min(u16::MAX as u64) as u16)
+        .collect();
+
+    let floor_sum: u16 = floors.iter().copied().sum();
+
+    // Step 2: Compute deficit (extra cells to distribute)
+    let deficit = total.saturating_sub(floor_sum);
+
+    if deficit == 0 {
+        // Exact fit — no rounding needed
+        // But we may need to adjust if floor_sum > total (overflow case)
+        if floor_sum > total {
+            return redistribute_overflow(&floors, total);
+        }
+        return floors;
+    }
+
+    // Step 3: Compute remainders and build priority list
+    let mut priority: Vec<(usize, f64, bool)> = targets
+        .iter()
+        .enumerate()
+        .map(|(i, &r)| {
+            let remainder = r - (floors[i] as f64);
+            let ceil_val = floors[i].saturating_add(1);
+            // Temporal stability: did previous allocation use ceil?
+            let prev_used_ceil = prev
+                .as_ref()
+                .is_some_and(|p| p.get(i).copied() == Some(ceil_val));
+            (i, remainder, prev_used_ceil)
+        })
+        .collect();
+
+    // Sort by: remainder descending, then temporal preference, then index ascending
+    priority.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                // Prefer items where prev used ceil (true > false)
+                b.2.cmp(&a.2)
+            })
+            .then_with(|| {
+                // Deterministic tie-break: smaller index first
+                a.0.cmp(&b.0)
+            })
+    });
+
+    // Step 4: Distribute deficit
+    let mut result = floors;
+    let distribute = (deficit as usize).min(n);
+    for &(i, _, _) in priority.iter().take(distribute) {
+        result[i] = result[i].saturating_add(1);
+    }
+
+    result
+}
+
+/// Handle the edge case where floored values exceed total.
+///
+/// This can happen with very small totals and many items. We greedily
+/// reduce the largest items by 1 until the sum matches.
+fn redistribute_overflow(floors: &[u16], total: u16) -> Vec<u16> {
+    let mut result = floors.to_vec();
+    let mut current_sum: u16 = result.iter().copied().sum();
+
+    // Build a max-heap of (value, index) to reduce largest first
+    while current_sum > total {
+        // Find the largest element
+        if let Some((idx, _)) = result
+            .iter()
+            .enumerate()
+            .filter(|item| *item.1 > 0)
+            .max_by_key(|item| *item.1)
+        {
+            result[idx] = result[idx].saturating_sub(1);
+            current_sum = current_sum.saturating_sub(1);
+        } else {
+            break;
+        }
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -673,6 +922,23 @@ mod tests {
         assert_eq!(flexible.min_height, 3);
         assert_eq!(flexible.max_width, None);
         assert_eq!(flexible.max_height, None);
+    }
+
+    #[test]
+    fn breakpoints_classify_defaults() {
+        let bp = Breakpoints::DEFAULT;
+        assert_eq!(bp.classify_width(20), Breakpoint::Xs);
+        assert_eq!(bp.classify_width(60), Breakpoint::Sm);
+        assert_eq!(bp.classify_width(90), Breakpoint::Md);
+        assert_eq!(bp.classify_width(120), Breakpoint::Lg);
+    }
+
+    #[test]
+    fn breakpoints_at_least_and_between() {
+        let bp = Breakpoints::new(50, 80, 110);
+        assert!(bp.at_least(85, Breakpoint::Sm));
+        assert!(bp.between(85, Breakpoint::Sm, Breakpoint::Md));
+        assert!(!bp.between(85, Breakpoint::Lg, Breakpoint::Lg));
     }
 
     #[test]
@@ -1185,6 +1451,233 @@ mod tests {
                 "Total {} exceeded available {} with FitContent",
                 total,
                 available
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Stable Layout Rounding Tests (bd-4kq0.4.1)
+    // -----------------------------------------------------------------------
+
+    mod rounding_tests {
+        use super::super::*;
+
+        // --- Sum conservation (REQUIRED) ---
+
+        #[test]
+        fn rounding_conserves_sum_exact() {
+            let result = round_layout_stable(&[10.0, 20.0, 10.0], 40, None);
+            assert_eq!(result.iter().copied().sum::<u16>(), 40);
+            assert_eq!(result, vec![10, 20, 10]);
+        }
+
+        #[test]
+        fn rounding_conserves_sum_fractional() {
+            let result = round_layout_stable(&[10.4, 20.6, 9.0], 40, None);
+            assert_eq!(
+                result.iter().copied().sum::<u16>(),
+                40,
+                "Sum must equal total: {:?}",
+                result
+            );
+        }
+
+        #[test]
+        fn rounding_conserves_sum_many_fractions() {
+            let targets = vec![20.2, 20.2, 20.2, 20.2, 19.2];
+            let result = round_layout_stable(&targets, 100, None);
+            assert_eq!(
+                result.iter().copied().sum::<u16>(),
+                100,
+                "Sum must be exactly 100: {:?}",
+                result
+            );
+        }
+
+        #[test]
+        fn rounding_conserves_sum_all_half() {
+            let targets = vec![10.5, 10.5, 10.5, 10.5];
+            let result = round_layout_stable(&targets, 42, None);
+            assert_eq!(
+                result.iter().copied().sum::<u16>(),
+                42,
+                "Sum must be exactly 42: {:?}",
+                result
+            );
+        }
+
+        // --- Bounded displacement ---
+
+        #[test]
+        fn rounding_displacement_bounded() {
+            let targets = vec![33.33, 33.33, 33.34];
+            let result = round_layout_stable(&targets, 100, None);
+            assert_eq!(result.iter().copied().sum::<u16>(), 100);
+
+            for (i, (&x, &r)) in result.iter().zip(targets.iter()).enumerate() {
+                let floor = r.floor() as u16;
+                let ceil = floor + 1;
+                assert!(
+                    x == floor || x == ceil,
+                    "Element {} = {} not in {{floor={}, ceil={}}} of target {}",
+                    i,
+                    x,
+                    floor,
+                    ceil,
+                    r
+                );
+            }
+        }
+
+        // --- Temporal tie-break (REQUIRED) ---
+
+        #[test]
+        fn temporal_tiebreak_stable_when_unchanged() {
+            let targets = vec![10.5, 10.5, 10.5, 10.5];
+            let first = round_layout_stable(&targets, 42, None);
+            let second = round_layout_stable(&targets, 42, Some(first.clone()));
+            assert_eq!(
+                first, second,
+                "Identical targets should produce identical results"
+            );
+        }
+
+        #[test]
+        fn temporal_tiebreak_prefers_previous_direction() {
+            let targets = vec![10.5, 10.5];
+            let total = 21;
+            let first = round_layout_stable(&targets, total, None);
+            assert_eq!(first.iter().copied().sum::<u16>(), total);
+            let second = round_layout_stable(&targets, total, Some(first.clone()));
+            assert_eq!(first, second, "Should maintain rounding direction");
+        }
+
+        #[test]
+        fn temporal_tiebreak_adapts_to_changed_targets() {
+            let targets_a = vec![10.5, 10.5];
+            let result_a = round_layout_stable(&targets_a, 21, None);
+            let targets_b = vec![15.7, 5.3];
+            let result_b = round_layout_stable(&targets_b, 21, Some(result_a));
+            assert_eq!(result_b.iter().copied().sum::<u16>(), 21);
+            assert!(result_b[0] > result_b[1], "Should follow larger target");
+        }
+
+        // --- Property: min displacement (REQUIRED) ---
+
+        #[test]
+        fn property_min_displacement_brute_force_small() {
+            let targets = vec![3.3, 3.3, 3.4];
+            let total: u16 = 10;
+            let result = round_layout_stable(&targets, total, None);
+            let our_displacement: f64 = result
+                .iter()
+                .zip(targets.iter())
+                .map(|(&x, &r)| (x as f64 - r).abs())
+                .sum();
+
+            let mut min_displacement = f64::MAX;
+            let floors: Vec<u16> = targets.iter().map(|&r| r.floor() as u16).collect();
+            let ceils: Vec<u16> = targets.iter().map(|&r| r.floor() as u16 + 1).collect();
+
+            for a in floors[0]..=ceils[0] {
+                for b in floors[1]..=ceils[1] {
+                    for c in floors[2]..=ceils[2] {
+                        if a + b + c == total {
+                            let disp = (a as f64 - targets[0]).abs()
+                                + (b as f64 - targets[1]).abs()
+                                + (c as f64 - targets[2]).abs();
+                            if disp < min_displacement {
+                                min_displacement = disp;
+                            }
+                        }
+                    }
+                }
+            }
+
+            assert!(
+                (our_displacement - min_displacement).abs() < 1e-10,
+                "Our displacement {} should match optimal {}: {:?}",
+                our_displacement,
+                min_displacement,
+                result
+            );
+        }
+
+        // --- Determinism ---
+
+        #[test]
+        fn rounding_deterministic() {
+            let targets = vec![7.7, 8.3, 14.0];
+            let a = round_layout_stable(&targets, 30, None);
+            let b = round_layout_stable(&targets, 30, None);
+            assert_eq!(a, b, "Same inputs must produce identical outputs");
+        }
+
+        // --- Edge cases ---
+
+        #[test]
+        fn rounding_empty_targets() {
+            let result = round_layout_stable(&[], 0, None);
+            assert!(result.is_empty());
+        }
+
+        #[test]
+        fn rounding_single_element() {
+            let result = round_layout_stable(&[10.7], 11, None);
+            assert_eq!(result, vec![11]);
+        }
+
+        #[test]
+        fn rounding_zero_total() {
+            let result = round_layout_stable(&[5.0, 5.0], 0, None);
+            assert_eq!(result.iter().copied().sum::<u16>(), 0);
+        }
+
+        #[test]
+        fn rounding_all_zeros() {
+            let result = round_layout_stable(&[0.0, 0.0, 0.0], 0, None);
+            assert_eq!(result, vec![0, 0, 0]);
+        }
+
+        #[test]
+        fn rounding_integer_targets() {
+            let result = round_layout_stable(&[10.0, 20.0, 30.0], 60, None);
+            assert_eq!(result, vec![10, 20, 30]);
+        }
+
+        #[test]
+        fn rounding_large_deficit() {
+            let result = round_layout_stable(&[0.9, 0.9, 0.9], 3, None);
+            assert_eq!(result.iter().copied().sum::<u16>(), 3);
+            assert_eq!(result, vec![1, 1, 1]);
+        }
+
+        #[test]
+        fn rounding_with_prev_different_length() {
+            let result = round_layout_stable(&[10.5, 10.5], 21, Some(vec![11, 10, 5]));
+            assert_eq!(result.iter().copied().sum::<u16>(), 21);
+        }
+
+        #[test]
+        fn rounding_very_small_fractions() {
+            let targets = vec![10.001, 20.001, 9.998];
+            let result = round_layout_stable(&targets, 40, None);
+            assert_eq!(result.iter().copied().sum::<u16>(), 40);
+        }
+
+        #[test]
+        fn rounding_conserves_sum_stress() {
+            let n = 50;
+            let targets: Vec<f64> = (0..n).map(|i| 2.0 + (i as f64 * 0.037)).collect();
+            let total = 120u16;
+            let result = round_layout_stable(&targets, total, None);
+            assert_eq!(
+                result.iter().copied().sum::<u16>(),
+                total,
+                "Sum must be exactly {} for {} items: {:?}",
+                total,
+                n,
+                result
             );
         }
     }

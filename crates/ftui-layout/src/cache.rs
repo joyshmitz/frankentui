@@ -374,6 +374,190 @@ impl Default for LayoutCache {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Coherence Cache: Temporal Stability for Layout Rounding
+// ---------------------------------------------------------------------------
+
+/// Identity for a layout computation, used as key in the coherence cache.
+///
+/// This is a subset of [`LayoutCacheKey`] that identifies a *layout slot*
+/// independently of the available area. Two computations with the same
+/// `CoherenceId` but different area sizes represent the same logical layout
+/// being re-rendered at a different terminal size.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct CoherenceId {
+    /// Hash fingerprint of constraints.
+    pub constraints_hash: u64,
+    /// Layout direction.
+    pub direction: Direction,
+}
+
+impl CoherenceId {
+    /// Create a coherence ID from layout parameters.
+    pub fn new(constraints: &[Constraint], direction: Direction) -> Self {
+        Self {
+            constraints_hash: LayoutCacheKey::hash_constraints(constraints),
+            direction,
+        }
+    }
+
+    /// Create a coherence ID from an existing cache key.
+    pub fn from_cache_key(key: &LayoutCacheKey) -> Self {
+        Self {
+            constraints_hash: key.constraints_hash,
+            direction: key.direction,
+        }
+    }
+}
+
+/// Stores previous layout allocations for temporal coherence.
+///
+/// When terminal size changes, the layout solver re-computes positions from
+/// scratch. Without coherence, rounding tie-breaks can cause widgets to
+/// "jump" between frames even when the total size change is small.
+///
+/// The `CoherenceCache` feeds previous allocations to
+/// [`round_layout_stable`](crate::round_layout_stable) so that tie-breaking
+/// favours keeping elements where they were.
+///
+/// # Usage
+///
+/// ```ignore
+/// use ftui_layout::{CoherenceCache, CoherenceId, round_layout_stable, Constraint, Direction};
+///
+/// let mut coherence = CoherenceCache::new(64);
+///
+/// let id = CoherenceId::new(&constraints, Direction::Horizontal);
+/// let prev = coherence.get(&id);
+/// let alloc = round_layout_stable(&targets, total, prev);
+/// coherence.store(id, alloc.clone());
+/// ```
+///
+/// # Eviction
+///
+/// Entries are evicted on a least-recently-stored basis when the cache
+/// reaches capacity. The cache does not grow unboundedly.
+#[derive(Debug)]
+pub struct CoherenceCache {
+    entries: HashMap<CoherenceId, CoherenceEntry>,
+    max_entries: usize,
+    /// Monotonic counter for LRU eviction.
+    tick: u64,
+}
+
+#[derive(Debug, Clone)]
+struct CoherenceEntry {
+    /// Previous allocation sizes.
+    allocation: Vec<u16>,
+    /// Tick when this entry was last stored.
+    last_stored: u64,
+}
+
+impl CoherenceCache {
+    /// Create a new coherence cache with the specified capacity.
+    pub fn new(max_entries: usize) -> Self {
+        Self {
+            entries: HashMap::with_capacity(max_entries.min(256)),
+            max_entries,
+            tick: 0,
+        }
+    }
+
+    /// Retrieve the previous allocation for a layout, if available.
+    ///
+    /// Returns `Some(allocation)` suitable for passing directly to
+    /// [`round_layout_stable`](crate::round_layout_stable).
+    #[inline]
+    pub fn get(&self, id: &CoherenceId) -> Option<Vec<u16>> {
+        self.entries.get(id).map(|e| e.allocation.clone())
+    }
+
+    /// Store a layout allocation for future coherence lookups.
+    ///
+    /// If the cache is at capacity, evicts the oldest entry.
+    pub fn store(&mut self, id: CoherenceId, allocation: Vec<u16>) {
+        self.tick = self.tick.wrapping_add(1);
+
+        if self.entries.len() >= self.max_entries && !self.entries.contains_key(&id) {
+            self.evict_oldest();
+        }
+
+        self.entries.insert(
+            id,
+            CoherenceEntry {
+                allocation,
+                last_stored: self.tick,
+            },
+        );
+    }
+
+    /// Clear all stored allocations.
+    #[inline]
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Number of entries in the cache.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Returns true if the cache is empty.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Compute displacement between a new allocation and the previously stored one.
+    ///
+    /// Returns `(sum_displacement, max_displacement)` in cells.
+    /// If no previous allocation exists for the ID, returns `(0, 0)`.
+    pub fn displacement(&self, id: &CoherenceId, new_alloc: &[u16]) -> (u64, u32) {
+        match self.entries.get(id) {
+            Some(entry) => {
+                let prev = &entry.allocation;
+                let len = prev.len().min(new_alloc.len());
+                let mut sum: u64 = 0;
+                let mut max: u32 = 0;
+                for i in 0..len {
+                    let d = (new_alloc[i] as i32 - prev[i] as i32).unsigned_abs();
+                    sum += u64::from(d);
+                    max = max.max(d);
+                }
+                // If lengths differ, count the extra elements as full displacement
+                for &v in &prev[len..] {
+                    sum += u64::from(v);
+                    max = max.max(u32::from(v));
+                }
+                for &v in &new_alloc[len..] {
+                    sum += u64::from(v);
+                    max = max.max(u32::from(v));
+                }
+                (sum, max)
+            }
+            None => (0, 0),
+        }
+    }
+
+    fn evict_oldest(&mut self) {
+        if let Some(key) = self
+            .entries
+            .iter()
+            .min_by_key(|(_, e)| e.last_stored)
+            .map(|(k, _)| *k)
+        {
+            self.entries.remove(&key);
+        }
+    }
+}
+
+impl Default for CoherenceCache {
+    fn default() -> Self {
+        Self::new(64)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -754,5 +938,233 @@ mod tests {
         let stats = cache.stats();
         assert_eq!(stats.misses, 1);
         assert_eq!(stats.hits, 5);
+    }
+
+    // -----------------------------------------------------------------------
+    // Coherence Cache Tests (bd-4kq0.4.2)
+    // -----------------------------------------------------------------------
+
+    fn make_coherence_id(n: u16) -> CoherenceId {
+        CoherenceId::new(
+            &[Constraint::Fixed(n), Constraint::Fill],
+            Direction::Horizontal,
+        )
+    }
+
+    #[test]
+    fn coherence_store_and_get() {
+        let mut cc = CoherenceCache::new(64);
+        let id = make_coherence_id(1);
+
+        assert!(cc.get(&id).is_none());
+
+        cc.store(id, vec![30, 50]);
+        assert_eq!(cc.get(&id), Some(vec![30, 50]));
+    }
+
+    #[test]
+    fn coherence_update_replaces_allocation() {
+        let mut cc = CoherenceCache::new(64);
+        let id = make_coherence_id(1);
+
+        cc.store(id, vec![30, 50]);
+        cc.store(id, vec![31, 49]);
+
+        assert_eq!(cc.get(&id), Some(vec![31, 49]));
+        assert_eq!(cc.len(), 1);
+    }
+
+    #[test]
+    fn coherence_different_ids_are_separate() {
+        let mut cc = CoherenceCache::new(64);
+        let id1 = make_coherence_id(1);
+        let id2 = make_coherence_id(2);
+
+        cc.store(id1, vec![40, 40]);
+        cc.store(id2, vec![30, 50]);
+
+        assert_eq!(cc.get(&id1), Some(vec![40, 40]));
+        assert_eq!(cc.get(&id2), Some(vec![30, 50]));
+    }
+
+    #[test]
+    fn coherence_eviction_at_capacity() {
+        let mut cc = CoherenceCache::new(2);
+
+        let id1 = make_coherence_id(1);
+        let id2 = make_coherence_id(2);
+        let id3 = make_coherence_id(3);
+
+        cc.store(id1, vec![10]);
+        cc.store(id2, vec![20]);
+        cc.store(id3, vec![30]);
+
+        assert_eq!(cc.len(), 2);
+        // id1 should be evicted (oldest)
+        assert!(cc.get(&id1).is_none());
+        assert_eq!(cc.get(&id2), Some(vec![20]));
+        assert_eq!(cc.get(&id3), Some(vec![30]));
+    }
+
+    #[test]
+    fn coherence_clear() {
+        let mut cc = CoherenceCache::new(64);
+        let id = make_coherence_id(1);
+
+        cc.store(id, vec![10, 20]);
+        assert_eq!(cc.len(), 1);
+
+        cc.clear();
+        assert!(cc.is_empty());
+        assert!(cc.get(&id).is_none());
+    }
+
+    #[test]
+    fn coherence_displacement_with_previous() {
+        let mut cc = CoherenceCache::new(64);
+        let id = make_coherence_id(1);
+
+        cc.store(id, vec![30, 50]);
+
+        // New allocation differs by 2 cells in each slot
+        let (sum, max) = cc.displacement(&id, &[32, 48]);
+        assert_eq!(sum, 4); // |32-30| + |48-50| = 2 + 2
+        assert_eq!(max, 2);
+    }
+
+    #[test]
+    fn coherence_displacement_without_previous() {
+        let cc = CoherenceCache::new(64);
+        let id = make_coherence_id(1);
+
+        let (sum, max) = cc.displacement(&id, &[30, 50]);
+        assert_eq!(sum, 0);
+        assert_eq!(max, 0);
+    }
+
+    #[test]
+    fn coherence_displacement_different_lengths() {
+        let mut cc = CoherenceCache::new(64);
+        let id = make_coherence_id(1);
+
+        cc.store(id, vec![30, 50]);
+
+        // New allocation has 3 elements (extra element counted as displacement)
+        let (sum, max) = cc.displacement(&id, &[30, 50, 10]);
+        assert_eq!(sum, 10);
+        assert_eq!(max, 10);
+    }
+
+    #[test]
+    fn coherence_from_cache_key() {
+        let key = make_key(80, 24);
+        let id = CoherenceId::from_cache_key(&key);
+
+        // Same constraints + direction should produce same ID regardless of area
+        let key2 = make_key(120, 40);
+        let id2 = CoherenceId::from_cache_key(&key2);
+
+        assert_eq!(id, id2);
+    }
+
+    // --- unit_cache_reuse ---
+
+    #[test]
+    fn unit_cache_reuse_unchanged_constraints_yield_identical_layout() {
+        use crate::round_layout_stable;
+
+        let mut cc = CoherenceCache::new(64);
+        let id = make_coherence_id(1);
+
+        // First layout at width 80
+        let targets = [26.67, 26.67, 26.66];
+        let total = 80;
+        let alloc1 = round_layout_stable(&targets, total, cc.get(&id));
+        cc.store(id, alloc1.clone());
+
+        // Same constraints, same width → should produce identical result
+        let alloc2 = round_layout_stable(&targets, total, cc.get(&id));
+        assert_eq!(alloc1, alloc2, "Same inputs should yield identical layout");
+    }
+
+    // --- e2e_resize_sweep ---
+
+    #[test]
+    fn e2e_resize_sweep_bounded_displacement() {
+        use crate::round_layout_stable;
+
+        let mut cc = CoherenceCache::new(64);
+        let id = make_coherence_id(1);
+
+        // Equal three-way split: targets are total/3 each
+        // Sweep terminal width from 60 to 120 in steps of 1
+        let mut max_displacement_ever: u32 = 0;
+        let mut total_displacement_sum: u64 = 0;
+        let steps = 61; // 60..=120
+
+        for width in 60u16..=120 {
+            let third = f64::from(width) / 3.0;
+            let targets = [third, third, third];
+
+            let prev = cc.get(&id);
+            let alloc = round_layout_stable(&targets, width, prev);
+
+            let (d_sum, d_max) = cc.displacement(&id, &alloc);
+            total_displacement_sum += d_sum;
+            max_displacement_ever = max_displacement_ever.max(d_max);
+
+            cc.store(id, alloc);
+        }
+
+        // Each 1-cell width change should cause at most 1 cell of displacement
+        // in each slot (ideal: only 1 slot changes by 1).
+        assert!(
+            max_displacement_ever <= 2,
+            "Max single-step displacement should be <=2 cells, got {}",
+            max_displacement_ever
+        );
+
+        // Average displacement per step should be ~1 (one extra cell redistributed)
+        let avg = total_displacement_sum as f64 / steps as f64;
+        assert!(
+            avg < 3.0,
+            "Average displacement per step should be <3 cells, got {:.2}",
+            avg
+        );
+    }
+
+    #[test]
+    fn e2e_resize_sweep_deterministic() {
+        use crate::round_layout_stable;
+
+        // Two identical sweeps should produce identical displacement logs
+        let sweep = |seed: u16| -> Vec<(u16, Vec<u16>, u64, u32)> {
+            let mut cc = CoherenceCache::new(64);
+            let id = CoherenceId::new(
+                &[Constraint::Percentage(30.0), Constraint::Fill],
+                Direction::Horizontal,
+            );
+
+            let mut log = Vec::new();
+            for width in (40 + seed)..(100 + seed) {
+                let targets = [f64::from(width) * 0.3, f64::from(width) * 0.7];
+                let prev = cc.get(&id);
+                let alloc = round_layout_stable(&targets, width, prev);
+                let (d_sum, d_max) = cc.displacement(&id, &alloc);
+                cc.store(id, alloc.clone());
+                log.push((width, alloc, d_sum, d_max));
+            }
+            log
+        };
+
+        let log1 = sweep(0);
+        let log2 = sweep(0);
+        assert_eq!(log1, log2, "Identical sweeps should produce identical logs");
+    }
+
+    #[test]
+    fn default_coherence_cache_capacity_is_64() {
+        let cc = CoherenceCache::default();
+        assert_eq!(cc.max_entries, 64);
     }
 }
