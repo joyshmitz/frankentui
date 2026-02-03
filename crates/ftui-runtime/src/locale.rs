@@ -274,11 +274,11 @@ mod tests {
             for locale in &locales {
                 guards.push(ctx.push_override(locale));
             }
-            prop_assert_eq!(ctx.current_locale(), *locales.last().unwrap());
+            prop_assert_eq!(ctx.current_locale(), locales.last().unwrap().as_str());
             guards.pop();
             if locales.len() >= 2 {
                 let prev = &locales[locales.len() - 2];
-                prop_assert_eq!(ctx.current_locale(), *prev);
+                prop_assert_eq!(ctx.current_locale(), prev.as_str());
             } else {
                 prop_assert_eq!(ctx.current_locale(), "en");
             }

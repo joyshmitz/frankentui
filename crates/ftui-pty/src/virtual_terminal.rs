@@ -43,6 +43,15 @@
 //! the pre-existing control flow. The quirk branches are constant-time boolean
 //! guards, with no extra allocations or buffering. Golden output checksums are
 //! emitted in E2E JSONL logs for reproducibility.
+//!
+//! # Performance Profile
+//!
+//! - Baseline: `QuirkSet::empty()` (default).
+//! - Profiles: `tmux_nested`, `gnu_screen`, `windows_console`.
+//! - Opportunity Matrix:
+//!   - Branch locality: keep quirk checks adjacent to affected escape handlers.
+//!   - Allocation: no new buffers; reuse the existing grid and scrollback.
+//!   - Diff cost: avoid extra passes over the grid in quirk branches.
 
 use std::collections::VecDeque;
 
