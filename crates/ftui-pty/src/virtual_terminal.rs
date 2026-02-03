@@ -93,6 +93,101 @@ enum ParseState {
     Osc,
 }
 
+/// Terminal quirks that can be simulated by the virtual terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalQuirk {
+    /// Nested tmux sessions can drop DEC save/restore in alt-screen mode.
+    TmuxNestedCursorSaveRestore,
+    /// GNU screen-style immediate wrap on last column writes.
+    ScreenImmediateWrap,
+    /// Windows console without alternate screen support.
+    WindowsNoAltScreen,
+}
+
+/// Set of terminal quirks to simulate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuirkSet {
+    tmux_nested_cursor: bool,
+    screen_immediate_wrap: bool,
+    windows_no_alt_screen: bool,
+}
+
+impl Default for QuirkSet {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl QuirkSet {
+    /// No quirks enabled.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            tmux_nested_cursor: false,
+            screen_immediate_wrap: false,
+            windows_no_alt_screen: false,
+        }
+    }
+
+    /// Simulate nested tmux cursor save/restore quirks in alt-screen.
+    #[must_use]
+    pub const fn tmux_nested() -> Self {
+        Self {
+            tmux_nested_cursor: true,
+            ..Self::empty()
+        }
+    }
+
+    /// Simulate GNU screen line-wrap behavior.
+    #[must_use]
+    pub const fn gnu_screen() -> Self {
+        Self {
+            screen_immediate_wrap: true,
+            ..Self::empty()
+        }
+    }
+
+    /// Simulate Windows console limitations (no alt-screen).
+    #[must_use]
+    pub const fn windows_console() -> Self {
+        Self {
+            windows_no_alt_screen: true,
+            ..Self::empty()
+        }
+    }
+
+    /// Enable or disable the tmux nested cursor quirk.
+    #[must_use]
+    pub const fn with_tmux_nested_cursor(mut self, enabled: bool) -> Self {
+        self.tmux_nested_cursor = enabled;
+        self
+    }
+
+    /// Enable or disable the immediate wrap quirk.
+    #[must_use]
+    pub const fn with_screen_immediate_wrap(mut self, enabled: bool) -> Self {
+        self.screen_immediate_wrap = enabled;
+        self
+    }
+
+    /// Enable or disable the Windows no-alt-screen quirk.
+    #[must_use]
+    pub const fn with_windows_no_alt_screen(mut self, enabled: bool) -> Self {
+        self.windows_no_alt_screen = enabled;
+        self
+    }
+
+    /// Check if a specific quirk is enabled.
+    #[must_use]
+    pub const fn has(self, quirk: TerminalQuirk) -> bool {
+        match quirk {
+            TerminalQuirk::TmuxNestedCursorSaveRestore => self.tmux_nested_cursor,
+            TerminalQuirk::ScreenImmediateWrap => self.screen_immediate_wrap,
+            TerminalQuirk::WindowsNoAltScreen => self.windows_no_alt_screen,
+        }
+    }
+}
+
 /// In-memory virtual terminal with cursor tracking and ANSI interpretation.
 ///
 /// # Example
@@ -132,6 +227,7 @@ pub struct VirtualTerminal {
     alternate_cursor: Option<(u16, u16)>,
     // Title
     title: String,
+    quirks: QuirkSet,
 }
 
 impl VirtualTerminal {
@@ -142,6 +238,16 @@ impl VirtualTerminal {
     /// Panics if width or height is 0.
     #[must_use]
     pub fn new(width: u16, height: u16) -> Self {
+        Self::with_quirks(width, height, QuirkSet::default())
+    }
+
+    /// Create a new virtual terminal with quirks enabled.
+    ///
+    /// # Panics
+    ///
+    /// Panics if width or height is 0.
+    #[must_use]
+    pub fn with_quirks(width: u16, height: u16, quirks: QuirkSet) -> Self {
         assert!(width > 0 && height > 0, "terminal dimensions must be > 0");
         let grid = vec![VCell::default(); usize::from(width) * usize::from(height)];
         Self {
@@ -165,6 +271,7 @@ impl VirtualTerminal {
             alternate_grid: None,
             alternate_cursor: None,
             title: String::new(),
+            quirks,
         }
     }
 
@@ -204,6 +311,17 @@ impl VirtualTerminal {
     #[must_use]
     pub fn title(&self) -> &str {
         &self.title
+    }
+
+    /// Active quirk set.
+    #[must_use]
+    pub const fn quirks(&self) -> QuirkSet {
+        self.quirks
+    }
+
+    /// Override the active quirk set.
+    pub fn set_quirks(&mut self, quirks: QuirkSet) {
+        self.quirks = quirks;
     }
 
     /// Number of lines in the scrollback buffer.
@@ -369,14 +487,18 @@ impl VirtualTerminal {
             }
             b'7' => {
                 // DEC save cursor
-                self.saved_cursor = Some((self.cursor_x, self.cursor_y));
+                if !(self.quirks.tmux_nested_cursor && self.alternate_screen) {
+                    self.saved_cursor = Some((self.cursor_x, self.cursor_y));
+                }
                 self.parse_state = ParseState::Ground;
             }
             b'8' => {
                 // DEC restore cursor
-                if let Some((x, y)) = self.saved_cursor {
-                    self.cursor_x = x.min(self.width.saturating_sub(1));
-                    self.cursor_y = y.min(self.height.saturating_sub(1));
+                if !(self.quirks.tmux_nested_cursor && self.alternate_screen) {
+                    if let Some((x, y)) = self.saved_cursor {
+                        self.cursor_x = x.min(self.width.saturating_sub(1));
+                        self.cursor_y = y.min(self.height.saturating_sub(1));
+                    }
                 }
                 self.parse_state = ParseState::Ground;
             }
@@ -660,6 +782,9 @@ impl VirtualTerminal {
             25 => self.cursor_visible = enable,
             1049 => {
                 // Alternate screen buffer
+                if self.quirks.windows_no_alt_screen {
+                    return;
+                }
                 if enable && !self.alternate_screen {
                     self.alternate_grid = Some(std::mem::replace(
                         &mut self.grid,
@@ -682,6 +807,9 @@ impl VirtualTerminal {
             }
             1047 => {
                 // Alternate screen (without save/restore cursor)
+                if self.quirks.windows_no_alt_screen {
+                    return;
+                }
                 if enable && !self.alternate_screen {
                     self.alternate_grid = Some(std::mem::replace(
                         &mut self.grid,
@@ -707,12 +835,19 @@ impl VirtualTerminal {
             self.cursor_x = 0;
             self.linefeed();
         }
+        let last_col = self.width.saturating_sub(1);
+        let immediate_wrap = self.quirks.screen_immediate_wrap && self.cursor_x == last_col;
         let idx = self.idx(self.cursor_x, self.cursor_y);
         self.grid[idx] = VCell {
             ch,
             style: self.current_style.clone(),
         };
-        self.cursor_x += 1;
+        if immediate_wrap {
+            self.cursor_x = 0;
+            self.linefeed();
+        } else {
+            self.cursor_x += 1;
+        }
     }
 
     fn linefeed(&mut self) {
