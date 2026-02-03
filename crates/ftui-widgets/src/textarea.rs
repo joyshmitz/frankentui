@@ -566,6 +566,85 @@ impl TextArea {
         digits + 2 // digit width + space + separator
     }
 
+    /// Count how many wrapped lines this text will occupy.
+    ///
+    /// This is a zero-allocation version of `wrap_line_slices` for layout calculations.
+    fn measure_wrap_count(line_text: &str, max_width: usize) -> usize {
+        if line_text.is_empty() {
+            return 1;
+        }
+
+        let mut count = 0;
+        let mut current_width = 0;
+        let mut has_content = false;
+
+        Self::run_wrapping_logic(line_text, max_width, |_, width, flush| {
+            if flush {
+                count += 1;
+                current_width = 0;
+                has_content = false;
+            } else {
+                current_width = width;
+                has_content = true;
+            }
+        });
+
+        // If there's pending content or if we flushed but started a new empty line (which shouldn't happen with this logic usually,
+        // but let's be safe), count the last line.
+        // Actually run_wrapping_logic only flushes when a line is full.
+        // We need to count the current line if it has content or if it's the only line.
+        if has_content || count == 0 {
+            count += 1;
+        }
+
+        count
+    }
+
+    /// Core wrapping logic that emits events for layout or slicing.
+    ///
+    /// The callback receives `(start_index, width, flush)`.
+    /// - `flush == true`: The current line is full/done. `width` is the width of the flushed line.
+    /// - `flush == false`: Update current line width.
+    fn run_wrapping_logic<F>(line_text: &str, max_width: usize, mut callback: F)
+    where
+        F: FnMut(usize, usize, bool),
+    {
+        let mut current_width = 0;
+        let mut byte_cursor = 0;
+
+        for segment in line_text.split_word_bounds() {
+            let seg_len = segment.len();
+            let seg_width: usize = segment.graphemes(true).map(display_width).sum();
+
+            if max_width > 0 && current_width + seg_width > max_width {
+                // Flush current
+                callback(byte_cursor, current_width, true);
+                current_width = 0;
+            }
+
+            if max_width > 0 && seg_width > max_width {
+                for grapheme in segment.graphemes(true) {
+                    let g_width = display_width(grapheme);
+                    let g_len = grapheme.len();
+
+                    if max_width > 0 && current_width + g_width > max_width && current_width > 0 {
+                        callback(byte_cursor, current_width, true);
+                        current_width = 0;
+                    }
+
+                    current_width += g_width;
+                    byte_cursor += g_len;
+                    callback(byte_cursor, current_width, false);
+                }
+                continue;
+            }
+
+            current_width += seg_width;
+            byte_cursor += seg_len;
+            callback(byte_cursor, current_width, false);
+        }
+    }
+
     fn wrap_line_slices(line_text: &str, max_width: usize) -> Vec<WrappedSlice> {
         if line_text.is_empty() {
             return vec![WrappedSlice {
@@ -591,6 +670,8 @@ impl TextArea {
                             start_col: &mut usize,
                             byte_cursor: usize,
                             col_cursor: usize| {
+            // Push even if empty if it's forced by logic (though usually check width > 0)
+            // But we match original logic:
             if text.is_empty() && *width == 0 {
                 return;
             }
@@ -846,7 +927,7 @@ impl Widget for TextArea {
                     .line(line_idx)
                     .unwrap_or(std::borrow::Cow::Borrowed(""));
                 let line_text = line_text.strip_suffix('\n').unwrap_or(&line_text);
-                cursor_virtual += Self::wrap_line_slices(line_text, text_area_w).len();
+                cursor_virtual += Self::measure_wrap_count(line_text, text_area_w);
             }
 
             let cursor_line_text = rope
@@ -879,6 +960,14 @@ impl Widget for TextArea {
                     .line(line_idx)
                     .unwrap_or(std::borrow::Cow::Borrowed(""));
                 let line_text = line_text.strip_suffix('\n').unwrap_or(&line_text);
+
+                // Fast path: check if this whole physical line is skipped
+                let wrap_count = Self::measure_wrap_count(line_text, text_area_w);
+                if virtual_index + wrap_count <= scroll_virtual {
+                    virtual_index += wrap_count;
+                    continue;
+                }
+
                 let line_start_byte = nav.to_byte_index(nav.from_line_grapheme(line_idx, 0));
                 let slices = Self::wrap_line_slices(line_text, text_area_w);
 

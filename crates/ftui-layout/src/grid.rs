@@ -190,12 +190,14 @@ impl Grid {
 
         // Calculate total gaps
         let total_row_gap = if num_rows > 1 {
-            self.row_gap.saturating_mul((num_rows - 1) as u16)
+            let gaps = (num_rows - 1) as u64;
+            (gaps * self.row_gap as u64).min(u16::MAX as u64) as u16
         } else {
             0
         };
         let total_col_gap = if num_cols > 1 {
-            self.col_gap.saturating_mul((num_cols - 1) as u16)
+            let gaps = (num_cols - 1) as u64;
+            (gaps * self.col_gap as u64).min(u16::MAX as u64) as u16
         } else {
             0
         };

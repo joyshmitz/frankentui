@@ -72,7 +72,13 @@ impl<'a> Table<'a> {
         let rows: Vec<Row> = rows.into_iter().collect();
         let widths: Vec<Constraint> = widths.into_iter().collect();
         let col_count = widths.len();
-        let intrinsic_col_widths = Self::compute_intrinsic_widths(&rows, None, col_count);
+
+        let intrinsic_col_widths = if Self::requires_measurement(&widths) {
+            Self::compute_intrinsic_widths(&rows, None, col_count)
+        } else {
+            Vec::new()
+        };
+
         Self {
             rows,
             widths,
@@ -89,9 +95,17 @@ impl<'a> Table<'a> {
     /// Set the header row.
     pub fn header(mut self, header: Row) -> Self {
         let col_count = self.widths.len();
-        if col_count > 0 {
-            self.intrinsic_col_widths =
-                Self::compute_intrinsic_widths(&self.rows, Some(&header), col_count);
+        if col_count > 0 && Self::requires_measurement(&self.widths) {
+            // Incremental update: merge header widths into existing row widths.
+            // This avoids re-scanning all rows (O(N) -> O(1)).
+            if self.intrinsic_col_widths.len() < col_count {
+                self.intrinsic_col_widths.resize(col_count, 0);
+            }
+
+            for (i, cell) in header.cells.iter().enumerate().take(col_count) {
+                let cell_width = cell.width().min(u16::MAX as usize) as u16;
+                self.intrinsic_col_widths[i] = self.intrinsic_col_widths[i].max(cell_width);
+            }
         }
         self.header = Some(header);
         self
@@ -129,6 +143,15 @@ impl<'a> Table<'a> {
     pub fn hit_id(mut self, id: HitId) -> Self {
         self.hit_id = Some(id);
         self
+    }
+
+    fn requires_measurement(constraints: &[Constraint]) -> bool {
+        constraints.iter().any(|c| {
+            matches!(
+                c,
+                Constraint::FitContent | Constraint::FitContentBounded { .. } | Constraint::FitMin
+            )
+        })
     }
 
     fn compute_intrinsic_widths(rows: &[Row], header: Option<&Row>, col_count: usize) -> Vec<u16> {
