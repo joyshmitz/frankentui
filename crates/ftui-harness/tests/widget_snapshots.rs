@@ -20,6 +20,7 @@ use ftui_widgets::padding::Padding;
 use ftui_widgets::panel::Panel;
 use ftui_widgets::paragraph::Paragraph;
 use ftui_widgets::scrollbar::{Scrollbar, ScrollbarOrientation, ScrollbarState};
+use ftui_widgets::modal::{BackdropConfig, Modal, ModalPosition, ModalSizeConstraints};
 use ftui_widgets::{StatefulWidget, Widget};
 
 // ============================================================================
@@ -281,4 +282,94 @@ fn snapshot_panel_title_truncates_with_ellipsis() {
     let mut frame = Frame::new(10, 3, &mut pool);
     panel.render(area, &mut frame);
     assert_snapshot!("panel_title_ellipsis", &frame.buffer);
+}
+
+// ============================================================================
+// Modal
+// ============================================================================
+
+#[test]
+fn snapshot_modal_center_80x24() {
+    let content = Paragraph::new(Text::raw("Modal Content"))
+        .block(Block::default().borders(Borders::ALL).title("Dialog"));
+    let modal = Modal::new(content).size(
+        ModalSizeConstraints::new()
+            .min_width(20)
+            .max_width(20)
+            .min_height(5)
+            .max_height(5),
+    );
+    let area = Rect::new(0, 0, 80, 24);
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    modal.render(area, &mut frame);
+    assert_snapshot!("modal_center_80x24", &frame.buffer);
+}
+
+#[test]
+fn snapshot_modal_offset_80x24() {
+    let content = Paragraph::new(Text::raw("Offset Modal"))
+        .block(Block::default().borders(Borders::ALL).title("Offset"));
+    let modal = Modal::new(content)
+        .size(
+            ModalSizeConstraints::new()
+                .min_width(16)
+                .max_width(16)
+                .min_height(4)
+                .max_height(4),
+        )
+        .position(ModalPosition::CenterOffset { x: -10, y: -3 });
+    let area = Rect::new(0, 0, 80, 24);
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    modal.render(area, &mut frame);
+    assert_snapshot!("modal_offset_80x24", &frame.buffer);
+}
+
+#[test]
+fn snapshot_modal_constrained_120x40() {
+    let content = Paragraph::new(Text::raw("Constrained\nWith max size"))
+        .block(Block::default().borders(Borders::ALL).title("Constrained"));
+    let modal = Modal::new(content).size(
+        ModalSizeConstraints::new()
+            .min_width(10)
+            .max_width(30)
+            .min_height(3)
+            .max_height(8),
+    );
+    let area = Rect::new(0, 0, 120, 40);
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(120, 40, &mut pool);
+    modal.render(area, &mut frame);
+    assert_snapshot!("modal_constrained_120x40", &frame.buffer);
+}
+
+#[test]
+fn snapshot_modal_backdrop_opacity() {
+    // Fill background with pattern to show backdrop effect
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(40, 12, &mut pool);
+    for y in 0..12u16 {
+        for x in 0..40u16 {
+            frame.buffer.set(x, y, Cell::from_char(if (x + y) % 2 == 0 { '#' } else { '.' }));
+        }
+    }
+
+    let content = Paragraph::new(Text::raw("Content"))
+        .block(Block::default().borders(Borders::ALL));
+    let modal = Modal::new(content)
+        .size(
+            ModalSizeConstraints::new()
+                .min_width(12)
+                .max_width(12)
+                .min_height(4)
+                .max_height(4),
+        )
+        .backdrop(BackdropConfig::new(
+            ftui_render::cell::PackedRgba::rgb(0, 0, 0),
+            0.8,
+        ));
+    let area = Rect::new(0, 0, 40, 12);
+    modal.render(area, &mut frame);
+    assert_snapshot!("modal_backdrop_opacity", &frame.buffer);
 }

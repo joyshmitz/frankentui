@@ -45,13 +45,13 @@ fn lerp_color(a: PackedRgba, b: PackedRgba, t: f64) -> PackedRgba {
 /// Cold → Hot: Navy → Blue → Teal → Green → Gold → Orange → Red → Hot Pink.
 pub fn heatmap_gradient(value: f64) -> PackedRgba {
     const STOPS: [(f64, PackedRgba); 8] = [
-        (0.000, PackedRgba::rgb(30, 30, 80)),   // Navy
-        (0.143, PackedRgba::rgb(50, 50, 180)),  // Blue
-        (0.286, PackedRgba::rgb(50, 150, 150)), // Teal
-        (0.429, PackedRgba::rgb(80, 180, 80)),  // Green
-        (0.571, PackedRgba::rgb(220, 180, 50)), // Gold
-        (0.714, PackedRgba::rgb(255, 140, 50)), // Orange
-        (0.857, PackedRgba::rgb(255, 80, 80)),  // Red
+        (0.000, PackedRgba::rgb(30, 30, 80)),    // Navy
+        (0.143, PackedRgba::rgb(50, 50, 180)),   // Blue
+        (0.286, PackedRgba::rgb(50, 150, 150)),  // Teal
+        (0.429, PackedRgba::rgb(80, 180, 80)),   // Green
+        (0.571, PackedRgba::rgb(220, 180, 50)),  // Gold
+        (0.714, PackedRgba::rgb(255, 140, 50)),  // Orange
+        (0.857, PackedRgba::rgb(255, 80, 80)),   // Red
         (1.000, PackedRgba::rgb(255, 100, 180)), // Hot Pink
     ];
 
@@ -60,7 +60,11 @@ pub fn heatmap_gradient(value: f64) -> PackedRgba {
         let (t0, c0) = window[0];
         let (t1, c1) = window[1];
         if clamped <= t1 {
-            let t = if t1 > t0 { (clamped - t0) / (t1 - t0) } else { 0.0 };
+            let t = if t1 > t0 {
+                (clamped - t0) / (t1 - t0)
+            } else {
+                0.0
+            };
             return lerp_color(c0, c1, t);
         }
     }

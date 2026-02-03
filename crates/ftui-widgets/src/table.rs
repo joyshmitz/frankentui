@@ -1,4 +1,5 @@
 use crate::block::Block;
+use crate::stateful::{StateKey, Stateful};
 use crate::{MeasurableWidget, SizeConstraints, StatefulWidget, Widget, set_style_area};
 use ftui_core::geometry::{Rect, Size};
 use ftui_layout::{Constraint, Flex};
@@ -133,6 +134,9 @@ pub struct TableState {
     pub selected: Option<usize>,
     /// Scroll offset (first visible row index).
     pub offset: usize,
+    /// Optional persistence ID for state saving/restoration.
+    /// When set, this state can be persisted via the [`Stateful`] trait.
+    persistence_id: Option<String>,
 }
 
 impl TableState {
@@ -142,6 +146,65 @@ impl TableState {
         if index.is_none() {
             self.offset = 0;
         }
+    }
+
+    /// Create a new TableState with a persistence ID for state saving.
+    #[must_use]
+    pub fn with_persistence_id(mut self, id: impl Into<String>) -> Self {
+        self.persistence_id = Some(id.into());
+        self
+    }
+
+    /// Get the persistence ID, if set.
+    #[must_use]
+    pub fn persistence_id(&self) -> Option<&str> {
+        self.persistence_id.as_deref()
+    }
+}
+
+// ============================================================================
+// Stateful Persistence Implementation
+// ============================================================================
+
+/// Persistable state for a [`TableState`].
+///
+/// This struct contains only the fields that should be persisted across
+/// sessions. Derived/cached values are not included.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[cfg_attr(
+    feature = "state-persistence",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+pub struct TablePersistState {
+    /// Selected row index.
+    pub selected: Option<usize>,
+    /// Scroll offset (first visible row).
+    pub offset: usize,
+}
+
+impl Stateful for TableState {
+    type State = TablePersistState;
+
+    fn state_key(&self) -> StateKey {
+        StateKey::new(
+            "Table",
+            self.persistence_id
+                .as_deref()
+                .unwrap_or("default"),
+        )
+    }
+
+    fn save_state(&self) -> TablePersistState {
+        TablePersistState {
+            selected: self.selected,
+            offset: self.offset,
+        }
+    }
+
+    fn restore_state(&mut self, state: TablePersistState) {
+        // Restore values directly; clamping to valid ranges happens during render
+        self.selected = state.selected;
+        self.offset = state.offset;
     }
 }
 

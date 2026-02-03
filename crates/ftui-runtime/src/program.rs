@@ -766,7 +766,7 @@ impl<M: Model, W: Write + Send> Program<M, W> {
                     let start = Instant::now();
                     let cmd = self.model.update(msg);
                     tracing::Span::current().record("duration_us", start.elapsed().as_micros() as u64);
-                    tracing::Span::current().record("cmd_type", cmd.type_name());
+                    tracing::Span::current().record("cmd_type", format!("{:?}", std::mem::discriminant(&cmd)));
                     cmd
                 };
                 self.mark_dirty();
@@ -900,7 +900,7 @@ impl<M: Model, W: Write + Send> Program<M, W> {
             let start = Instant::now();
             let cmd = self.model.update(msg);
             tracing::Span::current().record("duration_us", start.elapsed().as_micros() as u64);
-            tracing::Span::current().record("cmd_type", cmd.type_name());
+            tracing::Span::current().record("cmd_type", format!("{:?}", std::mem::discriminant(&cmd)));
             cmd
         };
         self.mark_dirty();
@@ -944,7 +944,7 @@ impl<M: Model, W: Write + Send> Program<M, W> {
                 let start = Instant::now();
                 let cmd = self.model.update(msg);
                 tracing::Span::current().record("duration_us", start.elapsed().as_micros() as u64);
-                tracing::Span::current().record("cmd_type", cmd.type_name());
+                tracing::Span::current().record("cmd_type", format!("{:?}", std::mem::discriminant(&cmd)));
                 cmd
             };
             self.mark_dirty();
@@ -970,7 +970,7 @@ impl<M: Model, W: Write + Send> Program<M, W> {
                 let start = Instant::now();
                 let cmd = self.model.update(msg);
                 tracing::Span::current().record("duration_us", start.elapsed().as_micros() as u64);
-                tracing::Span::current().record("cmd_type", cmd.type_name());
+                tracing::Span::current().record("cmd_type", format!("{:?}", std::mem::discriminant(&cmd)));
                 cmd
             };
             self.mark_dirty();

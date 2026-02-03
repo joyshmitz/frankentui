@@ -21,8 +21,8 @@ use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use ftui_core::geometry::Rect;
 use ftui_extras::canvas::{CanvasRef, Mode, Painter};
 use ftui_extras::text_effects::{
-    AsciiArtStyle, AsciiArtText, ColorGradient, Direction, Easing, Reflection, StyledText,
-    TextEffect, TransitionState,
+    AsciiArtStyle, AsciiArtText, ColorGradient, Direction, Easing, Reflection, StyledMultiLine,
+    StyledText, TextEffect, TransitionState,
 };
 use ftui_extras::visual_fx::{
     Backdrop, FxQuality, MetaballsFx, PlasmaFx, PlasmaPalette, ThemeInputs,

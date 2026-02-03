@@ -251,10 +251,7 @@ pub fn render_help_overlay(
     let desc_style = theme::body();
 
     // Section header styling
-    let section_style = Style::new()
-        .bold()
-        .underline()
-        .fg(theme::fg::SECONDARY);
+    let section_style = Style::new().bold().underline().fg(theme::fg::SECONDARY);
 
     // Calculate layout: split inner area for sections
     let content_y = inner.y;

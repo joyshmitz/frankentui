@@ -11,9 +11,11 @@
 use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers};
 use ftui_core::geometry::Rect;
 use ftui_extras::canvas::{Canvas, Mode, Painter};
-use ftui_extras::charts::{BarChart, BarDirection, BarGroup, LineChart, Series, Sparkline};
+use ftui_extras::charts::{
+    BarChart, BarDirection, BarGroup, LineChart, Series, Sparkline, heatmap_gradient,
+};
 use ftui_layout::{Constraint, Flex};
-use ftui_render::cell::PackedRgba;
+use ftui_render::cell::{Cell, PackedRgba};
 use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
 use ftui_style::Style;
@@ -290,7 +292,7 @@ impl DataViz {
         let block = Block::new()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .title("Canvas (Braille)")
+            .title("Canvas + Heatmap")
             .title_alignment(Alignment::Center)
             .style(border_style);
 
@@ -301,7 +303,16 @@ impl DataViz {
             return;
         }
 
-        let mut painter = Painter::for_area(inner, Mode::Braille);
+        let (canvas_area, heatmap_area) = if inner.height >= 8 {
+            let rows = Flex::vertical()
+                .constraints([Constraint::Percentage(62.0), Constraint::Percentage(38.0)])
+                .split(inner);
+            (rows[0], Some(rows[1]))
+        } else {
+            (inner, None)
+        };
+
+        let mut painter = Painter::for_area(canvas_area, Mode::Braille);
         let (pw, ph) = painter.size();
 
         // Draw a Lissajous curve that evolves with tick count
@@ -330,7 +341,49 @@ impl DataViz {
 
         Canvas::from_painter(&painter)
             .style(Style::new().fg(theme::fg::PRIMARY))
-            .render(inner, frame);
+            .render(canvas_area, frame);
+
+        if let Some(area) = heatmap_area {
+            self.render_heatmap(frame, area);
+        }
+    }
+
+    fn render_heatmap(&self, frame: &mut Frame, area: Rect) {
+        if area.is_empty() || area.width < 4 || area.height < 3 {
+            return;
+        }
+
+        let rows = Flex::vertical()
+            .constraints([Constraint::Fixed(1), Constraint::Min(1)])
+            .split(area);
+
+        if !rows[0].is_empty() {
+            Paragraph::new("Heatmap")
+                .style(Style::new().fg(theme::fg::SECONDARY))
+                .render(rows[0], frame);
+        }
+
+        let grid = rows[1];
+        let w = grid.width.max(1) as f64;
+        let h = grid.height.max(1) as f64;
+        let phase = self.tick_count as f64 * 0.05;
+
+        for dy in 0..grid.height {
+            let ny = dy as f64 / (h - 1.0).max(1.0);
+            for dx in 0..grid.width {
+                let nx = dx as f64 / (w - 1.0).max(1.0);
+                let wave_x = (nx * std::f64::consts::TAU * 1.2 + phase).sin() * 0.5 + 0.5;
+                let wave_y = (ny * std::f64::consts::TAU * 0.9 - phase).cos() * 0.5 + 0.5;
+                let value = (0.6 * wave_x + 0.4 * wave_y).clamp(0.0, 1.0);
+
+                let color = heatmap_gradient(value);
+                let mut cell = Cell::from_char(' ');
+                cell.bg = color;
+                if let Some(slot) = frame.buffer.get_mut(grid.x + dx, grid.y + dy) {
+                    *slot = cell;
+                }
+            }
+        }
     }
 }
 

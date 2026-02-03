@@ -18,7 +18,7 @@ use ftui_core::event::{
 use ftui_core::geometry::Rect;
 use ftui_core::hover_stabilizer::{HoverStabilizer, HoverStabilizerConfig};
 use ftui_layout::{Constraint, Flex};
-use ftui_render::cell::{Cell, CellAttrs, StyleFlags};
+use ftui_render::cell::{Cell as RenderCell, CellAttrs, StyleFlags};
 use ftui_render::frame::{Frame, HitId, HitRegion};
 use ftui_runtime::Cmd;
 use ftui_style::Style;
@@ -353,11 +353,10 @@ impl MousePlayground {
             return;
         }
 
+        self.last_grid_area.set(area);
+
         let cell_width = area.width / GRID_COLS as u16;
         let cell_height = area.height / GRID_ROWS as u16;
-
-        // Collect rects for hit testing (will be stored after render)
-        let mut new_rects = Vec::with_capacity(self.targets.len());
 
         for (i, target) in self.targets.iter().enumerate() {
             let col = i % GRID_COLS;
@@ -368,7 +367,6 @@ impl MousePlayground {
 
             // Slightly smaller than cell for visual separation
             let target_rect = Rect::new(x + 1, y, cell_width.saturating_sub(2), cell_height);
-            new_rects.push((target.id, target_rect));
 
             // Style based on hover/click state
             let style = if target.hovered {
@@ -414,16 +412,10 @@ impl MousePlayground {
             }
 
             // Register hit region
-            frame.register_hit(
-                target_rect,
-                HitId::new(target.id as u32),
-                HitRegion::Content,
-                0,
-            );
+            let hit_id = u32::try_from(target.id).unwrap_or(u32::MAX);
+            frame.register_hit(target_rect, HitId::new(hit_id), HitRegion::Content, 0);
         }
 
-        // Store rects for hit testing (via interior mutability would be cleaner,
-        // but for demo we'll update in tick or use a different approach)
         // Note: In real code, use frame's hit_test capability
     }
 
@@ -483,14 +475,14 @@ impl MousePlayground {
         if let Some((x, y)) = self.last_mouse_pos {
             if x < area.x + area.width && y < area.y + area.height {
                 // Draw crosshair at mouse position
-                let horiz_cell = Cell::from_char('-')
-                    .with_fg(theme::accent::PRIMARY)
+                let horiz_cell = RenderCell::from_char('-')
+                    .with_fg(theme::accent::PRIMARY.into())
                     .with_attrs(CellAttrs::new(StyleFlags::DIM, 0));
-                let vert_cell = Cell::from_char('|')
-                    .with_fg(theme::accent::PRIMARY)
+                let vert_cell = RenderCell::from_char('|')
+                    .with_fg(theme::accent::PRIMARY.into())
                     .with_attrs(CellAttrs::new(StyleFlags::DIM, 0));
-                let center_cell = Cell::from_char('+')
-                    .with_fg(theme::accent::PRIMARY)
+                let center_cell = RenderCell::from_char('+')
+                    .with_fg(theme::accent::PRIMARY.into())
                     .with_attrs(CellAttrs::new(StyleFlags::BOLD, 0));
 
                 // Horizontal line (within bounds)

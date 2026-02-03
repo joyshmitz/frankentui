@@ -222,27 +222,6 @@ impl TerminalProfile {
         }
     }
 
-    /// Parse a profile from a string name.
-    #[must_use]
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "modern" => Some(Self::Modern),
-            "xterm-256color" | "xterm256color" | "xterm-256" => Some(Self::Xterm256Color),
-            "xterm" => Some(Self::Xterm),
-            "vt100" => Some(Self::Vt100),
-            "dumb" => Some(Self::Dumb),
-            "screen" | "screen-256color" => Some(Self::Screen),
-            "tmux" | "tmux-256color" => Some(Self::Tmux),
-            "zellij" => Some(Self::Zellij),
-            "windows-console" | "windows" | "conhost" => Some(Self::WindowsConsole),
-            "kitty" | "xterm-kitty" => Some(Self::Kitty),
-            "linux" | "linux-console" => Some(Self::LinuxConsole),
-            "custom" => Some(Self::Custom),
-            "detected" | "auto" => Some(Self::Detected),
-            _ => None,
-        }
-    }
-
     /// Get all known profile identifiers (excluding Custom and Detected).
     #[must_use]
     pub const fn all_predefined() -> &'static [Self] {
@@ -259,6 +238,29 @@ impl TerminalProfile {
             Self::Kitty,
             Self::LinuxConsole,
         ]
+    }
+}
+
+impl std::str::FromStr for TerminalProfile {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "modern" => Ok(Self::Modern),
+            "xterm-256color" | "xterm256color" | "xterm-256" => Ok(Self::Xterm256Color),
+            "xterm" => Ok(Self::Xterm),
+            "vt100" => Ok(Self::Vt100),
+            "dumb" => Ok(Self::Dumb),
+            "screen" | "screen-256color" => Ok(Self::Screen),
+            "tmux" | "tmux-256color" => Ok(Self::Tmux),
+            "zellij" => Ok(Self::Zellij),
+            "windows-console" | "windows" | "conhost" => Ok(Self::WindowsConsole),
+            "kitty" | "xterm-kitty" => Ok(Self::Kitty),
+            "linux" | "linux-console" => Ok(Self::LinuxConsole),
+            "custom" => Ok(Self::Custom),
+            "detected" | "auto" => Ok(Self::Detected),
+            _ => Err(()),
+        }
     }
 }
 
