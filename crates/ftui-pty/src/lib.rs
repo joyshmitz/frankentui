@@ -9,6 +9,17 @@
 //! # Safety / policy
 //! - This crate forbids unsafe code (`#![forbid(unsafe_code)]`).
 //! - We use `portable-pty` as a safe, cross-platform abstraction.
+//!
+//! # Modules
+//!
+//! - [`pty_process`] - Shell process management with `spawn()`, `kill()`, `is_alive()`.
+//! - [`virtual_terminal`] - In-memory terminal state machine for testing.
+
+/// PTY process management for shell spawning and lifecycle control.
+pub mod pty_process;
+
+/// In-memory virtual terminal state machine for testing.
+pub mod virtual_terminal;
 
 use std::fmt;
 use std::io::{self, Read, Write};

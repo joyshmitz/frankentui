@@ -879,3 +879,26 @@ fn main() -> std::io::Result<()> {
     let mut program = Program::with_config(AgentHarness::new(view_mode, log_keys), config)?;
     program.run()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn theme_cycle_advances_and_restores() {
+        let original = theme::current_theme();
+        let next = theme::cycle_theme();
+        assert_ne!(original, next);
+        theme::set_theme(original);
+        assert_eq!(theme::current_theme(), original);
+    }
+
+    #[test]
+    fn status_line_style_has_fg_and_bg() {
+        let style = Style::new()
+            .bg(theme::alpha::OVERLAY)
+            .fg(theme::fg::SECONDARY);
+        assert!(style.bg.is_some());
+        assert!(style.fg.is_some());
+    }
+}

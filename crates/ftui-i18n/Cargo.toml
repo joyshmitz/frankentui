@@ -1,0 +1,9 @@
+[package]
+name = "ftui-i18n"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
