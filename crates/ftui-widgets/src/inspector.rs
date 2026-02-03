@@ -938,4 +938,299 @@ mod tests {
         let overlay = InspectorOverlay::new(&state);
         assert!(!overlay.is_essential());
     }
+
+    // =========================================================================
+    // Edge Case Tests (bd-17h9.6)
+    // =========================================================================
+
+    #[test]
+    fn edge_case_zero_area_widget() {
+        // Zero-sized areas should not panic
+        let info = WidgetInfo::new("ZeroArea", Rect::new(0, 0, 0, 0));
+        assert_eq!(info.area.width, 0);
+        assert_eq!(info.area.height, 0);
+        assert!(info.area.is_empty());
+    }
+
+    #[test]
+    fn edge_case_max_depth_widget() {
+        // Maximum depth should work without overflow
+        let info = WidgetInfo::new("Deep", Rect::new(0, 0, 10, 10)).with_depth(u8::MAX);
+        assert_eq!(info.depth, u8::MAX);
+
+        // Bound color should still cycle correctly
+        let style = InspectorStyle::default();
+        let _color = style.bound_color(u8::MAX); // Should not panic
+    }
+
+    #[test]
+    fn edge_case_empty_widget_registry() {
+        let mut state = InspectorState::new();
+        assert!(state.widgets.is_empty());
+
+        // Clearing empty registry should not panic
+        state.clear_widgets();
+        assert!(state.widgets.is_empty());
+    }
+
+    #[test]
+    fn edge_case_selection_without_widgets() {
+        let mut state = InspectorState::new();
+
+        // Selecting when no widgets are registered
+        state.select(Some(HitId::new(42)));
+        assert_eq!(state.selected, Some(HitId::new(42)));
+
+        // Clearing selection
+        state.clear_selection();
+        assert!(state.selected.is_none());
+    }
+
+    #[test]
+    fn edge_case_hover_boundary_positions() {
+        let mut state = InspectorState::new();
+
+        // Maximum u16 coordinates
+        state.set_hover(Some((u16::MAX, u16::MAX)));
+        assert_eq!(state.hover_pos, Some((u16::MAX, u16::MAX)));
+
+        // Zero coordinates
+        state.set_hover(Some((0, 0)));
+        assert_eq!(state.hover_pos, Some((0, 0)));
+    }
+
+    #[test]
+    fn edge_case_deeply_nested_widgets() {
+        // Build nested structure from inside out
+        let mut deepest = WidgetInfo::new("L10", Rect::new(10, 10, 80, 80)).with_depth(10);
+
+        for i in (1..10).rev() {
+            let mut parent =
+                WidgetInfo::new(format!("L{i}"), Rect::new(i as u16, i as u16, 90, 90))
+                    .with_depth(i as u8);
+            parent.add_child(deepest);
+            deepest = parent;
+        }
+
+        let mut root = WidgetInfo::new("Root", Rect::new(0, 0, 100, 100)).with_depth(0);
+        root.add_child(deepest);
+
+        // Verify nesting: root -> L1 -> L2 -> ... -> L10
+        assert_eq!(root.children.len(), 1);
+        assert_eq!(root.children[0].depth, 1);
+        assert_eq!(root.children[0].children[0].depth, 2);
+    }
+
+    #[test]
+    fn edge_case_rapid_mode_cycling() {
+        let mut state = InspectorState::new();
+        assert_eq!(state.mode, InspectorMode::Off);
+
+        // Cycle 1000 times and verify we end at correct mode
+        for _ in 0..1000 {
+            state.mode = state.mode.cycle();
+        }
+        // 1000 % 4 = 0, so should be back at Off
+        assert_eq!(state.mode, InspectorMode::Off);
+    }
+
+    #[test]
+    fn edge_case_many_hit_regions() {
+        let mut info = WidgetInfo::new("ManyHits", Rect::new(0, 0, 100, 1000));
+
+        // Add 1000 hit regions
+        for i in 0..1000 {
+            info.add_hit_region(
+                Rect::new(0, i as u16, 100, 1),
+                HitRegion::Content,
+                i as HitData,
+            );
+        }
+
+        assert_eq!(info.hit_regions.len(), 1000);
+        assert_eq!(info.hit_regions[0].2, 0);
+        assert_eq!(info.hit_regions[999].2, 999);
+    }
+
+    #[test]
+    fn edge_case_mode_show_flags_consistency() {
+        // Verify show flags are consistent with mode
+        for mode in [
+            InspectorMode::Off,
+            InspectorMode::HitRegions,
+            InspectorMode::WidgetBounds,
+            InspectorMode::Full,
+        ] {
+            match mode {
+                InspectorMode::Off => {
+                    assert!(!mode.show_hit_regions());
+                    assert!(!mode.show_widget_bounds());
+                }
+                InspectorMode::HitRegions => {
+                    assert!(mode.show_hit_regions());
+                    assert!(!mode.show_widget_bounds());
+                }
+                InspectorMode::WidgetBounds => {
+                    assert!(!mode.show_hit_regions());
+                    assert!(mode.show_widget_bounds());
+                }
+                InspectorMode::Full => {
+                    assert!(mode.show_hit_regions());
+                    assert!(mode.show_widget_bounds());
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // Property-Based Tests (bd-17h9.6)
+    // =========================================================================
+
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            /// Mode cycling is periodic with period 4.
+            /// Cycling 4 times from any mode returns to the original mode.
+            #[test]
+            fn mode_cycle_is_periodic(start_cycle in 0u8..4) {
+                let start_mode = match start_cycle {
+                    0 => InspectorMode::Off,
+                    1 => InspectorMode::HitRegions,
+                    2 => InspectorMode::WidgetBounds,
+                    _ => InspectorMode::Full,
+                };
+
+                let mut mode = start_mode;
+                for _ in 0..4 {
+                    mode = mode.cycle();
+                }
+                prop_assert_eq!(mode, start_mode);
+            }
+
+            /// Bound color cycling is periodic with period 6.
+            #[test]
+            fn bound_color_cycle_is_periodic(depth in 0u8..200) {
+                let style = InspectorStyle::default();
+                let color_a = style.bound_color(depth);
+                let color_b = style.bound_color(depth.wrapping_add(6));
+                prop_assert_eq!(color_a, color_b);
+            }
+
+            /// is_active correctly reflects mode != Off.
+            #[test]
+            fn is_active_reflects_mode(mode_idx in 0u8..4) {
+                let mode = match mode_idx {
+                    0 => InspectorMode::Off,
+                    1 => InspectorMode::HitRegions,
+                    2 => InspectorMode::WidgetBounds,
+                    _ => InspectorMode::Full,
+                };
+                let expected_active = mode_idx != 0;
+                prop_assert_eq!(mode.is_active(), expected_active);
+            }
+
+            /// Double toggle is identity for boolean flags.
+            #[test]
+            fn double_toggle_is_identity(_seed in 0u32..1000) {
+                let mut state = InspectorState::new();
+                let initial_hits = state.show_hits;
+                let initial_bounds = state.show_bounds;
+                let initial_names = state.show_names;
+                let initial_times = state.show_times;
+                let initial_panel = state.show_detail_panel;
+
+                // Toggle twice
+                state.toggle_hits();
+                state.toggle_hits();
+                state.toggle_bounds();
+                state.toggle_bounds();
+                state.toggle_names();
+                state.toggle_names();
+                state.toggle_times();
+                state.toggle_times();
+                state.toggle_detail_panel();
+                state.toggle_detail_panel();
+
+                prop_assert_eq!(state.show_hits, initial_hits);
+                prop_assert_eq!(state.show_bounds, initial_bounds);
+                prop_assert_eq!(state.show_names, initial_names);
+                prop_assert_eq!(state.show_times, initial_times);
+                prop_assert_eq!(state.show_detail_panel, initial_panel);
+            }
+
+            /// Widget info preserves area dimensions.
+            #[test]
+            fn widget_info_preserves_area(
+                x in 0u16..1000,
+                y in 0u16..1000,
+                w in 1u16..500,
+                h in 1u16..500,
+            ) {
+                let area = Rect::new(x, y, w, h);
+                let info = WidgetInfo::new("Test", area);
+                prop_assert_eq!(info.area, area);
+            }
+
+            /// Widget depth is preserved through builder pattern.
+            #[test]
+            fn widget_depth_preserved(depth in 0u8..255) {
+                let info = WidgetInfo::new("Test", Rect::new(0, 0, 10, 10))
+                    .with_depth(depth);
+                prop_assert_eq!(info.depth, depth);
+            }
+
+            /// Hit ID is preserved through builder pattern.
+            #[test]
+            fn widget_hit_id_preserved(id in 0u32..u32::MAX) {
+                let hit_id = HitId::new(id);
+                let info = WidgetInfo::new("Test", Rect::new(0, 0, 10, 10))
+                    .with_hit_id(hit_id);
+                prop_assert_eq!(info.hit_id, Some(hit_id));
+            }
+
+            /// Adding children increases child count.
+            #[test]
+            fn add_child_increases_count(child_count in 0usize..50) {
+                let mut parent = WidgetInfo::new("Parent", Rect::new(0, 0, 100, 100));
+                for i in 0..child_count {
+                    parent.add_child(WidgetInfo::new(
+                        format!("Child{i}"),
+                        Rect::new(0, i as u16, 10, 1),
+                    ));
+                }
+                prop_assert_eq!(parent.children.len(), child_count);
+            }
+
+            /// Hit regions can be added without bounds.
+            #[test]
+            fn add_hit_regions_unbounded(region_count in 0usize..100) {
+                let mut info = WidgetInfo::new("Test", Rect::new(0, 0, 100, 100));
+                for i in 0..region_count {
+                    info.add_hit_region(
+                        Rect::new(0, i as u16, 10, 1),
+                        HitRegion::Content,
+                        i as HitData,
+                    );
+                }
+                prop_assert_eq!(info.hit_regions.len(), region_count);
+            }
+
+            /// set_mode correctly maps index to mode.
+            #[test]
+            fn set_mode_maps_correctly(mode_idx in 0u8..10) {
+                let mut state = InspectorState::new();
+                state.set_mode(mode_idx);
+                let expected = match mode_idx {
+                    0 => InspectorMode::Off,
+                    1 => InspectorMode::HitRegions,
+                    2 => InspectorMode::WidgetBounds,
+                    3 => InspectorMode::Full,
+                    _ => InspectorMode::Full, // Saturates at max
+                };
+                prop_assert_eq!(state.mode, expected);
+            }
+        }
+    }
 }

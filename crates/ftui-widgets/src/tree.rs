@@ -18,10 +18,13 @@
 //! assert_eq!(tree.root().children().len(), 2);
 //! ```
 
+use crate::stateful::Stateful;
+use crate::undo_support::{TreeUndoExt, UndoSupport, UndoWidgetId};
 use crate::{Widget, draw_text_span};
 use ftui_core::geometry::Rect;
 use ftui_render::frame::Frame;
 use ftui_style::Style;
+use std::any::Any;
 use std::collections::HashSet;
 
 /// Guide character styles for tree rendering.
@@ -93,8 +96,10 @@ impl TreeGuides {
 #[derive(Debug, Clone)]
 pub struct TreeNode {
     label: String,
-    children: Vec<TreeNode>,
-    expanded: bool,
+    /// Child nodes (crate-visible for undo support).
+    pub(crate) children: Vec<TreeNode>,
+    /// Whether this node is expanded (crate-visible for undo support).
+    pub(crate) expanded: bool,
 }
 
 impl TreeNode {
@@ -233,6 +238,8 @@ struct FlatNode {
 /// Tree widget for rendering hierarchical data.
 #[derive(Debug, Clone)]
 pub struct Tree {
+    /// Unique ID for undo tracking.
+    undo_id: UndoWidgetId,
     root: TreeNode,
     /// Whether to show the root node.
     show_root: bool,
@@ -253,6 +260,7 @@ impl Tree {
     #[must_use]
     pub fn new(root: TreeNode) -> Self {
         Self {
+            undo_id: UndoWidgetId::new(),
             root,
             show_root: true,
             guides: TreeGuides::default(),
@@ -438,6 +446,75 @@ impl crate::stateful::Stateful for Tree {
 
     fn restore_state(&mut self, state: TreePersistState) {
         self.root.apply_expanded("", &state.expanded_paths);
+    }
+}
+
+// ============================================================================
+// Undo Support Implementation
+// ============================================================================
+
+impl UndoSupport for Tree {
+    fn undo_widget_id(&self) -> UndoWidgetId {
+        self.undo_id
+    }
+
+    fn create_snapshot(&self) -> Box<dyn Any + Send> {
+        Box::new(self.save_state())
+    }
+
+    fn restore_snapshot(&mut self, snapshot: &dyn Any) -> bool {
+        if let Some(snap) = snapshot.downcast_ref::<TreePersistState>() {
+            self.restore_state(snap.clone());
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl TreeUndoExt for Tree {
+    fn is_node_expanded(&self, path: &[usize]) -> bool {
+        self.get_node_at_path(path)
+            .map(|node| node.is_expanded())
+            .unwrap_or(false)
+    }
+
+    fn expand_node(&mut self, path: &[usize]) {
+        if let Some(node) = self.get_node_at_path_mut(path) {
+            node.expanded = true;
+        }
+    }
+
+    fn collapse_node(&mut self, path: &[usize]) {
+        if let Some(node) = self.get_node_at_path_mut(path) {
+            node.expanded = false;
+        }
+    }
+}
+
+impl Tree {
+    /// Get the undo widget ID for this tree.
+    #[must_use]
+    pub fn undo_id(&self) -> UndoWidgetId {
+        self.undo_id
+    }
+
+    /// Get a reference to a node at the given path (indices from root).
+    fn get_node_at_path(&self, path: &[usize]) -> Option<&TreeNode> {
+        let mut current = &self.root;
+        for &idx in path {
+            current = current.children.get(idx)?;
+        }
+        Some(current)
+    }
+
+    /// Get a mutable reference to a node at the given path (indices from root).
+    fn get_node_at_path_mut(&mut self, path: &[usize]) -> Option<&mut TreeNode> {
+        let mut current = &mut self.root;
+        for &idx in path {
+            current = current.children.get_mut(idx)?;
+        }
+        Some(current)
     }
 }
 
@@ -765,5 +842,106 @@ mod tests {
         assert!(saved.expanded_paths.contains("root"));
         // leaf has no children, so it's not tracked
         assert!(!saved.expanded_paths.contains("root/leaf"));
+    }
+
+    // ============================================================================
+    // Undo Support Tests
+    // ============================================================================
+
+    #[test]
+    fn tree_undo_widget_id_unique() {
+        let tree1 = Tree::new(TreeNode::new("root1"));
+        let tree2 = Tree::new(TreeNode::new("root2"));
+        assert_ne!(tree1.undo_id(), tree2.undo_id());
+    }
+
+    #[test]
+    fn tree_undo_snapshot_and_restore() {
+        // Nodes must have children for their expanded state to be tracked
+        let mut tree = Tree::new(
+            TreeNode::new("root")
+                .child(
+                    TreeNode::new("a")
+                        .with_expanded(true)
+                        .child(TreeNode::new("a_child")),
+                )
+                .child(
+                    TreeNode::new("b")
+                        .with_expanded(false)
+                        .child(TreeNode::new("b_child")),
+                ),
+        );
+
+        // Create snapshot
+        let snapshot = tree.create_snapshot();
+
+        // Verify initial state
+        assert!(tree.is_node_expanded(&[0])); // a
+        assert!(!tree.is_node_expanded(&[1])); // b
+
+        // Modify state
+        tree.collapse_node(&[0]); // collapse a
+        tree.expand_node(&[1]); // expand b
+        assert!(!tree.is_node_expanded(&[0]));
+        assert!(tree.is_node_expanded(&[1]));
+
+        // Restore snapshot
+        assert!(tree.restore_snapshot(&*snapshot));
+
+        // Verify restored state
+        assert!(tree.is_node_expanded(&[0])); // a back to expanded
+        assert!(!tree.is_node_expanded(&[1])); // b back to collapsed
+    }
+
+    #[test]
+    fn tree_expand_collapse_node() {
+        let mut tree =
+            Tree::new(TreeNode::new("root").child(TreeNode::new("child").with_expanded(true)));
+
+        // Initial state
+        assert!(tree.is_node_expanded(&[0]));
+
+        // Collapse
+        tree.collapse_node(&[0]);
+        assert!(!tree.is_node_expanded(&[0]));
+
+        // Expand again
+        tree.expand_node(&[0]);
+        assert!(tree.is_node_expanded(&[0]));
+    }
+
+    #[test]
+    fn tree_node_path_navigation() {
+        let tree = Tree::new(
+            TreeNode::new("root")
+                .child(
+                    TreeNode::new("a")
+                        .child(TreeNode::new("a1"))
+                        .child(TreeNode::new("a2")),
+                )
+                .child(TreeNode::new("b")),
+        );
+
+        // Test path navigation
+        assert_eq!(tree.get_node_at_path(&[]).map(|n| n.label()), Some("root"));
+        assert_eq!(tree.get_node_at_path(&[0]).map(|n| n.label()), Some("a"));
+        assert_eq!(tree.get_node_at_path(&[1]).map(|n| n.label()), Some("b"));
+        assert_eq!(
+            tree.get_node_at_path(&[0, 0]).map(|n| n.label()),
+            Some("a1")
+        );
+        assert_eq!(
+            tree.get_node_at_path(&[0, 1]).map(|n| n.label()),
+            Some("a2")
+        );
+        assert!(tree.get_node_at_path(&[5]).is_none()); // Invalid path
+    }
+
+    #[test]
+    fn tree_restore_wrong_snapshot_type_fails() {
+        use std::any::Any;
+        let mut tree = Tree::new(TreeNode::new("root"));
+        let wrong_snapshot: Box<dyn Any + Send> = Box::new(42i32);
+        assert!(!tree.restore_snapshot(&*wrong_snapshot));
     }
 }

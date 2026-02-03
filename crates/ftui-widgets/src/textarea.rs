@@ -311,6 +311,12 @@ impl TextArea {
         self.editor.cursor()
     }
 
+    /// Set cursor position (clamped to bounds). Clears selection.
+    pub fn set_cursor_position(&mut self, pos: CursorPosition) {
+        self.editor.set_cursor(pos);
+        self.ensure_cursor_visible();
+    }
+
     /// Whether the textarea is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {

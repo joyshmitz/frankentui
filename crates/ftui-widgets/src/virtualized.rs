@@ -1172,6 +1172,13 @@ impl<T: RenderItem> StatefulWidget for VirtualizedList<'_, T> {
                 break;
             }
 
+            // Check if item starts off-screen top (terminal y < 0)
+            // We cannot render at negative coordinates, and clamping to 0 causes artifacts
+            // (drawing top of item instead of bottom). Skip such items.
+            if i32::from(area.y) + y_offset < 0 {
+                continue;
+            }
+
             // Calculate actual render area
             // Use i32 arithmetic to avoid overflow when casting y_offset to i16
             let y = i32::from(area.y)
@@ -1725,6 +1732,75 @@ mod tests {
             small_time,
             large_time
         );
+    }
+
+    #[test]
+    fn render_partially_offscreen_top_skips_item() {
+        use ftui_render::grapheme_pool::GraphemePool;
+
+        // Item with height 2
+        struct TallItem;
+        impl RenderItem for TallItem {
+            fn render(&self, area: Rect, frame: &mut Frame, _selected: bool) {
+                // Should not be called if skipped
+                if area.height > 0 {
+                    frame.buffer.set(area.x, area.y, Cell::from_char('X'));
+                }
+            }
+            fn height(&self) -> u16 {
+                2
+            }
+        }
+
+        let items = vec![TallItem, TallItem];
+        let list = VirtualizedList::new(&items).fixed_height(2);
+
+        // Scroll so item 0 is partially off-screen top
+        // But VirtualizedList only scrolls by whole items.
+        // To trigger the bug, we need 'overscan' to include an item above,
+        // AND the list must be at terminal y=0.
+
+        let mut state = VirtualizedListState::new().with_overscan(1);
+        state.scroll_offset = 1; // Item 1 is top visible. Item 0 is in overscan.
+
+        let mut pool = GraphemePool::new();
+        // Frame at 0,0.
+        let mut frame = Frame::new(10, 5, &mut pool);
+
+        // Render at 0,0
+        list.render(Rect::new(0, 0, 10, 5), &mut frame, &mut state);
+
+        // Item 1 starts at y=0.
+        // Item 0 (overscan) starts at y = -2.
+        // Without fix, Item 0 would be clamped to y=0 and overwrite Item 1.
+        // With fix, Item 0 is skipped. Item 1 renders at y=0.
+
+        // We can't distinguish 'X' from 'X' easily unless they differ.
+        // Let's make items distinguishable.
+
+        struct IndexedItem(usize);
+        impl RenderItem for IndexedItem {
+            fn render(&self, area: Rect, frame: &mut Frame, _selected: bool) {
+                let ch = char::from_digit(self.0 as u32, 10).unwrap();
+                for y in area.y..area.bottom() {
+                    frame.buffer.set(area.x, y, Cell::from_char(ch));
+                }
+            }
+            fn height(&self) -> u16 {
+                2
+            }
+        }
+
+        let items = vec![IndexedItem(0), IndexedItem(1)];
+        let list = VirtualizedList::new(&items).fixed_height(2);
+
+        // Render again
+        frame.buffer.clear();
+        list.render(Rect::new(0, 0, 10, 5), &mut frame, &mut state);
+
+        // Row 0 should be '1' (from Item 1), NOT '0' (from Item 0 ghosting)
+        let cell = frame.buffer.get(0, 0).unwrap();
+        assert_eq!(cell.content.as_char(), Some('1'));
     }
 
     #[test]

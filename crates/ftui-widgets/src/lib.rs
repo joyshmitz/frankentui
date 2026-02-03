@@ -143,10 +143,13 @@ pub mod help;
 pub mod help_registry;
 /// Utility-based keybinding hint ranking with Bayesian posteriors.
 pub mod hint_ranker;
+/// Undo/redo history panel widget for displaying command history.
+pub mod history_panel;
 pub mod input;
 /// UI Inspector overlay for debugging widget trees and hit-test regions.
 pub mod inspector;
 pub mod json_view;
+pub mod keyboard_drag;
 pub mod layout;
 pub mod layout_debugger;
 pub mod list;
@@ -199,6 +202,7 @@ pub use debug_overlay::{
 };
 pub use group::Group;
 pub use help_registry::{HelpContent, HelpId, HelpRegistry, Keybinding};
+pub use history_panel::{HistoryEntry, HistoryPanel, HistoryPanelMode};
 pub use layout_debugger::{LayoutConstraints, LayoutDebugger, LayoutRecord};
 pub use log_ring::LogRing;
 pub use log_viewer::{LogViewer, LogViewerState, LogWrapMode, SearchConfig, SearchMode};

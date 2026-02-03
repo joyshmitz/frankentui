@@ -1,10 +1,14 @@
 use crate::block::Block;
+#[allow(unused_imports)]
+use crate::undo_support::{TableUndoExt, UndoSupport, UndoWidgetId};
 use crate::{MeasurableWidget, SizeConstraints, StatefulWidget, Widget, set_style_area};
 use ftui_core::geometry::{Rect, Size};
 use ftui_layout::{Constraint, Flex};
 use ftui_render::frame::{Frame, HitId, HitRegion};
 use ftui_style::Style;
 use ftui_text::Text;
+#[allow(unused_imports)]
+use std::any::Any;
 
 /// A row in a table.
 #[derive(Debug, Clone, Default)]
@@ -129,6 +133,9 @@ impl<'a> Widget for Table<'a> {
 /// Mutable state for a [`Table`] widget.
 #[derive(Debug, Clone, Default)]
 pub struct TableState {
+    /// Unique ID for undo tracking.
+    #[allow(dead_code)]
+    undo_id: UndoWidgetId,
     /// Index of the currently selected row, if any.
     pub selected: Option<usize>,
     /// Scroll offset (first visible row index).
@@ -136,6 +143,15 @@ pub struct TableState {
     /// Optional persistence ID for state saving/restoration.
     /// When set, this state can be persisted via the [`Stateful`] trait.
     persistence_id: Option<String>,
+    /// Current sort column (for undo support).
+    #[allow(dead_code)]
+    sort_column: Option<usize>,
+    /// Sort ascending (for undo support).
+    #[allow(dead_code)]
+    sort_ascending: bool,
+    /// Filter text (for undo support).
+    #[allow(dead_code)]
+    filter: String,
 }
 
 impl TableState {
@@ -199,6 +215,107 @@ impl crate::stateful::Stateful for TableState {
         // Restore values directly; clamping to valid ranges happens during render
         self.selected = state.selected;
         self.offset = state.offset;
+    }
+}
+
+// ============================================================================
+// Undo Support Implementation
+// ============================================================================
+
+/// Snapshot of TableState for undo.
+#[derive(Debug, Clone)]
+pub struct TableStateSnapshot {
+    selected: Option<usize>,
+    offset: usize,
+    sort_column: Option<usize>,
+    sort_ascending: bool,
+    filter: String,
+}
+
+impl UndoSupport for TableState {
+    fn undo_widget_id(&self) -> UndoWidgetId {
+        self.undo_id
+    }
+
+    fn create_snapshot(&self) -> Box<dyn Any + Send> {
+        Box::new(TableStateSnapshot {
+            selected: self.selected,
+            offset: self.offset,
+            sort_column: self.sort_column,
+            sort_ascending: self.sort_ascending,
+            filter: self.filter.clone(),
+        })
+    }
+
+    fn restore_snapshot(&mut self, snapshot: &dyn Any) -> bool {
+        if let Some(snap) = snapshot.downcast_ref::<TableStateSnapshot>() {
+            self.selected = snap.selected;
+            self.offset = snap.offset;
+            self.sort_column = snap.sort_column;
+            self.sort_ascending = snap.sort_ascending;
+            self.filter = snap.filter.clone();
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl TableUndoExt for TableState {
+    fn sort_state(&self) -> (Option<usize>, bool) {
+        (self.sort_column, self.sort_ascending)
+    }
+
+    fn set_sort_state(&mut self, column: Option<usize>, ascending: bool) {
+        self.sort_column = column;
+        self.sort_ascending = ascending;
+    }
+
+    fn filter_text(&self) -> &str {
+        &self.filter
+    }
+
+    fn set_filter_text(&mut self, filter: &str) {
+        self.filter = filter.to_string();
+    }
+}
+
+impl TableState {
+    /// Get the undo widget ID.
+    ///
+    /// This can be used to associate undo commands with this state instance.
+    #[must_use]
+    pub fn undo_id(&self) -> UndoWidgetId {
+        self.undo_id
+    }
+
+    /// Get the current sort column.
+    #[must_use]
+    pub fn sort_column(&self) -> Option<usize> {
+        self.sort_column
+    }
+
+    /// Get whether the sort is ascending.
+    #[must_use]
+    pub fn sort_ascending(&self) -> bool {
+        self.sort_ascending
+    }
+
+    /// Set the sort state.
+    pub fn set_sort(&mut self, column: Option<usize>, ascending: bool) {
+        self.sort_column = column;
+        self.sort_ascending = ascending;
+    }
+
+    /// Get the filter text.
+    #[must_use]
+    pub fn filter(&self) -> &str {
+        &self.filter
+    }
+
+    /// Set the filter text.
+    pub fn set_filter(&mut self, filter: impl Into<String>) {
+        self.filter = filter.into();
     }
 }
 
@@ -707,6 +824,7 @@ mod tests {
             offset: 5,
             selected: Some(2), // Selected is below offset
             persistence_id: None,
+            ..Default::default()
         };
 
         let table = Table::new(
@@ -732,6 +850,7 @@ mod tests {
             offset: 0,
             selected: Some(99),
             persistence_id: None,
+            ..Default::default()
         };
 
         StatefulWidget::render(&table, area, &mut frame, &mut state);
@@ -751,6 +870,7 @@ mod tests {
             offset: 0,
             selected: Some(1),
             persistence_id: None,
+            ..Default::default()
         };
 
         StatefulWidget::render(&table, area, &mut frame, &mut state);
@@ -1068,5 +1188,90 @@ mod tests {
         let persist = TablePersistState::default();
         assert_eq!(persist.selected, None);
         assert_eq!(persist.offset, 0);
+    }
+
+    // ============================================================================
+    // Undo Support Tests
+    // ============================================================================
+
+    #[test]
+    fn table_state_undo_widget_id_unique() {
+        let state1 = TableState::default();
+        let state2 = TableState::default();
+        assert_ne!(state1.undo_id(), state2.undo_id());
+    }
+
+    #[test]
+    fn table_state_undo_snapshot_and_restore() {
+        let mut state = TableState::default();
+        state.select(Some(5));
+        state.offset = 2;
+        state.set_sort(Some(1), false);
+        state.set_filter("test filter");
+
+        // Create snapshot
+        let snapshot = state.create_snapshot();
+
+        // Modify state
+        state.select(Some(10));
+        state.offset = 7;
+        state.set_sort(Some(3), true);
+        state.set_filter("new filter");
+
+        assert_eq!(state.selected, Some(10));
+        assert_eq!(state.offset, 7);
+        assert_eq!(state.sort_column(), Some(3));
+        assert!(state.sort_ascending());
+        assert_eq!(state.filter(), "new filter");
+
+        // Restore snapshot
+        assert!(state.restore_snapshot(&*snapshot));
+
+        // Verify restored state
+        assert_eq!(state.selected, Some(5));
+        assert_eq!(state.offset, 2);
+        assert_eq!(state.sort_column(), Some(1));
+        assert!(!state.sort_ascending());
+        assert_eq!(state.filter(), "test filter");
+    }
+
+    #[test]
+    fn table_state_undo_ext_sort() {
+        let mut state = TableState::default();
+
+        // Initial state
+        assert_eq!(state.sort_state(), (None, false));
+
+        // Set sort
+        state.set_sort_state(Some(2), true);
+        assert_eq!(state.sort_state(), (Some(2), true));
+
+        // Change sort
+        state.set_sort_state(Some(0), false);
+        assert_eq!(state.sort_state(), (Some(0), false));
+    }
+
+    #[test]
+    fn table_state_undo_ext_filter() {
+        let mut state = TableState::default();
+
+        // Initial state
+        assert_eq!(state.filter_text(), "");
+
+        // Set filter
+        state.set_filter_text("search term");
+        assert_eq!(state.filter_text(), "search term");
+
+        // Clear filter
+        state.set_filter_text("");
+        assert_eq!(state.filter_text(), "");
+    }
+
+    #[test]
+    fn table_state_restore_wrong_snapshot_type_fails() {
+        use std::any::Any;
+        let mut state = TableState::default();
+        let wrong_snapshot: Box<dyn Any + Send> = Box::new(42i32);
+        assert!(!state.restore_snapshot(&*wrong_snapshot));
     }
 }
