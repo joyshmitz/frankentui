@@ -44,7 +44,7 @@
 //!
 //! // Present UI
 //! let buffer = Buffer::new(80, 10);
-//! writer.present_ui(&buffer)?;
+//! writer.present_ui(&buffer, None, true)?;
 //! ```
 
 use std::io::{self, BufWriter, Write};
@@ -53,6 +53,7 @@ use ftui_core::inline_mode::InlineStrategy;
 use ftui_core::terminal_capabilities::TerminalCapabilities;
 use ftui_render::buffer::Buffer;
 use ftui_render::diff::BufferDiff;
+use ftui_render::diff_strategy::{DiffStrategy, DiffStrategyConfig, DiffStrategySelector};
 use ftui_render::grapheme_pool::GraphemePool;
 use ftui_render::link_registry::LinkRegistry;
 use tracing::{debug_span, info_span, trace};
@@ -74,6 +75,10 @@ const SYNC_END: &[u8] = b"\x1b[?2026l";
 
 /// Erase entire line (CSI 2 K).
 const ERASE_LINE: &[u8] = b"\x1b[2K";
+
+/// How often to probe with a real diff when FullRedraw is selected.
+#[allow(dead_code)] // API for future diff strategy integration
+const FULL_REDRAW_PROBE_INTERVAL: u64 = 60;
 
 fn sanitize_auto_bounds(min_height: u16, max_height: u16) -> (u16, u16) {
     let min = min_height.max(1);
@@ -119,6 +124,132 @@ struct InlineRegion {
     height: u16,
 }
 
+struct DiffDecision {
+    #[allow(dead_code)] // reserved for future diff strategy introspection
+    strategy: DiffStrategy,
+    diff: Option<BufferDiff>,
+}
+
+// =============================================================================
+// Runtime Diff Configuration
+// =============================================================================
+
+/// Runtime-level configuration for diff strategy selection.
+///
+/// This wraps [`DiffStrategyConfig`] and adds runtime-specific toggles
+/// for enabling/disabling features and controlling reset policies.
+///
+/// # Example
+///
+/// ```
+/// use ftui_runtime::{RuntimeDiffConfig, DiffStrategyConfig};
+///
+/// // Use defaults (Bayesian selection enabled, dirty-rows enabled)
+/// let config = RuntimeDiffConfig::default();
+///
+/// // Disable Bayesian selection (always use dirty-rows if available)
+/// let config = RuntimeDiffConfig::default()
+///     .with_bayesian_enabled(false);
+///
+/// // Custom cost model
+/// let config = RuntimeDiffConfig::default()
+///     .with_strategy_config(DiffStrategyConfig {
+///         c_emit: 10.0,  // Higher I/O cost
+///         ..Default::default()
+///     });
+/// ```
+#[derive(Debug, Clone)]
+pub struct RuntimeDiffConfig {
+    /// Enable Bayesian strategy selection.
+    ///
+    /// When enabled, the selector uses a Beta posterior over the change rate
+    /// to choose between Full, DirtyRows, and FullRedraw strategies.
+    ///
+    /// When disabled, always uses DirtyRows if dirty tracking is available,
+    /// otherwise Full.
+    ///
+    /// Default: true
+    pub bayesian_enabled: bool,
+
+    /// Enable dirty-row optimization.
+    ///
+    /// When enabled, the DirtyRows strategy is available for selection.
+    /// When disabled, the selector chooses between Full and FullRedraw only.
+    ///
+    /// Default: true
+    pub dirty_rows_enabled: bool,
+
+    /// Reset posterior on dimension change.
+    ///
+    /// When true, the Bayesian posterior resets to priors when the buffer
+    /// dimensions change (e.g., terminal resize).
+    ///
+    /// Default: true
+    pub reset_on_resize: bool,
+
+    /// Reset posterior on buffer invalidation.
+    ///
+    /// When true, resets to priors when the previous buffer becomes invalid
+    /// (e.g., mode switch, scroll region change).
+    ///
+    /// Default: true
+    pub reset_on_invalidation: bool,
+
+    /// Underlying strategy configuration.
+    ///
+    /// Contains cost model constants, prior parameters, and decay settings.
+    pub strategy_config: DiffStrategyConfig,
+}
+
+impl Default for RuntimeDiffConfig {
+    fn default() -> Self {
+        Self {
+            bayesian_enabled: true,
+            dirty_rows_enabled: true,
+            reset_on_resize: true,
+            reset_on_invalidation: true,
+            strategy_config: DiffStrategyConfig::default(),
+        }
+    }
+}
+
+impl RuntimeDiffConfig {
+    /// Create a new config with all defaults.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set whether Bayesian strategy selection is enabled.
+    pub fn with_bayesian_enabled(mut self, enabled: bool) -> Self {
+        self.bayesian_enabled = enabled;
+        self
+    }
+
+    /// Set whether dirty-row optimization is enabled.
+    pub fn with_dirty_rows_enabled(mut self, enabled: bool) -> Self {
+        self.dirty_rows_enabled = enabled;
+        self
+    }
+
+    /// Set whether to reset posterior on resize.
+    pub fn with_reset_on_resize(mut self, enabled: bool) -> Self {
+        self.reset_on_resize = enabled;
+        self
+    }
+
+    /// Set whether to reset posterior on invalidation.
+    pub fn with_reset_on_invalidation(mut self, enabled: bool) -> Self {
+        self.reset_on_invalidation = enabled;
+        self
+    }
+
+    /// Set the underlying strategy configuration.
+    pub fn with_strategy_config(mut self, config: DiffStrategyConfig) -> Self {
+        self.strategy_config = config;
+        self
+    }
+}
+
 /// Unified terminal output coordinator.
 ///
 /// Enforces the one-writer rule and implements inline mode correctly.
@@ -150,12 +281,23 @@ pub struct TerminalWriter<W: Write> {
     in_sync_block: bool,
     /// Whether cursor has been saved.
     cursor_saved: bool,
+    /// Current cursor visibility state (best-effort).
+    cursor_visible: bool,
     /// Inline mode rendering strategy (selected from capabilities).
     inline_strategy: InlineStrategy,
     /// Whether a scroll region is currently active.
     scroll_region_active: bool,
     /// Last inline UI region for clearing on shrink.
     last_inline_region: Option<InlineRegion>,
+    /// Bayesian diff strategy selector.
+    diff_strategy: DiffStrategySelector,
+    /// Frames since last diff probe while in FullRedraw.
+    full_redraw_probe: u64,
+    /// Runtime diff configuration.
+    #[allow(dead_code)] // runtime toggles wired up in follow-up work
+    diff_config: RuntimeDiffConfig,
+    /// Last diff strategy selected during present.
+    last_diff_strategy: Option<DiffStrategy>,
 }
 
 impl<W: Write> TerminalWriter<W> {
@@ -173,8 +315,53 @@ impl<W: Write> TerminalWriter<W> {
         ui_anchor: UiAnchor,
         capabilities: TerminalCapabilities,
     ) -> Self {
+        Self::with_diff_config(
+            writer,
+            screen_mode,
+            ui_anchor,
+            capabilities,
+            RuntimeDiffConfig::default(),
+        )
+    }
+
+    /// Create a new terminal writer with custom diff strategy configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `writer` - Output destination (takes ownership for one-writer rule)
+    /// * `screen_mode` - Inline or alternate screen mode
+    /// * `ui_anchor` - Where to anchor UI in inline mode
+    /// * `capabilities` - Terminal capabilities
+    /// * `diff_config` - Configuration for diff strategy selection
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use ftui_runtime::{TerminalWriter, ScreenMode, UiAnchor, RuntimeDiffConfig};
+    /// use ftui_core::terminal_capabilities::TerminalCapabilities;
+    ///
+    /// // Disable Bayesian selection for deterministic diffing
+    /// let config = RuntimeDiffConfig::default()
+    ///     .with_bayesian_enabled(false);
+    ///
+    /// let writer = TerminalWriter::with_diff_config(
+    ///     std::io::stdout(),
+    ///     ScreenMode::AltScreen,
+    ///     UiAnchor::Bottom,
+    ///     TerminalCapabilities::detect(),
+    ///     config,
+    /// );
+    /// ```
+    pub fn with_diff_config(
+        writer: W,
+        screen_mode: ScreenMode,
+        ui_anchor: UiAnchor,
+        capabilities: TerminalCapabilities,
+        diff_config: RuntimeDiffConfig,
+    ) -> Self {
         let inline_strategy = InlineStrategy::select(&capabilities);
         let auto_ui_height = None;
+        let diff_strategy = DiffStrategySelector::new(diff_config.strategy_config.clone());
         Self {
             writer: Some(BufWriter::with_capacity(BUFFER_CAPACITY, writer)),
             screen_mode,
@@ -189,9 +376,14 @@ impl<W: Write> TerminalWriter<W> {
             term_height: 24,
             in_sync_block: false,
             cursor_saved: false,
+            cursor_visible: true,
             inline_strategy,
             scroll_region_active: false,
             last_inline_region: None,
+            diff_strategy,
+            full_redraw_probe: 0,
+            diff_config,
+            last_diff_strategy: None,
         }
     }
 
@@ -203,6 +395,47 @@ impl<W: Write> TerminalWriter<W> {
     #[inline]
     fn writer(&mut self) -> &mut BufWriter<W> {
         self.writer.as_mut().expect("writer has been consumed")
+    }
+
+    /// Reset diff strategy state when the previous buffer is invalidated.
+    fn reset_diff_strategy(&mut self) {
+        if self.diff_config.reset_on_invalidation {
+            self.diff_strategy.reset();
+        }
+        self.full_redraw_probe = 0;
+        self.last_diff_strategy = None;
+    }
+
+    /// Reset diff strategy state on terminal resize.
+    #[allow(dead_code)] // used by upcoming resize-aware diff strategy work
+    fn reset_diff_on_resize(&mut self) {
+        if self.diff_config.reset_on_resize {
+            self.diff_strategy.reset();
+        }
+        self.full_redraw_probe = 0;
+        self.last_diff_strategy = None;
+    }
+
+    /// Get the current diff configuration.
+    pub fn diff_config(&self) -> &RuntimeDiffConfig {
+        &self.diff_config
+    }
+
+    /// Get mutable access to the diff strategy selector.
+    ///
+    /// Useful for advanced scenarios like manual posterior updates.
+    pub fn diff_strategy_mut(&mut self) -> &mut DiffStrategySelector {
+        &mut self.diff_strategy
+    }
+
+    /// Get the diff strategy selector (read-only).
+    pub fn diff_strategy(&self) -> &DiffStrategySelector {
+        &self.diff_strategy
+    }
+
+    /// Get the last diff strategy selected during present, if any.
+    pub fn last_diff_strategy(&self) -> Option<DiffStrategy> {
+        self.last_diff_strategy
     }
 
     /// Set the terminal size.
@@ -217,6 +450,7 @@ impl<W: Write> TerminalWriter<W> {
         // Clear prev_buffer to force full redraw after resize
         self.prev_buffer = None;
         self.spare_buffer = None;
+        self.reset_diff_on_resize();
         // Reset scroll region on resize; it will be re-established on next present
         if self.scroll_region_active {
             let _ = self.deactivate_scroll_region();
@@ -315,6 +549,7 @@ impl<W: Write> TerminalWriter<W> {
                 self.auto_ui_height = Some(clamped);
                 if clamped != previous_effective {
                     self.prev_buffer = None;
+                    self.reset_diff_strategy();
                     if self.scroll_region_active {
                         let _ = self.deactivate_scroll_region();
                     }
@@ -330,6 +565,7 @@ impl<W: Write> TerminalWriter<W> {
         {
             self.auto_ui_height = None;
             self.prev_buffer = None;
+            self.reset_diff_strategy();
             if self.scroll_region_active {
                 let _ = self.deactivate_scroll_region();
             }
@@ -488,10 +724,16 @@ impl<W: Write> TerminalWriter<W> {
     /// 4. Renders the buffer using the presenter
     /// 5. Restores cursor position
     /// 6. Moves cursor to requested UI position (if any)
-    /// 7. Ends synchronized output
+    /// 7. Applies cursor visibility
+    /// 8. Ends synchronized output
     ///
     /// In AltScreen mode, this just renders the buffer and positions cursor.
-    pub fn present_ui(&mut self, buffer: &Buffer, cursor: Option<(u16, u16)>) -> io::Result<()> {
+    pub fn present_ui(
+        &mut self,
+        buffer: &Buffer,
+        cursor: Option<(u16, u16)>,
+        cursor_visible: bool,
+    ) -> io::Result<()> {
         let mode_str = match self.screen_mode {
             ScreenMode::Inline { .. } => "inline",
             ScreenMode::InlineAuto { .. } => "inline_auto",
@@ -506,12 +748,14 @@ impl<W: Write> TerminalWriter<W> {
         .entered();
 
         let result = match self.screen_mode {
-            ScreenMode::Inline { ui_height } => self.present_inline(buffer, ui_height, cursor),
+            ScreenMode::Inline { ui_height } => {
+                self.present_inline(buffer, ui_height, cursor, cursor_visible)
+            }
             ScreenMode::InlineAuto { .. } => {
                 let ui_height = self.effective_ui_height();
-                self.present_inline(buffer, ui_height, cursor)
+                self.present_inline(buffer, ui_height, cursor, cursor_visible)
             }
-            ScreenMode::AltScreen => self.present_altscreen(buffer, cursor),
+            ScreenMode::AltScreen => self.present_altscreen(buffer, cursor, cursor_visible),
         };
 
         if result.is_ok() {
@@ -529,6 +773,7 @@ impl<W: Write> TerminalWriter<W> {
         &mut self,
         buffer: Buffer,
         cursor: Option<(u16, u16)>,
+        cursor_visible: bool,
     ) -> io::Result<()> {
         let mode_str = match self.screen_mode {
             ScreenMode::Inline { .. } => "inline",
@@ -544,12 +789,14 @@ impl<W: Write> TerminalWriter<W> {
         .entered();
 
         let result = match self.screen_mode {
-            ScreenMode::Inline { ui_height } => self.present_inline(&buffer, ui_height, cursor),
+            ScreenMode::Inline { ui_height } => {
+                self.present_inline(&buffer, ui_height, cursor, cursor_visible)
+            }
             ScreenMode::InlineAuto { .. } => {
                 let ui_height = self.effective_ui_height();
-                self.present_inline(&buffer, ui_height, cursor)
+                self.present_inline(&buffer, ui_height, cursor, cursor_visible)
             }
-            ScreenMode::AltScreen => self.present_altscreen(&buffer, cursor),
+            ScreenMode::AltScreen => self.present_altscreen(&buffer, cursor, cursor_visible),
         };
 
         if result.is_ok() {
@@ -557,6 +804,105 @@ impl<W: Write> TerminalWriter<W> {
             self.prev_buffer = Some(buffer);
         }
         result
+    }
+
+    fn decide_diff(&mut self, buffer: &Buffer) -> DiffDecision {
+        let prev_dims = self
+            .prev_buffer
+            .as_ref()
+            .map(|prev| (prev.width(), prev.height()));
+        if prev_dims.is_none() || prev_dims != Some((buffer.width(), buffer.height())) {
+            self.full_redraw_probe = 0;
+            self.last_diff_strategy = Some(DiffStrategy::FullRedraw);
+            return DiffDecision {
+                strategy: DiffStrategy::FullRedraw,
+                diff: None,
+            };
+        }
+
+        let dirty_rows = buffer.dirty_row_count();
+
+        // Select strategy based on config
+        let mut strategy = if self.diff_config.bayesian_enabled {
+            // Use Bayesian selector
+            self.diff_strategy
+                .select(buffer.width(), buffer.height(), dirty_rows)
+        } else {
+            // Simple heuristic: use DirtyRows if few rows dirty, else Full
+            if self.diff_config.dirty_rows_enabled && dirty_rows < buffer.height() as usize {
+                DiffStrategy::DirtyRows
+            } else {
+                DiffStrategy::Full
+            }
+        };
+
+        // Enforce dirty_rows_enabled toggle
+        if !self.diff_config.dirty_rows_enabled && strategy == DiffStrategy::DirtyRows {
+            strategy = DiffStrategy::Full;
+        }
+
+        // Periodic probe when FullRedraw is selected (to update posterior)
+        if strategy == DiffStrategy::FullRedraw {
+            if self.full_redraw_probe >= FULL_REDRAW_PROBE_INTERVAL {
+                self.full_redraw_probe = 0;
+                strategy = if self.diff_config.dirty_rows_enabled
+                    && dirty_rows < buffer.height() as usize
+                {
+                    DiffStrategy::DirtyRows
+                } else {
+                    DiffStrategy::Full
+                };
+            } else {
+                self.full_redraw_probe = self.full_redraw_probe.saturating_add(1);
+            }
+        } else {
+            self.full_redraw_probe = 0;
+        }
+
+        let diff = match strategy {
+            DiffStrategy::Full => {
+                let prev = self.prev_buffer.as_ref().expect("prev buffer must exist");
+                Some(BufferDiff::compute(prev, buffer))
+            }
+            DiffStrategy::DirtyRows => {
+                let prev = self.prev_buffer.as_ref().expect("prev buffer must exist");
+                Some(BufferDiff::compute_dirty(prev, buffer))
+            }
+            DiffStrategy::FullRedraw => None,
+        };
+
+        // Update posterior if Bayesian mode is enabled
+        if self.diff_config.bayesian_enabled
+            && let Some(ref diff) = diff
+        {
+            let width = buffer.width() as usize;
+            let height = buffer.height() as usize;
+            let cells_scanned = match strategy {
+                DiffStrategy::Full => width * height,
+                DiffStrategy::DirtyRows => dirty_rows * width,
+                DiffStrategy::FullRedraw => 0,
+            };
+            self.diff_strategy.observe(cells_scanned, diff.len());
+        }
+
+        if let Some(evidence) = self.diff_strategy.last_evidence() {
+            trace!(
+                strategy = %strategy,
+                selected = %evidence.strategy,
+                cost_full = evidence.cost_full,
+                cost_dirty = evidence.cost_dirty,
+                cost_redraw = evidence.cost_redraw,
+                dirty_rows = evidence.dirty_rows,
+                total_rows = evidence.total_rows,
+                total_cells = evidence.total_cells,
+                bayesian_enabled = self.diff_config.bayesian_enabled,
+                dirty_rows_enabled = self.diff_config.dirty_rows_enabled,
+                "diff strategy selected"
+            );
+        }
+
+        self.last_diff_strategy = Some(strategy);
+        DiffDecision { strategy, diff }
     }
 
     /// Present UI in inline mode with cursor save/restore.
@@ -569,6 +915,7 @@ impl<W: Write> TerminalWriter<W> {
         buffer: &Buffer,
         ui_height: u16,
         cursor: Option<(u16, u16)>,
+        cursor_visible: bool,
     ) -> io::Result<()> {
         let visible_height = ui_height.min(self.term_height);
         let ui_y_start = self.ui_start_row();
@@ -624,23 +971,19 @@ impl<W: Write> TerminalWriter<W> {
             }
 
             // Compute diff
-            let diff = {
+            let decision = {
                 let _span = debug_span!("ftui.render.diff_compute").entered();
-                if let Some(ref prev) = self.prev_buffer {
-                    if prev.width() == buffer.width() && prev.height() == buffer.height() {
-                        BufferDiff::compute(prev, buffer)
-                    } else {
-                        self.create_full_diff(buffer)
-                    }
-                } else {
-                    self.create_full_diff(buffer)
-                }
+                self.decide_diff(buffer)
             };
 
             // Emit diff
             {
                 let _span = debug_span!("ftui.render.emit").entered();
-                self.emit_diff(buffer, &diff, Some(visible_height), ui_y_start)?;
+                if let Some(diff) = decision.diff.as_ref() {
+                    self.emit_diff(buffer, diff, Some(visible_height), ui_y_start)?;
+                } else {
+                    self.emit_full_redraw(buffer, Some(visible_height), ui_y_start)?;
+                }
             }
         }
 
@@ -651,18 +994,23 @@ impl<W: Write> TerminalWriter<W> {
         self.writer().write_all(CURSOR_RESTORE)?;
         self.cursor_saved = false;
 
-        // Apply requested cursor position (relative to UI)
-        if let Some((cx, cy)) = cursor
-            && cy < visible_height
-        {
-            // Move to UI start + cursor y
-            let abs_y = ui_y_start.saturating_add(cy);
-            write!(
-                self.writer(),
-                "\x1b[{};{}H",
-                abs_y.saturating_add(1),
-                cx.saturating_add(1)
-            )?;
+        if cursor_visible {
+            // Apply requested cursor position (relative to UI)
+            if let Some((cx, cy)) = cursor
+                && cy < visible_height
+            {
+                // Move to UI start + cursor y
+                let abs_y = ui_y_start.saturating_add(cy);
+                write!(
+                    self.writer(),
+                    "\x1b[{};{}H",
+                    abs_y.saturating_add(1),
+                    cx.saturating_add(1)
+                )?;
+            }
+            self.set_cursor_visibility(true)?;
+        } else {
+            self.set_cursor_visibility(false)?;
         }
 
         // End sync output
@@ -682,18 +1030,15 @@ impl<W: Write> TerminalWriter<W> {
     }
 
     /// Present UI in alternate screen mode (simpler, no cursor gymnastics).
-    fn present_altscreen(&mut self, buffer: &Buffer, cursor: Option<(u16, u16)>) -> io::Result<()> {
-        let diff = {
+    fn present_altscreen(
+        &mut self,
+        buffer: &Buffer,
+        cursor: Option<(u16, u16)>,
+        cursor_visible: bool,
+    ) -> io::Result<()> {
+        let decision = {
             let _span = debug_span!("ftui.render.diff_compute").entered();
-            if let Some(ref prev) = self.prev_buffer {
-                if prev.width() == buffer.width() && prev.height() == buffer.height() {
-                    BufferDiff::compute(prev, buffer)
-                } else {
-                    self.create_full_diff(buffer)
-                }
-            } else {
-                self.create_full_diff(buffer)
-            }
+            self.decide_diff(buffer)
         };
 
         // Begin sync if available
@@ -703,34 +1048,29 @@ impl<W: Write> TerminalWriter<W> {
 
         {
             let _span = debug_span!("ftui.render.emit").entered();
-            self.emit_diff(buffer, &diff, None, 0)?;
+            if let Some(diff) = decision.diff.as_ref() {
+                self.emit_diff(buffer, diff, None, 0)?;
+            } else {
+                self.emit_full_redraw(buffer, None, 0)?;
+            }
         }
 
         // Reset style at end
         self.writer().write_all(b"\x1b[0m")?;
 
-        // Apply requested cursor position
-        if let Some((cx, cy)) = cursor {
-            write!(
-                self.writer(),
-                "\x1b[{};{}H",
-                cy.saturating_add(1),
-                cx.saturating_add(1)
-            )?;
+        if cursor_visible {
+            // Apply requested cursor position
+            if let Some((cx, cy)) = cursor {
+                write!(
+                    self.writer(),
+                    "\x1b[{};{}H",
+                    cy.saturating_add(1),
+                    cx.saturating_add(1)
+                )?;
+            }
+            self.set_cursor_visibility(true)?;
         } else {
-            // Hide cursor if not explicitly positioned?
-            // Usually widgets handle visibility, but if no position is requested,
-            // we should probably leave it where emit_diff left it, or hide it.
-            // But Frame usually has cursor_visible=true by default.
-            // If cursor is None, it means "don't show".
-            // However, we rely on Frame::cursor_visible for that?
-            // Frame logic:
-            // pub cursor_position: Option<(u16, u16)>,
-            // pub cursor_visible: bool,
-            //
-            // If cursor_position is None, we assume "hidden" or "don't care".
-            // Usually hidden. The writer has hide_cursor/show_cursor methods.
-            // But here we just position it.
+            self.set_cursor_visibility(false)?;
         }
 
         if self.capabilities.sync_output {
@@ -874,6 +1214,132 @@ impl<W: Write> TerminalWriter<W> {
         Ok(())
     }
 
+    /// Emit a full redraw without computing a diff.
+    fn emit_full_redraw(
+        &mut self,
+        buffer: &Buffer,
+        max_height: Option<u16>,
+        ui_y_start: u16,
+    ) -> io::Result<()> {
+        use ftui_render::cell::{CellAttrs, StyleFlags};
+
+        let height = max_height.unwrap_or(buffer.height()).min(buffer.height());
+        let width = buffer.width();
+
+        let _span = debug_span!("ftui.render.emit_full_redraw").entered();
+
+        let mut current_style: Option<(
+            ftui_render::cell::PackedRgba,
+            ftui_render::cell::PackedRgba,
+            StyleFlags,
+        )> = None;
+        let mut current_link: Option<u32> = None;
+
+        // Borrow writer once
+        let writer = self.writer.as_mut().expect("writer has been consumed");
+
+        for y in 0..height {
+            write!(
+                writer,
+                "\x1b[{};{}H",
+                ui_y_start.saturating_add(y).saturating_add(1),
+                1
+            )?;
+
+            for x in 0..width {
+                let cell = buffer.get_unchecked(x, y);
+
+                // Skip continuation cells
+                if cell.is_continuation() {
+                    continue;
+                }
+
+                // Check if style changed
+                let cell_style = (cell.fg, cell.bg, cell.attrs.flags());
+                if current_style != Some(cell_style) {
+                    // Reset and apply new style
+                    writer.write_all(b"\x1b[0m")?;
+
+                    // Apply attributes
+                    if !cell_style.2.is_empty() {
+                        Self::emit_style_flags(writer, cell_style.2)?;
+                    }
+
+                    // Apply colors
+                    if cell_style.0.a() > 0 {
+                        write!(
+                            writer,
+                            "\x1b[38;2;{};{};{}m",
+                            cell_style.0.r(),
+                            cell_style.0.g(),
+                            cell_style.0.b()
+                        )?;
+                    }
+                    if cell_style.1.a() > 0 {
+                        write!(
+                            writer,
+                            "\x1b[48;2;{};{};{}m",
+                            cell_style.1.r(),
+                            cell_style.1.g(),
+                            cell_style.1.b()
+                        )?;
+                    }
+
+                    current_style = Some(cell_style);
+                }
+
+                // Check if link changed
+                let raw_link_id = cell.attrs.link_id();
+                let new_link = if raw_link_id == CellAttrs::LINK_ID_NONE {
+                    None
+                } else {
+                    Some(raw_link_id)
+                };
+
+                if current_link != new_link {
+                    // Close current link
+                    if current_link.is_some() {
+                        writer.write_all(b"\x1b]8;;\x1b\\")?;
+                    }
+                    // Open new link if present
+                    if let Some(link_id) = new_link
+                        && let Some(url) = self.links.get(link_id)
+                    {
+                        write!(writer, "\x1b]8;;{}\x1b\\", url)?;
+                    }
+                    current_link = new_link;
+                }
+
+                // Emit content
+                if let Some(ch) = cell.content.as_char() {
+                    let mut buf = [0u8; 4];
+                    let encoded = ch.encode_utf8(&mut buf);
+                    writer.write_all(encoded.as_bytes())?;
+                } else if let Some(gid) = cell.content.grapheme_id() {
+                    // Use pool directly with writer (no clone needed)
+                    if let Some(text) = self.pool.get(gid) {
+                        writer.write_all(text.as_bytes())?;
+                    } else {
+                        writer.write_all(b" ")?;
+                    }
+                } else {
+                    writer.write_all(b" ")?;
+                }
+            }
+        }
+
+        // Reset style
+        writer.write_all(b"\x1b[0m")?;
+
+        // Close any open link
+        if current_link.is_some() {
+            writer.write_all(b"\x1b]8;;\x1b\\")?;
+        }
+
+        trace!("emit_full_redraw complete");
+        Ok(())
+    }
+
     /// Emit SGR flags.
     fn emit_style_flags(
         writer: &mut impl Write,
@@ -916,9 +1382,9 @@ impl<W: Write> TerminalWriter<W> {
     }
 
     /// Create a full-screen diff (marks all cells as changed).
+    #[allow(dead_code)] // API for future diff strategy integration
     fn create_full_diff(&self, buffer: &Buffer) -> BufferDiff {
-        let empty = Buffer::new(buffer.width(), buffer.height());
-        BufferDiff::compute(&empty, buffer)
+        BufferDiff::full(buffer.width(), buffer.height())
     }
 
     /// Write log output (goes to scrollback region in inline mode).
@@ -936,6 +1402,7 @@ impl<W: Write> TerminalWriter<W> {
                 if !self.scroll_region_active {
                     self.prev_buffer = None;
                     self.last_inline_region = None;
+                    self.reset_diff_strategy();
                 }
 
                 // Position cursor in the log region before writing.
@@ -949,6 +1416,7 @@ impl<W: Write> TerminalWriter<W> {
                 if !self.scroll_region_active {
                     self.prev_buffer = None;
                     self.last_inline_region = None;
+                    self.reset_diff_strategy();
                 }
 
                 // InlineAuto: use effective_ui_height for positioning.
@@ -1002,18 +1470,32 @@ impl<W: Write> TerminalWriter<W> {
         self.writer().flush()?;
         self.prev_buffer = None;
         self.last_inline_region = None;
+        self.reset_diff_strategy();
+        Ok(())
+    }
+
+    fn set_cursor_visibility(&mut self, visible: bool) -> io::Result<()> {
+        if self.cursor_visible == visible {
+            return Ok(());
+        }
+        self.cursor_visible = visible;
+        if visible {
+            self.writer().write_all(b"\x1b[?25h")?;
+        } else {
+            self.writer().write_all(b"\x1b[?25l")?;
+        }
         Ok(())
     }
 
     /// Hide the cursor.
     pub fn hide_cursor(&mut self) -> io::Result<()> {
-        self.writer().write_all(b"\x1b[?25l")?;
+        self.set_cursor_visibility(false)?;
         self.writer().flush()
     }
 
     /// Show the cursor.
     pub fn show_cursor(&mut self) -> io::Result<()> {
-        self.writer().write_all(b"\x1b[?25h")?;
+        self.set_cursor_visibility(true)?;
         self.writer().flush()
     }
 
@@ -1107,6 +1589,7 @@ impl<W: Write> TerminalWriter<W> {
 
         // Show cursor
         let _ = writer.write_all(b"\x1b[?25h");
+        self.cursor_visible = true;
 
         // Flush
         let _ = writer.flush();
@@ -1249,7 +1732,7 @@ mod tests {
             writer.set_size(10, 10);
 
             let buffer = Buffer::new(10, 5);
-            writer.present_ui(&buffer, None).unwrap();
+            writer.present_ui(&buffer, None, true).unwrap();
         }
 
         // Should contain cursor save and restore
@@ -1274,12 +1757,56 @@ mod tests {
             writer.set_size(10, 10);
 
             let buffer = Buffer::new(10, 5);
-            writer.present_ui(&buffer, None).unwrap();
+            writer.present_ui(&buffer, None, true).unwrap();
         }
 
         // Should contain sync begin and end
         assert!(output.windows(SYNC_BEGIN.len()).any(|w| w == SYNC_BEGIN));
         assert!(output.windows(SYNC_END.len()).any(|w| w == SYNC_END));
+    }
+
+    #[test]
+    fn present_ui_hides_cursor_when_requested() {
+        let mut output = Vec::new();
+        {
+            let mut writer = TerminalWriter::new(
+                &mut output,
+                ScreenMode::AltScreen,
+                UiAnchor::Bottom,
+                basic_caps(),
+            );
+            writer.set_size(10, 5);
+
+            let buffer = Buffer::new(10, 5);
+            writer.present_ui(&buffer, None, false).unwrap();
+        }
+
+        assert!(
+            output.windows(6).any(|w| w == b"\x1b[?25l"),
+            "expected cursor hide sequence"
+        );
+    }
+
+    #[test]
+    fn present_ui_visible_does_not_hide_cursor() {
+        let mut output = Vec::new();
+        {
+            let mut writer = TerminalWriter::new(
+                &mut output,
+                ScreenMode::AltScreen,
+                UiAnchor::Bottom,
+                basic_caps(),
+            );
+            writer.set_size(10, 5);
+
+            let buffer = Buffer::new(10, 5);
+            writer.present_ui(&buffer, None, true).unwrap();
+        }
+
+        assert!(
+            !output.windows(6).any(|w| w == b"\x1b[?25l"),
+            "did not expect cursor hide sequence"
+        );
     }
 
     #[test]
@@ -1329,7 +1856,7 @@ mod tests {
 
         // Present a buffer
         let buffer = Buffer::new(10, 5);
-        writer.present_ui(&buffer, None).unwrap();
+        writer.present_ui(&buffer, None, true).unwrap();
         assert!(writer.prev_buffer.is_some());
 
         // Clear screen should reset
@@ -1433,15 +1960,15 @@ mod tests {
         // First frame - full draw
         let mut buffer1 = Buffer::new(10, 5);
         buffer1.set_raw(0, 0, Cell::from_char('A'));
-        writer.present_ui(&buffer1, None).unwrap();
+        writer.present_ui(&buffer1, None, true).unwrap();
 
         // Second frame - same content (diff is empty, minimal output)
-        writer.present_ui(&buffer1, None).unwrap();
+        writer.present_ui(&buffer1, None, true).unwrap();
 
         // Third frame - change one cell
         let mut buffer2 = buffer1.clone();
         buffer2.set_raw(1, 0, Cell::from_char('B'));
-        writer.present_ui(&buffer2, None).unwrap();
+        writer.present_ui(&buffer2, None, true).unwrap();
 
         // Test passes if it doesn't panic - the diffing is working
         // (Detailed output length verification would require more complex setup)
@@ -1463,7 +1990,7 @@ mod tests {
             buffer.set_raw(0, 0, Cell::from_char('H'));
             buffer.set_raw(1, 0, Cell::from_char('i'));
             buffer.set_raw(2, 0, Cell::from_char('!'));
-            writer.present_ui(&buffer, None).unwrap();
+            writer.present_ui(&buffer, None, true).unwrap();
         }
 
         let output_str = String::from_utf8_lossy(&output);
@@ -1571,7 +2098,7 @@ mod tests {
             writer.set_size(10, 10);
 
             let buffer = Buffer::new(10, 5);
-            writer.present_ui(&buffer, None).unwrap();
+            writer.present_ui(&buffer, None, true).unwrap();
         }
 
         // Should NOT contain full screen clear (ED2 = "\x1b[2J")
@@ -1596,13 +2123,13 @@ mod tests {
 
             // Present UI first
             let buffer = Buffer::new(10, 5);
-            writer.present_ui(&buffer, None).unwrap();
+            writer.present_ui(&buffer, None, true).unwrap();
 
             // Write a log
             writer.write_log("log line\n").unwrap();
 
             // Present UI again
-            writer.present_ui(&buffer, None).unwrap();
+            writer.present_ui(&buffer, None, true).unwrap();
         }
 
         // Should have cursor save before each UI present
@@ -1653,7 +2180,7 @@ mod tests {
             );
             writer.set_size(8, 3);
             let buffer = Buffer::new(8, 10);
-            writer.present_ui(&buffer, None).unwrap();
+            writer.present_ui(&buffer, None, true).unwrap();
         }
 
         let max_row = max_cursor_row(&output);
@@ -1681,10 +2208,10 @@ mod tests {
 
             let buffer = Buffer::new(10, 6);
             writer.set_auto_ui_height(6);
-            writer.present_ui(&buffer, None).unwrap();
+            writer.present_ui(&buffer, None, true).unwrap();
 
             writer.set_auto_ui_height(3);
-            writer.present_ui(&buffer, None).unwrap();
+            writer.present_ui(&buffer, None, true).unwrap();
         }
 
         let second_save = find_nth(&output, CURSOR_SAVE, 2).expect("expected second cursor save");
@@ -1740,7 +2267,7 @@ mod tests {
             );
             writer.set_size(10, 10);
             let buffer = Buffer::new(10, 5);
-            writer.present_ui(&buffer, None).unwrap();
+            writer.present_ui(&buffer, None, true).unwrap();
         }
 
         let seq = b"\x1b[1;5r";
@@ -1762,7 +2289,7 @@ mod tests {
             );
             writer.set_size(10, 10);
             let buffer = Buffer::new(10, 5);
-            writer.present_ui(&buffer, None).unwrap();
+            writer.present_ui(&buffer, None, true).unwrap();
         }
 
         let seq = b"\x1b[6;10r";
@@ -1790,7 +2317,7 @@ mod tests {
             writer.set_size(5, 5);
             let mut buffer = Buffer::new(5, 2);
             buffer.set_raw(0, 0, Cell::from_char('X').with_fg(PackedRgba::RED));
-            writer.present_ui(&buffer, None).unwrap();
+            writer.present_ui(&buffer, None, true).unwrap();
         }
 
         let seq = b"\x1b[0m\x1b8";
@@ -1853,7 +2380,7 @@ mod tests {
             assert!(!writer.scroll_region_active());
 
             let buffer = Buffer::new(80, 5);
-            writer.present_ui(&buffer, None).unwrap();
+            writer.present_ui(&buffer, None, true).unwrap();
             assert!(writer.scroll_region_active());
         }
 
@@ -1878,7 +2405,7 @@ mod tests {
             writer.set_size(80, 24);
 
             let buffer = Buffer::new(80, 5);
-            writer.present_ui(&buffer, None).unwrap();
+            writer.present_ui(&buffer, None, true).unwrap();
             assert!(!writer.scroll_region_active());
         }
 
@@ -1903,7 +2430,7 @@ mod tests {
             writer.set_size(80, 24);
 
             let buffer = Buffer::new(80, 5);
-            writer.present_ui(&buffer, None).unwrap();
+            writer.present_ui(&buffer, None, true).unwrap();
             assert!(!writer.scroll_region_active());
         }
 
@@ -1928,7 +2455,7 @@ mod tests {
             writer.set_size(80, 24);
 
             let buffer = Buffer::new(80, 5);
-            writer.present_ui(&buffer, None).unwrap();
+            writer.present_ui(&buffer, None, true).unwrap();
             // Dropped here - cleanup should reset scroll region
         }
 
@@ -1974,7 +2501,7 @@ mod tests {
 
             // First present activates scroll region
             let buffer = Buffer::new(80, 5);
-            writer.present_ui(&buffer, None).unwrap();
+            writer.present_ui(&buffer, None, true).unwrap();
             assert!(writer.scroll_region_active());
 
             // Resize deactivates
@@ -1983,7 +2510,7 @@ mod tests {
 
             // Next present re-activates with new dimensions
             let buffer2 = Buffer::new(80, 5);
-            writer.present_ui(&buffer2, None).unwrap();
+            writer.present_ui(&buffer2, None, true).unwrap();
             assert!(writer.scroll_region_active());
         }
 
@@ -2008,7 +2535,7 @@ mod tests {
             writer.set_size(80, 24);
 
             let buffer = Buffer::new(80, 5);
-            writer.present_ui(&buffer, None).unwrap();
+            writer.present_ui(&buffer, None, true).unwrap();
             assert!(writer.scroll_region_active());
         }
 
@@ -2032,7 +2559,7 @@ mod tests {
         writer.set_size(80, 24);
 
         let buffer = Buffer::new(80, 24);
-        writer.present_ui(&buffer, None).unwrap();
+        writer.present_ui(&buffer, None, true).unwrap();
         assert!(!writer.scroll_region_active());
     }
 
@@ -2049,7 +2576,7 @@ mod tests {
             writer.set_size(80, 24);
 
             let buffer = Buffer::new(80, 5);
-            writer.present_ui(&buffer, None).unwrap();
+            writer.present_ui(&buffer, None, true).unwrap();
         }
 
         // Even with scroll region, cursor save/restore is used for UI presents
@@ -2182,7 +2709,7 @@ mod tests {
 
             // Present UI first
             let buffer = Buffer::new(80, 5);
-            writer.present_ui(&buffer, None).unwrap();
+            writer.present_ui(&buffer, None, true).unwrap();
 
             // Then write log
             writer.write_log("after UI\n").unwrap();
@@ -2237,7 +2764,7 @@ mod tests {
 
             // Present UI to activate scroll region
             let buffer = Buffer::new(80, 5);
-            writer.present_ui(&buffer, None).unwrap();
+            writer.present_ui(&buffer, None, true).unwrap();
             assert!(writer.scroll_region_active());
 
             // Log write should still position cursor
@@ -2369,7 +2896,7 @@ mod tests {
 
             let buffer = Buffer::new(80, 5);
             // Request cursor at (2, 1) in UI coordinates
-            writer.present_ui(&buffer, Some((2, 1))).unwrap();
+            writer.present_ui(&buffer, Some((2, 1)), true).unwrap();
         }
 
         // UI starts at row 20 (24 - 5 + 1 = 20) (1-indexed)
@@ -2387,6 +2914,248 @@ mod tests {
                 .windows(expected_pos.len())
                 .any(|w| w == expected_pos),
             "Cursor positioning should happen after restore"
+        );
+    }
+
+    // =========================================================================
+    // RuntimeDiffConfig tests
+    // =========================================================================
+
+    #[test]
+    fn runtime_diff_config_default() {
+        let config = RuntimeDiffConfig::default();
+        assert!(config.bayesian_enabled);
+        assert!(config.dirty_rows_enabled);
+        assert!(config.reset_on_resize);
+        assert!(config.reset_on_invalidation);
+    }
+
+    #[test]
+    fn runtime_diff_config_builder() {
+        let config = RuntimeDiffConfig::new()
+            .with_bayesian_enabled(false)
+            .with_dirty_rows_enabled(false)
+            .with_reset_on_resize(false)
+            .with_reset_on_invalidation(false);
+
+        assert!(!config.bayesian_enabled);
+        assert!(!config.dirty_rows_enabled);
+        assert!(!config.reset_on_resize);
+        assert!(!config.reset_on_invalidation);
+    }
+
+    #[test]
+    fn with_diff_config_applies_strategy_config() {
+        use ftui_render::diff_strategy::DiffStrategyConfig;
+
+        let strategy_config = DiffStrategyConfig {
+            prior_alpha: 5.0,
+            prior_beta: 5.0,
+            ..Default::default()
+        };
+
+        let runtime_config =
+            RuntimeDiffConfig::default().with_strategy_config(strategy_config.clone());
+
+        let writer = TerminalWriter::with_diff_config(
+            Vec::<u8>::new(),
+            ScreenMode::AltScreen,
+            UiAnchor::Bottom,
+            basic_caps(),
+            runtime_config,
+        );
+
+        // Verify the strategy config was applied
+        let (alpha, beta) = writer.diff_strategy().posterior_params();
+        assert!((alpha - 5.0).abs() < 0.001);
+        assert!((beta - 5.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn diff_config_accessor() {
+        let config = RuntimeDiffConfig::default().with_bayesian_enabled(false);
+
+        let writer = TerminalWriter::with_diff_config(
+            Vec::<u8>::new(),
+            ScreenMode::AltScreen,
+            UiAnchor::Bottom,
+            basic_caps(),
+            config,
+        );
+
+        assert!(!writer.diff_config().bayesian_enabled);
+    }
+
+    #[test]
+    fn last_diff_strategy_updates_after_present() {
+        let mut output = Vec::new();
+        let mut writer = TerminalWriter::with_diff_config(
+            &mut output,
+            ScreenMode::AltScreen,
+            UiAnchor::Bottom,
+            basic_caps(),
+            RuntimeDiffConfig::default(),
+        );
+        writer.set_size(10, 3);
+
+        let mut buffer = Buffer::new(10, 3);
+        buffer.set_raw(0, 0, Cell::from_char('X'));
+
+        assert!(writer.last_diff_strategy().is_none());
+        writer.present_ui(&buffer, None, false).unwrap();
+        assert_eq!(writer.last_diff_strategy(), Some(DiffStrategy::FullRedraw));
+
+        buffer.set_raw(1, 1, Cell::from_char('Y'));
+        writer.present_ui(&buffer, None, false).unwrap();
+        assert!(writer.last_diff_strategy().is_some());
+    }
+
+    #[test]
+    fn log_write_without_scroll_region_resets_diff_strategy() {
+        // When log writes occur without scroll region protection,
+        // the diff strategy posterior should be reset to priors.
+        let mut output = Vec::new();
+        {
+            let config = RuntimeDiffConfig::default();
+            let mut writer = TerminalWriter::with_diff_config(
+                &mut output,
+                ScreenMode::Inline { ui_height: 5 },
+                UiAnchor::Bottom,
+                basic_caps(), // no scroll region support
+                config,
+            );
+            writer.set_size(80, 24);
+
+            // Present a frame and observe some changes to modify posterior
+            let mut buffer = Buffer::new(80, 5);
+            buffer.set_raw(0, 0, Cell::from_char('X'));
+            writer.present_ui(&buffer, None, false).unwrap();
+
+            // Posterior should have been updated from initial priors
+            let (_alpha_before, _) = writer.diff_strategy().posterior_params();
+
+            // Present another frame
+            buffer.set_raw(1, 1, Cell::from_char('Y'));
+            writer.present_ui(&buffer, None, false).unwrap();
+
+            // Log write without scroll region should reset
+            assert!(!writer.scroll_region_active());
+            writer.write_log("log message\n").unwrap();
+
+            // After reset, posterior should be back to priors
+            let (alpha_after, beta_after) = writer.diff_strategy().posterior_params();
+            assert!(
+                (alpha_after - 1.0).abs() < 0.01 && (beta_after - 19.0).abs() < 0.01,
+                "posterior should reset to priors after log write: alpha={}, beta={}",
+                alpha_after,
+                beta_after
+            );
+        }
+    }
+
+    #[test]
+    fn log_write_with_scroll_region_preserves_diff_strategy() {
+        // When scroll region is active, log writes should NOT reset diff strategy
+        let mut output = Vec::new();
+        {
+            let config = RuntimeDiffConfig::default();
+            let mut writer = TerminalWriter::with_diff_config(
+                &mut output,
+                ScreenMode::Inline { ui_height: 5 },
+                UiAnchor::Bottom,
+                scroll_region_caps(), // has scroll region support
+                config,
+            );
+            writer.set_size(80, 24);
+
+            // Present frames to activate scroll region and update posterior
+            let mut buffer = Buffer::new(80, 5);
+            buffer.set_raw(0, 0, Cell::from_char('X'));
+            writer.present_ui(&buffer, None, false).unwrap();
+
+            buffer.set_raw(1, 1, Cell::from_char('Y'));
+            writer.present_ui(&buffer, None, false).unwrap();
+
+            assert!(writer.scroll_region_active());
+
+            // Get posterior before log write
+            let (alpha_before, beta_before) = writer.diff_strategy().posterior_params();
+
+            // Log write with scroll region active should NOT reset
+            writer.write_log("log message\n").unwrap();
+
+            let (alpha_after, beta_after) = writer.diff_strategy().posterior_params();
+            assert!(
+                (alpha_after - alpha_before).abs() < 0.01
+                    && (beta_after - beta_before).abs() < 0.01,
+                "posterior should be preserved with scroll region: before=({}, {}), after=({}, {})",
+                alpha_before,
+                beta_before,
+                alpha_after,
+                beta_after
+            );
+        }
+    }
+
+    #[test]
+    fn strategy_selection_config_flags_applied() {
+        // Verify that RuntimeDiffConfig flags are correctly stored and accessible
+        let config = RuntimeDiffConfig::default()
+            .with_dirty_rows_enabled(false)
+            .with_bayesian_enabled(false);
+
+        let writer = TerminalWriter::with_diff_config(
+            Vec::<u8>::new(),
+            ScreenMode::AltScreen,
+            UiAnchor::Bottom,
+            basic_caps(),
+            config,
+        );
+
+        // Config should be accessible
+        assert!(!writer.diff_config().dirty_rows_enabled);
+        assert!(!writer.diff_config().bayesian_enabled);
+
+        // Diff strategy should use the underlying strategy config
+        let (alpha, beta) = writer.diff_strategy().posterior_params();
+        // Default priors
+        assert!((alpha - 1.0).abs() < 0.01);
+        assert!((beta - 19.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn resize_respects_reset_toggle() {
+        // With reset_on_resize disabled, posterior should be preserved after resize
+        let config = RuntimeDiffConfig::default().with_reset_on_resize(false);
+
+        let mut writer = TerminalWriter::with_diff_config(
+            Vec::<u8>::new(),
+            ScreenMode::AltScreen,
+            UiAnchor::Bottom,
+            basic_caps(),
+            config,
+        );
+        writer.set_size(80, 24);
+
+        // Present frames to update posterior
+        let mut buffer = Buffer::new(80, 24);
+        buffer.set_raw(0, 0, Cell::from_char('X'));
+        writer.present_ui(&buffer, None, false).unwrap();
+
+        let mut buffer2 = Buffer::new(80, 24);
+        buffer2.set_raw(1, 1, Cell::from_char('Y'));
+        writer.present_ui(&buffer2, None, false).unwrap();
+
+        // Posterior should have moved from initial priors
+        let (alpha_before, beta_before) = writer.diff_strategy().posterior_params();
+
+        // Resize - with reset disabled, posterior should be preserved
+        writer.set_size(100, 30);
+
+        let (alpha_after, beta_after) = writer.diff_strategy().posterior_params();
+        assert!(
+            (alpha_after - alpha_before).abs() < 0.01 && (beta_after - beta_before).abs() < 0.01,
+            "posterior should be preserved when reset_on_resize=false"
         );
     }
 }
