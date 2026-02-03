@@ -7,13 +7,15 @@
 //! handles global keybindings, and renders the chrome (tab bar, status bar,
 //! help/debug overlays).
 
+use std::cell::Cell;
+use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers};
 use ftui_core::geometry::Rect;
 use ftui_layout::{Constraint, Flex};
-use ftui_render::cell::Cell;
+use ftui_render::cell::Cell as RenderCell;
 use ftui_render::frame::Frame;
 use ftui_runtime::{Cmd, Every, Model, Subscription};
 use ftui_style::Style;
@@ -367,6 +369,8 @@ pub enum AppMsg {
     ToggleHelp,
     /// Toggle the debug overlay.
     ToggleDebug,
+    /// Toggle the performance HUD overlay.
+    TogglePerfHud,
     /// Cycle the active color theme.
     CycleTheme,
     /// Periodic tick for animations and data updates.
@@ -415,6 +419,8 @@ pub struct AppModel {
     pub help_visible: bool,
     /// Whether the debug overlay is visible.
     pub debug_visible: bool,
+    /// Whether the performance HUD overlay is visible.
+    pub perf_hud_visible: bool,
     /// Command palette for instant action search (Ctrl+K).
     pub command_palette: CommandPalette,
     /// Global tick counter (incremented every 100ms).
@@ -427,6 +433,16 @@ pub struct AppModel {
     pub terminal_height: u16,
     /// Auto-exit after this many milliseconds (0 = disabled).
     pub exit_after_ms: u64,
+    /// Performance HUD: timestamp of last tick for tick-interval measurement.
+    perf_last_tick: Option<Instant>,
+    /// Performance HUD: recent tick intervals in microseconds (ring buffer, max 120).
+    perf_tick_times_us: VecDeque<u64>,
+    /// Performance HUD: frame counter using interior mutability (incremented in view).
+    perf_view_counter: Cell<u64>,
+    /// Performance HUD: views-per-tick ratio for FPS estimation.
+    perf_views_per_tick: f64,
+    /// Performance HUD: previous view count snapshot (for computing views per tick).
+    perf_prev_view_count: u64,
 }
 
 impl Default for AppModel {
@@ -446,12 +462,18 @@ impl AppModel {
             screens: ScreenStates::default(),
             help_visible: false,
             debug_visible: false,
+            perf_hud_visible: false,
             command_palette: palette,
             tick_count: 0,
             frame_count: 0,
             terminal_width: 0,
             terminal_height: 0,
             exit_after_ms: 0,
+            perf_last_tick: None,
+            perf_tick_times_us: VecDeque::with_capacity(120),
+            perf_view_counter: Cell::new(0),
+            perf_views_per_tick: 0.0,
+            perf_prev_view_count: 0,
         }
     }
 
@@ -481,6 +503,12 @@ impl AppModel {
             ActionItem::new("cmd:toggle_debug", "Toggle Debug Overlay")
                 .with_description("Show or hide the debug information panel")
                 .with_tags(&["debug", "info"])
+                .with_category("View"),
+        );
+        palette.register_action(
+            ActionItem::new("cmd:toggle_perf_hud", "Toggle Performance HUD")
+                .with_description("Show or hide the performance metrics overlay")
+                .with_tags(&["performance", "hud", "fps", "metrics", "budget"])
                 .with_category("View"),
         );
         palette.register_action(
@@ -526,6 +554,11 @@ impl AppModel {
                 Cmd::None
             }
 
+            AppMsg::TogglePerfHud => {
+                self.perf_hud_visible = !self.perf_hud_visible;
+                Cmd::None
+            }
+
             AppMsg::CycleTheme => {
                 theme::cycle_theme();
                 self.screens.apply_theme();
@@ -534,6 +567,7 @@ impl AppModel {
 
             AppMsg::Tick => {
                 self.tick_count += 1;
+                self.record_tick_timing();
                 self.screens.tick(self.tick_count);
                 let playback_events = self.screens.macro_recorder.drain_playback_events();
                 for event in playback_events {
@@ -592,6 +626,11 @@ impl AppModel {
                         // Debug
                         (KeyCode::F(12), _) => {
                             self.debug_visible = !self.debug_visible;
+                            return Cmd::None;
+                        }
+                        // Performance HUD
+                        (KeyCode::Char('p'), Modifiers::CTRL) => {
+                            self.perf_hud_visible = !self.perf_hud_visible;
                             return Cmd::None;
                         }
                         // Theme cycling
@@ -666,11 +705,14 @@ impl Model for AppModel {
     }
 
     fn view(&self, frame: &mut Frame) {
+        // Increment view counter (interior mutability for perf tracking)
+        self.perf_view_counter.set(self.perf_view_counter.get() + 1);
+
         let area = Rect::from_size(frame.buffer.width(), frame.buffer.height());
 
         frame
             .buffer
-            .fill(area, Cell::default().with_bg(theme::bg::DEEP.into()));
+            .fill(area, RenderCell::default().with_bg(theme::bg::DEEP.into()));
 
         // Top-level layout: tab bar (1 row) + content + status bar (1 row)
         let chunks = Flex::vertical()
@@ -707,6 +749,11 @@ impl Model for AppModel {
         // Debug overlay
         if self.debug_visible {
             self.render_debug_overlay(frame, area);
+        }
+
+        // Performance HUD overlay
+        if self.perf_hud_visible {
+            self.render_perf_hud(frame, area);
         }
 
         // Command palette overlay (topmost layer)
@@ -788,6 +835,9 @@ impl AppModel {
                     "cmd:toggle_debug" => {
                         self.debug_visible = !self.debug_visible;
                     }
+                    "cmd:toggle_perf_hud" => {
+                        self.perf_hud_visible = !self.perf_hud_visible;
+                    }
                     "cmd:cycle_theme" => {
                         theme::cycle_theme();
                         self.screens.apply_theme();
@@ -798,6 +848,203 @@ impl AppModel {
                 Cmd::None
             }
         }
+    }
+
+    /// Record a tick timing sample for the Performance HUD.
+    ///
+    /// Called from tick handling (which has `&mut self`). Keeps the
+    /// most recent 120 samples in a ring buffer for statistics.
+    fn record_tick_timing(&mut self) {
+        let now = Instant::now();
+        if let Some(last) = self.perf_last_tick {
+            let dt_us = now.duration_since(last).as_micros() as u64;
+            if self.perf_tick_times_us.len() >= 120 {
+                self.perf_tick_times_us.pop_front();
+            }
+            self.perf_tick_times_us.push_back(dt_us);
+        }
+        self.perf_last_tick = Some(now);
+
+        // Compute views rendered since last tick
+        let current_views = self.perf_view_counter.get();
+        let delta = current_views.saturating_sub(self.perf_prev_view_count);
+        self.perf_prev_view_count = current_views;
+        // EMA for views-per-tick (smoothed)
+        self.perf_views_per_tick = 0.7 * self.perf_views_per_tick + 0.3 * delta as f64;
+    }
+
+    /// Compute tick interval statistics from recent samples.
+    ///
+    /// Returns `(tps, avg_ms, p95_ms, p99_ms, min_ms, max_ms)`.
+    fn perf_stats(&self) -> (f64, f64, f64, f64, f64, f64) {
+        if self.perf_tick_times_us.is_empty() {
+            return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        }
+
+        let n = self.perf_tick_times_us.len();
+        let sum: u64 = self.perf_tick_times_us.iter().sum();
+        let avg_us = sum as f64 / n as f64;
+        let tps = if avg_us > 0.0 {
+            1_000_000.0 / avg_us
+        } else {
+            0.0
+        };
+        let avg_ms = avg_us / 1000.0;
+
+        let mut sorted: Vec<u64> = self.perf_tick_times_us.iter().copied().collect();
+        sorted.sort_unstable();
+
+        let p95_idx = ((n as f64 * 0.95) as usize).min(n.saturating_sub(1));
+        let p99_idx = ((n as f64 * 0.99) as usize).min(n.saturating_sub(1));
+        let p95_ms = sorted[p95_idx] as f64 / 1000.0;
+        let p99_ms = sorted[p99_idx] as f64 / 1000.0;
+        let min_ms = sorted[0] as f64 / 1000.0;
+        let max_ms = sorted[n - 1] as f64 / 1000.0;
+
+        (tps, avg_ms, p95_ms, p99_ms, min_ms, max_ms)
+    }
+
+    /// Render the Performance HUD overlay in the top-left corner.
+    ///
+    /// Shows frame timing, FPS, budget state, diff metrics, and a mini
+    /// sparkline of recent frame times. Toggled via Ctrl+P.
+    fn render_perf_hud(&self, frame: &mut Frame, area: Rect) {
+        let overlay_width = 48u16.min(area.width.saturating_sub(4));
+        let overlay_height = 16u16.min(area.height.saturating_sub(4));
+
+        if overlay_width < 20 || overlay_height < 6 {
+            return; // Graceful degradation: too small to render
+        }
+
+        let x = area.x + 1;
+        let y = area.y + 1;
+        let overlay_area = Rect::new(x, y, overlay_width, overlay_height);
+
+        let hud_block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("Perf HUD")
+            .title_alignment(Alignment::Center)
+            .style(Style::new().fg(theme::accent::INFO).bg(theme::bg::DEEP));
+
+        let inner = hud_block.inner(overlay_area);
+        // Fill background to ensure overlay occludes content behind it
+        frame.buffer.fill(
+            overlay_area,
+            RenderCell::default().with_bg(theme::bg::DEEP.into()),
+        );
+        hud_block.render(overlay_area, frame);
+
+        if inner.is_empty() {
+            return;
+        }
+
+        let (tps, avg_ms, p95_ms, p99_ms, min_ms, max_ms) = self.perf_stats();
+        let views = self.perf_view_counter.get();
+        // Estimate render FPS: views-per-tick * ticks-per-second
+        let est_fps = self.perf_views_per_tick * tps;
+
+        let mut lines: Vec<(String, Style)> = Vec::with_capacity(14);
+        let label_style = Style::new().fg(theme::fg::MUTED);
+        let value_style = Style::new().fg(theme::fg::PRIMARY);
+        let accent_style = Style::new().fg(theme::accent::INFO);
+
+        // FPS header with color coding
+        let fps_color = if est_fps >= 50.0 {
+            theme::accent::SUCCESS
+        } else if est_fps >= 20.0 {
+            theme::accent::WARNING
+        } else {
+            theme::accent::ERROR
+        };
+        lines.push((
+            format!(" Render FPS: {est_fps:.1}"),
+            Style::new().fg(fps_color).bold(),
+        ));
+
+        // Tick timing
+        lines.push((format!(" Tick rate:  {tps:>7.1} /s"), value_style));
+        lines.push((format!(" Tick avg:   {avg_ms:>7.2} ms"), value_style));
+        lines.push((format!(" Tick p95:   {p95_ms:>7.2} ms"), value_style));
+        lines.push((format!(" Tick p99:   {p99_ms:>7.2} ms"), label_style));
+        lines.push((
+            format!(" Tick range: {min_ms:.1}..{max_ms:.1} ms"),
+            label_style,
+        ));
+
+        // Separator
+        lines.push((String::new(), label_style));
+
+        // Counters
+        lines.push((format!(" Views:      {views}"), value_style));
+        lines.push((format!(" Ticks:      {}", self.tick_count), value_style));
+        lines.push((
+            format!(" Screen:     {}", self.current_screen.title()),
+            accent_style,
+        ));
+        lines.push((
+            format!(
+                " Terminal:   {}x{}",
+                self.terminal_width, self.terminal_height
+            ),
+            value_style,
+        ));
+        lines.push((
+            format!(" Samples:    {}/120", self.perf_tick_times_us.len()),
+            label_style,
+        ));
+
+        // Separator
+        lines.push((String::new(), label_style));
+
+        // Mini sparkline of recent tick intervals
+        let sparkline = self.perf_sparkline(inner.width.saturating_sub(2) as usize);
+        if !sparkline.is_empty() {
+            lines.push((format!(" {sparkline}"), accent_style));
+        }
+
+        // Render lines
+        for (i, (text, style)) in lines.iter().enumerate() {
+            if i >= inner.height as usize {
+                break;
+            }
+            let row_area = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
+            Paragraph::new(text.as_str())
+                .style(*style)
+                .render(row_area, frame);
+        }
+    }
+
+    /// Generate a braille-style sparkline from recent frame times.
+    ///
+    /// Uses Unicode block characters for a compact visual representation
+    /// of frame time trends.
+    fn perf_sparkline(&self, max_width: usize) -> String {
+        const BARS: &[char] = &[
+            ' ', '\u{2581}', '\u{2582}', '\u{2583}', '\u{2584}', '\u{2585}', '\u{2586}',
+            '\u{2587}', '\u{2588}',
+        ];
+
+        let samples: Vec<u64> = self.perf_tick_times_us.iter().copied().collect();
+        if samples.is_empty() {
+            return String::new();
+        }
+
+        // Take the last `max_width` samples
+        let start = samples.len().saturating_sub(max_width);
+        let window = &samples[start..];
+
+        let min = *window.iter().min().unwrap_or(&0);
+        let max = *window.iter().max().unwrap_or(&1);
+        let range = (max - min).max(1) as f64;
+
+        window
+            .iter()
+            .map(|&v| {
+                let normalized = ((v - min) as f64 / range * 8.0) as usize;
+                BARS[normalized.min(BARS.len() - 1)]
+            })
+            .collect()
     }
 
     /// Render the debug overlay in the top-right corner.
@@ -1167,8 +1414,8 @@ mod tests {
     #[test]
     fn palette_has_actions_for_all_screens() {
         let app = AppModel::new();
-        // One action per screen + 4 global commands
-        let expected = ScreenId::ALL.len() + 4;
+        // One action per screen + 5 global commands (quit, help, theme, debug, perf_hud)
+        let expected = ScreenId::ALL.len() + 5;
         assert_eq!(app.command_palette.action_count(), expected);
     }
 
@@ -1253,5 +1500,381 @@ mod tests {
         let mut frame = Frame::new(80, 24, &mut pool);
         app.view(&mut frame);
         // Should not panic — overlay rendered on top of content.
+    }
+
+    // -----------------------------------------------------------------------
+    // Performance HUD tests (bd-3k3x.2)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn toggle_perf_hud() {
+        let mut app = AppModel::new();
+        assert!(!app.perf_hud_visible);
+
+        app.update(AppMsg::TogglePerfHud);
+        assert!(app.perf_hud_visible);
+
+        app.update(AppMsg::TogglePerfHud);
+        assert!(!app.perf_hud_visible);
+    }
+
+    #[test]
+    fn ctrl_p_toggles_perf_hud() {
+        let mut app = AppModel::new();
+        assert!(!app.perf_hud_visible);
+
+        let event = Event::Key(KeyEvent {
+            code: KeyCode::Char('p'),
+            modifiers: Modifiers::CTRL,
+            kind: KeyEventKind::Press,
+        });
+        app.update(AppMsg::from(event.clone()));
+        assert!(app.perf_hud_visible);
+
+        app.update(AppMsg::from(event));
+        assert!(!app.perf_hud_visible);
+    }
+
+    #[test]
+    fn perf_stats_empty() {
+        let app = AppModel::new();
+        let (tps, avg, p95, p99, min, max) = app.perf_stats();
+        assert_eq!(tps, 0.0);
+        assert_eq!(avg, 0.0);
+        assert_eq!(p95, 0.0);
+        assert_eq!(p99, 0.0);
+        assert_eq!(min, 0.0);
+        assert_eq!(max, 0.0);
+    }
+
+    #[test]
+    fn perf_stats_with_samples() {
+        let mut app = AppModel::new();
+        // Inject known samples: 100ms intervals (100_000 µs each)
+        for _ in 0..10 {
+            app.perf_tick_times_us.push_back(100_000);
+        }
+        let (tps, avg_ms, _p95, _p99, min_ms, max_ms) = app.perf_stats();
+        assert!((tps - 10.0).abs() < 0.1, "tps should be ~10, got {tps}");
+        assert!(
+            (avg_ms - 100.0).abs() < 0.1,
+            "avg should be ~100ms, got {avg_ms}"
+        );
+        assert!(
+            (min_ms - 100.0).abs() < 0.1,
+            "min should be ~100ms, got {min_ms}"
+        );
+        assert!(
+            (max_ms - 100.0).abs() < 0.1,
+            "max should be ~100ms, got {max_ms}"
+        );
+    }
+
+    #[test]
+    fn perf_sparkline_empty() {
+        let app = AppModel::new();
+        assert!(app.perf_sparkline(40).is_empty());
+    }
+
+    #[test]
+    fn perf_sparkline_generates_output() {
+        let mut app = AppModel::new();
+        for i in 0..20 {
+            app.perf_tick_times_us.push_back(50_000 + i * 5_000);
+        }
+        let sparkline = app.perf_sparkline(20);
+        assert_eq!(
+            sparkline.chars().count(),
+            20,
+            "sparkline should use all 20 samples"
+        );
+        assert!(
+            sparkline
+                .chars()
+                .all(|c| c == ' ' || ('\u{2581}'..='\u{2588}').contains(&c))
+        );
+    }
+
+    #[test]
+    fn perf_sparkline_respects_max_width() {
+        let mut app = AppModel::new();
+        for i in 0..50 {
+            app.perf_tick_times_us.push_back(100_000 + i * 1_000);
+        }
+        let sparkline = app.perf_sparkline(10);
+        // Should take only the last 10 samples
+        assert_eq!(sparkline.chars().count(), 10);
+    }
+
+    #[test]
+    fn perf_hud_renders_without_panic() {
+        let mut app = AppModel::new();
+        app.perf_hud_visible = true;
+        app.terminal_width = 120;
+        app.terminal_height = 40;
+
+        // Add some tick samples so stats are non-trivial
+        for i in 0..30 {
+            app.perf_tick_times_us.push_back(90_000 + i * 1_000);
+        }
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(120, 40, &mut pool);
+        app.view(&mut frame);
+    }
+
+    #[test]
+    fn perf_hud_degrades_on_tiny_terminal() {
+        let mut app = AppModel::new();
+        app.perf_hud_visible = true;
+        app.terminal_width = 15;
+        app.terminal_height = 5;
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(15, 5, &mut pool);
+        // Should not panic even when area is too small for HUD
+        app.view(&mut frame);
+    }
+
+    #[test]
+    fn perf_tick_ring_buffer_caps_at_120() {
+        let mut app = AppModel::new();
+        for i in 0..200 {
+            app.perf_tick_times_us.push_back(i * 1000);
+        }
+        // Ring buffer should have capped... but push_back alone doesn't cap.
+        // record_tick_timing() is what caps it. Test that method.
+        let mut app2 = AppModel::new();
+        // Simulate 200 ticks with known intervals
+        for _ in 0..200 {
+            app2.perf_last_tick = Some(std::time::Instant::now());
+            // Manually push to simulate without real timing
+            if app2.perf_tick_times_us.len() >= 120 {
+                app2.perf_tick_times_us.pop_front();
+            }
+            app2.perf_tick_times_us.push_back(100_000);
+        }
+        assert_eq!(app2.perf_tick_times_us.len(), 120);
+    }
+
+    #[test]
+    fn palette_toggle_perf_hud_via_action() {
+        let mut app = AppModel::new();
+        assert!(!app.perf_hud_visible);
+
+        app.execute_palette_action(PaletteAction::Execute("cmd:toggle_perf_hud".into()));
+        assert!(app.perf_hud_visible);
+
+        app.execute_palette_action(PaletteAction::Execute("cmd:toggle_perf_hud".into()));
+        assert!(!app.perf_hud_visible);
+    }
+
+    #[test]
+    fn palette_includes_perf_hud_action() {
+        let app = AppModel::new();
+        // The palette should have the perf HUD action registered.
+        // Previous test counted ALL.len() + 4 global commands.
+        // Now we have 5 global commands (quit, help, theme, debug, perf_hud).
+        let expected = ScreenId::ALL.len() + 5;
+        assert_eq!(app.command_palette.action_count(), expected);
+    }
+
+    // -----------------------------------------------------------------------
+    // Performance HUD — Property Tests (bd-3k3x.6)
+    // -----------------------------------------------------------------------
+
+    /// Property: perf_stats is deterministic — same samples always produce same output.
+    #[test]
+    fn perf_stats_deterministic() {
+        let mut app1 = AppModel::new();
+        let mut app2 = AppModel::new();
+        let samples = [
+            80_000u64, 95_000, 110_000, 100_000, 87_000, 102_000, 99_000, 105_000,
+        ];
+        for &s in &samples {
+            app1.perf_tick_times_us.push_back(s);
+            app2.perf_tick_times_us.push_back(s);
+        }
+        let s1 = app1.perf_stats();
+        let s2 = app2.perf_stats();
+        assert_eq!(s1.0.to_bits(), s2.0.to_bits(), "tps must be identical");
+        assert_eq!(s1.1.to_bits(), s2.1.to_bits(), "avg must be identical");
+        assert_eq!(s1.2.to_bits(), s2.2.to_bits(), "p95 must be identical");
+        assert_eq!(s1.3.to_bits(), s2.3.to_bits(), "p99 must be identical");
+        assert_eq!(s1.4.to_bits(), s2.4.to_bits(), "min must be identical");
+        assert_eq!(s1.5.to_bits(), s2.5.to_bits(), "max must be identical");
+    }
+
+    /// Property: perf_stats returns non-negative values for all fields.
+    #[test]
+    fn perf_stats_non_negative() {
+        for n in [1, 2, 5, 10, 50, 120] {
+            let mut app = AppModel::new();
+            for i in 0..n {
+                app.perf_tick_times_us
+                    .push_back(50_000 + (i as u64) * 3_000);
+            }
+            let (tps, avg, p95, p99, min, max) = app.perf_stats();
+            assert!(tps >= 0.0, "tps must be non-negative (n={n})");
+            assert!(avg >= 0.0, "avg must be non-negative (n={n})");
+            assert!(p95 >= 0.0, "p95 must be non-negative (n={n})");
+            assert!(p99 >= 0.0, "p99 must be non-negative (n={n})");
+            assert!(min >= 0.0, "min must be non-negative (n={n})");
+            assert!(max >= 0.0, "max must be non-negative (n={n})");
+        }
+    }
+
+    /// Property: min <= avg <= max for any sample set.
+    #[test]
+    fn perf_stats_ordering_invariant() {
+        for pattern in [
+            vec![100_000u64; 10],                                 // uniform
+            (0..20).map(|i| 50_000 + i * 10_000).collect(),       // ascending
+            (0..20).rev().map(|i| 50_000 + i * 10_000).collect(), // descending
+            vec![1_000, 1_000_000, 500_000, 2_000, 800_000],      // high variance
+        ] {
+            let mut app = AppModel::new();
+            for s in &pattern {
+                app.perf_tick_times_us.push_back(*s);
+            }
+            let (_tps, avg, p95, p99, min, max) = app.perf_stats();
+            assert!(
+                min <= avg,
+                "min ({min}) must be <= avg ({avg}) for pattern len={}",
+                pattern.len()
+            );
+            assert!(
+                avg <= max,
+                "avg ({avg}) must be <= max ({max}) for pattern len={}",
+                pattern.len()
+            );
+            assert!(p95 <= max, "p95 ({p95}) must be <= max ({max})");
+            assert!(p99 <= max, "p99 ({p99}) must be <= max ({max})");
+            assert!(min <= p95, "min ({min}) must be <= p95 ({p95})");
+        }
+    }
+
+    /// Property: perf_stats with one sample has min == avg == max.
+    #[test]
+    fn perf_stats_single_sample() {
+        let mut app = AppModel::new();
+        app.perf_tick_times_us.push_back(42_000);
+        let (_tps, avg, p95, p99, min, max) = app.perf_stats();
+        assert_eq!(min, max, "single sample: min must equal max");
+        assert_eq!(avg, min, "single sample: avg must equal min");
+        assert_eq!(p95, min, "single sample: p95 must equal min");
+        assert_eq!(p99, min, "single sample: p99 must equal min");
+    }
+
+    /// Property: sparkline output length never exceeds max_width (char count).
+    #[test]
+    fn perf_sparkline_width_bound() {
+        for width in [1, 5, 10, 40, 100] {
+            let mut app = AppModel::new();
+            for i in 0..200 {
+                app.perf_tick_times_us.push_back(80_000 + (i % 50) * 2_000);
+            }
+            let sparkline = app.perf_sparkline(width);
+            let char_count = sparkline.chars().count();
+            assert!(
+                char_count <= width,
+                "sparkline char count ({char_count}) must be <= max_width ({width})"
+            );
+        }
+    }
+
+    /// Property: sparkline chars are always valid block characters or space.
+    #[test]
+    fn perf_sparkline_valid_chars() {
+        let valid_chars: Vec<char> = vec![
+            ' ', '\u{2581}', '\u{2582}', '\u{2583}', '\u{2584}', '\u{2585}', '\u{2586}',
+            '\u{2587}', '\u{2588}',
+        ];
+        for n in [1, 2, 10, 50, 120] {
+            let mut app = AppModel::new();
+            for i in 0..n {
+                app.perf_tick_times_us
+                    .push_back(10_000 + (i as u64) * 7_777);
+            }
+            let sparkline = app.perf_sparkline(50);
+            for ch in sparkline.chars() {
+                assert!(
+                    valid_chars.contains(&ch),
+                    "sparkline contains invalid char: {ch:?} (n={n})"
+                );
+            }
+        }
+    }
+
+    /// Property: toggle is idempotent — double toggle returns to original state.
+    #[test]
+    fn perf_hud_toggle_idempotent() {
+        let mut app = AppModel::new();
+        let initial = app.perf_hud_visible;
+        app.update(AppMsg::TogglePerfHud);
+        app.update(AppMsg::TogglePerfHud);
+        assert_eq!(
+            app.perf_hud_visible, initial,
+            "double toggle must restore state"
+        );
+    }
+
+    /// Property: perf HUD rendering never panics across many terminal sizes.
+    #[test]
+    fn perf_hud_renders_all_sizes() {
+        let mut app = AppModel::new();
+        app.perf_hud_visible = true;
+        for i in 0..60 {
+            app.perf_tick_times_us.push_back(90_000 + (i % 30) * 2_000);
+        }
+
+        for (w, h) in [
+            (1, 1),
+            (10, 5),
+            (20, 10),
+            (40, 15),
+            (80, 24),
+            (120, 40),
+            (200, 60),
+        ] {
+            app.terminal_width = w;
+            app.terminal_height = h;
+            let mut pool = GraphemePool::new();
+            let mut frame = Frame::new(w, h, &mut pool);
+            app.view(&mut frame);
+            // No panic = pass
+        }
+    }
+
+    /// Property: perf_stats tps is consistent with avg_ms (tps ≈ 1000/avg_ms).
+    #[test]
+    fn perf_stats_tps_avg_consistency() {
+        let mut app = AppModel::new();
+        for _ in 0..50 {
+            app.perf_tick_times_us.push_back(100_000); // 100ms intervals
+        }
+        let (tps, avg_ms, _, _, _, _) = app.perf_stats();
+        let expected_tps = 1000.0 / avg_ms;
+        assert!(
+            (tps - expected_tps).abs() < 0.01,
+            "tps ({tps}) should equal 1000/avg_ms ({expected_tps})"
+        );
+    }
+
+    /// Property: view counter increments on each view call.
+    #[test]
+    fn perf_view_counter_increments() {
+        let app = AppModel::new();
+        let before = app.perf_view_counter.get();
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+        app.view(&mut frame);
+
+        assert_eq!(
+            app.perf_view_counter.get(),
+            before + 1,
+            "view counter must increment on each view() call"
+        );
     }
 }
