@@ -27,6 +27,7 @@ use ftui_widgets::tree::{Tree, TreeGuides, TreeNode};
 
 use super::{HelpEntry, Screen};
 use crate::theme;
+use crate::theme::{BadgeSpec, PriorityBadge, StatusBadge};
 
 /// Number of gallery sections.
 const SECTION_COUNT: usize = 7;
@@ -446,36 +447,29 @@ impl WidgetGallery {
             return;
         }
 
-        let styles = theme::semantic_styles();
-
         let status_row = Rect::new(area.x, area.y, area.width, 1);
         let priority_row = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
 
-        self.render_badge_row(
-            frame,
-            status_row,
-            &[
-                ("OPEN", styles.status.open.badge_style),
-                ("PROG", styles.status.in_progress.badge_style),
-                ("BLKD", styles.status.blocked.badge_style),
-                ("DONE", styles.status.closed.badge_style),
-            ],
-        );
+        let status_badges = [
+            theme::status_badge(StatusBadge::Open),
+            theme::status_badge(StatusBadge::InProgress),
+            theme::status_badge(StatusBadge::Blocked),
+            theme::status_badge(StatusBadge::Closed),
+        ];
 
-        self.render_badge_row(
-            frame,
-            priority_row,
-            &[
-                ("P0", styles.priority.p0.badge_style),
-                ("P1", styles.priority.p1.badge_style),
-                ("P2", styles.priority.p2.badge_style),
-                ("P3", styles.priority.p3.badge_style),
-                ("P4", styles.priority.p4.badge_style),
-            ],
-        );
+        let priority_badges = [
+            theme::priority_badge(PriorityBadge::P0),
+            theme::priority_badge(PriorityBadge::P1),
+            theme::priority_badge(PriorityBadge::P2),
+            theme::priority_badge(PriorityBadge::P3),
+            theme::priority_badge(PriorityBadge::P4),
+        ];
+
+        self.render_badge_row(frame, status_row, &status_badges);
+        self.render_badge_row(frame, priority_row, &priority_badges);
     }
 
-    fn render_badge_row(&self, frame: &mut Frame, area: Rect, badges: &[(&str, Style)]) {
+    fn render_badge_row(&self, frame: &mut Frame, area: Rect, badges: &[BadgeSpec]) {
         if area.is_empty() {
             return;
         }
@@ -484,8 +478,8 @@ impl WidgetGallery {
         let max_x = area.right();
         let y = area.y;
 
-        for (label, style) in badges {
-            let badge = Badge::new(*label).with_style(*style);
+        for badge_spec in badges {
+            let badge = Badge::new(badge_spec.label).with_style(badge_spec.style);
             let w = badge.width().min(area.width);
             if x >= max_x || x.saturating_add(w) > max_x {
                 break;

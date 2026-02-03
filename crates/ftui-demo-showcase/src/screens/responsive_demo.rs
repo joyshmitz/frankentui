@@ -88,14 +88,9 @@ impl ResponsiveDemo {
             bps.xl,
         );
 
-        let style = Style::new()
-            .fg(theme::fg::PRIMARY)
-            .bg(bp_color(bp))
-            .bold();
+        let style = Style::new().fg(theme::fg::PRIMARY).bg(bp_color(bp)).bold();
 
-        Paragraph::new(&*indicator)
-            .style(style)
-            .render(area, frame);
+        Paragraph::new(&*indicator).style(style).render(area, frame);
     }
 
     fn render_main_content(&self, frame: &mut Frame, area: Rect) {
@@ -105,19 +100,20 @@ impl ResponsiveDemo {
         let bp = self.current_breakpoint();
 
         // Responsive layout: single column on small, sidebar+content on medium+
-        let layout = ResponsiveLayout::new(
-            Flex::vertical().constraints([Constraint::Fill]),
-        )
-        .at(
-            Breakpoint::Md,
-            Flex::horizontal().constraints([Constraint::Fixed(28), Constraint::Fill]),
-        )
-        .at(
-            Breakpoint::Lg,
-            Flex::horizontal()
-                .constraints([Constraint::Fixed(28), Constraint::Fill, Constraint::Fixed(24)]),
-        )
-        .with_breakpoints(self.breakpoints());
+        let layout = ResponsiveLayout::new(Flex::vertical().constraints([Constraint::Fill]))
+            .at(
+                Breakpoint::Md,
+                Flex::horizontal().constraints([Constraint::Fixed(28), Constraint::Fill]),
+            )
+            .at(
+                Breakpoint::Lg,
+                Flex::horizontal().constraints([
+                    Constraint::Fixed(28),
+                    Constraint::Fill,
+                    Constraint::Fixed(24),
+                ]),
+            )
+            .with_breakpoints(self.breakpoints());
 
         let result = layout.split_for(bp, area);
 
@@ -143,11 +139,7 @@ impl ResponsiveDemo {
 
     fn render_stacked_view(&self, frame: &mut Frame, area: Rect) {
         let chunks = Flex::vertical()
-            .constraints([
-                Constraint::Fixed(5),
-                Constraint::Fixed(6),
-                Constraint::Fill,
-            ])
+            .constraints([Constraint::Fixed(5), Constraint::Fixed(6), Constraint::Fill])
             .split(area);
 
         self.render_info_block("Layout Info", &self.layout_info_text(), frame, chunks[0]);
@@ -350,19 +342,20 @@ impl Screen for ResponsiveDemo {
 
         // Render main content with responsive layout
         // Re-derive layout inline using area.width for test accuracy
-        let layout = ResponsiveLayout::new(
-            Flex::vertical().constraints([Constraint::Fill]),
-        )
-        .at(
-            Breakpoint::Md,
-            Flex::horizontal().constraints([Constraint::Fixed(28), Constraint::Fill]),
-        )
-        .at(
-            Breakpoint::Lg,
-            Flex::horizontal()
-                .constraints([Constraint::Fixed(28), Constraint::Fill, Constraint::Fixed(24)]),
-        )
-        .with_breakpoints(self.breakpoints());
+        let layout = ResponsiveLayout::new(Flex::vertical().constraints([Constraint::Fill]))
+            .at(
+                Breakpoint::Md,
+                Flex::horizontal().constraints([Constraint::Fixed(28), Constraint::Fill]),
+            )
+            .at(
+                Breakpoint::Lg,
+                Flex::horizontal().constraints([
+                    Constraint::Fixed(28),
+                    Constraint::Fill,
+                    Constraint::Fixed(24),
+                ]),
+            )
+            .with_breakpoints(self.breakpoints());
 
         let result = layout.split_for(bp, chunks[1]);
 

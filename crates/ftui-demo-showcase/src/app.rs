@@ -64,6 +64,12 @@ pub enum ScreenId {
     VisualEffects,
     /// Responsive layout breakpoint demo.
     ResponsiveDemo,
+    /// Live log search and filter demo.
+    LogSearch,
+    /// Toast notification system demo.
+    Notifications,
+    /// Action timeline / event stream viewer.
+    ActionTimeline,
 }
 
 impl ScreenId {
@@ -83,6 +89,9 @@ impl ScreenId {
         Self::MarkdownRichText,
         Self::VisualEffects,
         Self::ResponsiveDemo,
+        Self::LogSearch,
+        Self::Notifications,
+        Self::ActionTimeline,
     ];
 
     /// 0-based index in the ALL array.
@@ -119,6 +128,9 @@ impl ScreenId {
             Self::MarkdownRichText => "Markdown",
             Self::VisualEffects => "Visual Effects",
             Self::ResponsiveDemo => "Responsive Layout",
+            Self::LogSearch => "Log Search",
+            Self::Notifications => "Notifications",
+            Self::ActionTimeline => "Action Timeline",
         }
     }
 
@@ -139,6 +151,9 @@ impl ScreenId {
             Self::MarkdownRichText => "MD",
             Self::VisualEffects => "VFX",
             Self::ResponsiveDemo => "Resp",
+            Self::LogSearch => "Logs",
+            Self::Notifications => "Notify",
+            Self::ActionTimeline => "Timeline",
         }
     }
 
@@ -159,6 +174,9 @@ impl ScreenId {
             Self::MarkdownRichText => "MarkdownRichText",
             Self::VisualEffects => "VisualEffects",
             Self::ResponsiveDemo => "ResponsiveDemo",
+            Self::LogSearch => "LogSearch",
+            Self::Notifications => "Notifications",
+            Self::ActionTimeline => "ActionTimeline",
         }
     }
 
@@ -208,9 +226,13 @@ pub struct ScreenStates {
     pub visual_effects: screens::visual_effects::VisualEffectsScreen,
     /// Responsive layout demo screen state.
     pub responsive_demo: screens::responsive_demo::ResponsiveDemo,
+    /// Log search demo screen state.
+    pub log_search: screens::log_search::LogSearch,
+    /// Notifications demo screen state.
+    pub notifications: screens::notifications::Notifications,
     /// Tracks whether each screen has errored during rendering.
     /// Indexed by `ScreenId::index()`.
-    screen_errors: [Option<String>; 14],
+    screen_errors: [Option<String>; 16],
 }
 
 impl ScreenStates {
@@ -260,6 +282,12 @@ impl ScreenStates {
             ScreenId::ResponsiveDemo => {
                 self.responsive_demo.update(event);
             }
+            ScreenId::LogSearch => {
+                self.log_search.update(event);
+            }
+            ScreenId::Notifications => {
+                self.notifications.update(event);
+            }
         }
     }
 
@@ -280,6 +308,8 @@ impl ScreenStates {
         self.markdown_rich_text.tick(tick_count);
         self.visual_effects.tick(tick_count);
         self.responsive_demo.tick(tick_count);
+        self.log_search.tick(tick_count);
+        self.notifications.tick(tick_count);
     }
 
     fn apply_theme(&mut self) {
@@ -322,6 +352,8 @@ impl ScreenStates {
                 ScreenId::MarkdownRichText => self.markdown_rich_text.view(frame, area),
                 ScreenId::VisualEffects => self.visual_effects.view(frame, area),
                 ScreenId::ResponsiveDemo => self.responsive_demo.view(frame, area),
+                ScreenId::LogSearch => self.log_search.view(frame, area),
+                ScreenId::Notifications => self.notifications.view(frame, area),
             }
         }));
 
@@ -801,6 +833,8 @@ impl AppModel {
             ScreenId::MarkdownRichText => self.screens.markdown_rich_text.keybindings(),
             ScreenId::VisualEffects => self.screens.visual_effects.keybindings(),
             ScreenId::ResponsiveDemo => self.screens.responsive_demo.keybindings(),
+            ScreenId::LogSearch => self.screens.log_search.keybindings(),
+            ScreenId::Notifications => self.screens.notifications.keybindings(),
         };
         // Convert screens::HelpEntry to chrome::HelpEntry (same struct, different module).
         entries
@@ -1118,7 +1152,7 @@ mod tests {
         assert_eq!(app.current_screen, ScreenId::Dashboard);
 
         app.update(AppMsg::PrevScreen);
-        assert_eq!(app.current_screen, ScreenId::ResponsiveDemo);
+        assert_eq!(app.current_screen, ScreenId::Notifications);
     }
 
     #[test]
@@ -1196,7 +1230,7 @@ mod tests {
     fn screen_next_prev_wraps() {
         assert_eq!(ScreenId::Dashboard.next(), ScreenId::Shakespeare);
         assert_eq!(ScreenId::VisualEffects.next(), ScreenId::ResponsiveDemo);
-        assert_eq!(ScreenId::Dashboard.prev(), ScreenId::ResponsiveDemo);
+        assert_eq!(ScreenId::Dashboard.prev(), ScreenId::Notifications);
         assert_eq!(ScreenId::Shakespeare.prev(), ScreenId::Dashboard);
     }
 
@@ -1375,7 +1409,7 @@ mod tests {
     /// Verify all screens have the expected count.
     #[test]
     fn all_screens_count() {
-        assert_eq!(ScreenId::ALL.len(), 14);
+        assert_eq!(ScreenId::ALL.len(), 16);
     }
 
     // -----------------------------------------------------------------------

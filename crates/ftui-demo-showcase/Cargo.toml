@@ -11,7 +11,7 @@ ftui-style = { path = "../ftui-style" }
 ftui-text = { path = "../ftui-text", features = ["markup"] }
 ftui-layout = { path = "../ftui-layout" }
 ftui-runtime = { path = "../ftui-runtime" }
-ftui-widgets = { path = "../ftui-widgets" }
+ftui-widgets = { path = "../ftui-widgets", features = ["tracing"] }
 ftui-extras = { path = "../ftui-extras", features = [
     "canvas",
     "charts",
@@ -39,3 +39,5 @@ debug-render = []
 
 [dev-dependencies]
 ftui-harness = { path = "../ftui-harness" }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["registry"] }

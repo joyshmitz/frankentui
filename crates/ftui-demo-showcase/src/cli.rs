@@ -39,6 +39,8 @@ SCREENS:
    12  Markdown           Rich text and markdown rendering
    13  Visual Effects     Animated braille and canvas effects
    14  Responsive         Breakpoint-driven responsive layout demo
+   15  Log Search         Live log search and filter demo
+   16  Notifications      Toast notification system demo
 
 KEYBINDINGS:
     1-9, 0          Switch to screens 1-10 by number

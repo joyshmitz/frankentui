@@ -25,10 +25,12 @@ use ftui_extras::theme as core_theme;
 use ftui_style::{Style, StyleFlags};
 
 pub use core_theme::{
-    AlphaColor, ColorToken, IntentStyles, IssueTypeStyles, PriorityStyles, SemanticStyles,
-    SemanticSwatch, StatusStyles, ThemeId, accent, accent_gradient, alpha, bg, blend_colors,
-    blend_over, contrast, current_theme, current_theme_name, cycle_theme, fg, intent, issue_type,
-    priority, semantic_styles, status, syntax, syntax_theme, theme_count, with_alpha, with_opacity,
+    AlphaColor, BadgeSpec, ColorToken, IntentStyles, IssueTypeStyles, PriorityBadge,
+    PriorityStyles, SemanticStyles, SemanticSwatch, StatusBadge, StatusStyles, ThemeId, accent,
+    accent_gradient, alpha, bg, blend_colors, blend_over, contrast, current_theme,
+    current_theme_name, cycle_theme, fg, intent, issue_type, priority, priority_badge,
+    semantic_styles, status, status_badge, syntax, syntax_theme, theme_count, with_alpha,
+    with_opacity,
 };
 pub use core_theme::{palette, set_theme};
 
@@ -123,6 +125,7 @@ pub mod screen_accent {
     pub const MARKDOWN: ColorToken = accent::ACCENT_11;
     pub const VISUAL_EFFECTS: ColorToken = accent::ACCENT_12;
     pub const RESPONSIVE_DEMO: ColorToken = accent::ACCENT_9;
+    pub const LOG_SEARCH: ColorToken = accent::ACCENT_3;
 }
 
 // ---------------------------------------------------------------------------

@@ -6,14 +6,17 @@
 //! tab bar or number keys.
 
 pub mod advanced_features;
+pub mod action_timeline;
 pub mod code_explorer;
 pub mod dashboard;
 pub mod data_viz;
 pub mod file_browser;
 pub mod forms_input;
 pub mod layout_lab;
+pub mod log_search;
 pub mod macro_recorder;
 pub mod markdown_rich_text;
+pub mod notifications;
 pub mod performance;
 pub mod responsive_demo;
 pub mod shakespeare;

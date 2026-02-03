@@ -21,9 +21,7 @@ use ftui_widgets::notification_queue::{
     NotificationPriority, NotificationQueue, NotificationStack, QueueConfig,
 };
 use ftui_widgets::paragraph::Paragraph;
-use ftui_widgets::toast::{
-    Toast, ToastAction, ToastIcon, ToastPosition, ToastStyle,
-};
+use ftui_widgets::toast::{Toast, ToastAction, ToastIcon, ToastPosition, ToastStyle};
 
 use super::{HelpEntry, Screen};
 use crate::theme;
@@ -69,8 +67,7 @@ impl Notifications {
             .icon(ToastIcon::Success)
             .style_variant(ToastStyle::Success)
             .duration(Duration::from_secs(5));
-        self.queue
-            .push(toast, NotificationPriority::Normal);
+        self.queue.push(toast, NotificationPriority::Normal);
     }
 
     /// Push an error toast with an action button.
@@ -92,8 +89,7 @@ impl Notifications {
             .icon(ToastIcon::Warning)
             .style_variant(ToastStyle::Warning)
             .duration(Duration::from_secs(6));
-        self.queue
-            .push(toast, NotificationPriority::Normal);
+        self.queue.push(toast, NotificationPriority::Normal);
     }
 
     /// Push an info toast.
@@ -103,8 +99,7 @@ impl Notifications {
             .icon(ToastIcon::Info)
             .style_variant(ToastStyle::Info)
             .duration(Duration::from_secs(4));
-        self.queue
-            .push(toast, NotificationPriority::Low);
+        self.queue.push(toast, NotificationPriority::Low);
     }
 
     /// Push an urgent toast with multiple actions.
@@ -151,10 +146,7 @@ impl Notifications {
                 self.queue.visible().len(),
                 self.queue.pending_count(),
             ),
-            &format!(
-                "Total shown: {}",
-                self.queue.stats().total_pushed,
-            ),
+            &format!("Total shown: {}", self.queue.stats().total_pushed,),
             &format!(
                 "Last action: {}",
                 self.last_action.as_deref().unwrap_or("(none)"),
@@ -294,21 +286,23 @@ mod tests {
         screen.push_info();
         screen.push_urgent();
         assert_eq!(screen.toast_counter, 5);
-        // Queue max_visible is 4, so 4 visible + 1 pending
+        assert_eq!(screen.queue.stats().total_pushed, 5);
+        // Items start in the pending queue and are promoted to visible during tick
+        screen.tick(1);
         assert_eq!(screen.queue.visible().len(), 4);
         assert_eq!(screen.queue.pending_count(), 1);
     }
 
     #[test]
-    fn dismiss_all_clears_queue() {
+    fn dismiss_all_after_tick() {
         let mut screen = Notifications::new();
         screen.push_success();
         screen.push_info();
+        screen.tick(1); // promote to visible
         assert!(!screen.queue.visible().is_empty());
 
         screen.queue.dismiss_all();
         // After dismiss, visible toasts start exit animation
-        // They may still be "visible" until animation completes
     }
 
     #[test]
