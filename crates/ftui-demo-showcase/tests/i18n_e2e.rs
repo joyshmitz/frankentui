@@ -38,9 +38,9 @@ use ftui_layout::direction::{
     FlowDirection, LogicalAlignment, LogicalSides, mirror_rects_horizontal,
 };
 use ftui_layout::{Alignment, Sides};
-use ftui_text::bidi::{BidiSegment, Direction, ParagraphDirection, reorder};
 use ftui_render::frame::Frame;
 use ftui_render::grapheme_pool::GraphemePool;
+use ftui_text::bidi::{BidiSegment, Direction, ParagraphDirection, reorder};
 
 // =============================================================================
 // Test Utilities
@@ -1132,10 +1132,7 @@ fn bidi_segment_ltr_identity() {
 
 #[test]
 fn bidi_segment_rtl_roundtrip() {
-    let seg = BidiSegment::new(
-        "\u{645}\u{631}\u{62d}\u{628}\u{627}",
-        Some(Direction::Rtl),
-    );
+    let seg = BidiSegment::new("\u{645}\u{631}\u{62d}\u{628}\u{627}", Some(Direction::Rtl));
     for i in 0..seg.chars.len() {
         let v = seg.logical_to_visual[i];
         let roundtrip = seg.visual_to_logical[v];
