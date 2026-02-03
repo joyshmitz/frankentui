@@ -77,8 +77,14 @@ impl TerminalEmulator {
     /// Convert a terminal cell to a buffer cell.
     fn convert_cell(&self, term_cell: &TerminalCell) -> BufferCell {
         let ch = term_cell.ch;
-        let fg = term_cell.fg.map(color_to_packed).unwrap_or(PackedRgba::TRANSPARENT);
-        let bg = term_cell.bg.map(color_to_packed).unwrap_or(PackedRgba::TRANSPARENT);
+        let fg = term_cell
+            .fg
+            .map(color_to_packed)
+            .unwrap_or(PackedRgba::TRANSPARENT);
+        let bg = term_cell
+            .bg
+            .map(color_to_packed)
+            .unwrap_or(PackedRgba::TRANSPARENT);
 
         // Convert terminal attrs to style flags
         let attrs = term_cell.attrs;
