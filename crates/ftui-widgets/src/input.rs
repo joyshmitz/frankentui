@@ -331,6 +331,11 @@ impl TextInput {
         let byte_offset = self.grapheme_byte_offset(self.cursor);
         self.value.insert_str(byte_offset, to_insert);
         self.cursor += insert_count;
+        // Clamp cursor when combining characters merge with adjacent graphemes
+        let gc = self.grapheme_count();
+        if self.cursor > gc {
+            self.cursor = gc;
+        }
     }
 
     fn insert_char(&mut self, c: char) {

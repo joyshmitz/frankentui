@@ -142,6 +142,9 @@ run_step "integration" "$LOG_DIR/10_integration.log" \
 run_step "performance" "$LOG_DIR/11_perf.log" \
     cargo test -p ftui-demo-showcase --test i18n_e2e -- perf_ --nocapture || true
 
+run_step "locale_context" "$LOG_DIR/11b_locale_ctx.log" \
+    cargo test -p ftui-demo-showcase --test i18n_e2e -- locale_context_ --nocapture || true
+
 echo ""
 echo "Phase 4: i18n Demo Unit Tests"
 echo "---"
