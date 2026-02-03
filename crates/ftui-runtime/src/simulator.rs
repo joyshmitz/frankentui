@@ -244,6 +244,10 @@ impl<M: Model> ProgramSimulator<M> {
                 let cmd = self.model.update(msg);
                 self.execute_cmd(cmd);
             }
+            Cmd::SaveState | Cmd::RestoreState => {
+                // State persistence commands are no-ops in simulation
+                // (no persistent storage in headless mode)
+            }
         }
     }
 }

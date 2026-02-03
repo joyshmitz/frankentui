@@ -51,7 +51,9 @@
 //! }
 //! ```
 
+use crate::StorageResult;
 use crate::input_macro::{EventRecorder, InputMacro};
+use crate::state_persistence::StateRegistry;
 use crate::subscription::SubscriptionManager;
 use crate::terminal_writer::{ScreenMode, TerminalWriter, UiAnchor};
 use ftui_core::event::Event;
@@ -139,6 +141,17 @@ pub enum Cmd<M> {
     /// The closure runs on a spawned thread and its return value
     /// is sent back as a message to the model.
     Task(Box<dyn FnOnce() -> M + Send>),
+    /// Save widget state to the persistence registry.
+    ///
+    /// Triggers a flush of the state registry to the storage backend.
+    /// No-op if persistence is not configured.
+    SaveState,
+    /// Restore widget state from the persistence registry.
+    ///
+    /// Triggers a load from the storage backend and updates the cache.
+    /// No-op if persistence is not configured. Returns a message via
+    /// callback if state was successfully restored.
+    RestoreState,
 }
 
 impl<M: std::fmt::Debug> std::fmt::Debug for Cmd<M> {
@@ -152,6 +165,8 @@ impl<M: std::fmt::Debug> std::fmt::Debug for Cmd<M> {
             Self::Tick(d) => f.debug_tuple("Tick").field(d).finish(),
             Self::Log(s) => f.debug_tuple("Log").field(s).finish(),
             Self::Task(_) => write!(f, "Task(...)"),
+            Self::SaveState => write!(f, "SaveState"),
+            Self::RestoreState => write!(f, "RestoreState"),
         }
     }
 }
@@ -222,6 +237,24 @@ impl<M> Cmd<M> {
     {
         Self::Task(Box::new(f))
     }
+
+    /// Create a save state command.
+    ///
+    /// Triggers a flush of the state registry to the storage backend.
+    /// No-op if persistence is not configured.
+    #[inline]
+    pub fn save_state() -> Self {
+        Self::SaveState
+    }
+
+    /// Create a restore state command.
+    ///
+    /// Triggers a load from the storage backend.
+    /// No-op if persistence is not configured.
+    #[inline]
+    pub fn restore_state() -> Self {
+        Self::RestoreState
+    }
 }
 
 /// Resize handling behavior for the runtime.
@@ -248,6 +281,84 @@ impl ResizeBehavior {
     }
 }
 
+/// Configuration for state persistence in the program runtime.
+///
+/// Controls when and how widget state is saved/restored.
+#[derive(Clone)]
+pub struct PersistenceConfig {
+    /// State registry for persistence. If None, persistence is disabled.
+    pub registry: Option<std::sync::Arc<StateRegistry>>,
+    /// Interval for periodic checkpoint saves. None disables checkpoints.
+    pub checkpoint_interval: Option<Duration>,
+    /// Automatically load state on program start.
+    pub auto_load: bool,
+    /// Automatically save state on program exit.
+    pub auto_save: bool,
+}
+
+impl Default for PersistenceConfig {
+    fn default() -> Self {
+        Self {
+            registry: None,
+            checkpoint_interval: None,
+            auto_load: true,
+            auto_save: true,
+        }
+    }
+}
+
+impl std::fmt::Debug for PersistenceConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PersistenceConfig")
+            .field(
+                "registry",
+                &self.registry.as_ref().map(|r| r.backend_name()),
+            )
+            .field("checkpoint_interval", &self.checkpoint_interval)
+            .field("auto_load", &self.auto_load)
+            .field("auto_save", &self.auto_save)
+            .finish()
+    }
+}
+
+impl PersistenceConfig {
+    /// Create a disabled persistence config.
+    #[must_use]
+    pub fn disabled() -> Self {
+        Self::default()
+    }
+
+    /// Create a persistence config with the given registry.
+    #[must_use]
+    pub fn with_registry(registry: std::sync::Arc<StateRegistry>) -> Self {
+        Self {
+            registry: Some(registry),
+            ..Default::default()
+        }
+    }
+
+    /// Set the checkpoint interval.
+    #[must_use]
+    pub fn checkpoint_every(mut self, interval: Duration) -> Self {
+        self.checkpoint_interval = Some(interval);
+        self
+    }
+
+    /// Enable or disable auto-load on start.
+    #[must_use]
+    pub fn auto_load(mut self, enabled: bool) -> Self {
+        self.auto_load = enabled;
+        self
+    }
+
+    /// Enable or disable auto-save on exit.
+    #[must_use]
+    pub fn auto_save(mut self, enabled: bool) -> Self {
+        self.auto_save = enabled;
+        self
+    }
+}
+
 /// Configuration for the program runtime.
 #[derive(Debug, Clone)]
 pub struct ProgramConfig {
@@ -271,6 +382,8 @@ pub struct ProgramConfig {
     pub focus_reporting: bool,
     /// Enable Kitty keyboard protocol (repeat/release events).
     pub kitty_keyboard: bool,
+    /// State persistence configuration.
+    pub persistence: PersistenceConfig,
 }
 
 impl Default for ProgramConfig {
@@ -286,6 +399,7 @@ impl Default for ProgramConfig {
             bracketed_paste: true,
             focus_reporting: false,
             kitty_keyboard: false,
+            persistence: PersistenceConfig::default(),
         }
     }
 }
@@ -347,6 +461,18 @@ impl ProgramConfig {
         if enabled {
             self.resize_behavior = ResizeBehavior::Immediate;
         }
+        self
+    }
+
+    /// Set the persistence configuration.
+    pub fn with_persistence(mut self, persistence: PersistenceConfig) -> Self {
+        self.persistence = persistence;
+        self
+    }
+
+    /// Enable persistence with the given registry.
+    pub fn with_registry(mut self, registry: std::sync::Arc<StateRegistry>) -> Self {
+        self.persistence = PersistenceConfig::with_registry(registry);
         self
     }
 }
@@ -474,6 +600,12 @@ pub struct Program<M: Model, W: Write + Send = Stdout> {
     task_receiver: std::sync::mpsc::Receiver<M::Message>,
     /// Join handles for background tasks; reaped opportunistically.
     task_handles: Vec<std::thread::JoinHandle<()>>,
+    /// Optional state registry for widget persistence.
+    state_registry: Option<std::sync::Arc<StateRegistry>>,
+    /// Persistence configuration.
+    persistence_config: PersistenceConfig,
+    /// Last checkpoint save time.
+    last_checkpoint: Instant,
 }
 
 impl<M: Model> Program<M, Stdout> {
@@ -529,6 +661,9 @@ impl<M: Model> Program<M, Stdout> {
             task_sender,
             task_receiver,
             task_handles: Vec::new(),
+            state_registry: config.persistence.registry.clone(),
+            persistence_config: config.persistence,
+            last_checkpoint: Instant::now(),
         })
     }
 }
@@ -547,6 +682,11 @@ impl<M: Model, W: Write + Send> Program<M, W> {
 
     /// The inner event loop, separated for proper cleanup handling.
     fn run_event_loop(&mut self) -> io::Result<()> {
+        // Auto-load state on start
+        if self.persistence_config.auto_load {
+            self.load_state();
+        }
+
         // Initialize
         let cmd = self.model.init();
         self.execute_cmd(cmd)?;
@@ -594,10 +734,18 @@ impl<M: Model, W: Write + Send> Program<M, W> {
                 self.reconcile_subscriptions();
             }
 
+            // Check for periodic checkpoint save
+            self.check_checkpoint_save();
+
             // Render if dirty
             if self.dirty {
                 self.render_frame()?;
             }
+        }
+
+        // Auto-save state on exit
+        if self.persistence_config.auto_save {
+            self.save_state();
         }
 
         // Stop all subscriptions on exit
@@ -605,6 +753,47 @@ impl<M: Model, W: Write + Send> Program<M, W> {
         self.reap_finished_tasks();
 
         Ok(())
+    }
+
+    /// Load state from the persistence registry.
+    fn load_state(&mut self) {
+        if let Some(registry) = &self.state_registry {
+            match registry.load() {
+                Ok(count) => {
+                    info!(count, "loaded widget state from persistence");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to load widget state");
+                }
+            }
+        }
+    }
+
+    /// Save state to the persistence registry.
+    fn save_state(&mut self) {
+        if let Some(registry) = &self.state_registry {
+            match registry.flush() {
+                Ok(true) => {
+                    debug!("saved widget state to persistence");
+                }
+                Ok(false) => {
+                    // No changes to save
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to save widget state");
+                }
+            }
+        }
+    }
+
+    /// Check if it's time for a periodic checkpoint save.
+    fn check_checkpoint_save(&mut self) {
+        if let Some(interval) = self.persistence_config.checkpoint_interval
+            && self.last_checkpoint.elapsed() >= interval
+        {
+            self.save_state();
+            self.last_checkpoint = Instant::now();
+        }
     }
 
     fn handle_event(&mut self, event: Event) -> io::Result<()> {
@@ -743,6 +932,12 @@ impl<M: Model, W: Write + Send> Program<M, W> {
                     let _ = sender.send(msg);
                 });
                 self.task_handles.push(handle);
+            }
+            Cmd::SaveState => {
+                self.save_state();
+            }
+            Cmd::RestoreState => {
+                self.load_state();
             }
         }
         Ok(())
@@ -985,6 +1180,40 @@ impl<M: Model, W: Write + Send> Program<M, W> {
     /// Request a quit.
     pub fn quit(&mut self) {
         self.running = false;
+    }
+
+    /// Get a reference to the state registry, if configured.
+    pub fn state_registry(&self) -> Option<&std::sync::Arc<StateRegistry>> {
+        self.state_registry.as_ref()
+    }
+
+    /// Check if state persistence is enabled.
+    pub fn has_persistence(&self) -> bool {
+        self.state_registry.is_some()
+    }
+
+    /// Trigger a manual save of widget state.
+    ///
+    /// Returns the result of the flush operation, or `Ok(false)` if
+    /// persistence is not configured.
+    pub fn trigger_save(&mut self) -> StorageResult<bool> {
+        if let Some(registry) = &self.state_registry {
+            registry.flush()
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Trigger a manual load of widget state.
+    ///
+    /// Returns the number of entries loaded, or `Ok(0)` if persistence
+    /// is not configured.
+    pub fn trigger_load(&mut self) -> StorageResult<usize> {
+        if let Some(registry) = &self.state_registry {
+            registry.load()
+        } else {
+            Ok(0)
+        }
     }
 
     fn mark_dirty(&mut self) {
@@ -2818,5 +3047,77 @@ mod tests {
             lambda > 20.0 && lambda < 100.0,
             "λ should be near 50: got {lambda:.1}"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Persistence Config Tests
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn cmd_save_state() {
+        let cmd: Cmd<TestMsg> = Cmd::save_state();
+        assert!(matches!(cmd, Cmd::SaveState));
+    }
+
+    #[test]
+    fn cmd_restore_state() {
+        let cmd: Cmd<TestMsg> = Cmd::restore_state();
+        assert!(matches!(cmd, Cmd::RestoreState));
+    }
+
+    #[test]
+    fn persistence_config_default() {
+        let config = PersistenceConfig::default();
+        assert!(config.registry.is_none());
+        assert!(config.checkpoint_interval.is_none());
+        assert!(config.auto_load);
+        assert!(config.auto_save);
+    }
+
+    #[test]
+    fn persistence_config_disabled() {
+        let config = PersistenceConfig::disabled();
+        assert!(config.registry.is_none());
+    }
+
+    #[test]
+    fn persistence_config_with_registry() {
+        use crate::state_persistence::{MemoryStorage, StateRegistry};
+        use std::sync::Arc;
+
+        let registry = Arc::new(StateRegistry::new(Box::new(MemoryStorage::new())));
+        let config = PersistenceConfig::with_registry(registry.clone());
+
+        assert!(config.registry.is_some());
+        assert!(config.auto_load);
+        assert!(config.auto_save);
+    }
+
+    #[test]
+    fn persistence_config_checkpoint_interval() {
+        use crate::state_persistence::{MemoryStorage, StateRegistry};
+        use std::sync::Arc;
+
+        let registry = Arc::new(StateRegistry::new(Box::new(MemoryStorage::new())));
+        let config = PersistenceConfig::with_registry(registry)
+            .checkpoint_every(Duration::from_secs(30))
+            .auto_load(false)
+            .auto_save(true);
+
+        assert!(config.checkpoint_interval.is_some());
+        assert_eq!(config.checkpoint_interval.unwrap(), Duration::from_secs(30));
+        assert!(!config.auto_load);
+        assert!(config.auto_save);
+    }
+
+    #[test]
+    fn program_config_with_persistence() {
+        use crate::state_persistence::{MemoryStorage, StateRegistry};
+        use std::sync::Arc;
+
+        let registry = Arc::new(StateRegistry::new(Box::new(MemoryStorage::new())));
+        let config = ProgramConfig::default().with_registry(registry);
+
+        assert!(config.persistence.registry.is_some());
     }
 }
