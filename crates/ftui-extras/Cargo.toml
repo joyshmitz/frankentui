@@ -72,3 +72,7 @@ portable-pty = "0.8.1"
 name = "text_effects_bench"
 harness = false
 required-features = ["text-effects"]
+
+[[test]]
+name = "backdrop_composition_tests"
+required-features = ["visual-fx"]
