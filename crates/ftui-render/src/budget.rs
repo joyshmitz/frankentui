@@ -1102,6 +1102,7 @@ impl RenderBudget {
         Self {
             total: phase_total.min(self.remaining()),
             start: self.start,
+            last_frame_time: self.last_frame_time,
             degradation: self.degradation,
             phase_budgets: self.phase_budgets,
             allow_frame_skip: self.allow_frame_skip,
@@ -1387,6 +1388,26 @@ mod tests {
         budget.next_frame();
 
         // Should have upgraded
+        assert!(budget.degradation() < before);
+    }
+
+    #[test]
+    fn next_frame_prefers_recorded_frame_time_for_upgrade() {
+        let mut budget = RenderBudget::new(Duration::from_millis(16));
+
+        budget.degrade();
+        for _ in 0..5 {
+            budget.reset();
+        }
+
+        // Record a fast frame, then wait long enough that start.elapsed()
+        // would otherwise exceed the budget.
+        budget.record_frame_time(Duration::from_millis(1));
+        std::thread::sleep(Duration::from_millis(25));
+
+        let before = budget.degradation();
+        budget.next_frame();
+
         assert!(budget.degradation() < before);
     }
 

@@ -1069,23 +1069,18 @@ mod tests {
         input.delete_word_back();
         assert_eq!(input.value(), "hello "); // Deleted "world"
 
+        // "hello |" — word-left skips space then "hello"
         input.delete_word_back();
-        assert_eq!(input.value(), "hello"); // Deleted " "
-
-        input.delete_word_back();
-        assert_eq!(input.value(), ""); // Deleted "hello"
+        assert_eq!(input.value(), ""); // Deleted "hello "
     }
 
     #[test]
     fn test_delete_word_forward() {
         let mut input = TextInput::new().with_value("hello world");
         input.cursor = 0;
-        // "|hello world"
+        // "|hello world" — word-right skips "hello" then space
         input.delete_word_forward();
-        assert_eq!(input.value(), " world"); // Deleted "hello"
-
-        input.delete_word_forward();
-        assert_eq!(input.value(), "world"); // Deleted " "
+        assert_eq!(input.value(), "world"); // Deleted "hello "
 
         input.delete_word_forward();
         assert_eq!(input.value(), ""); // Deleted "world"

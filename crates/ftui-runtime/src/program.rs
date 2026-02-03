@@ -1063,6 +1063,7 @@ impl<M: Model, W: Write + Send> Program<M, W> {
 
         // Early skip if budget says to skip this frame entirely
         if self.budget.exhausted() {
+            self.budget.record_frame_time(Duration::ZERO);
             debug!(
                 degradation = self.budget.degradation().as_str(),
                 "frame skipped: budget exhausted before render"
@@ -1094,6 +1095,7 @@ impl<M: Model, W: Write + Send> Program<M, W> {
         .entered();
         let (buffer, cursor) = self.render_buffer(frame_height);
         let render_elapsed = render_start.elapsed();
+        let mut present_elapsed = Duration::ZERO;
 
         // Check if render phase overspent its budget
         let render_budget = self.budget.phase_budgets().render;
@@ -1116,7 +1118,7 @@ impl<M: Model, W: Write + Send> Program<M, W> {
                 let _present_span = debug_span!("ftui.render.present").entered();
                 self.writer.present_ui_owned(buffer, cursor)?;
             }
-            let present_elapsed = present_start.elapsed();
+            present_elapsed = present_start.elapsed();
 
             let present_budget = self.budget.phase_budgets().present;
             if present_elapsed > present_budget {
@@ -1134,6 +1136,8 @@ impl<M: Model, W: Write + Send> Program<M, W> {
             );
         }
 
+        self.budget
+            .record_frame_time(render_elapsed.saturating_add(present_elapsed));
         self.dirty = false;
 
         Ok(())
