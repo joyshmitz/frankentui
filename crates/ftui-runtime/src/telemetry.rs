@@ -803,10 +803,9 @@ impl DataCategory {
             | Self::ProcessArgs
             | Self::UserIdentifier => RedactionLevel::Full,
             // Soft redaction: emit only in verbose mode
-            Self::WidgetType
-            | Self::MessageType
-            | Self::CommandType
-            | Self::CapabilityDetails => RedactionLevel::Partial,
+            Self::WidgetType | Self::MessageType | Self::CommandType | Self::CapabilityDetails => {
+                RedactionLevel::Partial
+            }
         }
     }
 
@@ -827,7 +826,9 @@ pub const ALLOWED_ENV_PREFIXES: &[&str] = &["OTEL_", "FTUI_"];
 /// Check if an environment variable name is safe to emit.
 #[must_use]
 pub fn is_safe_env_var(name: &str) -> bool {
-    ALLOWED_ENV_PREFIXES.iter().any(|prefix| name.starts_with(prefix))
+    ALLOWED_ENV_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
 }
 
 /// Redaction utilities for telemetry.
@@ -972,7 +973,11 @@ pub mod redact {
     /// Returns `"[verbose-only]"` when not in verbose mode.
     #[inline]
     pub fn verbose_str(value: &str) -> &str {
-        if is_verbose() { value } else { "[verbose-only]" }
+        if is_verbose() {
+            value
+        } else {
+            "[verbose-only]"
+        }
     }
 
     /// Redact a type name unless in verbose mode.
@@ -1205,7 +1210,8 @@ mod tests {
         // Field names should be lowercase with dots or underscores
         let check_field = |name: &str| {
             assert!(
-                name.chars().all(|c| c.is_ascii_lowercase() || c == '.' || c == '_'),
+                name.chars()
+                    .all(|c| c.is_ascii_lowercase() || c == '.' || c == '_'),
                 "Field name '{}' contains invalid characters",
                 name
             );
@@ -1224,21 +1230,51 @@ mod tests {
     #[test]
     fn test_hard_redaction_categories() {
         // These should always be redacted
-        assert_eq!(DataCategory::UserInput.default_redaction(), RedactionLevel::Full);
-        assert_eq!(DataCategory::FilePath.default_redaction(), RedactionLevel::Full);
-        assert_eq!(DataCategory::EnvVar.default_redaction(), RedactionLevel::Full);
-        assert_eq!(DataCategory::MemoryAddress.default_redaction(), RedactionLevel::Full);
-        assert_eq!(DataCategory::ProcessArgs.default_redaction(), RedactionLevel::Full);
-        assert_eq!(DataCategory::UserIdentifier.default_redaction(), RedactionLevel::Full);
+        assert_eq!(
+            DataCategory::UserInput.default_redaction(),
+            RedactionLevel::Full
+        );
+        assert_eq!(
+            DataCategory::FilePath.default_redaction(),
+            RedactionLevel::Full
+        );
+        assert_eq!(
+            DataCategory::EnvVar.default_redaction(),
+            RedactionLevel::Full
+        );
+        assert_eq!(
+            DataCategory::MemoryAddress.default_redaction(),
+            RedactionLevel::Full
+        );
+        assert_eq!(
+            DataCategory::ProcessArgs.default_redaction(),
+            RedactionLevel::Full
+        );
+        assert_eq!(
+            DataCategory::UserIdentifier.default_redaction(),
+            RedactionLevel::Full
+        );
     }
 
     #[test]
     fn test_soft_redaction_categories() {
         // These should be redacted unless verbose mode
-        assert_eq!(DataCategory::WidgetType.default_redaction(), RedactionLevel::Partial);
-        assert_eq!(DataCategory::MessageType.default_redaction(), RedactionLevel::Partial);
-        assert_eq!(DataCategory::CommandType.default_redaction(), RedactionLevel::Partial);
-        assert_eq!(DataCategory::CapabilityDetails.default_redaction(), RedactionLevel::Partial);
+        assert_eq!(
+            DataCategory::WidgetType.default_redaction(),
+            RedactionLevel::Partial
+        );
+        assert_eq!(
+            DataCategory::MessageType.default_redaction(),
+            RedactionLevel::Partial
+        );
+        assert_eq!(
+            DataCategory::CommandType.default_redaction(),
+            RedactionLevel::Partial
+        );
+        assert_eq!(
+            DataCategory::CapabilityDetails.default_redaction(),
+            RedactionLevel::Partial
+        );
     }
 
     #[test]
@@ -1331,10 +1367,16 @@ mod tests {
     fn test_prefix_custom_field() {
         // Already prefixed - should return as-is
         assert_eq!(redact::prefix_custom_field("app.my_field"), "app.my_field");
-        assert_eq!(redact::prefix_custom_field("custom.my_field"), "custom.my_field");
+        assert_eq!(
+            redact::prefix_custom_field("custom.my_field"),
+            "custom.my_field"
+        );
         // Not prefixed - should add app. prefix
         assert_eq!(redact::prefix_custom_field("my_field"), "app.my_field");
-        assert_eq!(redact::prefix_custom_field("user_action"), "app.user_action");
+        assert_eq!(
+            redact::prefix_custom_field("user_action"),
+            "app.user_action"
+        );
     }
 
     // =========================================================================
@@ -1349,7 +1391,9 @@ mod tests {
         assert!(redact::contains_sensitive_pattern("auth_token"));
         assert!(redact::contains_sensitive_pattern("user@example.com"));
         assert!(redact::contains_sensitive_pattern("/home/user/secret.txt"));
-        assert!(redact::contains_sensitive_pattern("https://example.com/api"));
+        assert!(redact::contains_sensitive_pattern(
+            "https://example.com/api"
+        ));
 
         // Should not flag safe strings
         assert!(!redact::contains_sensitive_pattern("frame_count"));

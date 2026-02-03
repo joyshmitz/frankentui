@@ -181,6 +181,40 @@ ftui.decision.resize        # Resize handling
 
 ---
 
+## Reflow Diagnostics (JSONL)
+
+For resize/reflow decisions, the runtime exposes a **local JSONL evidence log**
+via the `ResizeCoalescer` API. This is intended for deterministic E2E tests
+and post-mortem analysis without requiring an OTEL collector.
+
+### Example
+
+```rust
+use ftui_runtime::resize_coalescer::{CoalescerConfig, ResizeCoalescer};
+
+let mut config = CoalescerConfig::default().with_logging(true);
+let mut coalescer = ResizeCoalescer::new(config, (80, 24));
+
+coalescer.handle_resize(100, 40);
+coalescer.tick();
+
+let jsonl = coalescer.evidence_to_jsonl();
+let checksum = coalescer.decision_checksum_hex();
+```
+
+### JSONL Layout
+
+Each evidence log includes:
+
+- A **config** line (parameters and logging flag)
+- One **decision** line per decision
+- A **summary** line (counts + checksum)
+
+This log is deterministic for fixed event schedules (use explicit timestamps
+in tests via `handle_resize_at` / `tick_at`).
+
+---
+
 ## Performance Impact
 
 ### When Disabled (Default)

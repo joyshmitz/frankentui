@@ -517,7 +517,10 @@ impl ResizeCoalescer {
                 fnv_hash_bytes(&mut hash, &h.to_le_bytes());
             }
 
-            fnv_hash_bytes(&mut hash, &entry.time_since_render_ms.to_bits().to_le_bytes());
+            fnv_hash_bytes(
+                &mut hash,
+                &entry.time_since_render_ms.to_bits().to_le_bytes(),
+            );
             fnv_hash_bytes(&mut hash, &[entry.forced as u8]);
         }
         hash
