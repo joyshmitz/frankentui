@@ -1,0 +1,24 @@
+ 1: Dash │ 2: Shakes │ 3: Code │ 4: Widgets │ 5: Layout │ 6: Forms │ 7: DataViz 
+╭─────────────────────────────Advanced Text Editor─────────────────────────────╮
+│╭───────────────────────────────────Editor───────────────────────────────────╮│
+││ 1  Welcome to the Advanced Text Editor!                                    ││
+││ 2                                                                          ││
+││ 3  This is a demonstration of FrankenTUI's text editing capabilities.      ││
+││ 4  You can edit text, select regions, search, and replace.                 ││
+││ 5                                                                          ││
+││ 6  Features:                                                               ││
+││ 7  - Multi-line editing with line numbers                                  ││
+││ 8  - Selection with Shift+Arrow keys                                       ││
+││ 9  - Undo (Ctrl+Z) and Redo (Ctrl+Y)                                       ││
+││10  - Search (Ctrl+F) with next/prev match                                  ││
+││11  - Replace (Ctrl+H) single or all matches                                ││
+││12                                                                          ││
+││13  Try editing this text or loading your own content.                      ││
+││14                                                                          ││
+││15  Unicode support:                                                        ││
+││16  - Emoji: ? ? ?                                                       ││
+││17  - CJK: ????                                                         ││
+│╰────────────────────────────────────────────────────────────────────────────╯│
+│Ready | Ctrl+F: Search | Ctrl+H: Replace | ?: Help                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ Advanced Text Editor [19/21]  Cyberpunk Aurora     tick:0 frm:0      0x0 00:00 

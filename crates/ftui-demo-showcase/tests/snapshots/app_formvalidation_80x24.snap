@@ -1,0 +1,24 @@
+ 1: Dash │ 2: Shakes │ 3: Code │ 4: Widgets │ 5: Layout │ 6: Forms │ 7: DataViz 
+╭───────────────────────────────Form Validation────────────────────────────────╮
+│Mode: Real-time [M to toggle]                  ╭────────Error Summary────────╮│
+│╭──────────────Registration Form──────────────╮│No validation errors         ││
+││Username:         Enter username (required)  ││                             ││
+││Email:            user@example.com           ││                             ││
+││Password:         Min 8 characters           ││                             ││
+││Confirm Password: Re-enter password          ││                             ││
+││Age:                25                       ││                             ││
+││Bio:              Max 100 characters         ││                             ││
+││Website:          https://example.com        ││                             ││
+││Role:               (Select a role)          ││                             ││
+││Accept Terms:     [ ]                        ││                             ││
+││                                             ││                             ││
+││                                             ││                             ││
+││                                             ││                             ││
+││                                             ││                             ││
+││                                             ││                             ││
+││                                             ││                             ││
+│╰─────────────────────────────────────────────╯│                             ││
+│Touched: 0/9 | Dirty: 0/9                      │                             ││
+│Tab/Arrow: navigate | Space: toggle | Enter: su╰─────────────────────────────╯│
+╰──────────────────────────────────────────────────────────────────────────────╯
+ Form Validation [21/21]  Cyberpunk Aurora        tick:0 frm:0        0x0 00:00 
