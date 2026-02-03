@@ -359,6 +359,13 @@ impl ResizeCoalescer {
         self
     }
 
+    /// Set the last render time (for deterministic testing).
+    #[must_use]
+    pub fn with_last_render(mut self, time: Instant) -> Self {
+        self.last_render = time;
+        self
+    }
+
     /// Get current regime transition count.
     #[must_use]
     pub fn regime_transition_count(&self) -> u64 {
@@ -450,10 +457,10 @@ impl ResizeCoalescer {
         self.log_decision(now, "coalesce", false, Some(dt_ms), None);
 
         // Fire decision hook for coalesce events (bd-1rz0.7)
-        if let Some(ref hooks) = self.telemetry_hooks {
-            if let Some(entry) = self.logs.last() {
-                hooks.fire_decision(entry);
-            }
+        if let Some(ref hooks) = self.telemetry_hooks
+            && let Some(entry) = self.logs.last()
+        {
+            hooks.fire_decision(entry);
         }
 
         CoalesceAction::ShowPlaceholder
@@ -704,10 +711,10 @@ impl ResizeCoalescer {
         );
 
         // Fire telemetry hooks (bd-1rz0.7)
-        if let Some(ref hooks) = self.telemetry_hooks {
-            if let Some(entry) = self.logs.last() {
-                hooks.fire_resize_applied(entry);
-            }
+        if let Some(ref hooks) = self.telemetry_hooks
+            && let Some(entry) = self.logs.last()
+        {
+            hooks.fire_resize_applied(entry);
         }
 
         CoalesceAction::ApplyResize {
@@ -1270,8 +1277,8 @@ mod tests {
         config.enable_logging = true;
 
         let base = Instant::now();
-        let mut c1 = ResizeCoalescer::new(config.clone(), (80, 24));
-        let mut c2 = ResizeCoalescer::new(config, (80, 24));
+        let mut c1 = ResizeCoalescer::new(config.clone(), (80, 24)).with_last_render(base);
+        let mut c2 = ResizeCoalescer::new(config, (80, 24)).with_last_render(base);
 
         for c in [&mut c1, &mut c2] {
             c.handle_resize_at(90, 30, base);
@@ -1651,16 +1658,15 @@ mod tests {
 
     #[test]
     fn telemetry_hooks_fire_on_resize_applied() {
-        use std::sync::atomic::{AtomicU32, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
 
         let applied_count = Arc::new(AtomicU32::new(0));
         let applied_count_clone = applied_count.clone();
 
-        let hooks = TelemetryHooks::new()
-            .on_resize_applied(move |_entry| {
-                applied_count_clone.fetch_add(1, Ordering::SeqCst);
-            });
+        let hooks = TelemetryHooks::new().on_resize_applied(move |_entry| {
+            applied_count_clone.fetch_add(1, Ordering::SeqCst);
+        });
 
         let mut config = test_config();
         config.enable_logging = true;
@@ -1675,16 +1681,15 @@ mod tests {
 
     #[test]
     fn telemetry_hooks_fire_on_regime_change() {
-        use std::sync::atomic::{AtomicU32, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
 
         let regime_changes = Arc::new(AtomicU32::new(0));
         let regime_changes_clone = regime_changes.clone();
 
-        let hooks = TelemetryHooks::new()
-            .on_regime_change(move |_from, _to| {
-                regime_changes_clone.fetch_add(1, Ordering::SeqCst);
-            });
+        let hooks = TelemetryHooks::new().on_regime_change(move |_from, _to| {
+            regime_changes_clone.fetch_add(1, Ordering::SeqCst);
+        });
 
         let config = test_config();
         let mut c = ResizeCoalescer::new(config, (80, 24)).with_telemetry_hooks(hooks);
@@ -1731,11 +1736,7 @@ mod tests {
 
         // Generate multiple applies to get cycle times
         for i in 0..5 {
-            c.handle_resize_at(
-                80 + i,
-                24 + i,
-                base + Duration::from_millis(i as u64 * 100),
-            );
+            c.handle_resize_at(80 + i, 24 + i, base + Duration::from_millis(i as u64 * 100));
             c.tick_at(base + Duration::from_millis(i as u64 * 100 + 50));
         }
 

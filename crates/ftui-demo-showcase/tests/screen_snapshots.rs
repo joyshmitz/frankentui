@@ -1269,3 +1269,55 @@ fn theme_studio_title() {
     assert_eq!(screen.title(), "Theme Studio");
     assert_eq!(screen.tab_label(), "Themes");
 }
+
+#[test]
+fn theme_studio_focus_token_inspector_120x40() {
+    let mut screen = ftui_demo_showcase::screens::theme_studio::ThemeStudioDemo::new();
+    // Switch focus to token inspector panel (tests focus indicator)
+    screen.update(&press(KeyCode::Tab));
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(120, 40, &mut pool);
+    let area = Rect::new(0, 0, 120, 40);
+    screen.view(&mut frame, area);
+    assert_snapshot!("theme_studio_focus_token_inspector_120x40", &frame.buffer);
+}
+
+#[test]
+fn theme_studio_home_key_120x40() {
+    let mut screen = ftui_demo_showcase::screens::theme_studio::ThemeStudioDemo::new();
+    // Navigate down then use Home to jump to first
+    for _ in 0..5 {
+        screen.update(&press(KeyCode::Down));
+    }
+    screen.update(&press(KeyCode::Home));
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(120, 40, &mut pool);
+    let area = Rect::new(0, 0, 120, 40);
+    screen.view(&mut frame, area);
+    assert_snapshot!("theme_studio_home_key_120x40", &frame.buffer);
+}
+
+#[test]
+fn theme_studio_end_key_120x40() {
+    let mut screen = ftui_demo_showcase::screens::theme_studio::ThemeStudioDemo::new();
+    // Use End to jump to last preset
+    screen.update(&press(KeyCode::End));
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(120, 40, &mut pool);
+    let area = Rect::new(0, 0, 120, 40);
+    screen.view(&mut frame, area);
+    assert_snapshot!("theme_studio_end_key_120x40", &frame.buffer);
+}
+
+#[test]
+fn theme_studio_page_down_tokens_120x40() {
+    let mut screen = ftui_demo_showcase::screens::theme_studio::ThemeStudioDemo::new();
+    // Switch to token inspector and use PageDown
+    screen.update(&press(KeyCode::Tab));
+    screen.update(&press(KeyCode::PageDown));
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(120, 40, &mut pool);
+    let area = Rect::new(0, 0, 120, 40);
+    screen.view(&mut frame, area);
+    assert_snapshot!("theme_studio_page_down_tokens_120x40", &frame.buffer);
+}

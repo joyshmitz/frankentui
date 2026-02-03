@@ -20,6 +20,7 @@ use ftui_demo_showcase::theme;
 use ftui_harness::assert_snapshot;
 use ftui_render::frame::Frame;
 use ftui_render::grapheme_pool::GraphemePool;
+use ftui_runtime::program::Model;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::time::Instant;

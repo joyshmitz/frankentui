@@ -201,6 +201,7 @@ pub struct Form {
     required_style: Style,
     label_width: u16,
     required: Vec<bool>,
+    disabled: Vec<bool>,
 }
 
 impl Form {
@@ -219,6 +220,7 @@ impl Form {
             required_style: Style::default(),
             label_width: 0, // auto-detect
             required: vec![false; count],
+            disabled: vec![false; count],
         }
     }
 
@@ -246,6 +248,24 @@ impl Form {
         self
     }
 
+    /// Set success style (valid field state).
+    pub fn success_style(mut self, style: Style) -> Self {
+        self.success_style = style;
+        self
+    }
+
+    /// Set disabled field style.
+    pub fn disabled_style(mut self, style: Style) -> Self {
+        self.disabled_style = style;
+        self
+    }
+
+    /// Set required indicator style.
+    pub fn required_style(mut self, style: Style) -> Self {
+        self.required_style = style;
+        self
+    }
+
     /// Update base style in place.
     pub fn set_style(&mut self, style: Style) {
         self.style = style;
@@ -264,6 +284,57 @@ impl Form {
     /// Update error message style in place.
     pub fn set_error_style(&mut self, style: Style) {
         self.error_style = style;
+    }
+
+    /// Update success style in place.
+    pub fn set_success_style(&mut self, style: Style) {
+        self.success_style = style;
+    }
+
+    /// Update disabled style in place.
+    pub fn set_disabled_style(&mut self, style: Style) {
+        self.disabled_style = style;
+    }
+
+    /// Update required indicator style in place.
+    pub fn set_required_style(&mut self, style: Style) {
+        self.required_style = style;
+    }
+
+    /// Mark a field as required (adds indicator).
+    pub fn required(mut self, field_index: usize, required: bool) -> Self {
+        self.set_required(field_index, required);
+        self
+    }
+
+    /// Mark a field as disabled (non-interactive).
+    pub fn disabled(mut self, field_index: usize, disabled: bool) -> Self {
+        self.set_disabled(field_index, disabled);
+        self
+    }
+
+    /// Set required flag for a field by index.
+    pub fn set_required(&mut self, field_index: usize, required: bool) {
+        if field_index < self.required.len() {
+            self.required[field_index] = required;
+        }
+    }
+
+    /// Set disabled flag for a field by index.
+    pub fn set_disabled(&mut self, field_index: usize, disabled: bool) {
+        if field_index < self.disabled.len() {
+            self.disabled[field_index] = disabled;
+        }
+    }
+
+    /// Check if a field is required.
+    pub fn is_required(&self, field_index: usize) -> bool {
+        self.required.get(field_index).copied().unwrap_or(false)
+    }
+
+    /// Check if a field is disabled.
+    pub fn is_disabled(&self, field_index: usize) -> bool {
+        self.disabled.get(field_index).copied().unwrap_or(false)
     }
 
     /// Set fixed label width (0 = auto-detect from longest label).
@@ -348,7 +419,14 @@ impl Form {
         }
         self.fields
             .iter()
-            .map(|f| unicode_width::UnicodeWidthStr::width(f.label()) as u16)
+            .enumerate()
+            .map(|(i, f)| {
+                let mut width = unicode_width::UnicodeWidthStr::width(f.label()) as u16;
+                if self.is_required(i) {
+                    width = width.saturating_add(2); // " *"
+                }
+                width
+            })
             .max()
             .unwrap_or(0)
             .saturating_add(2) // ": " suffix
@@ -563,6 +641,32 @@ impl FormState {
     }
 
     fn handle_key(&mut self, form: &mut Form, key: &KeyEvent) -> bool {
+        if form.is_disabled(self.focused) {
+            match key.code {
+                KeyCode::Tab => {
+                    self.focus_next(form.field_count());
+                    self.sync_text_cursor(form);
+                    return true;
+                }
+                KeyCode::BackTab => {
+                    self.focus_prev(form.field_count());
+                    self.sync_text_cursor(form);
+                    return true;
+                }
+                KeyCode::Up => {
+                    self.focus_prev(form.field_count());
+                    self.sync_text_cursor(form);
+                    return true;
+                }
+                KeyCode::Down => {
+                    self.focus_next(form.field_count());
+                    self.sync_text_cursor(form);
+                    return true;
+                }
+                KeyCode::Enter | KeyCode::Escape => {}
+                _ => return false,
+            }
+        }
         match key.code {
             // Tab / Shift+Tab: navigate fields
             KeyCode::Tab => {

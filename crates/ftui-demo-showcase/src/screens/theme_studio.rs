@@ -819,14 +819,19 @@ palette = 7={}
     /// Render the preset list panel.
     fn render_presets(&self, frame: &mut Frame, area: Rect) {
         let is_focused = self.focus == Focus::Presets;
-        let border_style = if is_focused {
-            Style::new().fg(theme::accent::PRIMARY.resolve())
+        let (border_style, title) = if is_focused {
+            (
+                Style::new()
+                    .fg(theme::accent::PRIMARY.resolve())
+                    .attrs(StyleFlags::BOLD),
+                " ► Presets ",
+            )
         } else {
-            Style::new().fg(theme::fg::MUTED.resolve())
+            (Style::new().fg(theme::fg::MUTED.resolve()), "   Presets ")
         };
 
         let block = Block::new()
-            .title(" Presets ")
+            .title(title)
             .title_alignment(Alignment::Left)
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
@@ -874,14 +879,22 @@ palette = 7={}
     /// Render the token inspector panel.
     fn render_token_inspector(&self, frame: &mut Frame, area: Rect) {
         let is_focused = self.focus == Focus::TokenInspector;
-        let border_style = if is_focused {
-            Style::new().fg(theme::accent::PRIMARY.resolve())
+        let (border_style, title) = if is_focused {
+            (
+                Style::new()
+                    .fg(theme::accent::PRIMARY.resolve())
+                    .attrs(StyleFlags::BOLD),
+                " ► Token Inspector ",
+            )
         } else {
-            Style::new().fg(theme::fg::MUTED.resolve())
+            (
+                Style::new().fg(theme::fg::MUTED.resolve()),
+                "   Token Inspector ",
+            )
         };
 
         let block = Block::new()
-            .title(" Token Inspector ")
+            .title(title)
             .title_alignment(Alignment::Left)
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)

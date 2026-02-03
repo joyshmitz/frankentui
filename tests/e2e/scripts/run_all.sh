@@ -143,6 +143,9 @@ else
     if [[ -x "$SCRIPT_DIR/test_theme_studio.sh" ]]; then
         run_suite "theme_studio" "$SCRIPT_DIR/test_theme_studio.sh"
     fi
+    if [[ -x "$SCRIPT_DIR/test_ui_inspector.sh" ]]; then
+        run_suite "ui_inspector" "$SCRIPT_DIR/test_ui_inspector.sh"
+    fi
 fi
 
 # Finalize JSON summary

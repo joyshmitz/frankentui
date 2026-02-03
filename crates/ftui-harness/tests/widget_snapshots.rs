@@ -393,8 +393,8 @@ fn snapshot_inspector_hit_regions_with_panel() {
     let inner = shell.inner(area);
     shell.render(area, &mut frame);
 
-    let content = Paragraph::new(Text::raw("Hit regions\n- Button\n- Content"))
-        .alignment(Alignment::Left);
+    let content =
+        Paragraph::new(Text::raw("Hit regions\n- Button\n- Content")).alignment(Alignment::Left);
     content.render(inner, &mut frame);
 
     let button_hit = Rect::new(inner.x + 2, inner.y + 2, 12, 3);

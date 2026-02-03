@@ -2388,7 +2388,7 @@ mod proptests {
         /// Property: NO_COLOR disables all color-related features but not non-visual features.
         #[test]
         fn prop_no_color_preserves_non_visual(no_color in any::<bool>()) {
-            let mut env = DetectInputs {
+            let env = DetectInputs {
                 no_color,
                 term: "xterm-256color".to_string(),
                 term_program: "WezTerm".to_string(),
