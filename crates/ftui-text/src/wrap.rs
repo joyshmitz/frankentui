@@ -1497,12 +1497,12 @@ mod tests {
         assert!(
             b20 >= b10 * 6,
             "doubling slack 10→20: expected ~8× but got {}× (b10={b10}, b20={b20})",
-            if b10 > 0 { b20 / b10 } else { 0 }
+            b20.checked_div(b10).unwrap_or(0)
         );
         assert!(
             b40 >= b20 * 6,
             "doubling slack 20→40: expected ~8× but got {}× (b20={b20}, b40={b40})",
-            if b20 > 0 { b40 / b20 } else { 0 }
+            b40.checked_div(b20).unwrap_or(0)
         );
     }
 
@@ -1729,9 +1729,7 @@ mod tests {
             "the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog", "and", "then", "runs",
             "back", "to", "its", "den", "in",
         ]
-        .iter()
-        .copied()
-        .collect();
+        .to_vec();
 
         let mut paragraph = String::new();
         for i in 0..1000 {

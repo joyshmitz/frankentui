@@ -823,7 +823,7 @@ impl<M: Model, W: Write + Send> Program<M, W> {
             let present_start = Instant::now();
             {
                 let _present_span = debug_span!("frame_present").entered();
-                self.writer.present_ui(&buffer)?;
+                self.writer.present_ui_owned(buffer)?;
             }
             let present_elapsed = present_start.elapsed();
 
@@ -946,21 +946,23 @@ impl<M: Model, W: Write + Send> Program<M, W> {
 
         // Use ui_height() to get effective visible height in inline mode.
         let frame_height = self.writer.ui_height();
-        let mut frame = Frame::new(self.width, frame_height, self.writer.pool_mut());
-        let text_width = PLACEHOLDER_TEXT.chars().count().min(self.width as usize) as u16;
-        let x_start = self.width.saturating_sub(text_width) / 2;
-        let y = frame_height / 2;
+        let buffer = {
+            let mut frame = Frame::new(self.width, frame_height, self.writer.pool_mut());
+            let text_width = PLACEHOLDER_TEXT.chars().count().min(self.width as usize) as u16;
+            let x_start = self.width.saturating_sub(text_width) / 2;
+            let y = frame_height / 2;
 
-        for (offset, ch) in PLACEHOLDER_TEXT.chars().enumerate() {
-            let x = x_start.saturating_add(offset as u16);
-            if x >= self.width {
-                break;
+            for (offset, ch) in PLACEHOLDER_TEXT.chars().enumerate() {
+                let x = x_start.saturating_add(offset as u16);
+                if x >= self.width {
+                    break;
+                }
+                frame.buffer.set_raw(x, y, Cell::from_char(ch));
             }
-            frame.buffer.set_raw(x, y, Cell::from_char(ch));
-        }
+            frame.buffer
+        };
 
-        let buffer = frame.buffer;
-        self.writer.present_ui(&buffer)?;
+        self.writer.present_ui_owned(buffer)?;
 
         Ok(())
     }

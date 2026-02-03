@@ -1561,7 +1561,7 @@ mod tinylfu_tests {
         assert_eq!(cms.total_increments(), 0);
 
         // Access one again -> passes doorkeeper
-        let h = 0 * 0x9E37_79B9 + 1;
+        let h = 1; // i=0 from the loop above
         assert!(dk.check_and_set(h));
         cms.increment(h);
         assert_eq!(cms.total_increments(), 1);
