@@ -117,12 +117,6 @@ fn emit_palette_closed(reason: PaletteCloseReason) {
     );
 }
 
-#[cfg(not(feature = "tracing"))]
-fn emit_palette_action_executed(_action_id: &str, _latency_ms: Option<u128>) {}
-
-#[cfg(not(feature = "tracing"))]
-fn emit_palette_closed(_reason: PaletteCloseReason) {}
-
 // ---------------------------------------------------------------------------
 // Action Item
 // ---------------------------------------------------------------------------

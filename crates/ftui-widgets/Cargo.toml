@@ -8,6 +8,7 @@ publish = false
 default = []
 debug-overlay = []
 regex-search = ["dep:regex"]
+state-persistence = ["dep:serde"]
 tracing = ["dep:tracing", "ftui-render/tracing"]
 
 [dependencies]
@@ -18,6 +19,7 @@ ftui-render = { path = "../ftui-render" }
 ftui-style = { path = "../ftui-style" }
 ftui-text = { path = "../ftui-text" }
 regex = { version = "1", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
 tracing = { version = "0.1", optional = true }
 unicode-segmentation = "1.12.0"
 unicode-width = "0.2.2"
@@ -25,6 +27,8 @@ unicode-width = "0.2.2"
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["registry"] }
 

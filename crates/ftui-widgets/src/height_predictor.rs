@@ -83,7 +83,11 @@ struct WelfordStats {
 
 impl WelfordStats {
     fn new() -> Self {
-        Self { n: 0, mean: 0.0, m2: 0.0 }
+        Self {
+            n: 0,
+            mean: 0.0,
+            m2: 0.0,
+        }
     }
 
     fn update(&mut self, x: f64) {
@@ -386,8 +390,14 @@ mod tests {
         let var_100 = pred.posterior_variance(0);
 
         // With noisy data, posterior variance σ²/κ_n decreases as κ_n grows.
-        assert!(var_10 < var_0, "variance should decrease: {var_10} >= {var_0}");
-        assert!(var_100 < var_10, "variance should decrease: {var_100} >= {var_10}");
+        assert!(
+            var_10 < var_0,
+            "variance should decrease: {var_10} >= {var_0}"
+        );
+        assert!(
+            var_100 < var_10,
+            "variance should decrease: {var_100} >= {var_10}"
+        );
     }
 
     // ─── Conformal bounds tests ───────────────────────────────────
@@ -440,7 +450,9 @@ mod tests {
         });
         let mut seed: u64 = 0xABCD_1234_5678_9ABC;
         for _ in 0..50 {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let h = 3 + (seed >> 62) as u16; // heights 3..6
             pred2.observe(0, h);
         }
@@ -470,7 +482,9 @@ mod tests {
         // Warm up with calibration data.
         let mut seed: u64 = 0xDEAD_BEEF_CAFE_0001;
         for _ in 0..100 {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let h = 2 + (seed >> 62) as u16; // heights 2..5
             pred.observe(0, h);
         }
@@ -479,7 +493,9 @@ mod tests {
         let mut violations = 0u32;
         let test_n = 200;
         for _ in 0..test_n {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let h = 2 + (seed >> 62) as u16;
             let within = pred.observe(0, h);
             if !within {

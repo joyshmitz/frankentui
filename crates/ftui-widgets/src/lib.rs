@@ -127,6 +127,8 @@ pub mod command_palette;
 pub mod constraint_overlay;
 #[cfg(feature = "debug-overlay")]
 pub mod debug_overlay;
+/// Drag-and-drop protocol: [`Draggable`](drag::Draggable) sources, [`DropTarget`](drag::DropTarget) targets, and [`DragPayload`](drag::DragPayload).
+pub mod drag;
 pub mod emoji;
 pub mod error_boundary;
 /// Fenwick tree (Binary Indexed Tree) for O(log n) prefix sum queries.
@@ -235,6 +237,11 @@ pub use inspector::{
 // Focus management
 pub use focus::{
     FocusEvent, FocusGraph, FocusGroup, FocusId, FocusManager, FocusNode, FocusTrap, NavDirection,
+};
+
+// Drag-and-drop protocol (source + target)
+pub use drag::{
+    DragConfig, DragPayload, DragState, Draggable, DropPosition, DropResult, DropTarget,
 };
 
 // Stateful persistence trait

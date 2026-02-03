@@ -604,6 +604,88 @@ impl Default for ToastConfig {
     }
 }
 
+/// Simplified key event for toast interaction handling.
+///
+/// This is a widget-level abstraction over terminal key events. The hosting
+/// application maps its native key events to these variants before passing
+/// them to `Toast::handle_key`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyEvent {
+    /// Escape key — dismiss the toast.
+    Esc,
+    /// Tab key — cycle focus through action buttons.
+    Tab,
+    /// Enter key — invoke the focused action.
+    Enter,
+    /// Any other key (not consumed by the toast).
+    Other,
+}
+
+/// An interactive action button displayed in a toast.
+///
+/// Actions allow users to respond to a toast (e.g., "Undo", "Retry", "View").
+/// Each action has a display label and a unique identifier used to match
+/// callbacks when the action is invoked.
+///
+/// # Invariants
+///
+/// - `label` must be non-empty after trimming whitespace.
+/// - `id` must be non-empty; it serves as the stable callback key.
+/// - Display width of `label` is bounded by toast `max_width` minus chrome.
+///
+/// # Evidence Ledger
+///
+/// Action focus uses a simple round-robin model: Tab advances focus index
+/// modulo action count. This is deterministic and requires no scoring heuristic.
+/// The decision rule is: `next_focus = (current_focus + 1) % actions.len()`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToastAction {
+    /// Display label for the action button (e.g., "Undo").
+    pub label: String,
+    /// Unique identifier for callback matching.
+    pub id: String,
+}
+
+impl ToastAction {
+    /// Create a new toast action.
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug builds if `label` or `id` is empty after trimming.
+    pub fn new(label: impl Into<String>, id: impl Into<String>) -> Self {
+        let label = label.into();
+        let id = id.into();
+        debug_assert!(
+            !label.trim().is_empty(),
+            "ToastAction label must not be empty"
+        );
+        debug_assert!(!id.trim().is_empty(), "ToastAction id must not be empty");
+        Self { label, id }
+    }
+
+    /// Display width of the action button including brackets.
+    ///
+    /// Rendered as `[Label]`, so width = label_width + 2 (brackets).
+    pub fn display_width(&self) -> usize {
+        UnicodeWidthStr::width(self.label.as_str()) + 2 // [ + label + ]
+    }
+}
+
+/// Result of handling a toast interaction event.
+///
+/// Returned by `Toast::handle_key` to indicate what happened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToastEvent {
+    /// No interaction occurred (key not consumed).
+    None,
+    /// The toast was dismissed.
+    Dismissed,
+    /// An action button was invoked. Contains the action ID.
+    Action(String),
+    /// Focus moved between action buttons.
+    FocusChanged,
+}
+
 /// Content of a toast notification.
 #[derive(Debug, Clone)]
 pub struct ToastContent {
@@ -647,6 +729,14 @@ pub struct ToastState {
     pub dismissed: bool,
     /// Animation state.
     pub animation: ToastAnimationState,
+    /// Index of the currently focused action, if any.
+    pub focused_action: Option<usize>,
+    /// Whether the auto-dismiss timer is paused (e.g., due to action focus).
+    pub timer_paused: bool,
+    /// When the timer was paused, for calculating credited time.
+    pub pause_started: Option<Instant>,
+    /// Total duration the timer has been paused (accumulated across multiple pauses).
+    pub total_paused: Duration,
 }
 
 impl Default for ToastState {
@@ -655,6 +745,10 @@ impl Default for ToastState {
             created_at: Instant::now(),
             dismissed: false,
             animation: ToastAnimationState::default(),
+            focused_action: None,
+            timer_paused: false,
+            pause_started: None,
+            total_paused: Duration::ZERO,
         }
     }
 }
@@ -666,6 +760,10 @@ impl ToastState {
             created_at: Instant::now(),
             dismissed: false,
             animation: ToastAnimationState::with_reduced_motion(),
+            focused_action: None,
+            timer_paused: false,
+            pause_started: None,
+            total_paused: Duration::ZERO,
         }
     }
 }
@@ -697,12 +795,18 @@ pub struct Toast {
     pub config: ToastConfig,
     /// Internal state.
     pub state: ToastState,
+    /// Interactive action buttons (e.g., "Undo", "Retry").
+    pub actions: Vec<ToastAction>,
     /// Base style override.
     style: Style,
     /// Icon style override.
     icon_style: Style,
     /// Title style override.
     title_style: Style,
+    /// Style for action buttons.
+    action_style: Style,
+    /// Style for the focused action button.
+    action_focus_style: Style,
 }
 
 impl Toast {
@@ -716,9 +820,12 @@ impl Toast {
             content: ToastContent::new(message),
             config: ToastConfig::default(),
             state: ToastState::default(),
+            actions: Vec::new(),
             style: Style::default(),
             icon_style: Style::default(),
             title_style: Style::default(),
+            action_style: Style::default(),
+            action_focus_style: Style::default(),
         }
     }
 
@@ -729,9 +836,12 @@ impl Toast {
             content: ToastContent::new(message),
             config: ToastConfig::default(),
             state: ToastState::default(),
+            actions: Vec::new(),
             style: Style::default(),
             icon_style: Style::default(),
             title_style: Style::default(),
+            action_style: Style::default(),
+            action_focus_style: Style::default(),
         }
     }
 
@@ -847,6 +957,32 @@ impl Toast {
         self
     }
 
+    // --- Action builder methods ---
+
+    /// Add a single action button to the toast.
+    pub fn action(mut self, action: ToastAction) -> Self {
+        self.actions.push(action);
+        self
+    }
+
+    /// Set all action buttons at once.
+    pub fn actions(mut self, actions: Vec<ToastAction>) -> Self {
+        self.actions = actions;
+        self
+    }
+
+    /// Set the style for action buttons.
+    pub fn with_action_style(mut self, style: Style) -> Self {
+        self.action_style = style;
+        self
+    }
+
+    /// Set the style for the focused action button.
+    pub fn with_action_focus_style(mut self, style: Style) -> Self {
+        self.action_focus_style = style;
+        self
+    }
+
     /// Disable all animations.
     pub fn no_animation(mut self) -> Self {
         self.config.animation = ToastAnimationConfig::none();
@@ -870,9 +1006,19 @@ impl Toast {
     // --- State methods ---
 
     /// Check if the toast has expired based on its duration.
+    ///
+    /// Accounts for time spent paused (when actions are focused).
     pub fn is_expired(&self) -> bool {
         if let Some(duration) = self.config.duration {
-            self.state.created_at.elapsed() >= duration
+            let wall_elapsed = self.state.created_at.elapsed();
+            let mut paused = self.state.total_paused;
+            if self.state.timer_paused
+                && let Some(pause_start) = self.state.pause_started
+            {
+                paused += pause_start.elapsed();
+            }
+            let effective_elapsed = wall_elapsed.saturating_sub(paused);
+            effective_elapsed >= duration
         } else {
             false
         }
@@ -940,11 +1086,107 @@ impl Toast {
     }
 
     /// Get the remaining time before auto-dismiss.
+    ///
+    /// Accounts for paused time.
     pub fn remaining_time(&self) -> Option<Duration> {
         self.config.duration.map(|d| {
-            let elapsed = self.state.created_at.elapsed();
-            d.saturating_sub(elapsed)
+            let wall_elapsed = self.state.created_at.elapsed();
+            let mut paused = self.state.total_paused;
+            if self.state.timer_paused
+                && let Some(pause_start) = self.state.pause_started
+            {
+                paused += pause_start.elapsed();
+            }
+            let effective_elapsed = wall_elapsed.saturating_sub(paused);
+            d.saturating_sub(effective_elapsed)
         })
+    }
+
+    // --- Interaction methods ---
+
+    /// Handle a key event for toast interaction.
+    ///
+    /// Supported keys:
+    /// - `Esc`: Dismiss the toast (if dismissable).
+    /// - `Tab`: Cycle focus through action buttons (round-robin).
+    /// - `Enter`: Invoke the focused action. Returns `ToastEvent::Action(id)`.
+    pub fn handle_key(&mut self, key: KeyEvent) -> ToastEvent {
+        if !self.is_visible() {
+            return ToastEvent::None;
+        }
+
+        match key {
+            KeyEvent::Esc => {
+                if self.has_focus() {
+                    self.clear_focus();
+                    ToastEvent::None
+                } else if self.config.dismissable {
+                    self.dismiss();
+                    ToastEvent::Dismissed
+                } else {
+                    ToastEvent::None
+                }
+            }
+            KeyEvent::Tab => {
+                if self.actions.is_empty() {
+                    return ToastEvent::None;
+                }
+                let next = match self.state.focused_action {
+                    None => 0,
+                    Some(i) => (i + 1) % self.actions.len(),
+                };
+                self.state.focused_action = Some(next);
+                self.pause_timer();
+                ToastEvent::FocusChanged
+            }
+            KeyEvent::Enter => {
+                if let Some(idx) = self.state.focused_action
+                    && let Some(action) = self.actions.get(idx)
+                {
+                    let id = action.id.clone();
+                    self.dismiss();
+                    return ToastEvent::Action(id);
+                }
+                ToastEvent::None
+            }
+            _ => ToastEvent::None,
+        }
+    }
+
+    /// Pause the auto-dismiss timer.
+    pub fn pause_timer(&mut self) {
+        if !self.state.timer_paused {
+            self.state.timer_paused = true;
+            self.state.pause_started = Some(Instant::now());
+        }
+    }
+
+    /// Resume the auto-dismiss timer.
+    pub fn resume_timer(&mut self) {
+        if self.state.timer_paused {
+            if let Some(pause_start) = self.state.pause_started.take() {
+                self.state.total_paused += pause_start.elapsed();
+            }
+            self.state.timer_paused = false;
+        }
+    }
+
+    /// Clear action focus and resume the timer.
+    pub fn clear_focus(&mut self) {
+        self.state.focused_action = None;
+        self.resume_timer();
+    }
+
+    /// Check whether any action is currently focused.
+    pub fn has_focus(&self) -> bool {
+        self.state.focused_action.is_some()
+    }
+
+    /// Get the currently focused action, if any.
+    pub fn focused_action(&self) -> Option<&ToastAction> {
+        self.state
+            .focused_action
+            .and_then(|idx| self.actions.get(idx))
     }
 
     /// Calculate the toast dimensions based on content.
@@ -962,16 +1204,28 @@ impl Toast {
             .unwrap_or(0);
 
         // Content width is max of title and message (plus icon)
-        let content_width = (icon_width + message_width).max(title_width);
+        let mut content_width = (icon_width + message_width).max(title_width);
+
+        // Account for actions row width: [Label] [Label] with spaces between
+        if !self.actions.is_empty() {
+            let actions_width: usize = self
+                .actions
+                .iter()
+                .map(|a| a.display_width())
+                .sum::<usize>()
+                + self.actions.len().saturating_sub(1); // spaces between buttons
+            content_width = content_width.max(actions_width);
+        }
 
         // Add padding (1 char each side) and border (1 char each side)
         let total_width = content_width.saturating_add(4).min(max_width);
 
-        // Height: border (2) + optional title (1) + message (1) + padding (0)
+        // Height: border (2) + optional title (1) + message (1) + optional actions (1)
         let has_title = self.content.title.is_some();
-        let height = if has_title { 4 } else { 3 };
+        let has_actions = !self.actions.is_empty();
+        let height = 3 + u16::from(has_title) + u16::from(has_actions);
 
-        (total_width as u16, height as u16)
+        (total_width as u16, height)
     }
 }
 
@@ -1153,6 +1407,44 @@ impl Widget for Toast {
                 *cell = Cell::from_char(c);
                 if deg.apply_styling() {
                     crate::apply_style(cell, self.style);
+                }
+            }
+        }
+
+        // Draw action buttons if present
+        if !self.actions.is_empty() {
+            content_y += 1;
+            let mut btn_x = content_x;
+
+            for (idx, action) in self.actions.iter().enumerate() {
+                let is_focused = self.state.focused_action == Some(idx);
+                let btn_style = if is_focused && deg.apply_styling() {
+                    self.action_focus_style.merge(&self.style)
+                } else if deg.apply_styling() {
+                    self.action_style.merge(&self.style)
+                } else {
+                    Style::default()
+                };
+
+                // Render [Label]
+                let label = format!("[{}]", action.label);
+                for (i, c) in label.chars().enumerate() {
+                    if btn_x + i as u16 >= content_x + content_width {
+                        break;
+                    }
+                    if let Some(cell) = frame.buffer.get_mut(btn_x + i as u16, content_y) {
+                        *cell = Cell::from_char(c);
+                        if deg.apply_styling() {
+                            crate::apply_style(cell, btn_style);
+                        }
+                    }
+                }
+
+                btn_x += label.len() as u16;
+
+                // Space between buttons
+                if idx + 1 < self.actions.len() {
+                    btn_x += 1;
                 }
             }
         }
@@ -1655,5 +1947,316 @@ mod tests {
         // Should have positive dx (sliding from right)
         assert!(dx > 0, "Should have positive x offset at start");
         assert_eq!(dy, 0);
+    }
+
+    // ── Interactive Toast Action tests ─────────────────────────────────
+
+    #[test]
+    fn action_builder_single() {
+        let toast = Toast::new("msg").action(ToastAction::new("Retry", "retry"));
+        assert_eq!(toast.actions.len(), 1);
+        assert_eq!(toast.actions[0].label, "Retry");
+        assert_eq!(toast.actions[0].id, "retry");
+    }
+
+    #[test]
+    fn action_builder_multiple() {
+        let toast = Toast::new("msg")
+            .action(ToastAction::new("Ack", "ack"))
+            .action(ToastAction::new("Snooze", "snooze"));
+        assert_eq!(toast.actions.len(), 2);
+    }
+
+    #[test]
+    fn action_builder_vec() {
+        let actions = vec![
+            ToastAction::new("A", "a"),
+            ToastAction::new("B", "b"),
+            ToastAction::new("C", "c"),
+        ];
+        let toast = Toast::new("msg").actions(actions);
+        assert_eq!(toast.actions.len(), 3);
+    }
+
+    #[test]
+    fn action_display_width() {
+        let a = ToastAction::new("OK", "ok");
+        // [OK] = 4 chars
+        assert_eq!(a.display_width(), 4);
+    }
+
+    #[test]
+    fn handle_key_esc_dismisses() {
+        let mut toast = Toast::new("msg").no_animation();
+        let result = toast.handle_key(KeyEvent::Esc);
+        assert_eq!(result, ToastEvent::Dismissed);
+    }
+
+    #[test]
+    fn handle_key_esc_clears_focus_first() {
+        let mut toast = Toast::new("msg")
+            .action(ToastAction::new("A", "a"))
+            .no_animation();
+        // First tab to focus
+        toast.handle_key(KeyEvent::Tab);
+        assert!(toast.has_focus());
+        // Esc clears focus rather than dismissing
+        let result = toast.handle_key(KeyEvent::Esc);
+        assert_eq!(result, ToastEvent::None);
+        assert!(!toast.has_focus());
+    }
+
+    #[test]
+    fn handle_key_tab_cycles_focus() {
+        let mut toast = Toast::new("msg")
+            .action(ToastAction::new("A", "a"))
+            .action(ToastAction::new("B", "b"))
+            .no_animation();
+
+        let r1 = toast.handle_key(KeyEvent::Tab);
+        assert_eq!(r1, ToastEvent::FocusChanged);
+        assert_eq!(toast.state.focused_action, Some(0));
+
+        let r2 = toast.handle_key(KeyEvent::Tab);
+        assert_eq!(r2, ToastEvent::FocusChanged);
+        assert_eq!(toast.state.focused_action, Some(1));
+
+        // Wraps around
+        let r3 = toast.handle_key(KeyEvent::Tab);
+        assert_eq!(r3, ToastEvent::FocusChanged);
+        assert_eq!(toast.state.focused_action, Some(0));
+    }
+
+    #[test]
+    fn handle_key_tab_no_actions_is_noop() {
+        let mut toast = Toast::new("msg").no_animation();
+        let result = toast.handle_key(KeyEvent::Tab);
+        assert_eq!(result, ToastEvent::None);
+    }
+
+    #[test]
+    fn handle_key_enter_invokes_action() {
+        let mut toast = Toast::new("msg")
+            .action(ToastAction::new("Retry", "retry"))
+            .no_animation();
+        toast.handle_key(KeyEvent::Tab); // focus action 0
+        let result = toast.handle_key(KeyEvent::Enter);
+        assert_eq!(result, ToastEvent::Action("retry".into()));
+    }
+
+    #[test]
+    fn handle_key_enter_no_focus_is_noop() {
+        let mut toast = Toast::new("msg")
+            .action(ToastAction::new("A", "a"))
+            .no_animation();
+        let result = toast.handle_key(KeyEvent::Enter);
+        assert_eq!(result, ToastEvent::None);
+    }
+
+    #[test]
+    fn handle_key_other_is_noop() {
+        let mut toast = Toast::new("msg").no_animation();
+        let result = toast.handle_key(KeyEvent::Other);
+        assert_eq!(result, ToastEvent::None);
+    }
+
+    #[test]
+    fn handle_key_dismissed_toast_is_noop() {
+        let mut toast = Toast::new("msg").no_animation();
+        toast.state.dismissed = true;
+        let result = toast.handle_key(KeyEvent::Esc);
+        assert_eq!(result, ToastEvent::None);
+    }
+
+    #[test]
+    fn pause_timer_sets_flag() {
+        let mut toast = Toast::new("msg").no_animation();
+        toast.pause_timer();
+        assert!(toast.state.timer_paused);
+        assert!(toast.state.pause_started.is_some());
+    }
+
+    #[test]
+    fn resume_timer_accumulates_paused() {
+        let mut toast = Toast::new("msg").no_animation();
+        toast.pause_timer();
+        std::thread::sleep(Duration::from_millis(10));
+        toast.resume_timer();
+        assert!(!toast.state.timer_paused);
+        assert!(toast.state.total_paused >= Duration::from_millis(5));
+    }
+
+    #[test]
+    fn pause_resume_idempotent() {
+        let mut toast = Toast::new("msg").no_animation();
+        // Double pause should not panic
+        toast.pause_timer();
+        toast.pause_timer();
+        assert!(toast.state.timer_paused);
+        // Double resume should not panic
+        toast.resume_timer();
+        toast.resume_timer();
+        assert!(!toast.state.timer_paused);
+    }
+
+    #[test]
+    fn clear_focus_resumes_timer() {
+        let mut toast = Toast::new("msg")
+            .action(ToastAction::new("A", "a"))
+            .no_animation();
+        toast.handle_key(KeyEvent::Tab);
+        assert!(toast.state.timer_paused);
+        toast.clear_focus();
+        assert!(!toast.has_focus());
+        assert!(!toast.state.timer_paused);
+    }
+
+    #[test]
+    fn focused_action_returns_correct() {
+        let mut toast = Toast::new("msg")
+            .action(ToastAction::new("X", "x"))
+            .action(ToastAction::new("Y", "y"))
+            .no_animation();
+        assert!(toast.focused_action().is_none());
+        toast.handle_key(KeyEvent::Tab);
+        assert_eq!(toast.focused_action().unwrap().id, "x");
+        toast.handle_key(KeyEvent::Tab);
+        assert_eq!(toast.focused_action().unwrap().id, "y");
+    }
+
+    #[test]
+    fn is_expired_accounts_for_pause() {
+        let mut toast = Toast::new("msg")
+            .duration(Duration::from_millis(50))
+            .no_animation();
+        toast.pause_timer();
+        // Sleep past the duration while paused
+        std::thread::sleep(Duration::from_millis(60));
+        assert!(
+            !toast.is_expired(),
+            "Should not expire while timer is paused"
+        );
+        toast.resume_timer();
+        // Not expired yet because paused time is subtracted
+        assert!(
+            !toast.is_expired(),
+            "Should not expire immediately after resume because paused time was subtracted"
+        );
+    }
+
+    #[test]
+    fn dimensions_include_actions_row() {
+        let toast = Toast::new("Hi")
+            .action(ToastAction::new("OK", "ok"))
+            .no_animation();
+        let (_, h) = toast.calculate_dimensions();
+        // Without actions: 3 (border + message + border)
+        // With actions: 4 (border + message + actions + border)
+        assert_eq!(h, 4);
+    }
+
+    #[test]
+    fn dimensions_with_title_and_actions() {
+        let toast = Toast::new("Hi")
+            .title("Title")
+            .action(ToastAction::new("OK", "ok"))
+            .no_animation();
+        let (_, h) = toast.calculate_dimensions();
+        // border + title + message + actions + border = 5
+        assert_eq!(h, 5);
+    }
+
+    #[test]
+    fn dimensions_width_accounts_for_actions() {
+        let toast = Toast::new("Hi")
+            .action(ToastAction::new("LongButtonLabel", "lb"))
+            .no_animation();
+        let (w, _) = toast.calculate_dimensions();
+        // [LongButtonLabel] = 18 chars, plus 4 for borders/padding = 22
+        // "Hi" = 2 chars + 4 = 6, so actions width dominates
+        assert!(w >= 20);
+    }
+
+    #[test]
+    fn render_with_actions_does_not_panic() {
+        let toast = Toast::new("Test")
+            .action(ToastAction::new("OK", "ok"))
+            .action(ToastAction::new("Cancel", "cancel"))
+            .no_animation();
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(60, 20, &mut pool);
+        let area = Rect::new(0, 0, 40, 10);
+        toast.render(area, &mut frame);
+    }
+
+    #[test]
+    fn render_focused_action_does_not_panic() {
+        let mut toast = Toast::new("Test")
+            .action(ToastAction::new("OK", "ok"))
+            .no_animation();
+        toast.handle_key(KeyEvent::Tab); // focus first action
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(60, 20, &mut pool);
+        let area = Rect::new(0, 0, 40, 10);
+        toast.render(area, &mut frame);
+    }
+
+    #[test]
+    fn render_actions_tiny_area_does_not_panic() {
+        let toast = Toast::new("X")
+            .action(ToastAction::new("A", "a"))
+            .no_animation();
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(5, 3, &mut pool);
+        let area = Rect::new(0, 0, 5, 3);
+        toast.render(area, &mut frame);
+    }
+
+    #[test]
+    fn toast_action_styles() {
+        let style = Style::new().bold();
+        let focus_style = Style::new().italic();
+        let toast = Toast::new("msg")
+            .action(ToastAction::new("A", "a"))
+            .with_action_style(style)
+            .with_action_focus_style(focus_style);
+        assert_eq!(toast.action_style, style);
+        assert_eq!(toast.action_focus_style, focus_style);
+    }
+
+    #[test]
+    fn persistent_toast_not_expired_with_actions() {
+        let toast = Toast::new("msg")
+            .persistent()
+            .action(ToastAction::new("Dismiss", "dismiss"))
+            .no_animation();
+        std::thread::sleep(Duration::from_millis(10));
+        assert!(!toast.is_expired());
+    }
+
+    #[test]
+    fn action_invoke_second_button() {
+        let mut toast = Toast::new("msg")
+            .action(ToastAction::new("A", "a"))
+            .action(ToastAction::new("B", "b"))
+            .no_animation();
+        toast.handle_key(KeyEvent::Tab); // focus 0
+        toast.handle_key(KeyEvent::Tab); // focus 1
+        let result = toast.handle_key(KeyEvent::Enter);
+        assert_eq!(result, ToastEvent::Action("b".into()));
+    }
+
+    #[test]
+    fn remaining_time_with_pause() {
+        let toast = Toast::new("msg")
+            .duration(Duration::from_secs(10))
+            .no_animation();
+        let remaining = toast.remaining_time();
+        assert!(remaining.is_some());
+        let r = remaining.unwrap();
+        assert!(r > Duration::from_secs(9));
     }
 }

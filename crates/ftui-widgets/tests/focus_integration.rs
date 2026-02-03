@@ -17,8 +17,8 @@
 
 use ftui_core::geometry::Rect;
 use ftui_widgets::focus::{
-    build_spatial_edges, spatial_navigate, FocusEvent, FocusGraph, FocusManager, FocusNode,
-    NavDirection,
+    FocusEvent, FocusGraph, FocusManager, FocusNode, NavDirection, build_spatial_edges,
+    spatial_navigate,
 };
 
 // ---------------------------------------------------------------------------
@@ -574,7 +574,10 @@ fn property_focus_always_valid_or_none() {
     if let Some(id) = fm.current() {
         let node = fm.graph().get(id);
         assert!(node.is_some(), "focused node {id} must exist in graph");
-        assert!(node.unwrap().is_focusable, "focused node {id} must be focusable");
+        assert!(
+            node.unwrap().is_focusable,
+            "focused node {id} must be focusable"
+        );
     }
 }
 
@@ -750,8 +753,7 @@ fn perf_full_navigation_sequence_100_nodes() {
 fn perf_focus_history_1000_entries() {
     let mut fm = FocusManager::new();
     for i in 1..=1000 {
-        fm.graph_mut()
-            .insert(node(i, 0, 0, 10, 3, i as i32));
+        fm.graph_mut().insert(node(i, 0, 0, 10, 3, i as i32));
     }
 
     let start = std::time::Instant::now();
