@@ -42,6 +42,8 @@ pub mod computed;
 pub mod observable;
 
 pub use batch::BatchScope;
-pub use binding::{Binding, BindingScope, TwoWayBinding, bind_mapped, bind_mapped2, bind_observable};
+pub use binding::{
+    Binding, BindingScope, TwoWayBinding, bind_mapped, bind_mapped2, bind_observable,
+};
 pub use computed::Computed;
 pub use observable::{Observable, Subscription};

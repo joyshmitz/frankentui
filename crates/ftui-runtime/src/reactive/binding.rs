@@ -132,7 +132,11 @@ pub fn bind_mapped<S: Clone + PartialEq + 'static, T: 'static>(
 }
 
 /// Create a binding from two observables combined by `map`.
-pub fn bind_mapped2<S1: Clone + PartialEq + 'static, S2: Clone + PartialEq + 'static, T: 'static>(
+pub fn bind_mapped2<
+    S1: Clone + PartialEq + 'static,
+    S2: Clone + PartialEq + 'static,
+    T: 'static,
+>(
     s1: &Observable<S1>,
     s2: &Observable<S2>,
     map: impl Fn(&S1, &S2) -> T + 'static,
@@ -140,9 +144,7 @@ pub fn bind_mapped2<S1: Clone + PartialEq + 'static, S2: Clone + PartialEq + 'st
     let src1 = s1.clone();
     let src2 = s2.clone();
     Binding {
-        eval: Rc::new(move || {
-            src1.with(|v1| src2.with(|v2| map(v1, v2)))
-        }),
+        eval: Rc::new(move || src1.with(|v1| src2.with(|v2| map(v1, v2)))),
     }
 }
 
@@ -327,10 +329,7 @@ impl BindingScope {
     ///
     /// The binding's underlying subscription is held by the scope.
     /// Returns the `Binding<T>` for reading the value.
-    pub fn bind<T: Clone + PartialEq + 'static>(
-        &mut self,
-        source: &Observable<T>,
-    ) -> Binding<T> {
+    pub fn bind<T: Clone + PartialEq + 'static>(&mut self, source: &Observable<T>) -> Binding<T> {
         bind_observable(source)
     }
 
@@ -560,7 +559,11 @@ mod tests {
 
         let source2 = source.clone();
         source2.set(99);
-        assert_eq!(b.get(), 99, "binding should see changes through cloned observable");
+        assert_eq!(
+            b.get(),
+            99,
+            "binding should see changes through cloned observable"
+        );
     }
 
     // ---- BindingScope tests ----
@@ -594,7 +597,11 @@ mod tests {
 
         // After scope dropped, subscription should be gone.
         obs.set(99);
-        assert_eq!(seen.get(), 1, "callback should not fire after scope dropped");
+        assert_eq!(
+            seen.get(),
+            1,
+            "callback should not fire after scope dropped"
+        );
     }
 
     #[test]
@@ -684,7 +691,11 @@ mod tests {
 
         drop(scope);
         obs.set(99);
-        assert_eq!(seen.get(), 5, "held subscription should be released on scope drop");
+        assert_eq!(
+            seen.get(),
+            5,
+            "held subscription should be released on scope drop"
+        );
     }
 
     #[test]

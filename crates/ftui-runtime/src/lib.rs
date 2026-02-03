@@ -42,8 +42,7 @@ pub use input_macro::{
 };
 pub use log_sink::LogSink;
 pub use program::{
-    App, AppBuilder, BatchController, Cmd, Model, Program, ProgramConfig,
-    ResizeBehavior,
+    App, AppBuilder, BatchController, Cmd, Model, Program, ProgramConfig, ResizeBehavior,
 };
 pub use simulator::ProgramSimulator;
 pub use string_model::{StringModel, StringModelAdapter};

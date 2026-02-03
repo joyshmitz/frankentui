@@ -13,9 +13,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use ftui_runtime::reactive::batch::BatchScope;
-use ftui_runtime::reactive::binding::{
-    bind_mapped, bind_observable, BindingScope, TwoWayBinding,
-};
+use ftui_runtime::reactive::binding::{BindingScope, TwoWayBinding, bind_mapped, bind_observable};
 use ftui_runtime::reactive::computed::Computed;
 use ftui_runtime::reactive::observable::Observable;
 use ftui_runtime::{bind, bind_map, bind_map2};
@@ -700,8 +698,16 @@ mod bind_lifecycle {
 
         a.set(100);
         b.set("world".to_string());
-        assert_eq!(a_seen.get(), 42, "scope dropped, a callback should not fire");
-        assert_eq!(*b_seen.borrow(), "hello", "scope dropped, b callback should not fire");
+        assert_eq!(
+            a_seen.get(),
+            42,
+            "scope dropped, a callback should not fire"
+        );
+        assert_eq!(
+            *b_seen.borrow(),
+            "hello",
+            "scope dropped, b callback should not fire"
+        );
     }
 
     #[test]
