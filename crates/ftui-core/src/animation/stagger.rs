@@ -40,7 +40,7 @@
 
 use std::time::Duration;
 
-use super::{ease_in, ease_in_out, ease_out, EasingFn};
+use super::{EasingFn, ease_in, ease_in_out, ease_out};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -84,9 +84,7 @@ pub fn stagger_offsets(count: usize, delay: Duration, mode: StaggerMode) -> Vec<
 
     // For Linear mode, use exact integer arithmetic to avoid float drift.
     if matches!(mode, StaggerMode::Linear) {
-        return (0..count)
-            .map(|i| delay.saturating_mul(i as u32))
-            .collect();
+        return (0..count).map(|i| delay.saturating_mul(i as u32)).collect();
     }
 
     let total_nanos = delay.as_nanos() as f64 * (count - 1) as f64;
@@ -233,13 +231,20 @@ mod tests {
         } else {
             total / 2 - mid
         };
-        assert!(diff < Duration::from_millis(10), "middle should be near half");
+        assert!(
+            diff < Duration::from_millis(10),
+            "middle should be near half"
+        );
     }
 
     #[test]
     fn custom_easing() {
         // Use a custom "jump to end" easing
-        let offsets = stagger_offsets(3, MS_100, StaggerMode::Custom(|t| if t > 0.0 { 1.0 } else { 0.0 }));
+        let offsets = stagger_offsets(
+            3,
+            MS_100,
+            StaggerMode::Custom(|t| if t > 0.0 { 1.0 } else { 0.0 }),
+        );
         assert_eq!(offsets[0], Duration::ZERO);
         assert_eq!(offsets[1], Duration::from_millis(200)); // easing(0.5) = 1.0
         assert_eq!(offsets[2], Duration::from_millis(200)); // easing(1.0) = 1.0
@@ -268,8 +273,13 @@ mod tests {
 
     #[test]
     fn jitter_offsets_non_negative() {
-        let offsets =
-            stagger_offsets_with_jitter(10, MS_50, StaggerMode::Linear, Duration::from_millis(200), 12345);
+        let offsets = stagger_offsets_with_jitter(
+            10,
+            MS_50,
+            StaggerMode::Linear,
+            Duration::from_millis(200),
+            12345,
+        );
         for offset in &offsets {
             assert!(*offset >= Duration::ZERO);
         }
@@ -278,7 +288,8 @@ mod tests {
     #[test]
     fn jitter_zero_is_noop() {
         let base = stagger_offsets(5, MS_100, StaggerMode::Linear);
-        let jittered = stagger_offsets_with_jitter(5, MS_100, StaggerMode::Linear, Duration::ZERO, 42);
+        let jittered =
+            stagger_offsets_with_jitter(5, MS_100, StaggerMode::Linear, Duration::ZERO, 42);
         assert_eq!(base, jittered);
     }
 
