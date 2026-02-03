@@ -1178,3 +1178,94 @@ fn action_timeline_title() {
     assert_eq!(screen.title(), "Action Timeline");
     assert_eq!(screen.tab_label(), "Timeline");
 }
+
+// ============================================================================
+// Theme Studio — Live palette editor (bd-vu0o.1)
+// ============================================================================
+
+#[test]
+fn theme_studio_initial_80x24() {
+    let screen = ftui_demo_showcase::screens::theme_studio::ThemeStudioDemo::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("theme_studio_initial_80x24", &frame.buffer);
+}
+
+#[test]
+fn theme_studio_initial_120x40() {
+    let screen = ftui_demo_showcase::screens::theme_studio::ThemeStudioDemo::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(120, 40, &mut pool);
+    let area = Rect::new(0, 0, 120, 40);
+    screen.view(&mut frame, area);
+    assert_snapshot!("theme_studio_initial_120x40", &frame.buffer);
+}
+
+#[test]
+fn theme_studio_tiny_40x10() {
+    let screen = ftui_demo_showcase::screens::theme_studio::ThemeStudioDemo::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(40, 10, &mut pool);
+    let area = Rect::new(0, 0, 40, 10);
+    screen.view(&mut frame, area);
+    assert_snapshot!("theme_studio_tiny_40x10", &frame.buffer);
+}
+
+#[test]
+fn theme_studio_wide_200x50() {
+    let screen = ftui_demo_showcase::screens::theme_studio::ThemeStudioDemo::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(200, 50, &mut pool);
+    let area = Rect::new(0, 0, 200, 50);
+    screen.view(&mut frame, area);
+    assert_snapshot!("theme_studio_wide_200x50", &frame.buffer);
+}
+
+#[test]
+fn theme_studio_navigate_tokens_120x40() {
+    let mut screen = ftui_demo_showcase::screens::theme_studio::ThemeStudioDemo::new();
+    // Switch to token inspector panel
+    screen.update(&press(KeyCode::Tab));
+    // Navigate down through tokens
+    for _ in 0..5 {
+        screen.update(&press(KeyCode::Down));
+    }
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(120, 40, &mut pool);
+    let area = Rect::new(0, 0, 120, 40);
+    screen.view(&mut frame, area);
+    assert_snapshot!("theme_studio_navigate_tokens_120x40", &frame.buffer);
+}
+
+#[test]
+fn theme_studio_vim_navigation_120x40() {
+    let mut screen = ftui_demo_showcase::screens::theme_studio::ThemeStudioDemo::new();
+    // Use vim-style j/k navigation in presets panel
+    for _ in 0..3 {
+        screen.update(&press(KeyCode::Char('j')));
+    }
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(120, 40, &mut pool);
+    let area = Rect::new(0, 0, 120, 40);
+    screen.view(&mut frame, area);
+    assert_snapshot!("theme_studio_vim_navigation_120x40", &frame.buffer);
+}
+
+#[test]
+fn theme_studio_zero_area() {
+    let screen = ftui_demo_showcase::screens::theme_studio::ThemeStudioDemo::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(1, 1, &mut pool);
+    let area = Rect::new(0, 0, 0, 0);
+    screen.view(&mut frame, area);
+    // No panic = success
+}
+
+#[test]
+fn theme_studio_title() {
+    let screen = ftui_demo_showcase::screens::theme_studio::ThemeStudioDemo::new();
+    assert_eq!(screen.title(), "Theme Studio");
+    assert_eq!(screen.tab_label(), "Themes");
+}
