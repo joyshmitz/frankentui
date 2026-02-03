@@ -64,17 +64,17 @@ impl ColorToken {
 /// Theme Studio demo screen state.
 pub struct ThemeStudioDemo {
     /// Current focus panel.
-    focus: Focus,
+    pub focus: Focus,
     /// Selected preset index.
-    preset_index: usize,
+    pub preset_index: usize,
     /// Selected token index.
-    token_index: usize,
+    pub token_index: usize,
     /// List of color tokens for inspection.
-    tokens: Vec<ColorToken>,
+    pub tokens: Vec<ColorToken>,
     /// Tick counter for animations.
-    tick_count: u64,
+    pub tick_count: u64,
     /// Export status message.
-    export_status: Option<String>,
+    pub export_status: Option<String>,
 }
 
 impl Default for ThemeStudioDemo {
@@ -166,7 +166,7 @@ impl ThemeStudioDemo {
     }
 
     /// Calculate WCAG contrast ratio between two colors.
-    fn contrast_ratio(fg: PackedRgba, bg: PackedRgba) -> f32 {
+    pub fn contrast_ratio(fg: PackedRgba, bg: PackedRgba) -> f32 {
         fn linearize(v: f32) -> f32 {
             if v <= 0.04045 {
                 v / 12.92

@@ -561,24 +561,17 @@ impl TextArea {
         self.ensure_cursor_visible_with_height(vp_height, cursor);
     }
 
-    fn ensure_cursor_visible_with_height(&mut self, vp_height: usize, cursor: CursorPosition) {
-        if vp_height == 0 {
-            return;
-        }
-        // Vertical scroll
+    fn ensure_cursor_visible_with_height(&mut self, _vp_height: usize, cursor: CursorPosition) {
+        // Vertical scroll: only adjust if cursor is above the top
         if cursor.line < self.scroll_top {
             self.scroll_top = cursor.line;
-        } else if cursor.line >= self.scroll_top + vp_height {
-            self.scroll_top = cursor.line.saturating_sub(vp_height - 1);
         }
-        // Horizontal scroll (only in no-wrap mode)
+
+        // Horizontal scroll: only adjust if cursor is to the left of the view
         if !self.soft_wrap {
             let visual_col = cursor.visual_col;
             if visual_col < self.scroll_left {
                 self.scroll_left = visual_col;
-            } else if visual_col >= self.scroll_left + 40 {
-                // Rough heuristic; actual width comes from render
-                self.scroll_left = visual_col.saturating_sub(39);
             }
         }
     }
