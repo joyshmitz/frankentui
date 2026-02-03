@@ -577,12 +577,13 @@ impl<W: Write> TerminalWriter<W> {
         self.clear_inline_region_diff(current_region)?;
 
         if visible_height > 0 {
-            // Move to UI anchor and clear UI region
-            {
-                let _span = debug_span!("ftui.render.clear_ui", rows = visible_height).entered();
-                write!(self.writer(), "\x1b[{};1H", ui_y_start.saturating_add(1))?;
-                self.clear_rows(ui_y_start, visible_height)?;
-                write!(self.writer(), "\x1b[{};1H", ui_y_start.saturating_add(1))?;
+            // If the buffer is shorter than the visible height, clear the remaining rows
+            // to prevent ghosting from previous larger buffers.
+            let buf_height = buffer.height().min(visible_height);
+            if buf_height < visible_height {
+                let clear_start = ui_y_start.saturating_add(buf_height);
+                let clear_height = visible_height.saturating_sub(buf_height);
+                self.clear_rows(clear_start, clear_height)?;
             }
 
             // Compute diff

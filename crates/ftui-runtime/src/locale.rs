@@ -112,11 +112,9 @@ impl Drop for LocaleOverride {
 /// Preference order: `LC_ALL`, then `LANG`. Falls back to `"en"` when unknown.
 #[must_use]
 pub fn detect_system_locale() -> Locale {
-    env::var("LC_ALL")
-        .ok()
-        .and_then(|v| normalize_locale_raw(&v))
-        .or_else(|| env::var("LANG").ok().and_then(|v| normalize_locale_raw(&v)))
-        .unwrap_or_else(|| "en".to_string())
+    let lc_all = env::var("LC_ALL").ok();
+    let lang = env::var("LANG").ok();
+    detect_system_locale_from(lc_all.as_deref(), lang.as_deref())
 }
 
 /// Convenience: set the global locale.
@@ -136,6 +134,13 @@ fn normalize_locale(mut locale: Locale) -> Locale {
         locale.push_str("en");
         locale
     })
+}
+
+fn detect_system_locale_from(lc_all: Option<&str>, lang: Option<&str>) -> Locale {
+    lc_all
+        .and_then(normalize_locale_raw)
+        .or_else(|| lang.and_then(normalize_locale_raw))
+        .unwrap_or_else(|| "en".to_string())
 }
 
 fn normalize_locale_raw(raw: &str) -> Option<Locale> {
@@ -161,10 +166,23 @@ fn normalize_locale_raw(raw: &str) -> Option<Locale> {
 mod tests {
     use super::*;
 
-    // Note: Tests for detect_system_locale() env var handling removed because
-    // env::set_var/remove_var are unsafe in Rust 2024 edition and the crate
-    // forbids unsafe code. The function itself is covered by manual testing and
-    // integration tests that run in their own process with controlled env.
+    #[test]
+    fn detect_system_locale_prefers_lc_all() {
+        let locale = detect_system_locale_from(Some("fr_FR.UTF-8"), Some("en_US.UTF-8"));
+        assert_eq!(locale, "fr-FR");
+    }
+
+    #[test]
+    fn detect_system_locale_uses_lang_when_lc_all_missing() {
+        let locale = detect_system_locale_from(None, Some("en_US.UTF-8"));
+        assert_eq!(locale, "en-US");
+    }
+
+    #[test]
+    fn detect_system_locale_defaults_to_en() {
+        let locale = detect_system_locale_from(None, None);
+        assert_eq!(locale, "en");
+    }
 
     #[test]
     fn locale_context_switching_updates_version() {
@@ -185,5 +203,17 @@ mod tests {
         assert_eq!(ctx.current_locale(), "fr");
         drop(guard);
         assert_eq!(ctx.current_locale(), "en");
+    }
+
+    #[test]
+    fn locale_override_is_lifo() {
+        let ctx = LocaleContext::new("en");
+        let _outer = ctx.push_override("fr");
+        assert_eq!(ctx.current_locale(), "fr");
+        {
+            let _inner = ctx.push_override("es");
+            assert_eq!(ctx.current_locale(), "es");
+        }
+        assert_eq!(ctx.current_locale(), "fr");
     }
 }
