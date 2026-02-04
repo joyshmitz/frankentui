@@ -59,6 +59,9 @@ fn grapheme_width(grapheme: &str) -> usize {
         return 0;
     }
     let width = unicode_display_width(grapheme) as usize;
+    if width == 1 && has_emoji_presentation_selector(grapheme) {
+        return 2;
+    }
     if width == 1 && grapheme.chars().any(is_probable_emoji) {
         return 2;
     }
@@ -73,6 +76,9 @@ fn display_width(text: &str) -> usize {
         return ascii_display_width(text);
     }
     if !text.chars().any(is_zero_width_codepoint) {
+        if text.chars().any(is_probable_emoji) {
+            return text.graphemes(true).map(grapheme_width).sum();
+        }
         return unicode_display_width(text) as usize;
     }
     text.graphemes(true).map(grapheme_width).sum()
@@ -95,7 +101,15 @@ fn is_zero_width_codepoint(c: char) -> bool {
 #[inline]
 fn is_probable_emoji(c: char) -> bool {
     let u = c as u32;
-    matches!(u, 0x1F000..=0x1FAFF)
+    matches!(
+        u,
+        0x1F000..=0x1FAFF | 0x2300..=0x23FF | 0x2600..=0x27BF | 0x2B00..=0x2BFF
+    ) && u != 0x2764
+}
+
+#[inline]
+fn has_emoji_presentation_selector(grapheme: &str) -> bool {
+    grapheme.chars().any(|c| c as u32 == 0xFE0F)
 }
 
 /// Identifier for a clickable region in the hit grid.
@@ -1004,6 +1018,20 @@ mod tests {
         let id = frame.intern_with_width("🧪", 2);
         assert_eq!(id.width(), 2);
         assert_eq!(frame.pool.get(id), Some("🧪"));
+    }
+
+    #[test]
+    fn frame_print_text_emoji_presentation_sets_continuation() {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(5, 1, &mut pool);
+
+        frame.print_text(0, 0, "⚙️", Cell::from_char(' '));
+
+        let head = frame.buffer.get(0, 0).unwrap();
+        let tail = frame.buffer.get(1, 0).unwrap();
+
+        assert_eq!(head.content.width(), 2);
+        assert!(tail.content.is_continuation());
     }
 
     #[test]

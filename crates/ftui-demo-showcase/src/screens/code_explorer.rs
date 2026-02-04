@@ -13,7 +13,7 @@ use ftui_extras::text_effects::{
     ColorGradient, CursorPosition, CursorStyle, Direction, StyledMultiLine, StyledText, TextEffect,
 };
 use ftui_layout::{Constraint, Flex};
-use ftui_render::cell::PackedRgba;
+use ftui_render::cell::{Cell as RenderCell, PackedRgba};
 use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
 use ftui_style::{Style, StyleFlags};
@@ -1961,6 +1961,14 @@ impl CodeExplorer {
     }
 
     fn render_status_bar(&self, frame: &mut Frame, area: Rect) {
+        if area.is_empty() {
+            return;
+        }
+        frame.buffer.fill(
+            area,
+            RenderCell::default().with_bg(theme::alpha::SURFACE.into()),
+        );
+
         let total = self.total_lines();
         let pos = self.scroll_offset + 1;
         let pct = (self.scroll_offset * 100).checked_div(total).unwrap_or(0);
@@ -1971,9 +1979,25 @@ impl CodeExplorer {
             self.mode.label(),
             self.search_matches.len()
         );
-        Paragraph::new(truncate_to_width(&status, area.width))
-            .style(Style::new().fg(theme::fg::MUTED).bg(theme::alpha::SURFACE))
-            .render(area, frame);
+        let status_line = truncate_to_width(&status, area.width);
+        if self.search_matches.is_empty() {
+            Paragraph::new(status_line)
+                .style(Style::new().fg(theme::fg::MUTED))
+                .render(area, frame);
+        } else {
+            StyledText::new(status_line)
+                .base_color(theme::fg::PRIMARY.into())
+                .effect(TextEffect::AnimatedGradient {
+                    gradient: ColorGradient::sunset(),
+                    speed: 0.5,
+                })
+                .effect(TextEffect::Pulse {
+                    speed: 1.2,
+                    min_alpha: 0.6,
+                })
+                .time(self.time)
+                .render(area, frame);
+        }
     }
 }
 

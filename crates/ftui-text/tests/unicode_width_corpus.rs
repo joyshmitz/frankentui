@@ -219,6 +219,7 @@ const EMOJI_BASIC_TESTS: &[WidthTestCase] = &[
     WidthTestCase::new("\u{1F680}", "rocket", 2),
     WidthTestCase::new("\u{1F4BB}", "laptop", 2),
     WidthTestCase::new("\u{1F3E0}", "house", 2),
+    WidthTestCase::new("\u{26A1}", "high voltage", 2),
     // Animals
     WidthTestCase::new("\u{1F436}", "dog face", 2),
     WidthTestCase::new("\u{1F431}", "cat face", 2),
@@ -239,6 +240,21 @@ fn emoji_presentation_grapheme_width_is_wide() {
         assert_eq!(
             width, 2,
             "Expected emoji presentation '{}' to be width 2",
+            case
+        );
+    }
+}
+
+#[test]
+fn file_browser_icons_are_wide() {
+    let cases = [
+        "📁", "🔗", "🦀", "🐍", "📜", "📝", "⚙️", "🖼️", "🎵", "🎬", "⚡", "📄", "🏠",
+    ];
+    for case in cases {
+        let width = grapheme_width(case);
+        assert_eq!(
+            width, 2,
+            "Expected file browser icon '{}' to be width 2",
             case
         );
     }

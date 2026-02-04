@@ -276,13 +276,8 @@ fn bench_selector_overhead(c: &mut Criterion) {
                         ((p_actual * total_cells as f64).round() as usize).min(total_cells);
                     for _ in 0..64 {
                         let strategy = selector.select(w, h, dirty_rows);
-                        let scanned = match strategy {
-                            DiffStrategy::Full => total_cells,
-                            DiffStrategy::DirtyRows => dirty_rows.saturating_mul(w as usize),
-                            DiffStrategy::FullRedraw => 0,
-                        };
                         if strategy != DiffStrategy::FullRedraw {
-                            selector.observe(scanned, changed);
+                            selector.observe(total_cells, changed);
                         }
                         black_box(strategy);
                     }
@@ -327,8 +322,7 @@ fn bench_selector_vs_fixed(c: &mut Criterion) {
                         }
                         DiffStrategy::DirtyRows => {
                             let diff = BufferDiff::compute_dirty(&old, &new);
-                            let scanned = dirty_rows.saturating_mul(w as usize);
-                            selector.observe(scanned, diff.len());
+                            selector.observe(total_cells, diff.len());
                             black_box(diff.len());
                         }
                         DiffStrategy::FullRedraw => {

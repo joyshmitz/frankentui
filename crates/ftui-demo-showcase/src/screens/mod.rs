@@ -114,13 +114,23 @@ pub struct ScreenMeta {
 /// Screen Registry: single source of truth for screen ordering + metadata.
 pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
     ScreenMeta {
+        id: ScreenId::GuidedTour,
+        title: "Guided Tour",
+        short_label: "Tour",
+        category: ScreenCategory::Tour,
+        palette_tags: &["tour", "storyboard", "autoplay"],
+        blurb: "Cinematic auto-play tour across key screens.",
+        default_hotkey: Some("1"),
+        tour_step_hint: Some("Auto-play showcase"),
+    },
+    ScreenMeta {
         id: ScreenId::Dashboard,
         title: "Dashboard",
         short_label: "Dash",
         category: ScreenCategory::Tour,
         palette_tags: &["overview", "tour", "widgets"],
         blurb: "Cinematic overview of key features and live tiles.",
-        default_hotkey: Some("1"),
+        default_hotkey: Some("2"),
         tour_step_hint: Some("Start here"),
     },
     ScreenMeta {
@@ -130,7 +140,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         category: ScreenCategory::Text,
         palette_tags: &["search", "text", "highlight"],
         blurb: "Live search over Shakespeare with animated highlights.",
-        default_hotkey: Some("2"),
+        default_hotkey: Some("3"),
         tour_step_hint: Some("Live search + highlights"),
     },
     ScreenMeta {
@@ -140,8 +150,8 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         category: ScreenCategory::Text,
         palette_tags: &["code", "explorer", "syntax"],
         blurb: "Code browser with pane routing and syntax preview.",
-        default_hotkey: Some("3"),
-        tour_step_hint: None,
+        default_hotkey: Some("4"),
+        tour_step_hint: Some("Live code + syntax"),
     },
     ScreenMeta {
         id: ScreenId::WidgetGallery,
@@ -150,7 +160,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         category: ScreenCategory::Core,
         palette_tags: &["widgets", "catalog", "layout"],
         blurb: "Library of core widgets in a compact gallery.",
-        default_hotkey: Some("4"),
+        default_hotkey: Some("5"),
         tour_step_hint: None,
     },
     ScreenMeta {
@@ -160,8 +170,8 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         category: ScreenCategory::Core,
         palette_tags: &["layout", "flex", "grid"],
         blurb: "Hands-on layout experiments with constraints.",
-        default_hotkey: Some("5"),
-        tour_step_hint: None,
+        default_hotkey: Some("6"),
+        tour_step_hint: Some("Constraints in motion"),
     },
     ScreenMeta {
         id: ScreenId::FormsInput,
@@ -170,7 +180,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         category: ScreenCategory::Interaction,
         palette_tags: &["forms", "input", "controls"],
         blurb: "Form fields, validation cues, and input widgets.",
-        default_hotkey: Some("6"),
+        default_hotkey: Some("7"),
         tour_step_hint: None,
     },
     ScreenMeta {
@@ -180,8 +190,8 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         category: ScreenCategory::Visuals,
         palette_tags: &["charts", "graphs", "visuals"],
         blurb: "Dense charts and small-multiple visualizations.",
-        default_hotkey: Some("7"),
-        tour_step_hint: None,
+        default_hotkey: Some("8"),
+        tour_step_hint: Some("Dense charts + metrics"),
     },
     ScreenMeta {
         id: ScreenId::FileBrowser,
@@ -190,7 +200,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         category: ScreenCategory::Interaction,
         palette_tags: &["files", "tree", "navigation"],
         blurb: "File tree with previews and pane routing.",
-        default_hotkey: Some("8"),
+        default_hotkey: Some("9"),
         tour_step_hint: None,
     },
     ScreenMeta {
@@ -200,7 +210,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         category: ScreenCategory::Core,
         palette_tags: &["advanced", "widgets", "patterns"],
         blurb: "Advanced widget patterns and composite layouts.",
-        default_hotkey: Some("9"),
+        default_hotkey: Some("0"),
         tour_step_hint: None,
     },
     ScreenMeta {
@@ -251,7 +261,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         palette_tags: &["effects", "particles", "animation"],
         blurb: "High-performance visual effects playground.",
         default_hotkey: None,
-        tour_step_hint: None,
+        tour_step_hint: Some("Braille plasma + FX"),
     },
     ScreenMeta {
         id: ScreenId::ResponsiveDemo,
@@ -311,7 +321,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         palette_tags: &["layout", "inspector", "constraints"],
         blurb: "Constraint solver visual inspector.",
         default_hotkey: None,
-        tour_step_hint: None,
+        tour_step_hint: Some("Layout solver visual"),
     },
     ScreenMeta {
         id: ScreenId::AdvancedTextEditor,
@@ -461,7 +471,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         palette_tags: &["determinism", "checksum", "replay"],
         blurb: "Checksum equivalence and determinism checks.",
         default_hotkey: None,
-        tour_step_hint: None,
+        tour_step_hint: Some("Checksum proof"),
     },
     ScreenMeta {
         id: ScreenId::HyperlinkPlayground,

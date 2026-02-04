@@ -42,6 +42,7 @@ use ftui_widgets::voi_debug_overlay::{
 
 use crate::screens;
 use crate::theme;
+use crate::tour::{GuidedTourState, TourAdvanceReason, TourEvent};
 
 // ---------------------------------------------------------------------------
 // Performance HUD Diagnostics (bd-3k3x.8)
@@ -326,6 +327,8 @@ fn emit_palette_jsonl(
 /// Identifies which demo screen is active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ScreenId {
+    /// Guided tour (auto-play storyboard).
+    GuidedTour,
     /// System dashboard with live widgets.
     Dashboard,
     /// Complete Shakespeare works with search.
@@ -429,6 +432,7 @@ impl ScreenId {
     /// Widget name used in error boundary fallback messages.
     fn widget_name(self) -> &'static str {
         match self {
+            Self::GuidedTour => "GuidedTour",
             Self::Dashboard => "Dashboard",
             Self::Shakespeare => "Shakespeare",
             Self::CodeExplorer => "CodeExplorer",
@@ -611,6 +615,7 @@ impl ScreenStates {
     fn update(&mut self, id: ScreenId, event: &Event) {
         use screens::Screen;
         match id {
+            ScreenId::GuidedTour => {}
             ScreenId::Dashboard => {
                 self.dashboard.update(event);
             }
@@ -739,6 +744,7 @@ impl ScreenStates {
         }
 
         match active {
+            ScreenId::GuidedTour => {}
             ScreenId::Dashboard => self.dashboard.tick(tick_count),
             ScreenId::Shakespeare => self.shakespeare.tick(tick_count),
             ScreenId::CodeExplorer => self.code_explorer.tick(tick_count),
@@ -805,6 +811,7 @@ impl ScreenStates {
         let result = catch_unwind(AssertUnwindSafe(|| {
             use screens::Screen;
             match id {
+                ScreenId::GuidedTour => {}
                 ScreenId::Dashboard => self.dashboard.view(frame, area),
                 ScreenId::Shakespeare => self.shakespeare.view(frame, area),
                 ScreenId::CodeExplorer => self.code_explorer.view(frame, area),
@@ -942,6 +949,8 @@ impl From<Event> for AppMsg {
 pub struct AppModel {
     /// Currently displayed screen.
     pub current_screen: ScreenId,
+    /// Guided tour storyboard state.
+    pub tour: GuidedTourState,
     /// Per-screen state storage.
     pub screens: ScreenStates,
     /// Whether the help overlay is visible.
@@ -1025,6 +1034,7 @@ impl AppModel {
         let voi_sampler = VoiSampler::new(voi_config);
         let mut app = Self {
             current_screen: ScreenId::Dashboard,
+            tour: GuidedTourState::new(),
             screens: ScreenStates::default(),
             help_visible: false,
             debug_visible: false,
@@ -1065,6 +1075,81 @@ impl AppModel {
     pub fn with_a11y_telemetry_hooks(mut self, hooks: A11yTelemetryHooks) -> Self {
         self.a11y_telemetry = Some(hooks);
         self
+    }
+
+    fn display_screen(&self) -> ScreenId {
+        if self.tour.is_active() {
+            self.tour.active_screen()
+        } else {
+            self.current_screen
+        }
+    }
+
+    fn tick_interval_ms(&self) -> u64 {
+        if self.tour.is_active() {
+            return 100;
+        }
+        if matches!(self.display_screen(), ScreenId::VisualEffects) {
+            16
+        } else {
+            100
+        }
+    }
+
+    pub fn start_tour(&mut self, start_step: usize, speed: f64) {
+        let resume_screen = if self.current_screen == ScreenId::GuidedTour {
+            self.display_screen()
+        } else {
+            self.current_screen
+        };
+        self.tour.start(resume_screen, start_step, speed);
+        self.current_screen = ScreenId::GuidedTour;
+        self.screens.action_timeline.record_command_event(
+            self.tick_count,
+            "Start guided tour",
+            vec![
+                ("start_step".to_string(), start_step.to_string()),
+                ("speed".to_string(), format!("{:.2}", self.tour.speed())),
+            ],
+        );
+    }
+
+    fn stop_tour(&mut self, keep_last: bool, reason: &str) {
+        let screen = self.tour.stop(keep_last);
+        self.current_screen = screen;
+        self.screens.action_timeline.record_command_event(
+            self.tick_count,
+            "Stop guided tour",
+            vec![
+                ("reason".to_string(), reason.to_string()),
+                ("screen".to_string(), screen.title().to_string()),
+            ],
+        );
+    }
+
+    fn handle_tour_event(&mut self, event: TourEvent) {
+        match event {
+            TourEvent::StepChanged { from, to, reason } => {
+                let reason_label = match reason {
+                    TourAdvanceReason::Auto => "auto",
+                    TourAdvanceReason::ManualNext => "manual_next",
+                    TourAdvanceReason::ManualPrev => "manual_prev",
+                    TourAdvanceReason::Jump => "jump",
+                };
+                self.screens.action_timeline.record_command_event(
+                    self.tick_count,
+                    "Guided tour step",
+                    vec![
+                        ("from".to_string(), from.title().to_string()),
+                        ("to".to_string(), to.title().to_string()),
+                        ("reason".to_string(), reason_label.to_string()),
+                    ],
+                );
+            }
+            TourEvent::Finished { last_screen: _ } => {
+                self.stop_tour(true, "completed");
+            }
+        }
     }
 
     fn emit_a11y_event(&mut self, kind: A11yEventKind) {
@@ -1247,6 +1332,13 @@ impl AppModel {
             AppMsg::Quit => Cmd::Quit,
 
             AppMsg::SwitchScreen(id) => {
+                if id == ScreenId::GuidedTour {
+                    self.start_tour(0, self.tour.speed());
+                    return Cmd::None;
+                }
+                if self.tour.is_active() {
+                    self.stop_tour(false, "switch_screen");
+                }
                 let from = self.current_screen.title();
                 self.current_screen = id;
                 self.screens.action_timeline.record_command_event(
@@ -1261,28 +1353,44 @@ impl AppModel {
             }
 
             AppMsg::NextScreen => {
-                let from = self.current_screen.title();
-                self.current_screen = self.current_screen.next();
+                let from_screen = self.display_screen();
+                let to_screen = from_screen.next();
+                if self.tour.is_active() {
+                    self.stop_tour(false, "next_screen");
+                }
+                if to_screen == ScreenId::GuidedTour {
+                    self.start_tour(0, self.tour.speed());
+                    return Cmd::None;
+                }
+                self.current_screen = to_screen;
                 self.screens.action_timeline.record_command_event(
                     self.tick_count,
                     "Next screen",
                     vec![
-                        ("from".to_string(), from.to_string()),
-                        ("to".to_string(), self.current_screen.title().to_string()),
+                        ("from".to_string(), from_screen.title().to_string()),
+                        ("to".to_string(), to_screen.title().to_string()),
                     ],
                 );
                 Cmd::None
             }
 
             AppMsg::PrevScreen => {
-                let from = self.current_screen.title();
-                self.current_screen = self.current_screen.prev();
+                let from_screen = self.display_screen();
+                let to_screen = from_screen.prev();
+                if self.tour.is_active() {
+                    self.stop_tour(false, "prev_screen");
+                }
+                if to_screen == ScreenId::GuidedTour {
+                    self.start_tour(0, self.tour.speed());
+                    return Cmd::None;
+                }
+                self.current_screen = to_screen;
                 self.screens.action_timeline.record_command_event(
                     self.tick_count,
                     "Previous screen",
                     vec![
-                        ("from".to_string(), from.to_string()),
-                        ("to".to_string(), self.current_screen.title().to_string()),
+                        ("from".to_string(), from_screen.title().to_string()),
+                        ("to".to_string(), to_screen.title().to_string()),
                     ],
                 );
                 Cmd::None
@@ -1432,12 +1540,16 @@ impl AppModel {
             }
 
             AppMsg::Tick => {
+                let tick_ms = self.tick_interval_ms();
                 self.tick_count += 1;
                 self.tick_last_seen = Some(Instant::now());
                 self.record_tick_timing();
                 self.update_voi_ledger();
                 if !self.a11y.reduced_motion {
-                    self.screens.tick(self.current_screen, self.tick_count);
+                    self.screens.tick(self.display_screen(), self.tick_count);
+                }
+                if let Some(event) = self.tour.advance(Duration::from_millis(tick_ms)) {
+                    self.handle_tour_event(event);
                 }
                 let playback_events = self.screens.macro_recorder.drain_playback_events();
                 for event in playback_events {
@@ -1466,7 +1578,7 @@ impl AppModel {
 
             AppMsg::ScreenEvent(event) => {
                 if source == EventSource::User {
-                    let filter_controls = self.current_screen == ScreenId::MacroRecorder;
+                    let filter_controls = self.display_screen() == ScreenId::MacroRecorder;
                     self.screens
                         .macro_recorder
                         .record_event(&event, filter_controls);
@@ -1476,13 +1588,57 @@ impl AppModel {
                     EventSource::User => "user",
                     EventSource::Playback => "playback",
                 };
-                let screen_title = self.current_screen.title();
+                let screen_title = self.display_screen().title();
                 self.screens.action_timeline.record_input_event(
                     self.tick_count,
                     &event,
                     source_label,
                     screen_title,
                 );
+
+                if self.tour.is_active()
+                    && let Event::Key(KeyEvent {
+                        code,
+                        modifiers,
+                        kind: KeyEventKind::Press,
+                        ..
+                    }) = &event
+                    && modifiers.is_empty()
+                {
+                    match *code {
+                        KeyCode::Char(' ') => {
+                            self.tour.toggle_pause();
+                            return Cmd::None;
+                        }
+                        KeyCode::Right | KeyCode::Char('n') => {
+                            if let Some(evt) = self.tour.next_step(TourAdvanceReason::ManualNext) {
+                                self.handle_tour_event(evt);
+                            }
+                            return Cmd::None;
+                        }
+                        KeyCode::Left | KeyCode::Char('p') => {
+                            if let Some(evt) = self.tour.prev_step() {
+                                self.handle_tour_event(evt);
+                            }
+                            return Cmd::None;
+                        }
+                        KeyCode::Escape => {
+                            self.stop_tour(false, "exit");
+                            return Cmd::None;
+                        }
+                        KeyCode::Char('+') | KeyCode::Char('=') => {
+                            let speed = self.tour.speed() * 1.25;
+                            self.tour.set_speed(speed);
+                            return Cmd::None;
+                        }
+                        KeyCode::Char('-') => {
+                            let speed = self.tour.speed() / 1.25;
+                            self.tour.set_speed(speed);
+                            return Cmd::None;
+                        }
+                        _ => {}
+                    }
+                }
 
                 if let Event::Mouse(mouse) = &event
                     && self.handle_mouse_tab_click(mouse)
@@ -1505,7 +1661,7 @@ impl AppModel {
                             KeyCode::Char('f') => {
                                 let query = self.command_palette.query().to_string();
                                 let selected = self.selected_palette_screen();
-                                let log_screen = selected.unwrap_or(self.current_screen);
+                                let log_screen = selected.unwrap_or(self.display_screen());
                                 let log_category = screens::screen_category(log_screen);
                                 let outcome = if selected.is_some() {
                                     "ok"
@@ -1528,7 +1684,7 @@ impl AppModel {
                                 let query = self.command_palette.query().to_string();
                                 let log_screen = self
                                     .selected_palette_screen()
-                                    .unwrap_or(self.current_screen);
+                                    .unwrap_or(self.display_screen());
                                 let log_category = screens::screen_category(log_screen);
                                 self.palette_favorites_only = !self.palette_favorites_only;
                                 self.refresh_palette_actions();
@@ -1551,7 +1707,7 @@ impl AppModel {
                                 let query = self.command_palette.query().to_string();
                                 let log_screen = self
                                     .selected_palette_screen()
-                                    .unwrap_or(self.current_screen);
+                                    .unwrap_or(self.display_screen());
                                 self.palette_category_filter = None;
                                 self.refresh_palette_actions();
                                 emit_palette_jsonl(
@@ -1572,7 +1728,7 @@ impl AppModel {
                                     let query = self.command_palette.query().to_string();
                                     let log_screen = self
                                         .selected_palette_screen()
-                                        .unwrap_or(self.current_screen);
+                                        .unwrap_or(self.display_screen());
                                     self.palette_category_filter = Some(category);
                                     self.refresh_palette_actions();
                                     emit_palette_jsonl(
@@ -1770,7 +1926,7 @@ impl AppModel {
                     self.screens.clear_error(self.current_screen);
                     return Cmd::None;
                 }
-                self.screens.update(self.current_screen, &event);
+                self.screens.update(self.display_screen(), &event);
                 Cmd::None
             }
         }
@@ -1803,6 +1959,7 @@ impl Model for AppModel {
 
         let area = Rect::from_size(frame.buffer.width(), frame.buffer.height());
         frame.enable_hit_testing();
+        let display_screen = self.display_screen();
 
         frame
             .buffer
@@ -1839,16 +1996,16 @@ impl Model for AppModel {
         let content_block = Block::new()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .title(self.current_screen.title())
+            .title(display_screen.title())
             .title_alignment(Alignment::Center)
             .style(theme::content_border());
 
         let inner = content_block.inner(chunks[1]);
         content_block.render(chunks[1], frame);
-        crate::chrome::register_pane_hit(frame, inner, self.current_screen);
+        crate::chrome::register_pane_hit(frame, inner, display_screen);
 
         // Screen content (wrapped in error boundary)
-        self.screens.view(self.current_screen, frame, inner);
+        self.screens.view(display_screen, frame, inner);
 
         // A11y panel (small overlay inside content area)
         if self.a11y_panel_visible {
@@ -1861,10 +2018,16 @@ impl Model for AppModel {
             crate::chrome::render_a11y_panel(&a11y_state, frame, inner);
         }
 
+        if self.tour.is_active()
+            && let Some(state) = self.tour.overlay_state(inner, 6)
+        {
+            crate::chrome::render_guided_tour_overlay(&state, frame, inner);
+        }
+
         // Help overlay (chrome module)
         if self.help_visible {
             let bindings = self.current_screen_keybindings();
-            crate::chrome::render_help_overlay(self.current_screen, &bindings, frame, area);
+            crate::chrome::render_help_overlay(display_screen, &bindings, frame, area);
         }
 
         // Debug overlay
@@ -1890,9 +2053,9 @@ impl Model for AppModel {
         // Status bar (chrome module)
         let (can_undo, can_redo, undo_description) = self.current_screen_undo_status();
         let status_state = crate::chrome::StatusBarState {
-            current_screen: self.current_screen,
-            screen_title: self.current_screen.title(),
-            screen_index: self.current_screen.index(),
+            current_screen: display_screen,
+            screen_title: display_screen.title(),
+            screen_index: display_screen.index(),
             screen_count: screens::screen_registry().len(),
             tick_count: self.tick_count,
             frame_count: self.frame_count,
@@ -1912,11 +2075,7 @@ impl Model for AppModel {
     }
 
     fn subscriptions(&self) -> Vec<Box<dyn Subscription<Self::Message>>> {
-        let tick_ms = if matches!(self.current_screen, ScreenId::VisualEffects) {
-            16
-        } else {
-            100
-        };
+        let tick_ms = self.tick_interval_ms();
         vec![Box::new(Every::new(Duration::from_millis(tick_ms), || {
             AppMsg::Tick
         }))]
@@ -1933,7 +2092,8 @@ impl AppModel {
     /// Gather keybindings from the current screen for the help overlay.
     fn current_screen_keybindings(&self) -> Vec<crate::chrome::HelpEntry> {
         use screens::Screen;
-        let entries = match self.current_screen {
+        let mut entries = match self.display_screen() {
+            ScreenId::GuidedTour => Vec::new(),
             ScreenId::Dashboard => self.screens.dashboard.keybindings(),
             ScreenId::Shakespeare => self.screens.shakespeare.keybindings(),
             ScreenId::CodeExplorer => self.screens.code_explorer.keybindings(),
@@ -1971,6 +2131,24 @@ impl AppModel {
             ScreenId::DeterminismLab => self.screens.determinism_lab.keybindings(),
             ScreenId::HyperlinkPlayground => self.screens.hyperlink_playground.keybindings(),
         };
+        if self.tour.is_active() {
+            entries.push(screens::HelpEntry {
+                key: "Space",
+                action: "Tour: pause / resume",
+            });
+            entries.push(screens::HelpEntry {
+                key: "← / →",
+                action: "Tour: previous / next step",
+            });
+            entries.push(screens::HelpEntry {
+                key: "Esc",
+                action: "Tour: exit tour",
+            });
+            entries.push(screens::HelpEntry {
+                key: "+ / -",
+                action: "Tour: speed up / down",
+            });
+        }
         // Convert screens::HelpEntry to chrome::HelpEntry (same struct, different module).
         entries
             .into_iter()
@@ -1983,7 +2161,7 @@ impl AppModel {
 
     fn current_screen_undo_status(&self) -> (bool, bool, Option<&str>) {
         use screens::Screen;
-        match self.current_screen {
+        match self.display_screen() {
             ScreenId::AdvancedTextEditor => (
                 self.screens.advanced_text_editor.can_undo(),
                 self.screens.advanced_text_editor.can_redo(),
@@ -2013,6 +2191,10 @@ impl AppModel {
 
         if target == self.current_screen {
             return false;
+        }
+
+        if self.tour.is_active() {
+            self.stop_tour(false, "mouse_tab");
         }
 
         let from = self.current_screen.title();
@@ -2047,7 +2229,7 @@ impl AppModel {
 
     fn handle_screen_undo(&mut self, action: UndoAction) -> bool {
         use screens::Screen;
-        match self.current_screen {
+        match self.display_screen() {
             ScreenId::AdvancedTextEditor => match action {
                 UndoAction::Undo => self.screens.advanced_text_editor.undo(),
                 UndoAction::Redo => self.screens.advanced_text_editor.redo(),
@@ -2096,6 +2278,13 @@ impl AppModel {
                 );
                 // Screen navigation: "screen:<name>"
                 if let Some(sid) = Self::screen_id_from_action_id(&id) {
+                    if sid == ScreenId::GuidedTour {
+                        self.start_tour(0, self.tour.speed());
+                        return Cmd::None;
+                    }
+                    if self.tour.is_active() {
+                        self.stop_tour(false, "palette");
+                    }
                     let from = self.current_screen.title();
                     self.current_screen = sid;
                     self.screens.action_timeline.record_command_event(
@@ -2846,22 +3035,22 @@ mod tests {
 
     #[test]
     fn number_keys_map_to_screens() {
-        assert_eq!(ScreenId::from_number_key('1'), Some(ScreenId::Dashboard));
-        assert_eq!(ScreenId::from_number_key('2'), Some(ScreenId::Shakespeare));
-        assert_eq!(ScreenId::from_number_key('3'), Some(ScreenId::CodeExplorer));
+        assert_eq!(ScreenId::from_number_key('1'), Some(ScreenId::GuidedTour));
+        assert_eq!(ScreenId::from_number_key('2'), Some(ScreenId::Dashboard));
+        assert_eq!(ScreenId::from_number_key('3'), Some(ScreenId::Shakespeare));
+        assert_eq!(ScreenId::from_number_key('4'), Some(ScreenId::CodeExplorer));
         assert_eq!(
-            ScreenId::from_number_key('4'),
+            ScreenId::from_number_key('5'),
             Some(ScreenId::WidgetGallery)
         );
-        assert_eq!(ScreenId::from_number_key('5'), Some(ScreenId::LayoutLab));
-        assert_eq!(ScreenId::from_number_key('6'), Some(ScreenId::FormsInput));
-        assert_eq!(ScreenId::from_number_key('7'), Some(ScreenId::DataViz));
-        assert_eq!(ScreenId::from_number_key('8'), Some(ScreenId::FileBrowser));
+        assert_eq!(ScreenId::from_number_key('6'), Some(ScreenId::LayoutLab));
+        assert_eq!(ScreenId::from_number_key('7'), Some(ScreenId::FormsInput));
+        assert_eq!(ScreenId::from_number_key('8'), Some(ScreenId::DataViz));
+        assert_eq!(ScreenId::from_number_key('9'), Some(ScreenId::FileBrowser));
         assert_eq!(
-            ScreenId::from_number_key('9'),
+            ScreenId::from_number_key('0'),
             Some(ScreenId::AdvancedFeatures)
         );
-        assert_eq!(ScreenId::from_number_key('0'), Some(ScreenId::Performance));
         // No direct key for screens after the first 10
         assert_eq!(ScreenId::from_number_key('a'), None);
     }
@@ -2870,7 +3059,7 @@ mod tests {
     fn screen_next_prev_wraps() {
         assert_eq!(ScreenId::Dashboard.next(), ScreenId::Shakespeare);
         assert_eq!(ScreenId::VisualEffects.next(), ScreenId::ResponsiveDemo);
-        assert_eq!(ScreenId::Dashboard.prev(), ScreenId::HyperlinkPlayground);
+        assert_eq!(ScreenId::Dashboard.prev(), ScreenId::GuidedTour);
         assert_eq!(ScreenId::Shakespeare.prev(), ScreenId::Dashboard);
     }
 

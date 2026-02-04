@@ -5,7 +5,7 @@
 use ftui_core::geometry::Rect;
 use ftui_render::frame::{Frame, HitId};
 use ftui_style::{Style, StyleFlags};
-use ftui_text::{Line, Span, Text};
+use ftui_text::{Line, Span, Text, WrapMode};
 use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
 use ftui_widgets::borders::{BorderType, Borders};
@@ -15,6 +15,7 @@ use ftui_widgets::paragraph::Paragraph;
 use crate::app::ScreenId;
 use crate::screens::{self, ScreenCategory};
 use crate::theme;
+use crate::tour::TourOverlayState;
 
 // ---------------------------------------------------------------------------
 // Hit IDs for tab bar clicks + pane routing
@@ -61,6 +62,106 @@ pub fn register_pane_hit(frame: &mut Frame, rect: Rect, screen: ScreenId) {
             HitId::new(PANE_HIT_BASE + screens::screen_index(screen) as u32),
         );
     }
+}
+
+/// Render the guided tour overlay (callouts + step list + highlight).
+pub fn render_guided_tour_overlay(state: &TourOverlayState<'_>, frame: &mut Frame, area: Rect) {
+    if area.is_empty() {
+        return;
+    }
+
+    if let Some(highlight) = state.highlight
+        && highlight.width > 1
+        && highlight.height > 1
+    {
+        let highlight_block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .style(
+                Style::new()
+                    .fg(theme::accent::WARNING)
+                    .bg(theme::with_alpha(theme::accent::WARNING, 18))
+                    .attrs(StyleFlags::BOLD),
+            );
+        highlight_block.render(highlight, frame);
+    }
+
+    let width = area.width.min(56);
+    let height = area.height.min(12);
+    if width < 28 || height < 7 {
+        return;
+    }
+    let overlay = Rect::new(area.right().saturating_sub(width), area.y, width, height);
+
+    let block = Block::new()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title("Guided Tour")
+        .title_alignment(Alignment::Center)
+        .style(
+            Style::new()
+                .fg(theme::accent::PRIMARY)
+                .bg(theme::alpha::SURFACE),
+        );
+    let inner = block.inner(overlay);
+    block.render(overlay, frame);
+
+    if inner.is_empty() {
+        return;
+    }
+
+    let mut lines = Vec::new();
+    let status = if state.paused { "PAUSED" } else { "LIVE" };
+    let header = Line::from_spans([
+        Span::styled(
+            format!("{}/{}", state.step_index + 1, state.step_count.max(1)),
+            Style::new().fg(theme::accent::INFO).bold(),
+        ),
+        Span::raw(" · "),
+        Span::styled(
+            state.screen_category.label(),
+            Style::new().fg(theme::accent::SECONDARY),
+        ),
+        Span::raw(" · "),
+        Span::styled(status, Style::new().fg(theme::accent::SUCCESS).bold()),
+    ]);
+    lines.push(header);
+
+    lines.push(Line::from_spans([Span::styled(
+        state.callout_title,
+        Style::new().fg(theme::fg::PRIMARY).bold(),
+    )]));
+
+    lines.push(Line::from_spans([Span::styled(
+        state.callout_body,
+        Style::new().fg(theme::fg::SECONDARY),
+    )]));
+
+    if let Some(hint) = state.callout_hint {
+        lines.push(Line::from_spans([Span::styled(
+            hint,
+            Style::new().fg(theme::accent::WARNING).italic(),
+        )]));
+    }
+
+    if inner.height >= 6 {
+        lines.push(Line::from_spans([Span::styled(
+            "Next:",
+            Style::new().fg(theme::fg::MUTED).bold(),
+        )]));
+        for step in state.steps.iter().take((inner.height - 5) as usize) {
+            let prefix = if step.is_current { "▶" } else { "•" };
+            let label = format!("{} {} · {}", prefix, step.category.label(), step.title);
+            lines.push(Line::from_spans([Span::styled(
+                label,
+                Style::new().fg(theme::fg::PRIMARY),
+            )]));
+        }
+    }
+
+    Paragraph::new(Text::from_lines(lines))
+        .wrap(WrapMode::Word)
+        .render(inner, frame);
 }
 
 // ---------------------------------------------------------------------------
@@ -728,6 +829,7 @@ pub fn category_accent(category: ScreenCategory) -> theme::ColorToken {
 /// Return the accent color for the given screen.
 pub fn accent_for(id: ScreenId) -> theme::ColorToken {
     match id {
+        ScreenId::GuidedTour => theme::screen_accent::DASHBOARD,
         ScreenId::Dashboard => theme::screen_accent::DASHBOARD,
         ScreenId::Shakespeare => theme::screen_accent::SHAKESPEARE,
         ScreenId::CodeExplorer => theme::screen_accent::CODE_EXPLORER,

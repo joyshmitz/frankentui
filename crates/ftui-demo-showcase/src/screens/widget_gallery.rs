@@ -158,7 +158,7 @@ impl WidgetGallery {
         virtualized_state.selected = Some(2);
 
         Self {
-            current_section: 1,
+            current_section: 0,
             tick_count: 0,
             spinner_state: SpinnerState::default(),
             file_picker_state: RefCell::new(file_picker_state),
@@ -1943,7 +1943,7 @@ mod tests {
     #[test]
     fn gallery_initial_state() {
         let gallery = WidgetGallery::new();
-        assert_eq!(gallery.current_section, 1);
+        assert_eq!(gallery.current_section, 0);
         assert_eq!(gallery.tick_count, 0);
     }
 
@@ -1987,7 +1987,7 @@ mod tests {
     #[test]
     fn gallery_section_navigation() {
         let mut gallery = WidgetGallery::new();
-        assert_eq!(gallery.current_section, 1);
+        assert_eq!(gallery.current_section, 0);
 
         // Navigate forward with j
         let ev = Event::Key(KeyEvent {
@@ -1996,11 +1996,11 @@ mod tests {
             kind: KeyEventKind::Press,
         });
         gallery.update(&ev);
-        assert_eq!(gallery.current_section, 2);
+        assert_eq!(gallery.current_section, 1);
 
         // Navigate forward again
         gallery.update(&ev);
-        assert_eq!(gallery.current_section, 3);
+        assert_eq!(gallery.current_section, 2);
 
         // Navigate backward with k
         let ev_back = Event::Key(KeyEvent {
@@ -2009,13 +2009,13 @@ mod tests {
             kind: KeyEventKind::Press,
         });
         gallery.update(&ev_back);
-        assert_eq!(gallery.current_section, 2);
+        assert_eq!(gallery.current_section, 1);
     }
 
     #[test]
     fn gallery_section_navigation_arrows() {
         let mut gallery = WidgetGallery::new();
-        assert_eq!(gallery.current_section, 1);
+        assert_eq!(gallery.current_section, 0);
 
         let ev_down = Event::Key(KeyEvent {
             code: KeyCode::Down,
@@ -2023,7 +2023,7 @@ mod tests {
             kind: KeyEventKind::Press,
         });
         gallery.update(&ev_down);
-        assert_eq!(gallery.current_section, 2);
+        assert_eq!(gallery.current_section, 1);
 
         let ev_up = Event::Key(KeyEvent {
             code: KeyCode::Up,
@@ -2031,7 +2031,7 @@ mod tests {
             kind: KeyEventKind::Press,
         });
         gallery.update(&ev_up);
-        assert_eq!(gallery.current_section, 1);
+        assert_eq!(gallery.current_section, 0);
     }
 
     #[test]

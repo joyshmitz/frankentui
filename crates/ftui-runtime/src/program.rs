@@ -53,7 +53,7 @@
 
 use crate::StorageResult;
 use crate::evidence_sink::{EvidenceSink, EvidenceSinkConfig};
-use crate::input_fairness::{FairnessEventType, InputFairnessGuard};
+use crate::input_fairness::{FairnessDecision, FairnessEventType, InputFairnessGuard};
 use crate::input_macro::{EventRecorder, InputMacro};
 use crate::locale::LocaleContext;
 use crate::queueing_scheduler::{EstimateSource, QueueingScheduler, SchedulerConfig, WeightSource};
@@ -1103,6 +1103,62 @@ impl BudgetDecisionEvidence {
 }
 
 #[derive(Debug, Clone)]
+struct FairnessConfigEvidence {
+    enabled: bool,
+    input_priority_threshold_ms: u64,
+    dominance_threshold: u32,
+    fairness_threshold: f64,
+}
+
+impl FairnessConfigEvidence {
+    #[must_use]
+    fn to_jsonl(&self) -> String {
+        format!(
+            r#"{{"event":"fairness_config","enabled":{},"input_priority_threshold_ms":{},"dominance_threshold":{},"fairness_threshold":{:.6}}}"#,
+            self.enabled,
+            self.input_priority_threshold_ms,
+            self.dominance_threshold,
+            self.fairness_threshold
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+struct FairnessDecisionEvidence {
+    frame_idx: u64,
+    decision: &'static str,
+    reason: &'static str,
+    pending_input_latency_ms: Option<u64>,
+    jain_index: f64,
+    resize_dominance_count: u32,
+    dominance_threshold: u32,
+    fairness_threshold: f64,
+    input_priority_threshold_ms: u64,
+}
+
+impl FairnessDecisionEvidence {
+    #[must_use]
+    fn to_jsonl(&self) -> String {
+        let pending_latency = self
+            .pending_input_latency_ms
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "null".to_string());
+        format!(
+            r#"{{"event":"fairness_decision","frame_idx":{},"decision":"{}","reason":"{}","pending_input_latency_ms":{},"jain_index":{:.6},"resize_dominance_count":{},"dominance_threshold":{},"fairness_threshold":{:.6},"input_priority_threshold_ms":{}}}"#,
+            self.frame_idx,
+            self.decision,
+            self.reason,
+            pending_latency,
+            self.jain_index,
+            self.resize_dominance_count,
+            self.dominance_threshold,
+            self.fairness_threshold,
+            self.input_priority_threshold_ms
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
 struct WidgetRefreshEntry {
     widget_id: u64,
     essential: bool,
@@ -1437,6 +1493,8 @@ pub struct Program<M: Model, W: Write + Send = Stdout> {
     resize_coalescer: ResizeCoalescer,
     /// Shared evidence sink for decision logs (optional).
     evidence_sink: Option<EvidenceSink>,
+    /// Whether fairness config has been logged to evidence sink.
+    fairness_config_logged: bool,
     /// Resize handling behavior.
     resize_behavior: ResizeBehavior,
     /// Input fairness guard for scheduler integration.
@@ -1565,6 +1623,7 @@ impl<M: Model> Program<M, Stdout> {
             locale_version,
             resize_coalescer,
             evidence_sink,
+            fairness_config_logged: false,
             resize_behavior: config.resize_behavior,
             fairness_guard: InputFairnessGuard::new(),
             event_recorder: None,
@@ -1752,6 +1811,9 @@ impl<M: Model, W: Write + Send> Program<M, W> {
         // Track event start time and type for fairness scheduling.
         let event_start = Instant::now();
         let fairness_event_type = Self::classify_event_for_fairness(&event);
+        if fairness_event_type == FairnessEventType::Input {
+            self.fairness_guard.input_arrived(event_start);
+        }
 
         // Record event before processing (no-op when recorder is None or idle).
         if let Some(recorder) = &mut self.event_recorder {
@@ -2306,6 +2368,44 @@ impl<M: Model, W: Write + Send> Program<M, W> {
         (frame.buffer, frame.cursor_position, frame.cursor_visible)
     }
 
+    fn emit_fairness_evidence(&mut self, decision: &FairnessDecision, dominance_count: u32) {
+        let Some(ref sink) = self.evidence_sink else {
+            return;
+        };
+
+        let config = self.fairness_guard.config();
+        if !self.fairness_config_logged {
+            let config_entry = FairnessConfigEvidence {
+                enabled: config.enabled,
+                input_priority_threshold_ms: config.input_priority_threshold.as_millis() as u64,
+                dominance_threshold: config.dominance_threshold,
+                fairness_threshold: config.fairness_threshold,
+            };
+            let _ = sink.write_jsonl(&config_entry.to_jsonl());
+            self.fairness_config_logged = true;
+        }
+
+        let evidence = FairnessDecisionEvidence {
+            frame_idx: self.frame_idx,
+            decision: if decision.should_process {
+                "allow"
+            } else {
+                "yield"
+            },
+            reason: decision.reason.as_str(),
+            pending_input_latency_ms: decision
+                .pending_input_latency
+                .map(|latency| latency.as_millis() as u64),
+            jain_index: decision.jain_index,
+            resize_dominance_count: dominance_count,
+            dominance_threshold: config.dominance_threshold,
+            fairness_threshold: config.fairness_threshold,
+            input_priority_threshold_ms: config.input_priority_threshold.as_millis() as u64,
+        };
+
+        let _ = sink.write_jsonl(&evidence.to_jsonl());
+    }
+
     fn render_measure_buffer(&mut self, frame_height: u16) -> (Buffer, Option<(u16, u16)>) {
         let pool = self.writer.pool_mut();
         let mut frame = Frame::new(self.width, frame_height, pool);
@@ -2364,7 +2464,9 @@ impl<M: Model, W: Write + Send> Program<M, W> {
 
         // Check fairness: if input is starving, skip resize application this cycle.
         // This ensures input events are processed before resize is finalized.
+        let dominance_count = self.fairness_guard.resize_dominance_count();
         let fairness_decision = self.fairness_guard.check_fairness(Instant::now());
+        self.emit_fairness_evidence(&fairness_decision, dominance_count);
         if !fairness_decision.should_process {
             debug!(
                 reason = ?fairness_decision.reason,

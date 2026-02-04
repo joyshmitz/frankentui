@@ -299,7 +299,7 @@ impl FileBrowser {
         if inner.is_empty() {
             return;
         }
-        let content_width = inner.width.saturating_sub(1).max(1);
+        let content_width = inner.width.max(1);
 
         // FilePicker::render needs &mut self, but view() has &self.
         // We work around by re-rendering manually with Paragraph lines.
@@ -342,6 +342,7 @@ impl FileBrowser {
             inner.height.saturating_sub(2),
         );
 
+        let mut rendered_rows = 0u16;
         for (row, i) in (scroll..count.min(scroll + list_area.height as usize)).enumerate() {
             let Some(entry) = entries.get(i) else {
                 break;
@@ -367,6 +368,19 @@ impl FileBrowser {
 
             let row_area = Rect::new(list_area.x, y, list_area.width, 1);
             Paragraph::new(&*line).style(style).render(row_area, frame);
+            rendered_rows = rendered_rows.saturating_add(1);
+        }
+
+        if rendered_rows < list_area.height {
+            let blank = " ".repeat(list_area.width as usize);
+            for row in rendered_rows..list_area.height {
+                let y = list_area.y.saturating_add(row);
+                if y >= list_area.bottom() {
+                    break;
+                }
+                let row_area = Rect::new(list_area.x, y, list_area.width, 1);
+                Paragraph::new(&*blank).render(row_area, frame);
+            }
         }
     }
 
@@ -586,7 +600,7 @@ fn format_breadcrumbs(path: &str) -> String {
     let mut parts = path.split('/').filter(|p| !p.is_empty());
     let mut out = String::new();
     if path.starts_with('/') {
-        out.push_str("~ /");
+        out.push_str("🏠 /");
     }
     if let Some(first) = parts.next() {
         if !out.is_empty() {
@@ -598,7 +612,7 @@ fn format_breadcrumbs(path: &str) -> String {
     }
     for part in parts {
         out.push(' ');
-        out.push_str(theme::icons::ascii::ARROW_RIGHT);
+        out.push_str(theme::icons::ARROW_RIGHT);
         out.push(' ');
         out.push_str(icons::directory_icon());
         out.push(' ');
@@ -637,7 +651,7 @@ fn preview_metadata(path: &str, entry: Option<&FileEntry>) -> String {
                 .map(filesize::decimal)
                 .unwrap_or_else(|| "--".into());
             let perms = file_permissions(entry);
-            format!("{kind}  |  Size: {size}  |  Perms: {perms}\nPath: {path}\nPreview:",)
+            format!("{kind}  •  Size: {size}  •  Perms: {perms}\nPath: {path}\nPreview:",)
         }
         None => format!("No selection\nPath: {path}\nPreview:"),
     }
@@ -655,26 +669,26 @@ mod icons {
     use super::{FileEntry, FileKind};
 
     pub fn directory_icon() -> &'static str {
-        "d "
+        "📁"
     }
 
     pub fn symlink_icon() -> &'static str {
-        "l "
+        "🔗"
     }
 
     pub fn file_icon(name: &str) -> &'static str {
         let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
         match ext.as_str() {
-            "rs" => "r ",
-            "py" => "p ",
-            "js" | "ts" => "j ",
-            "md" => "m ",
-            "json" | "toml" | "yaml" | "yml" | "env" | "gitignore" => "c ",
-            "png" | "jpg" | "jpeg" | "gif" | "svg" => "i ",
-            "mp3" | "wav" | "flac" => "a ",
-            "mp4" | "mov" | "mkv" => "v ",
-            "sh" | "bash" => "s ",
-            _ => "f ",
+            "rs" => "🦀",
+            "py" => "🐍",
+            "js" | "ts" => "📜",
+            "md" => "📝",
+            "json" | "toml" | "yaml" | "yml" | "env" | "gitignore" => "⚙️",
+            "png" | "jpg" | "jpeg" | "gif" | "svg" => "🖼️",
+            "mp3" | "wav" | "flac" => "🎵",
+            "mp4" | "mov" | "mkv" => "🎬",
+            "sh" | "bash" => "⚡",
+            _ => "📄",
         }
     }
 

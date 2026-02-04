@@ -152,6 +152,17 @@ impl InterventionReason {
     pub fn requires_intervention(&self) -> bool {
         !matches!(self, InterventionReason::None)
     }
+
+    /// Stable string representation for logs.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::InputLatency => "input_latency",
+            Self::ResizeDominance => "resize_dominance",
+            Self::FairnessIndex => "fairness_index",
+        }
+    }
 }
 
 /// Fairness decision returned by the guard.
@@ -243,6 +254,8 @@ pub struct InputFairnessGuard {
 
     /// Time when an input event arrived but hasn't been fully processed.
     pending_input_arrival: Option<Instant>,
+    /// Most recent input arrival since the last fairness check.
+    recent_input_arrival: Option<Instant>,
 
     /// Number of consecutive resize-dominated cycles.
     resize_dominance_count: u32,
@@ -268,6 +281,7 @@ impl InputFairnessGuard {
             stats: FairnessStats::default(),
             intervention_counts: InterventionCounts::default(),
             pending_input_arrival: None,
+            recent_input_arrival: None,
             resize_dominance_count: 0,
             processing_window: VecDeque::with_capacity(FAIRNESS_WINDOW_SIZE),
             input_time_us: 0,
@@ -282,6 +296,9 @@ impl InputFairnessGuard {
         if self.pending_input_arrival.is_none() {
             self.pending_input_arrival = Some(now);
         }
+        if self.recent_input_arrival.is_none() {
+            self.recent_input_arrival = Some(now);
+        }
     }
 
     /// Check fairness and return a decision.
@@ -292,14 +309,18 @@ impl InputFairnessGuard {
 
         // If disabled, return default (no intervention)
         if !self.config.enabled {
+            self.recent_input_arrival = None;
             return FairnessDecision::default();
         }
 
         // Calculate Jain's index for input vs resize
         let jain = self.calculate_jain_index();
 
-        // Check pending input latency
-        let pending_latency = self.pending_input_arrival.map(|t| now.duration_since(t));
+        // Check pending input latency (including recent input seen this cycle).
+        let pending_latency = self
+            .recent_input_arrival
+            .or(self.pending_input_arrival)
+            .map(|t| now.duration_since(t));
         if let Some(latency) = pending_latency
             && latency > self.stats.max_input_latency
         {
@@ -328,13 +349,18 @@ impl InputFairnessGuard {
             self.resize_dominance_count = 0;
         }
 
-        FairnessDecision {
+        let decision = FairnessDecision {
             should_process: !yield_to_input,
             pending_input_latency: pending_latency,
             reason,
             yield_to_input,
             jain_index: jain,
-        }
+        };
+
+        // Clear recent input marker after evaluating fairness.
+        self.recent_input_arrival = None;
+
+        decision
     }
 
     /// Record that an event was processed.
@@ -432,7 +458,7 @@ impl InputFairnessGuard {
         }
 
         // Priority 3: Fairness index
-        if jain < self.config.fairness_threshold && self.pending_input_arrival.is_some() {
+        if jain < self.config.fairness_threshold && pending_latency.is_some() {
             return InterventionReason::FairnessIndex;
         }
 
@@ -447,6 +473,16 @@ impl InputFairnessGuard {
     /// Get intervention counts.
     pub fn intervention_counts(&self) -> &InterventionCounts {
         &self.intervention_counts
+    }
+
+    /// Get current configuration.
+    pub fn config(&self) -> &FairnessConfig {
+        &self.config
+    }
+
+    /// Current resize dominance count.
+    pub fn resize_dominance_count(&self) -> u32 {
+        self.resize_dominance_count
     }
 
     /// Check if fairness is enabled.
@@ -467,6 +503,7 @@ impl InputFairnessGuard {
     /// Reset the guard state (useful for testing).
     pub fn reset(&mut self) {
         self.pending_input_arrival = None;
+        self.recent_input_arrival = None;
         self.resize_dominance_count = 0;
         self.processing_window.clear();
         self.input_time_us = 0;

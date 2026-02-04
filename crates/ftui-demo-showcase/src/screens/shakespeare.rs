@@ -9,11 +9,11 @@ use ftui_core::geometry::Rect;
 use ftui_extras::charts::Sparkline;
 use ftui_extras::text_effects::{ColorGradient, Direction, RevealMode, StyledText, TextEffect};
 use ftui_layout::{Constraint, Flex};
-use ftui_render::cell::PackedRgba;
+use ftui_render::cell::{Cell as RenderCell, PackedRgba};
 use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
 use ftui_style::{Style, StyleFlags};
-use ftui_text::search::search_ascii_case_insensitive;
+use ftui_text::search::SearchResult;
 use ftui_text::{display_width, grapheme_width, graphemes};
 use ftui_widgets::StatefulWidget;
 use ftui_widgets::Widget;
@@ -879,6 +879,11 @@ impl Shakespeare {
         // Render visible lines
         let query = self.search_input.value();
         let has_query = query.len() >= 2;
+        let query_lower = if has_query {
+            Some(query.to_ascii_lowercase())
+        } else {
+            None
+        };
 
         for row in 0..vh {
             let line_idx = self.scroll_offset + row;
@@ -894,8 +899,8 @@ impl Shakespeare {
                 1,
             );
 
-            let matches = if has_query {
-                search_ascii_case_insensitive(line, query)
+            let matches = if let Some(lower) = query_lower.as_deref() {
+                search_ascii_case_insensitive_ranges(line, lower)
             } else {
                 Vec::new()
             };
@@ -1528,25 +1533,44 @@ impl Shakespeare {
     }
 
     fn render_status_bar(&self, frame: &mut Frame, area: Rect) {
+        if area.is_empty() {
+            return;
+        }
+        frame.buffer.fill(
+            area,
+            RenderCell::default().with_bg(theme::alpha::SURFACE.into()),
+        );
+
         let section = self.current_section();
         let total = self.total_lines();
         let pos = self.scroll_offset + 1;
         let pct = (self.scroll_offset * 100).checked_div(total).unwrap_or(0);
 
+        let section_label = truncate_to_width(section, 40);
         let status = format!(
             " Mode: {} · Line {pos}/{total} ({pct}%) · Matches: {} | {}",
             self.mode.label(),
             self.search_matches.len(),
-            if section.len() > 40 {
-                &section[..40]
-            } else {
-                section
-            }
+            section_label
         );
 
-        Paragraph::new(truncate_to_width(&status, area.width))
-            .style(Style::new().fg(theme::fg::MUTED).bg(theme::alpha::SURFACE))
-            .render(area, frame);
+        let status_line = truncate_to_width(&status, area.width);
+        if self.search_matches.is_empty() {
+            Paragraph::new(status_line)
+                .style(Style::new().fg(theme::fg::MUTED))
+                .render(area, frame);
+        } else {
+            StyledText::new(status_line)
+                .base_color(theme::fg::PRIMARY.into())
+                .effect(TextEffect::ColorWave {
+                    color1: theme::accent::PRIMARY.into(),
+                    color2: theme::accent::ACCENT_8.into(),
+                    speed: 0.8,
+                    wavelength: 10.0,
+                })
+                .time(self.time)
+                .render(area, frame);
+        }
     }
 }
 
@@ -1566,6 +1590,37 @@ fn truncate_to_width(text: &str, max_width: u16) -> String {
         width += w;
     }
     out
+}
+
+/// Find ASCII case-insensitive matches without allocating lowercase haystacks per line.
+fn search_ascii_case_insensitive_ranges(haystack: &str, needle_lower: &str) -> Vec<SearchResult> {
+    let mut results = Vec::new();
+    if needle_lower.is_empty() {
+        return results;
+    }
+    let haystack_bytes = haystack.as_bytes();
+    let needle_bytes = needle_lower.as_bytes();
+    if needle_bytes.len() > haystack_bytes.len() {
+        return results;
+    }
+
+    let mut i = 0;
+    while i <= haystack_bytes.len() - needle_bytes.len() {
+        let mut match_found = true;
+        for j in 0..needle_bytes.len() {
+            if haystack_bytes[i + j].to_ascii_lowercase() != needle_bytes[j] {
+                match_found = false;
+                break;
+            }
+        }
+        if match_found {
+            results.push(SearchResult::new(i, i + needle_bytes.len()));
+            i += needle_bytes.len();
+        } else {
+            i += 1;
+        }
+    }
+    results
 }
 
 #[cfg(test)]

@@ -190,11 +190,26 @@ impl Screen for LayoutLab {
 
             match (key.code, key.modifiers) {
                 // Preset selection: 1-5
-                (KeyCode::Char('1'), Modifiers::NONE) => self.current_preset = 0,
-                (KeyCode::Char('2'), Modifiers::NONE) => self.current_preset = 1,
-                (KeyCode::Char('3'), Modifiers::NONE) => self.current_preset = 2,
-                (KeyCode::Char('4'), Modifiers::NONE) => self.current_preset = 3,
-                (KeyCode::Char('5'), Modifiers::NONE) => self.current_preset = 4,
+                (KeyCode::Char('1'), Modifiers::NONE) => {
+                    self.current_preset = 0;
+                    self.selected_constraint = 0;
+                }
+                (KeyCode::Char('2'), Modifiers::NONE) => {
+                    self.current_preset = 1;
+                    self.selected_constraint = 0;
+                }
+                (KeyCode::Char('3'), Modifiers::NONE) => {
+                    self.current_preset = 2;
+                    self.selected_constraint = 0;
+                }
+                (KeyCode::Char('4'), Modifiers::NONE) => {
+                    self.current_preset = 3;
+                    self.selected_constraint = 0;
+                }
+                (KeyCode::Char('5'), Modifiers::NONE) => {
+                    self.current_preset = 4;
+                    self.selected_constraint = 0;
+                }
 
                 // Direction toggle
                 (KeyCode::Char('d'), Modifiers::NONE) => {

@@ -1,5 +1,25 @@
 # Session TODO List
 
+## Current Session (Codex) — Guided Tour Fixes + Review Sweep (2026-02-04)
+- [x] Re-read `AGENTS.md` + `README.md` (refresh constraints + architecture)
+- [x] Fix GuidedTour compile errors (imports + match arms + accent mapping)
+- [x] Remove unused import in `shakespeare.rs`
+- [x] Update number-key mapping tests for GuidedTour insertion
+- [x] `cargo check -p ftui-demo-showcase` (post-fix)
+- [x] `cargo fmt --check` (post-fix)
+- [x] Run `bv --robot-triage` + `br ready --json`
+- [ ] Pick bead to work on (likely `bd-1e3w`, assigned to codex) and post status update
+- [ ] Start Agent Mail session (macro or manual) and message relevant agents
+- [ ] Deep review remaining modified files:
+- [ ] `crates/ftui-demo-showcase/src/chrome.rs`
+- [ ] `crates/ftui-demo-showcase/src/screens/*` (dashboard, forms, layout, widget gallery)
+- [ ] Runtime/render changes (`diff_strategy.rs`, `terminal_writer.rs`, `program.rs`)
+- [ ] Text/render changes (`wrap.rs`, unicode width corpus)
+- [ ] Widgets (`log_viewer.rs`, `command_palette/scorer.rs`)
+- [ ] Fix any issues found in review
+- [x] Run remaining quality gates (`cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`)
+- [x] Run UBS on changed files (`UBS_MAX_DIR_SIZE_MB=0 ubs --diff`)
+
 ## Current Session (SapphireStone) — bd-1e3w Showcase Demo Overhaul + Review/Perf (2026-02-04)
 - [x] Re-read `AGENTS.md` + `README.md` (refresh constraints + architecture)
 - [x] Load skills: `beads-bv`, `agent-mail`, `extreme-software-optimization`

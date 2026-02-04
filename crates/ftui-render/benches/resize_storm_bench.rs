@@ -311,6 +311,61 @@ fn bench_mixed_pattern(c: &mut Criterion) {
 }
 
 // =============================================================================
+// Large-Screen Storm Benchmarks (bd-3e1t.4)
+// =============================================================================
+
+fn bench_large_screen_storm(c: &mut Criterion) {
+    let mut group = c.benchmark_group("resize_storm/large");
+    let seed = 4242u64;
+
+    let cases = [
+        (
+            "burst_50",
+            StormPattern::Burst { count: 50 },
+            (200u16, 60u16),
+        ),
+        (
+            "oscillate_20",
+            StormPattern::Oscillate {
+                size_a: (200, 60),
+                size_b: (240, 80),
+                cycles: 20,
+            },
+            (200u16, 60u16),
+        ),
+    ];
+
+    for (label, pattern, initial) in cases {
+        let config = StormConfig::default()
+            .with_seed(seed)
+            .with_pattern(pattern)
+            .with_initial_size(initial.0, initial.1)
+            .with_size_bounds(160, 320, 50, 120);
+
+        let storm = ResizeStorm::new(config);
+        let events = storm.events();
+
+        log_perf_run(label, "large", events.len(), seed);
+
+        group.bench_with_input(
+            BenchmarkId::new("adaptive_buffer", label),
+            &events,
+            |b, events| {
+                b.iter(|| {
+                    let mut adb = AdaptiveDoubleBuffer::new(initial.0, initial.1);
+                    for event in events.iter() {
+                        adb.resize(event.width, event.height);
+                    }
+                    black_box(adb.stats().avoidance_ratio())
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
+// =============================================================================
 // Single Resize Operation (Baseline)
 // =============================================================================
 
@@ -472,6 +527,7 @@ criterion_group!(
     bench_sweep_pattern,
     bench_pathological_pattern,
     bench_mixed_pattern,
+    bench_large_screen_storm,
     bench_single_resize,
     bench_avoidance_ratio_tracking,
     bench_memory_efficiency,

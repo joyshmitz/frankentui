@@ -8,6 +8,7 @@
 
 use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 use super::FxContext;
 use ftui_render::cell::PackedRgba;
@@ -17,6 +18,7 @@ use pollster::block_on;
 
 const ENV_GPU_DISABLE: &str = "FTUI_FX_GPU_DISABLE";
 const ENV_GPU_FORCE_FAIL: &str = "FTUI_FX_GPU_FORCE_FAIL";
+const READBACK_TIMEOUT: Duration = Duration::from_millis(1000);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GpuDisableReason {
@@ -497,9 +499,21 @@ impl GpuContext {
             let _ = sender.send(result);
         });
 
-        // Poll until map completes
-        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-        receiver.recv().expect("map_async callback not called")?;
+        // Poll until map completes, but avoid indefinite hangs.
+        if self
+            .device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(READBACK_TIMEOUT),
+            })
+            .is_err()
+        {
+            return Err(wgpu::BufferAsyncError);
+        }
+        match receiver.recv_timeout(READBACK_TIMEOUT) {
+            Ok(result) => result?,
+            Err(_) => return Err(wgpu::BufferAsyncError),
+        }
 
         let data = slice.get_mapped_range();
         let pixels: &[u32] = bytemuck::cast_slice(&data);

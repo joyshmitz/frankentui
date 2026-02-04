@@ -701,7 +701,8 @@ impl BayesianScorer {
                 combined_bf *= gap_factor;
             }
 
-            let length_factor = 1.0 + (query.len() as f64 / title.len() as f64) * 0.2;
+            let title_len = title.len().max(1);
+            let length_factor = 1.0 + (query.len() as f64 / title_len as f64) * 0.2;
             combined_bf *= length_factor;
 
             let score = combined_bf / (1.0 + combined_bf);
@@ -758,12 +759,13 @@ impl BayesianScorer {
         }
 
         // Title length: prefer shorter (more specific) titles
-        let length_factor = 1.0 + (query.len() as f64 / title.len() as f64) * 0.2;
+        let title_len = title.len().max(1);
+        let length_factor = 1.0 + (query.len() as f64 / title_len as f64) * 0.2;
         evidence.add(
             EvidenceKind::TitleLength,
             length_factor,
             EvidenceDescription::CoveragePercent {
-                percent: (query.len() as f64 / title.len() as f64) * 100.0,
+                percent: (query.len() as f64 / title_len as f64) * 100.0,
             },
         );
 
@@ -1782,6 +1784,14 @@ mod tests {
         let result = scorer.score("", "Any Command");
         assert!(result.score > 0.0, "Empty query should have positive score");
         assert!(result.score < 1.0, "Empty query should not be max score");
+    }
+
+    #[test]
+    fn empty_title_is_safe() {
+        let scorer = BayesianScorer::new();
+        let result = scorer.score("x", "");
+        assert_eq!(result.match_type, MatchType::NoMatch);
+        assert!(result.score.is_finite(), "Score should remain finite");
     }
 
     // --- Query Longer Than Title ---

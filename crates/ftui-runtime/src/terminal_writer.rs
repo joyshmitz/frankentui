@@ -165,6 +165,27 @@ fn ui_anchor_str(anchor: UiAnchor) -> &'static str {
 }
 
 #[allow(dead_code)]
+#[inline]
+fn json_escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "\\u{:04X}", c as u32);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+#[allow(dead_code)]
 fn estimate_diff_scan_cost(
     strategy: DiffStrategy,
     dirty_rows: usize,
@@ -1165,12 +1186,28 @@ impl<W: Write> TerminalWriter<W> {
         }
 
         let dirty_rows = buffer.dirty_row_count();
+        let width = buffer.width() as usize;
+        let height = buffer.height() as usize;
+        let mut span_stats_snapshot: Option<DirtySpanStats> = None;
+        let mut dirty_scan_cells_estimate = dirty_rows.saturating_mul(width);
+
+        if self.diff_config.bayesian_enabled {
+            let span_stats = buffer.dirty_span_stats();
+            if span_stats.span_coverage_cells > 0 {
+                dirty_scan_cells_estimate = span_stats.span_coverage_cells;
+            }
+            span_stats_snapshot = Some(span_stats);
+        }
 
         // Select strategy based on config
         let mut strategy = if self.diff_config.bayesian_enabled {
             // Use Bayesian selector
-            self.diff_strategy
-                .select(buffer.width(), buffer.height(), dirty_rows)
+            self.diff_strategy.select_with_scan_estimate(
+                buffer.width(),
+                buffer.height(),
+                dirty_rows,
+                dirty_scan_cells_estimate,
+            )
         } else {
             // Simple heuristic: use DirtyRows if few rows dirty, else Full
             if self.diff_config.dirty_rows_enabled && dirty_rows < buffer.height() as usize {
@@ -1229,9 +1266,6 @@ impl<W: Write> TerminalWriter<W> {
             DiffStrategy::FullRedraw => {}
         }
 
-        let width = buffer.width() as usize;
-        let height = buffer.height() as usize;
-        let mut span_stats_snapshot: Option<DirtySpanStats> = None;
         let mut scan_cost_estimate = 0usize;
         let mut fallback_reason: &'static str = "none";
         let tile_stats = if strategy == DiffStrategy::DirtyRows {
@@ -1242,7 +1276,8 @@ impl<W: Write> TerminalWriter<W> {
 
         // Update posterior if Bayesian mode is enabled
         if self.diff_config.bayesian_enabled && has_diff {
-            let span_stats = buffer.dirty_span_stats();
+            let span_stats = span_stats_snapshot.unwrap_or_else(|| buffer.dirty_span_stats());
+            let total_cells = width.saturating_mul(height);
             let (scan_cost, reason) = estimate_diff_scan_cost(
                 strategy,
                 dirty_rows,
@@ -1252,7 +1287,7 @@ impl<W: Write> TerminalWriter<W> {
                 tile_stats,
             );
             self.diff_strategy
-                .observe(scan_cost, self.diff_scratch.len());
+                .observe(total_cells, self.diff_scratch.len());
             span_stats_snapshot = Some(span_stats);
             scan_cost_estimate = scan_cost;
             fallback_reason = reason;
@@ -1286,6 +1321,11 @@ impl<W: Write> TerminalWriter<W> {
                 .and_then(|stats| stats.fallback)
                 .map(TileDiffFallback::as_str)
                 .unwrap_or("none");
+            let run_id = json_escape(&self.diff_evidence_run_id);
+            let strategy_json = json_escape(&strategy.to_string());
+            let guard_reason_json = json_escape(evidence.guard_reason);
+            let fallback_reason_json = json_escape(reason);
+            let tile_fallback_json = json_escape(tile_fallback);
             let (
                 tile_w,
                 tile_h,
@@ -1338,9 +1378,9 @@ impl<W: Write> TerminalWriter<W> {
             if let Some(ref sink) = self.evidence_sink {
                 let line = format!(
                     r#"{{"event":"diff_decision","run_id":"{}","event_idx":{},"strategy":"{}","cost_full":{:.6},"cost_dirty":{:.6},"cost_redraw":{:.6},"posterior_mean":{:.6},"posterior_variance":{:.6},"alpha":{:.6},"beta":{:.6},"guard_reason":"{}","hysteresis_applied":{},"hysteresis_ratio":{:.6},"dirty_rows":{},"total_rows":{},"total_cells":{},"span_count":{},"span_coverage_pct":{:.6},"max_span_len":{},"fallback_reason":"{}","scan_cost_estimate":{},"tile_used":{},"tile_fallback":"{}","tile_w":{},"tile_h":{},"tile_size":{},"tiles_x":{},"tiles_y":{},"dirty_tiles":{},"dirty_tile_count":{},"dirty_cells":{},"dirty_tile_ratio":{:.6},"dirty_cell_ratio":{:.6},"scanned_tiles":{},"skipped_tiles":{},"skipped_tile_count":{},"tile_scan_cells_estimate":{},"sat_build_cost_est":{},"bayesian_enabled":{},"dirty_rows_enabled":{}}}"#,
-                    self.diff_evidence_run_id,
+                    run_id,
                     event_idx,
-                    strategy,
+                    strategy_json,
                     evidence.cost_full,
                     evidence.cost_dirty,
                     evidence.cost_redraw,
@@ -1348,7 +1388,7 @@ impl<W: Write> TerminalWriter<W> {
                     evidence.posterior_variance,
                     evidence.alpha,
                     evidence.beta,
-                    evidence.guard_reason,
+                    guard_reason_json,
                     evidence.hysteresis_applied,
                     evidence.hysteresis_ratio,
                     evidence.dirty_rows,
@@ -1357,10 +1397,10 @@ impl<W: Write> TerminalWriter<W> {
                     span_count,
                     span_coverage_pct,
                     max_span_len,
-                    reason,
+                    fallback_reason_json,
                     scan_cost,
                     tile_used,
-                    tile_fallback,
+                    tile_fallback_json,
                     tile_w,
                     tile_h,
                     tile_size,
@@ -3728,6 +3768,41 @@ mod tests {
         assert!(
             value["scan_cost_estimate"].is_number(),
             "scan_cost_estimate should be numeric"
+        );
+    }
+
+    #[test]
+    fn diff_strategy_posterior_updates_with_total_cells() {
+        let mut output = Vec::new();
+        let mut writer = TerminalWriter::with_diff_config(
+            &mut output,
+            ScreenMode::AltScreen,
+            UiAnchor::Bottom,
+            basic_caps(),
+            RuntimeDiffConfig::default(),
+        );
+        writer.set_size(10, 10);
+
+        let mut buffer = Buffer::new(10, 10);
+        buffer.set_raw(0, 0, Cell::from_char('A'));
+        writer.present_ui(&buffer, None, false).unwrap();
+
+        let mut buffer2 = Buffer::new(10, 10);
+        for x in 0..10u16 {
+            buffer2.set_raw(x, 0, Cell::from_char('X'));
+        }
+        writer.present_ui(&buffer2, None, false).unwrap();
+
+        let config = writer.diff_strategy().config().clone();
+        let total_cells = 10usize * 10usize;
+        let changed = 10usize;
+        let alpha = config.prior_alpha * config.decay + changed as f64;
+        let beta = config.prior_beta * config.decay + (total_cells - changed) as f64;
+        let expected = alpha / (alpha + beta);
+        let mean = writer.diff_strategy().posterior_mean();
+        assert!(
+            (mean - expected).abs() < 1e-9,
+            "posterior mean should use total_cells; got {mean:.6}, expected {expected:.6}"
         );
     }
 

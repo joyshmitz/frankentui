@@ -2670,42 +2670,67 @@ LIMIT 3;
 ];
 
 const EFFECT_GFM_SAMPLES: &[&str] = &[
-    r#"# FX Lab
-> *"Render truth, not pixels."*
+    r#"# FX Lab · Deterministic Spectra
+> *"Render truth, not pixels."* — kernel memo
 
-- [x] Inline scrollback
-- [x] Deterministic diff
-- [ ] GPU hype
+- [x] Inline scrollback (DEC 7/8)
+- [x] One-writer rule
+- [x] Synced presenter (DEC 2026)
+- [ ] GPU raster (not needed)
 
-| Key | Action |
-| --- | --- |
-| `e` | next FX |
-| `c` | next code |
+| Key | Action | Notes |
+| --- | --- | --- |
+| `e` | cycle FX | multi-stack |
+| `c` | cycle code | 27 langs |
+| `g` | cycle charts | 6 modes |
 
 ```bash
-ftui run --inline --height 12
+FTUI_DEMO_SCREEN=1 FTUI_DEMO_EXIT_AFTER_MS=2000 \
+  cargo run -p ftui-demo-showcase
 ```
 
-[^1]: Effects are deterministic.
-"#,
-    r#"## GFM Stress
-1. **Bold** + _italic_
-2. `code` + ~~strike~~
-3. Link: https://ftui.dev
+> [!NOTE]
+> This panel renders **three** effects at once.
 
-| op | cost |
-| -- | --- |
-| diff | O(n) |
+[^fx]: Effects are deterministic with fixed seeds.
+"#,
+    r#"## GFM Stress · Ledger
+1. **Bold** + _italic_ + ~~strike~~
+2. `code` + [links](https://ftui.dev)
+3. Nested:
+   - alpha
+   - beta
+
+| op | cost | policy |
+| -- | ---: | --- |
+| diff | 3.2ms | bayes |
+| present | 1.1ms | sync |
+
+```diff
+- emit-per-cell
++ coalesce-run
+```
 
 > [!TIP]
-> Use `Cmd::batch`.
+> Use `Cmd::batch` for side effects.
 "#,
-    r#"### Mixed
+    r#"### Runtime Ledger · Mixed
 - [x] Tasks
 - [ ] Benchmarks
+- [x] Evidence log
 
 ```sql
-SELECT * FROM diff WHERE dirty = true;
+SELECT frame, strategy, checksum
+FROM evidence
+WHERE dirty_rows > 0
+ORDER BY frame DESC
+LIMIT 3;
+```
+
+```mermaid
+graph LR
+  A[Frame] --> B[Diff]
+  B --> C[Presenter]
 ```
 
 Math: `∫ f(x) dx` and `α + β`
@@ -3116,7 +3141,8 @@ impl Dashboard {
         }
         let md = self.current_markdown_sample();
         let max_len = md.len();
-        let mut new_pos = self.md_stream_pos.saturating_add(240);
+        // Triple streaming speed to keep the dashboard markdown lively.
+        let mut new_pos = self.md_stream_pos.saturating_add(720);
         while new_pos < max_len && !md.is_char_boundary(new_pos) {
             new_pos += 1;
         }
@@ -4713,7 +4739,10 @@ impl Dashboard {
             lines.extend(line.wrap(width, WrapMode::Word));
         }
 
-        Text::from_lines(lines)
+        let mut wrapped = Text::from_lines(lines);
+        // Clamp to panel width to avoid border overdraw on long table/rule lines.
+        wrapped.truncate(width, None);
+        wrapped
     }
 
     fn is_table_line(plain: &str) -> bool {
@@ -4761,7 +4790,11 @@ impl Dashboard {
         let md = self.current_markdown_sample();
         let end = self.md_stream_pos.min(md.len());
         let fragment = &md[..end];
-        let renderer = self.md_renderer.clone().table_max_width(inner.width);
+        let renderer = self
+            .md_renderer
+            .clone()
+            .rule_width(inner.width)
+            .table_max_width(inner.width);
         let mut rendered = renderer.render_streaming(fragment);
 
         if !self.markdown_stream_complete() {

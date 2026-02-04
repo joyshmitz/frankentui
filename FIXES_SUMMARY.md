@@ -278,3 +278,11 @@ All tasks are complete. The codebase has been extensively refactored for Unicode
 **Issue:** Search implementation suffered from the same O(N) allocation issue as Shakespeare, exacerbated by the larger `sqlite3.c` dataset.
 **Fix:**
     - Applied the same `line_contains_ignore_case` optimization to `perform_search`, eliminating hundreds of thousands of allocations per search event.
+
+## 100. LogViewer Search Performance
+**File:** `crates/ftui-widgets/src/log_viewer.rs`
+**Issue:** `LogViewer` performed O(N) string allocations (for `to_ascii_lowercase`) per search keypress, even for the filtered/incremental search path. This impacts all applications using `LogViewer`.
+**Fix:**
+    - Updated `SearchState` to cache the lowercased query.
+    - Implemented `search_ascii_case_insensitive_ranges` allocation-free helper.
+    - Updated `search_with_config` and `find_match_ranges` to use the cached lowercase query and the zero-allocation search helper.

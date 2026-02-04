@@ -39,11 +39,14 @@
 //!
 //! ### Dirty-Row Diff (`compute_dirty`)
 //!
-//! Scans only rows marked dirty:
+//! Scans only rows marked dirty. When available, use a scan-cell estimate
+//! (e.g., dirty-span coverage) to refine the scan cost:
 //!
 //! ```text
-//! Cost_dirty = c_scan × D × W + c_emit × (p × N)
+//! Cost_dirty = c_scan × ScanCells + c_emit × (p × N)
 //! ```
+//!
+//! Where `ScanCells` defaults to `D × W` when no estimate is provided.
 //!
 //! ### Full Redraw
 //!
@@ -556,12 +559,30 @@ impl DiffStrategySelector {
     ///
     /// The optimal `DiffStrategy` and stores evidence for later inspection.
     pub fn select(&mut self, width: u16, height: u16, dirty_rows: usize) -> DiffStrategy {
+        let scan_cells = dirty_rows.saturating_mul(width as usize);
+        self.select_with_scan_estimate(width, height, dirty_rows, scan_cells)
+    }
+
+    /// Select the optimal strategy using a scan-cell estimate for DirtyRows.
+    ///
+    /// `dirty_scan_cells` should approximate the number of cells scanned when
+    /// using DirtyRows (e.g., dirty-span coverage). If unknown, pass
+    /// `dirty_rows × width`.
+    pub fn select_with_scan_estimate(
+        &mut self,
+        width: u16,
+        height: u16,
+        dirty_rows: usize,
+        dirty_scan_cells: usize,
+    ) -> DiffStrategy {
         self.frame_count += 1;
 
         let w = width as f64;
         let h = height as f64;
         let d = dirty_rows as f64;
         let n = w * h;
+        let scan_cells =
+            dirty_scan_cells.min((width as usize).saturating_mul(height as usize)) as f64;
 
         // Get expected change rate
         let uncertainty_guard = self.config.uncertainty_guard_variance > 0.0
@@ -576,7 +597,7 @@ impl DiffStrategySelector {
         let cost_full =
             self.config.c_row * h + self.config.c_scan * d * w + self.config.c_emit * p * n;
 
-        let cost_dirty = self.config.c_scan * d * w + self.config.c_emit * p * n;
+        let cost_dirty = self.config.c_scan * scan_cells + self.config.c_emit * p * n;
 
         let cost_redraw = self.config.c_emit * n;
 
@@ -974,13 +995,18 @@ mod tests {
         } else {
             0.0
         };
+        let evidence = selector
+            .last_evidence()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "no evidence".to_string());
 
         assert!(
             regret <= 0.05,
-            "Selector regret too high: {:.4} (selector {:.2}, best_fixed {:.2})",
+            "Selector regret too high: {:.4} (selector {:.2}, best_fixed {:.2})\n{}",
             regret,
             selector_total,
-            best_fixed
+            best_fixed,
+            evidence
         );
     }
 
@@ -1019,9 +1045,13 @@ mod tests {
             let _ = strategy_costs(&config, width, height, dirty_rows, p_actual);
         }
 
+        let evidence = selector
+            .last_evidence()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "no evidence".to_string());
         assert!(
             switches <= 40,
-            "Selector switched too often under stable regime: {switches}"
+            "Selector switched too often under stable regime: {switches}\n{evidence}"
         );
     }
 

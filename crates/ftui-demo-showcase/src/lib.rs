@@ -12,6 +12,7 @@ pub mod cli;
 pub mod data;
 pub mod screens;
 pub mod theme;
+pub mod tour;
 
 /// Debug logging macro for visual render diagnostics (bd-3vbf.31).
 ///

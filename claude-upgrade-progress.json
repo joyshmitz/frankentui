@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "started": "2026-02-02T20:53:16Z",
-  "last_updated": "2026-02-02T21:16:55Z",
+  "last_updated": "2026-02-04T08:00:50Z",
   "project": "frankentui",
   "language": "Rust",
   "manifest": "Cargo.toml (workspace)",
@@ -14,7 +14,7 @@
   },
   "summary": {
     "total": 27,
-    "updated": 5,
+    "updated": 7,
     "skipped": 1,
     "failed": 0,
     "requires_refactor": 0
@@ -90,14 +90,16 @@
     {
       "name": "lru",
       "current_version": "0.12",
-      "target_version": "",
+      "target_version": "0.16.3",
       "version_type": "stable",
-      "status": "pending",
-      "changelog_url": "",
-      "breaking_changes": [],
+      "status": "updated",
+      "changelog_url": "https://docs.rs/crate/lru/0.16.3/source/CHANGELOG.md",
+      "breaking_changes": [
+        "Potential API changes between 0.12 and 0.16; verify usage on build"
+      ],
       "deprecations": [],
-      "notes": "",
-      "attempts": 0,
+      "notes": "Updated to address RUSTSEC-2026-0002 unsoundness; compile/tests pending.",
+      "attempts": 1,
       "error_log": []
     },
     {
@@ -131,14 +133,16 @@
     {
       "name": "portable-pty",
       "current_version": "mixed: 0.8, 0.8.1",
-      "target_version": "",
+      "target_version": "0.9.0",
       "version_type": "stable",
-      "status": "pending",
-      "changelog_url": "",
-      "breaking_changes": [],
+      "status": "updated",
+      "changelog_url": "https://docs.rs/crate/portable-pty/0.9.0",
+      "breaking_changes": [
+        "Major version bump from 0.8 to 0.9; verify API compatibility on build"
+      ],
       "deprecations": [],
-      "notes": "",
-      "attempts": 0,
+      "notes": "Updated to mitigate serial unmaintained advisory; compile/tests pending.",
+      "attempts": 1,
       "error_log": []
     },
     {
@@ -407,6 +411,26 @@
       ],
       "fixes_applied": [],
       "timestamp": "2026-02-02T21:15:16Z"
+    },
+    {
+      "name": "lru",
+      "from": "0.12",
+      "to": "0.16.3",
+      "breaking_changes": [
+        "Potential API changes between 0.12 and 0.16; verify usage on build"
+      ],
+      "fixes_applied": [],
+      "timestamp": "2026-02-04T08:00:50Z"
+    },
+    {
+      "name": "portable-pty",
+      "from": "mixed: 0.8, 0.8.1",
+      "to": "0.9.0",
+      "breaking_changes": [
+        "Major version bump from 0.8 to 0.9; verify API compatibility on build"
+      ],
+      "fixes_applied": [],
+      "timestamp": "2026-02-04T08:00:50Z"
     }
   ],
   "failed": [],

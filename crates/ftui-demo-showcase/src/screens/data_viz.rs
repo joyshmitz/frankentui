@@ -498,9 +498,37 @@ impl DataViz {
             let inner = block.inner(*area);
             block.render(*area, frame);
             if !inner.is_empty() {
-                Sparkline::new(data)
-                    .style(Style::new().fg(*color))
-                    .render(inner, frame);
+                let value = normalize_series_value(data.last().copied().unwrap_or(0.0));
+                if inner.height >= 4 {
+                    let rows = Flex::vertical()
+                        .constraints([
+                            Constraint::Fixed(1),
+                            Constraint::Fixed(1),
+                            Constraint::Min(1),
+                        ])
+                        .split(inner);
+                    if !rows[0].is_empty() {
+                        Sparkline::new(data)
+                            .style(Style::new().fg(*color))
+                            .render(rows[0], frame);
+                    }
+                    if !rows[1].is_empty() {
+                        let colors = MiniBarColors::new(*color, *color, *color, *color);
+                        MiniBar::new(value, rows[1].width)
+                            .colors(colors)
+                            .render(rows[1], frame);
+                    }
+                    if !rows[2].is_empty() {
+                        let pct = format!("{:.0}%", value * 100.0);
+                        Paragraph::new(pct)
+                            .style(Style::new().fg(*color).bold())
+                            .render(rows[2], frame);
+                    }
+                } else {
+                    Sparkline::new(data)
+                        .style(Style::new().fg(*color))
+                        .render(inner, frame);
+                }
             }
         }
     }

@@ -38,7 +38,7 @@
 use ftui_core::geometry::Rect;
 use ftui_render::frame::Frame;
 use ftui_style::Style;
-use ftui_text::search::{SearchResult, search_ascii_case_insensitive, search_exact};
+use ftui_text::search::{search_ascii_case_insensitive, search_exact};
 use ftui_text::{Text, WrapMode, WrapOptions, display_width, wrap_with_options};
 
 use crate::virtualized::Virtualized;
@@ -102,6 +102,8 @@ impl Default for SearchConfig {
 struct SearchState {
     /// The search query string (retained for re-search after eviction).
     query: String,
+    /// Lowercase query for case-insensitive search optimization.
+    query_lower: Option<String>,
     /// Current search configuration.
     config: SearchConfig,
     /// Indices of matching lines.
@@ -299,6 +301,7 @@ impl LogViewer {
                     let ranges = find_match_ranges(
                         &plain,
                         &search.query,
+                        search.query_lower.as_deref(),
                         &search.config,
                         #[cfg(feature = "regex-search")]
                         search.compiled_regex.as_ref(),
@@ -609,6 +612,13 @@ impl LogViewer {
             None
         };
 
+        // Pre-compute lowercase query for optimization
+        let query_lower = if !config.case_sensitive {
+            Some(query.to_ascii_lowercase())
+        } else {
+            None
+        };
+
         // Full rescan for search matches.
         self.filter_stats.full_rescans += 1;
         let mut matches = Vec::new();
@@ -629,6 +639,7 @@ impl LogViewer {
                 let ranges = find_match_ranges(
                     &plain,
                     query,
+                    query_lower.as_deref(),
                     &config,
                     #[cfg(feature = "regex-search")]
                     compiled_regex.as_ref(),
@@ -654,6 +665,7 @@ impl LogViewer {
 
         self.search = Some(SearchState {
             query: query.to_string(),
+            query_lower,
             config,
             matches,
             current: 0,
@@ -1073,24 +1085,78 @@ impl StatefulWidget for LogViewer {
     }
 }
 
+/// Find match ranges using allocation-free case-insensitive search.
+fn search_ascii_case_insensitive_ranges(haystack: &str, needle_lower: &str) -> Vec<(usize, usize)> {
+    let mut results = Vec::new();
+    if needle_lower.is_empty() {
+        return results;
+    }
+
+    if !haystack.is_ascii() || !needle_lower.is_ascii() {
+        return search_ascii_case_insensitive(haystack, needle_lower)
+            .into_iter()
+            .map(|r| (r.range.start, r.range.end))
+            .collect();
+    }
+
+    let haystack_bytes = haystack.as_bytes();
+    let needle_bytes = needle_lower.as_bytes();
+    let needle_len = needle_bytes.len();
+
+    if needle_len > haystack_bytes.len() {
+        return results;
+    }
+
+    const MAX_WORK: usize = 4096;
+    if haystack_bytes.len().saturating_mul(needle_len) > MAX_WORK {
+        return search_ascii_case_insensitive(haystack, needle_lower)
+            .into_iter()
+            .map(|r| (r.range.start, r.range.end))
+            .collect();
+    }
+
+    let mut i = 0;
+    while i <= haystack_bytes.len() - needle_len {
+        let mut match_found = true;
+        for j in 0..needle_len {
+            if haystack_bytes[i + j].to_ascii_lowercase() != needle_bytes[j] {
+                match_found = false;
+                break;
+            }
+        }
+        if match_found {
+            results.push((i, i + needle_len));
+            i += needle_len;
+        } else {
+            i += 1;
+        }
+    }
+    results
+}
+
 /// Find match byte ranges within a single line using the given config.
 fn find_match_ranges(
     plain: &str,
     query: &str,
+    query_lower: Option<&str>,
     config: &SearchConfig,
     #[cfg(feature = "regex-search")] compiled_regex: Option<&regex::Regex>,
 ) -> Vec<(usize, usize)> {
     match config.mode {
         SearchMode::Literal => {
-            let results: Vec<SearchResult> = if config.case_sensitive {
+            if config.case_sensitive {
                 search_exact(plain, query)
+                    .into_iter()
+                    .map(|r| (r.range.start, r.range.end))
+                    .collect()
+            } else if let Some(lower) = query_lower {
+                search_ascii_case_insensitive_ranges(plain, lower)
             } else {
                 search_ascii_case_insensitive(plain, query)
-            };
-            results
-                .into_iter()
-                .map(|r| (r.range.start, r.range.end))
-                .collect()
+                    .into_iter()
+                    .map(|r| (r.range.start, r.range.end))
+                    .collect()
+            }
         }
         SearchMode::Regex => {
             #[cfg(feature = "regex-search")]

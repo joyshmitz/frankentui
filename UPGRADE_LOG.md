@@ -11,8 +11,8 @@
 
 | Metric | Count |
 |--------|-------|
-| **Total dependencies** | TBD |
-| **Updated** | 0 |
+| **Total dependencies** | 27 |
+| **Updated** | 2 |
 | **Skipped** | 0 |
 | **Failed (rolled back)** | 0 |
 | **Requires attention** | 0 |
@@ -21,7 +21,15 @@
 
 ## Successfully Updated
 
-_TBD_
+### lru: 0.12 → 0.16.3
+- **Breaking:** Yes (API changes since 0.12; will verify on build)
+- **Tests:** `cargo test -p ftui-text` ✓
+- **Notes:** Updated to fix RUSTSEC-2026-0002 (unsoundness in 0.12.x).
+
+### portable-pty: 0.8/0.8.1 → 0.9.0
+- **Breaking:** Possible (major version bump from 0.8 → 0.9)
+- **Tests:** `cargo check --all-targets` + `cargo clippy --all-targets -- -D warnings` ✓ (targeted tests pending)
+- **Notes:** Updated to avoid `serial` unmaintained advisory; portable-pty 0.9.0 is latest stable.
 
 ---
 
@@ -39,7 +47,7 @@ _TBD_
 
 ## Requires Attention
 
-_TBD_
+- `paste` advisory is target-specific (macOS `metal` dependency). Patch to `pastey` is in place but not used on Linux; verify on macOS target or ensure lock resolution applies to target builds.
 
 ---
 
@@ -54,7 +62,9 @@ _TBD_
 ## Security Notes
 
 **Vulnerabilities resolved:**
-- _TBD_
+- RUSTSEC-2026-0002 (lru unsoundness) via upgrade to 0.16.3.
+- paste unmaintained advisory mitigated via workspace patch to pastey (drop-in replacement).
+- serial unmaintained advisory mitigated via portable-pty 0.9.0.
 
 **New advisories:** _None detected_
 
@@ -76,7 +86,18 @@ _TBD_
 
 ```bash
 # Update commands
-TBD
+manual edits (Cargo.toml + patch)
+`cargo update -p lru -p paste`
+
+# Version research
+docs.rs + changelog review (lru, portable-pty, pastey)
+
+# Test commands
+`cargo check --all-targets`
+`cargo clippy --all-targets -- -D warnings`
+`cargo fmt`
+`cargo fmt --check`
+`cargo test -p ftui-text`
 
 # Test commands
 TBD

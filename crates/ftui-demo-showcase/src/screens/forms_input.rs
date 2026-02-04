@@ -1002,6 +1002,34 @@ impl Screen for FormsInput {
             return Cmd::None;
         }
         if let Event::Key(KeyEvent {
+            code: KeyCode::Right,
+            modifiers,
+            kind: KeyEventKind::Press,
+            ..
+        }) = event
+            && modifiers.is_empty()
+            && !matches!(self.focus, FocusPanel::Form | FocusPanel::TextEditor)
+        {
+            self.focus = self.focus.next();
+            self.update_focus_states();
+            self.update_status();
+            return Cmd::None;
+        }
+        if let Event::Key(KeyEvent {
+            code: KeyCode::Left,
+            modifiers,
+            kind: KeyEventKind::Press,
+            ..
+        }) = event
+            && modifiers.is_empty()
+            && !matches!(self.focus, FocusPanel::Form | FocusPanel::TextEditor)
+        {
+            self.focus = self.focus.prev();
+            self.update_focus_states();
+            self.update_status();
+            return Cmd::None;
+        }
+        if let Event::Key(KeyEvent {
             code: KeyCode::Up,
             modifiers,
             kind: KeyEventKind::Press,
@@ -1120,7 +1148,7 @@ impl Screen for FormsInput {
                 action: "Switch panel",
             },
             HelpEntry {
-                key: "\u{2191}/\u{2193}",
+                key: "\u{2190}/\u{2192}/\u{2191}/\u{2193}",
                 action: "Switch input panel",
             },
             HelpEntry {

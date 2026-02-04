@@ -107,7 +107,7 @@ pub struct VisualEffectsScreen {
     /// Spin lattice state.
     spin_lattice: SpinLatticeState,
     /// Doom E1M1 braille automap state.
-    doom_e1m1: DoomE1M1State,
+    doom_e1m1: RefCell<DoomE1M1State>,
     /// Quake E1M1 braille rasterizer state.
     quake_e1m1: RefCell<QuakeE1M1State>,
     // FPS tracking
@@ -2478,9 +2478,16 @@ impl WaveInterferenceState {
             return;
         }
 
-        let stride = fx_stride(quality);
+        let mut stride = fx_stride(quality);
         if stride == 0 {
             return;
+        }
+        let area_cells = width as usize * height as usize;
+        if area_cells > 12_000 {
+            stride = stride.max(2);
+        }
+        if area_cells > 20_000 {
+            stride = stride.max(3);
         }
 
         let w = width as f64;
@@ -2848,6 +2855,57 @@ const DOOM_MOVE_STEP: f32 = 2.8;
 const DOOM_STRAFE_STEP: f32 = 2.4;
 const DOOM_TURN_RATE: f32 = 0.07;
 
+#[derive(Debug, Clone, Copy)]
+struct DoomLine {
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    vx: f32,
+    vy: f32,
+    len_sq: f32,
+}
+
+impl DoomLine {
+    fn new(x1: f32, y1: f32, x2: f32, y2: f32) -> Self {
+        let vx = x2 - x1;
+        let vy = y2 - y1;
+        let len_sq = vx * vx + vy * vy;
+        Self {
+            x1,
+            y1,
+            x2,
+            y2,
+            vx,
+            vy,
+            len_sq,
+        }
+    }
+
+    fn distance_sq(self, px: f32, py: f32) -> f32 {
+        if self.len_sq <= 1e-6 {
+            let dx = px - self.x1;
+            let dy = py - self.y1;
+            return dx * dx + dy * dy;
+        }
+        let wx = px - self.x1;
+        let wy = py - self.y1;
+        let t = ((wx * self.vx) + (wy * self.vy)) / self.len_sq;
+        let t = t.clamp(0.0, 1.0);
+        let proj_x = self.x1 + t * self.vx;
+        let proj_y = self.y1 + t * self.vy;
+        let dx = px - proj_x;
+        let dy = py - proj_y;
+        dx * dx + dy * dy
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DoomRay {
+    sin_t: f32,
+    cos_t: f32,
+}
+
 #[derive(Debug, Clone)]
 struct DoomPlayer {
     x: f32,
@@ -2881,6 +2939,9 @@ struct DoomE1M1State {
     player: DoomPlayer,
     walk_phase: f32,
     walk_intensity: f32,
+    lines: Vec<DoomLine>,
+    ray_cache: RefCell<Vec<DoomRay>>,
+    ray_width: Cell<u16>,
 }
 
 impl Default for DoomE1M1State {
@@ -2891,11 +2952,31 @@ impl Default for DoomE1M1State {
             player: DoomPlayer::default(),
             walk_phase: 0.0,
             walk_intensity: 0.0,
+            lines: build_doom_lines(),
+            ray_cache: RefCell::new(Vec::new()),
+            ray_width: Cell::new(0),
         }
     }
 }
 
 impl DoomE1M1State {
+    fn ensure_ray_cache(&self, width: u16) {
+        if width == 0 || self.ray_width.get() == width {
+            return;
+        }
+        let mut ray_cache = self.ray_cache.borrow_mut();
+        ray_cache.clear();
+        let w = width as f32;
+        let denom = (w - 1.0).max(1.0);
+        ray_cache.reserve(width as usize);
+        for px in 0..width {
+            let x = px as f32;
+            let t = (x / denom - 0.5) * DOOM_FOV;
+            let (sin_t, cos_t) = t.sin_cos();
+            ray_cache.push(DoomRay { sin_t, cos_t });
+        }
+        self.ray_width.set(width);
+    }
     fn look(&mut self, yaw_delta: f32, pitch_delta: f32) {
         self.player.yaw = (self.player.yaw + yaw_delta) % TAU as f32;
         self.player.pitch = (self.player.pitch + pitch_delta).clamp(-0.6, 0.6);
@@ -2956,10 +3037,8 @@ impl DoomE1M1State {
 
     fn collides(&self, x: f32, y: f32) -> bool {
         let radius_sq = DOOM_COLLISION_RADIUS * DOOM_COLLISION_RADIUS;
-        for (x1, y1, x2, y2) in FREEDOOM_E1M1_LINES {
-            let dist_sq =
-                point_segment_distance_sq(x, y, *x1 as f32, *y1 as f32, *x2 as f32, *y2 as f32);
-            if dist_sq < radius_sq {
+        for line in &self.lines {
+            if line.distance_sq(x, y) < radius_sq {
                 return true;
             }
         }
@@ -2988,16 +3067,14 @@ impl DoomE1M1State {
         let mut best_idx = 0usize;
         let mut best_side = 0.0f32;
         let mut best_u = 0.0f32;
-        for (idx, (x1, y1, x2, y2)) in FREEDOOM_E1M1_LINES.iter().enumerate() {
-            let vx = *x2 as f32 - *x1 as f32;
-            let vy = *y2 as f32 - *y1 as f32;
-            let denom = cross2(dx, dy, vx, vy);
+        for (idx, line) in self.lines.iter().enumerate() {
+            let denom = cross2(dx, dy, line.vx, line.vy);
             if denom.abs() < 1e-5 {
                 continue;
             }
-            let px = *x1 as f32 - ox;
-            let py = *y1 as f32 - oy;
-            let t = cross2(px, py, vx, vy) / denom;
+            let px = line.x1 - ox;
+            let py = line.y1 - oy;
+            let t = cross2(px, py, line.vx, line.vy) / denom;
             let u = cross2(px, py, dx, dy) / denom;
             if t > 0.0 && (0.0..=1.0).contains(&u) && t < best_t {
                 best_t = t;
@@ -3033,7 +3110,8 @@ impl DoomE1M1State {
             return;
         }
 
-        let w = width as f32;
+        self.ensure_ray_cache(width);
+        let ray_cache = self.ray_cache.borrow();
         let h = height as f32;
         let half_h = h * 0.5;
         let pitch_offset = -self.player.pitch * (h * 0.4);
@@ -3070,21 +3148,20 @@ impl DoomE1M1State {
             }
         }
 
+        let (sy, cy) = self.player.yaw.sin_cos();
         for px in (0..width as usize).step_by(stride) {
-            let x = px as f32;
-            let t = (x / (w - 1.0) - 0.5) * DOOM_FOV;
-            let ray_angle = self.player.yaw + t;
-            let dir_x = ray_angle.cos();
-            let dir_y = ray_angle.sin();
-            let ray = self.raycast(self.player.x, self.player.y, dir_x, dir_y);
+            let ray_params = ray_cache[px];
+            let dir_x = cy * ray_params.cos_t - sy * ray_params.sin_t;
+            let dir_y = sy * ray_params.cos_t + cy * ray_params.sin_t;
+            let hit = self.raycast(self.player.x, self.player.y, dir_x, dir_y);
 
-            let (dist, hit_idx, side, hit_u) = if let Some(hit) = ray {
+            let (dist, hit_idx, side, hit_u) = if let Some(hit) = hit {
                 hit
             } else {
                 continue;
             };
 
-            let corrected = (dist * t.cos()).max(1.0);
+            let corrected = (dist * ray_params.cos_t).max(1.0);
             let wall_height = (DOOM_WALL_HEIGHT / corrected) * proj_scale;
             let top = (center_y - wall_height).round() as i32;
             let bottom = (center_y + wall_height).round() as i32;
@@ -3300,6 +3377,20 @@ impl FloorTri {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct QuakeTri {
+    v0: Vec3,
+    v1: Vec3,
+    v2: Vec3,
+    normal: Vec3,
+    base: PackedRgba,
+    is_floor: bool,
+    is_ceiling: bool,
+    ambient: f32,
+    diffuse_scale: f32,
+    diffuse: f32,
+}
+
 #[derive(Debug, Clone)]
 struct QuakePlayer {
     pos: Vec3,
@@ -3329,7 +3420,10 @@ struct QuakeE1M1State {
     bounds_max: Vec3,
     wall_segments: Vec<WallSeg>,
     floor_tris: Vec<FloorTri>,
+    quake_tris: Vec<QuakeTri>,
     depth: Vec<f32>,
+    depth_stamp: Vec<u32>,
+    depth_epoch: u32,
     depth_w: u16,
     depth_h: u16,
     walk_phase: f32,
@@ -3339,7 +3433,7 @@ struct QuakeE1M1State {
 impl Default for QuakeE1M1State {
     fn default() -> Self {
         let (min, max) = QuakeE1M1State::compute_bounds();
-        let (wall_segments, floor_tris) = QuakeE1M1State::build_collision();
+        let (wall_segments, floor_tris, quake_tris) = QuakeE1M1State::build_collision(min, max);
         let center_x = (min.x + max.x) * 0.5;
         let center_y = (min.y + max.y) * 0.5;
         let start = Vec3::new(center_x, center_y, min.z + QUAKE_EYE_HEIGHT);
@@ -3350,7 +3444,10 @@ impl Default for QuakeE1M1State {
             bounds_max: max,
             wall_segments,
             floor_tris,
+            quake_tris,
             depth: Vec::new(),
+            depth_stamp: Vec::new(),
+            depth_epoch: 1,
             depth_w: 0,
             depth_h: 0,
             walk_phase: 0.0,
@@ -3380,10 +3477,16 @@ impl QuakeE1M1State {
         (min, max)
     }
 
-    fn build_collision() -> (Vec<WallSeg>, Vec<FloorTri>) {
+    fn build_collision(
+        bounds_min: Vec3,
+        bounds_max: Vec3,
+    ) -> (Vec<WallSeg>, Vec<FloorTri>, Vec<QuakeTri>) {
         let inv_scale = 1.0 / 1024.0;
         let mut walls = Vec::new();
         let mut floors = Vec::new();
+        let mut tris = Vec::with_capacity(QUAKE_E1M1_TRIS.len());
+        let light_dir = Vec3::new(0.3, -0.45, 0.85).normalized();
+        let height_span = (bounds_max.z - bounds_min.z).max(0.001);
 
         let mut push_edge = |a: Vec3, b: Vec3| {
             let dx = b.x - a.x;
@@ -3425,22 +3528,55 @@ impl QuakeE1M1State {
             if len <= 1e-6 {
                 continue;
             }
-            let n = n * (1.0 / len);
+            let normal = n * (1.0 / len);
 
-            if n.z.abs() < 0.35 {
+            if normal.z.abs() < 0.35 {
                 push_edge(w0, w1);
                 push_edge(w1, w2);
                 push_edge(w2, w0);
             }
 
-            if n.z > 0.35
+            if normal.z > 0.35
                 && let Some(tri) = FloorTri::new(w0, w1, w2)
             {
                 floors.push(tri);
             }
+
+            let height_t = ((w0.z - bounds_min.z) / height_span).clamp(0.0, 1.0);
+            let is_floor = normal.z > 0.55;
+            let is_ceiling = normal.z < -0.55;
+            let base = if is_floor {
+                palette_quake_floor(height_t as f64)
+            } else if is_ceiling {
+                palette_quake_ceiling(height_t as f64)
+            } else {
+                palette_quake_stone(height_t as f64)
+            };
+            let ambient = if is_floor {
+                0.28
+            } else if is_ceiling {
+                0.18
+            } else {
+                0.22
+            };
+            let diffuse_scale = if is_floor || is_ceiling { 0.75 } else { 0.9 };
+            let diffuse = normal.dot(light_dir).max(0.0);
+
+            tris.push(QuakeTri {
+                v0: w0,
+                v1: w1,
+                v2: w2,
+                normal,
+                base,
+                is_floor,
+                is_ceiling,
+                ambient,
+                diffuse_scale,
+                diffuse,
+            });
         }
 
-        (walls, floors)
+        (walls, floors, tris)
     }
 
     fn pick_spawn(&self) -> Vec3 {
@@ -3621,14 +3757,18 @@ impl QuakeE1M1State {
         if len > self.depth.len() {
             self.depth.resize(len, f32::INFINITY);
         }
+        if len > self.depth_stamp.len() {
+            self.depth_stamp.resize(len, 0);
+        }
         self.depth_w = width;
         self.depth_h = height;
     }
 
     fn clear_depth(&mut self) {
-        let len = self.depth_w as usize * self.depth_h as usize;
-        if len > 0 {
-            self.depth[..len].fill(f32::INFINITY);
+        self.depth_epoch = self.depth_epoch.wrapping_add(1);
+        if self.depth_epoch == 0 {
+            self.depth_stamp.fill(0);
+            self.depth_epoch = 1;
         }
     }
 
@@ -3658,6 +3798,7 @@ impl QuakeE1M1State {
 
         let w = width as f32;
         let h = height as f32;
+        let width_usize = width as usize;
         let center = Vec3::new(w * 0.5, h * 0.5, 0.0);
         let bob = (self.walk_phase).sin() * (0.015 + self.walk_intensity * 0.025);
         let eye = Vec3::new(
@@ -3665,14 +3806,11 @@ impl QuakeE1M1State {
             self.player.pos.y,
             self.player.pos.z + bob,
         );
-
         let (sy, cy) = self.player.yaw.sin_cos();
         let (sp, cp) = self.player.pitch.sin_cos();
         let forward = Vec3::new(cy * cp, sy * cp, sp).normalized();
         let right = Vec3::new(-sy, cy, 0.0).normalized();
         let up = right.cross(forward).normalized();
-
-        let light_dir = Vec3::new(0.3, -0.45, 0.85).normalized();
 
         let proj_scale = (w.min(h) * 0.5) / (QUAKE_FOV * 0.5).tan();
         let near = 0.04f32;
@@ -3707,88 +3845,58 @@ impl QuakeE1M1State {
             }
         }
 
-        let inv_scale = 1.0 / 1024.0;
         let tri_step = match quality {
             FxQuality::Off => 0,
             _ => 1,
         };
         let edge_stride = if tri_step > 1 { tri_step * 2 } else { 1 };
+        let inv_floor_tile = 1.0 / 0.35;
+        let inv_ceiling_tile = 1.0 / 0.45;
+        let inv_wall_stripe_x = 1.0 / 0.25;
+        let inv_wall_stripe_z = 1.0 / 0.18;
 
         let edge = |ax: f32, ay: f32, bx: f32, by: f32, cx: f32, cy: f32| {
             (cx - ax) * (by - ay) - (cy - ay) * (bx - ax)
         };
 
-        for (tri_idx, tri) in QUAKE_E1M1_TRIS.iter().enumerate().step_by(tri_step) {
-            let (i0, i1, i2) = (tri.0 as usize, tri.1 as usize, tri.2 as usize);
-            let v0 = QUAKE_E1M1_VERTS[i0];
-            let v1 = QUAKE_E1M1_VERTS[i1];
-            let v2 = QUAKE_E1M1_VERTS[i2];
+        for (tri_idx, tri) in self.quake_tris.iter().enumerate().step_by(tri_step) {
+            let world0 = tri.v0;
+            let world1 = tri.v1;
+            let world2 = tri.v2;
 
-            let w0 = Vec3::new(
-                v0.0 as f32 * inv_scale,
-                v0.1 as f32 * inv_scale,
-                v0.2 as f32 * inv_scale,
-            );
-            let w1 = Vec3::new(
-                v1.0 as f32 * inv_scale,
-                v1.1 as f32 * inv_scale,
-                v1.2 as f32 * inv_scale,
-            );
-            let w2 = Vec3::new(
-                v2.0 as f32 * inv_scale,
-                v2.1 as f32 * inv_scale,
-                v2.2 as f32 * inv_scale,
-            );
-
-            let n = (w1 - w0).cross(w2 - w0).normalized();
-            let view_dir = (eye - w0).normalized();
+            let n = tri.normal;
+            let view_dir = (eye - world0).normalized();
             let facing = n.dot(view_dir);
             if facing <= 0.02 {
                 continue;
             }
-            let diffuse = n.dot(light_dir).max(0.0);
             let rim = (1.0 - facing.clamp(0.0, 1.0)).powf(2.0) * 0.35;
 
-            let height_span = (self.bounds_max.z - self.bounds_min.z).max(0.001);
-            let height_t = ((w0.z - self.bounds_min.z) / height_span).clamp(0.0, 1.0);
-            let is_floor = n.z > 0.55;
-            let is_ceiling = n.z < -0.55;
-            let base = if is_floor {
-                palette_quake_floor(height_t as f64)
-            } else if is_ceiling {
-                palette_quake_ceiling(height_t as f64)
-            } else {
-                palette_quake_stone(height_t as f64)
-            };
-            let ambient = if is_floor {
-                0.28
-            } else if is_ceiling {
-                0.18
-            } else {
-                0.22
-            };
-            let diffuse_scale = if is_floor || is_ceiling { 0.75 } else { 0.9 };
-            let light = (ambient + diffuse * diffuse_scale + rim).clamp(0.0, 1.2);
+            let is_floor = tri.is_floor;
+            let is_ceiling = tri.is_ceiling;
+            let base = tri.base;
+            let light = (tri.ambient + tri.diffuse * tri.diffuse_scale + rim).clamp(0.0, 1.2);
 
             let cam0 = Vec3::new(
-                (w0 - eye).dot(right),
-                (w0 - eye).dot(up),
-                (w0 - eye).dot(forward),
+                (world0 - eye).dot(right),
+                (world0 - eye).dot(up),
+                (world0 - eye).dot(forward),
             );
             let cam1 = Vec3::new(
-                (w1 - eye).dot(right),
-                (w1 - eye).dot(up),
-                (w1 - eye).dot(forward),
+                (world1 - eye).dot(right),
+                (world1 - eye).dot(up),
+                (world1 - eye).dot(forward),
             );
             let cam2 = Vec3::new(
-                (w2 - eye).dot(right),
-                (w2 - eye).dot(up),
-                (w2 - eye).dot(forward),
+                (world2 - eye).dot(right),
+                (world2 - eye).dot(up),
+                (world2 - eye).dot(forward),
             );
             let tri_depth = (cam0.z + cam1.z + cam2.z) / 3.0;
             let edge_fade = ((tri_depth - near) / (far - near)).clamp(0.0, 1.0);
-            let clipped = clip_polygon_near(&[cam0, cam1, cam2], near);
-            if clipped.len() < 3 {
+            let mut clipped = [Vec3::new(0.0, 0.0, 0.0); 4];
+            let clipped_len = clip_triangle_near(cam0, cam1, cam2, near, &mut clipped);
+            if clipped_len < 3 {
                 continue;
             }
 
@@ -3816,16 +3924,27 @@ impl QuakeE1M1State {
 
                 let inv_area = 1.0 / area;
                 let stride_usize = stride;
+                let e0_dx = sy1 - sy2;
+                let e0_dy = -(sx1 - sx2);
+                let e1_dx = sy2 - sy0;
+                let e1_dy = -(sx2 - sx0);
+                let e2_dx = sy0 - sy1;
+                let e2_dy = -(sx0 - sx1);
+                let start_x = minx as f32;
+                let start_y = miny as f32;
+                let mut w0_row = edge(sx1, sy1, sx2, sy2, start_x, start_y);
+                let mut w1_row = edge(sx2, sy2, sx0, sy0, start_x, start_y);
+                let mut w2_row = edge(sx0, sy0, sx1, sy1, start_x, start_y);
 
                 for py in (miny..=maxy).step_by(stride_usize) {
-                    let fy = py as f32;
+                    let mut w0e = w0_row;
+                    let mut w1e = w1_row;
+                    let mut w2e = w2_row;
                     for px in (minx..=maxx).step_by(stride_usize) {
-                        let fx = px as f32;
-                        let w0e = edge(sx1, sy1, sx2, sy2, fx, fy);
-                        let w1e = edge(sx2, sy2, sx0, sy0, fx, fy);
-                        let w2e = edge(sx0, sy0, sx1, sy1, fx, fy);
-
                         if (w0e * area) < 0.0 || (w1e * area) < 0.0 || (w2e * area) < 0.0 {
+                            w0e += e0_dx;
+                            w1e += e1_dx;
+                            w2e += e2_dx;
                             continue;
                         }
 
@@ -3834,29 +3953,41 @@ impl QuakeE1M1State {
                         let b2 = w2e * inv_area;
                         let z = b0 * a.z + b1 * b.z + b2 * c.z;
 
-                        let idx = py as usize * width as usize + px as usize;
-                        if z >= self.depth[idx] {
+                        let idx = py as usize * width_usize + px as usize;
+                        let prior = if self.depth_stamp[idx] == self.depth_epoch {
+                            self.depth[idx]
+                        } else {
+                            f32::INFINITY
+                        };
+                        if z >= prior {
+                            w0e += e0_dx;
+                            w1e += e1_dx;
+                            w2e += e2_dx;
                             continue;
                         }
+                        self.depth_stamp[idx] = self.depth_epoch;
                         self.depth[idx] = z;
 
-                        let wx = w0.x * b0 + w1.x * b1 + w2.x * b2;
-                        let wy = w0.y * b0 + w1.y * b1 + w2.y * b2;
-                        let wz = w0.z * b0 + w1.z * b1 + w2.z * b2;
+                        let wx = world0.x * b0 + world1.x * b1 + world2.x * b2;
+                        let wy = world0.y * b0 + world1.y * b1 + world2.y * b2;
+                        let wz = world0.z * b0 + world1.z * b1 + world2.z * b2;
 
                         let fog = ((z - near) / (far - near)).clamp(0.0, 1.0);
                         let fade = (1.0 - fog).powf(1.55);
                         let pattern = if is_floor {
-                            let tile =
-                                ((wx / 0.35).floor() as i32 + (wy / 0.35).floor() as i32) & 1;
+                            let tile = ((wx * inv_floor_tile).floor() as i32
+                                + (wy * inv_floor_tile).floor() as i32)
+                                & 1;
                             if tile == 0 { 0.92 } else { 1.05 }
                         } else if is_ceiling {
-                            let tile =
-                                ((wx / 0.45).floor() as i32 + (wy / 0.45).floor() as i32) & 1;
+                            let tile = ((wx * inv_ceiling_tile).floor() as i32
+                                + (wy * inv_ceiling_tile).floor() as i32)
+                                & 1;
                             if tile == 0 { 0.95 } else { 1.03 }
                         } else {
-                            let stripe =
-                                ((wx / 0.25).floor() as i32 + (wz / 0.18).floor() as i32) & 1;
+                            let stripe = ((wx * inv_wall_stripe_x).floor() as i32
+                                + (wz * inv_wall_stripe_z).floor() as i32)
+                                & 1;
                             if stripe == 0 { 0.9 } else { 1.08 }
                         };
                         let grain = (((px as u64).wrapping_mul(73856093)
@@ -3880,7 +4011,15 @@ impl QuakeE1M1State {
                         let g = g.clamp(0.0, 255.0) as u8;
                         let b = b.clamp(0.0, 255.0) as u8;
                         painter.point_colored(px, py, PackedRgba::rgb(r, g, b));
+
+                        w0e += e0_dx;
+                        w1e += e1_dx;
+                        w2e += e2_dx;
                     }
+
+                    w0_row += e0_dy;
+                    w1_row += e1_dy;
+                    w2_row += e2_dy;
                 }
 
                 if tri_idx % edge_stride == 0 && edge_fade < 0.55 {
@@ -3915,10 +4054,10 @@ impl QuakeE1M1State {
                 }
             };
 
-            if clipped.len() == 3 {
+            if clipped_len == 3 {
                 draw_tri(clipped[0], clipped[1], clipped[2]);
             } else {
-                for i in 1..(clipped.len() - 1) {
+                for i in 1..(clipped_len - 1) {
                     draw_tri(clipped[0], clipped[i], clipped[i + 1]);
                 }
             }
@@ -3952,6 +4091,16 @@ impl QuakeE1M1State {
 // =============================================================================
 // Helper functions
 // =============================================================================
+
+fn build_doom_lines() -> Vec<DoomLine> {
+    let mut lines = Vec::with_capacity(FREEDOOM_E1M1_LINES.len());
+    for (x1, y1, x2, y2) in FREEDOOM_E1M1_LINES {
+        lines.push(DoomLine::new(
+            *x1 as f32, *y1 as f32, *x2 as f32, *y2 as f32,
+        ));
+    }
+    lines
+}
 
 static RAND_STATE: AtomicU64 = AtomicU64::new(12345);
 
@@ -4000,47 +4149,48 @@ fn min_wall_distance_sq(x: f32, y: f32, walls: &[WallSeg]) -> f32 {
     best
 }
 
-fn clip_polygon_near(poly: &[Vec3], near: f32) -> Vec<Vec3> {
-    if poly.is_empty() {
-        return Vec::new();
-    }
-
-    let mut out = Vec::with_capacity(poly.len() + 2);
-    let mut prev = poly[poly.len() - 1];
+fn clip_triangle_near(a: Vec3, b: Vec3, c: Vec3, near: f32, out: &mut [Vec3; 4]) -> usize {
+    let verts = [a, b, c];
+    let mut count = 0usize;
+    let mut prev = verts[2];
     let mut prev_inside = prev.z >= near;
 
-    for &curr in poly {
+    for &curr in &verts {
         let curr_inside = curr.z >= near;
         if prev_inside && curr_inside {
-            out.push(curr);
+            out[count] = curr;
+            count += 1;
         } else if prev_inside && !curr_inside {
             let denom = curr.z - prev.z;
             if denom.abs() > 1e-6 {
                 let t = (near - prev.z) / denom;
-                out.push(Vec3::new(
+                out[count] = Vec3::new(
                     prev.x + (curr.x - prev.x) * t,
                     prev.y + (curr.y - prev.y) * t,
                     near,
-                ));
+                );
+                count += 1;
             }
         } else if !prev_inside && curr_inside {
             let denom = curr.z - prev.z;
             if denom.abs() > 1e-6 {
                 let t = (near - prev.z) / denom;
-                out.push(Vec3::new(
+                out[count] = Vec3::new(
                     prev.x + (curr.x - prev.x) * t,
                     prev.y + (curr.y - prev.y) * t,
                     near,
-                ));
+                );
+                count += 1;
             }
-            out.push(curr);
+            out[count] = curr;
+            count += 1;
         }
 
         prev = curr;
         prev_inside = curr_inside;
     }
 
-    out
+    count
 }
 
 fn fx_stride(quality: FxQuality) -> usize {
@@ -4083,7 +4233,7 @@ impl Default for VisualEffectsScreen {
             wave_interference: WaveInterferenceState::default(),
             spiral: SpiralState::default(),
             spin_lattice: SpinLatticeState::default(),
-            doom_e1m1: DoomE1M1State::default(),
+            doom_e1m1: RefCell::new(DoomE1M1State::default()),
             quake_e1m1: RefCell::new(QuakeE1M1State::default()),
             // FPS tracking
             frame_times: VecDeque::with_capacity(60),
@@ -4125,42 +4275,10 @@ impl VisualEffectsScreen {
         matches!(self.effect, EffectType::DoomE1M1 | EffectType::QuakeE1M1)
     }
 
-    fn canvas_mode_for_effect(&self, quality: FxQuality, area_cells: usize) -> Mode {
-        let base = match quality {
-            FxQuality::Full => Mode::Braille,
-            FxQuality::Reduced => Mode::Block,
-            FxQuality::Minimal | FxQuality::Off => Mode::HalfBlock,
-        };
-
-        if matches!(self.effect, EffectType::Metaballs | EffectType::Plasma) {
-            const DOWNSHIFT_AREA_CELLS: usize = 1800;
-            if area_cells >= DOWNSHIFT_AREA_CELLS {
-                return match base {
-                    Mode::Braille => Mode::Block,
-                    Mode::Block => Mode::HalfBlock,
-                    Mode::HalfBlock => Mode::HalfBlock,
-                };
-            }
-        }
-
-        base
-    }
-
-    fn downshift_quality_for_effect(&self, quality: FxQuality, area_cells: usize) -> FxQuality {
-        if !matches!(self.effect, EffectType::Metaballs | EffectType::Plasma) {
-            return quality;
-        }
-
-        const DOWNSHIFT_AREA_CELLS: usize = 1800;
-        if area_cells < DOWNSHIFT_AREA_CELLS {
-            return quality;
-        }
-
-        match quality {
-            FxQuality::Full => FxQuality::Reduced,
-            FxQuality::Reduced => FxQuality::Minimal,
-            FxQuality::Minimal | FxQuality::Off => quality,
-        }
+    fn canvas_mode_for_effect(&self, _quality: FxQuality, _area_cells: usize) -> Mode {
+        // Always render in braille resolution; performance is controlled via stride/quality,
+        // but we never downshift to block modes that visibly reduce resolution.
+        Mode::Braille
     }
 
     fn switch_effect(&mut self, effect: EffectType) {
@@ -4200,13 +4318,17 @@ impl VisualEffectsScreen {
         match self.effect {
             EffectType::DoomE1M1 => {
                 if forward != 0.0 {
-                    self.doom_e1m1.move_forward(forward * DOOM_MOVE_STEP);
+                    self.doom_e1m1
+                        .borrow_mut()
+                        .move_forward(forward * DOOM_MOVE_STEP);
                 }
                 if strafe != 0.0 {
-                    self.doom_e1m1.strafe(strafe * DOOM_STRAFE_STEP);
+                    self.doom_e1m1
+                        .borrow_mut()
+                        .strafe(strafe * DOOM_STRAFE_STEP);
                 }
                 if turn != 0.0 {
-                    self.doom_e1m1.look(turn * DOOM_TURN_RATE, 0.0);
+                    self.doom_e1m1.borrow_mut().look(turn * DOOM_TURN_RATE, 0.0);
                 }
             }
             EffectType::QuakeE1M1 => {
@@ -4233,7 +4355,7 @@ impl VisualEffectsScreen {
 
         match code {
             KeyCode::Char(' ') => match self.effect {
-                EffectType::DoomE1M1 => self.doom_e1m1.jump(),
+                EffectType::DoomE1M1 => self.doom_e1m1.borrow_mut().jump(),
                 EffectType::QuakeE1M1 => self.quake_e1m1.borrow_mut().jump(),
                 _ => {}
             },
@@ -4258,7 +4380,9 @@ impl VisualEffectsScreen {
                     let yaw_delta = dx as f32 * self.fps_mouse_sensitivity;
                     let pitch_delta = dy as f32 * self.fps_mouse_sensitivity;
                     match self.effect {
-                        EffectType::DoomE1M1 => self.doom_e1m1.look(yaw_delta, pitch_delta),
+                        EffectType::DoomE1M1 => {
+                            self.doom_e1m1.borrow_mut().look(yaw_delta, pitch_delta)
+                        }
                         EffectType::QuakeE1M1 => {
                             self.quake_e1m1.borrow_mut().look(yaw_delta, pitch_delta);
                         }
@@ -4268,7 +4392,7 @@ impl VisualEffectsScreen {
                 self.fps_last_mouse = Some((x, y));
             }
             MouseEventKind::Down(MouseButton::Left) => match self.effect {
-                EffectType::DoomE1M1 => self.doom_e1m1.fire(),
+                EffectType::DoomE1M1 => self.doom_e1m1.borrow_mut().fire(),
                 EffectType::QuakeE1M1 => self.quake_e1m1.borrow_mut().fire(),
                 _ => {}
             },
@@ -4857,12 +4981,8 @@ impl Screen for VisualEffectsScreen {
         // Reuse cached painter (grow-only) and render at sub-pixel resolution.
         {
             let area_cells = canvas_area.width as usize * canvas_area.height as usize;
-            let mut quality = FxQuality::from_degradation_with_area(frame.degradation, area_cells);
-            if self.is_fps_effect() && matches!(quality, FxQuality::Off) {
-                // FPS effects are the main attraction here; never drop to Off.
-                quality = FxQuality::Minimal;
-            }
-            quality = self.downshift_quality_for_effect(quality, area_cells);
+            // Visual fidelity is non-negotiable for this screen.
+            let quality = FxQuality::Full;
             self.last_quality.set(quality);
             let theme_inputs = current_fx_theme();
 
@@ -4895,8 +5015,14 @@ impl Screen for VisualEffectsScreen {
                         self.spin_lattice.render(&mut painter, pw, ph, quality)
                     }
                     EffectType::DoomE1M1 => {
-                        self.doom_e1m1
-                            .render(&mut painter, pw, ph, quality, self.time, self.frame);
+                        self.doom_e1m1.borrow_mut().render(
+                            &mut painter,
+                            pw,
+                            ph,
+                            quality,
+                            self.time,
+                            self.frame,
+                        );
                     }
                     EffectType::QuakeE1M1 => {
                         self.quake_e1m1.borrow_mut().render(
@@ -5142,7 +5268,7 @@ impl Screen for VisualEffectsScreen {
             }
             EffectType::DoomE1M1 => {
                 if update_this_frame {
-                    self.doom_e1m1.update();
+                    self.doom_e1m1.borrow_mut().update();
                 }
             }
             EffectType::QuakeE1M1 => {

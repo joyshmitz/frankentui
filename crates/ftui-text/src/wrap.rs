@@ -439,7 +439,15 @@ fn is_zero_width_codepoint(c: char) -> bool {
 #[inline]
 fn is_probable_emoji(c: char) -> bool {
     let u = c as u32;
-    matches!(u, 0x1F000..=0x1FAFF)
+    matches!(
+        u,
+        0x1F000..=0x1FAFF | 0x2300..=0x23FF | 0x2600..=0x27BF | 0x2B00..=0x2BFF
+    ) && u != 0x2764
+}
+
+#[inline]
+fn has_emoji_presentation_selector(grapheme: &str) -> bool {
+    grapheme.chars().any(|c| c as u32 == 0xFE0F)
 }
 
 /// Calculate the display width of a single grapheme cluster.
@@ -456,6 +464,9 @@ pub fn grapheme_width(grapheme: &str) -> usize {
         return 0;
     }
     let width = unicode_display_width(grapheme) as usize;
+    if width == 1 && has_emoji_presentation_selector(grapheme) {
+        return 2;
+    }
     if width == 1 && grapheme.chars().any(is_probable_emoji) {
         return 2;
     }
@@ -1141,6 +1152,12 @@ mod tests {
         assert_eq!(display_width("👩‍🔬"), 2);
         assert_eq!(display_width("👨‍👩‍👧‍👦"), 2);
         assert_eq!(display_width("👩‍🚀x"), 3);
+    }
+
+    #[test]
+    fn display_width_misc_symbol_emoji() {
+        assert_eq!(display_width("⏳"), 2);
+        assert_eq!(display_width("⌛"), 2);
     }
 
     #[test]
