@@ -8,7 +8,11 @@
 //! - `LineChart` with multi-series and Braille rendering
 //! - `Canvas` with programmatic drawing (Lissajous curve)
 
-use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers};
+use std::cell::Cell as StdCell;
+
+use ftui_core::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseButton, MouseEventKind,
+};
 use ftui_core::geometry::Rect;
 use ftui_extras::canvas::{Canvas, Mode, Painter};
 use ftui_extras::charts::{
@@ -69,6 +73,12 @@ pub struct DataViz {
     chart_data: ChartData,
     tick_count: u64,
     bar_horizontal: bool,
+    layout_sparkline: StdCell<Rect>,
+    layout_barchart: StdCell<Rect>,
+    layout_spectrum: StdCell<Rect>,
+    layout_linechart: StdCell<Rect>,
+    layout_canvas: StdCell<Rect>,
+    layout_heatmap: StdCell<Rect>,
 }
 
 impl Default for DataViz {
@@ -88,6 +98,12 @@ impl DataViz {
             chart_data,
             tick_count: 30,
             bar_horizontal: false,
+            layout_sparkline: StdCell::new(Rect::default()),
+            layout_barchart: StdCell::new(Rect::default()),
+            layout_spectrum: StdCell::new(Rect::default()),
+            layout_linechart: StdCell::new(Rect::default()),
+            layout_canvas: StdCell::new(Rect::default()),
+            layout_heatmap: StdCell::new(Rect::default()),
         }
     }
 
@@ -440,6 +456,55 @@ impl DataViz {
         self.render_heatmap_grid(frame, rows[1]);
     }
 
+    fn render_micro_panels(&self, frame: &mut Frame, area: Rect) {
+        if area.is_empty() {
+            return;
+        }
+
+        let cols = Flex::horizontal()
+            .gap(theme::spacing::XS)
+            .constraints([
+                Constraint::Percentage(25.0),
+                Constraint::Percentage(25.0),
+                Constraint::Percentage(25.0),
+                Constraint::Percentage(25.0),
+            ])
+            .split(area);
+
+        let sine_data: Vec<f64> = self.chart_data.sine_series.iter().copied().collect();
+        let cos_data: Vec<f64> = self.chart_data.cosine_series.iter().copied().collect();
+        let rand_data: Vec<f64> = self.chart_data.random_series.iter().copied().collect();
+        let mix_data: Vec<f64> = sine_data
+            .iter()
+            .zip(cos_data.iter())
+            .map(|(a, b)| (a + b) * 0.5)
+            .collect();
+        let colors = chart_palette();
+
+        let panels = [
+            ("Sine", &sine_data, colors[0]),
+            ("Cos", &cos_data, colors[1]),
+            ("Noise", &rand_data, colors[2]),
+            ("Mix", &mix_data, theme::accent::ACCENT_8.into()),
+        ];
+
+        for (area, (label, data, color)) in cols.iter().zip(panels.iter()) {
+            let block = Block::new()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(label)
+                .title_alignment(Alignment::Center)
+                .style(theme::content_border());
+            let inner = block.inner(*area);
+            block.render(*area, frame);
+            if !inner.is_empty() {
+                Sparkline::new(data)
+                    .style(Style::new().fg(*color))
+                    .render(inner, frame);
+            }
+        }
+    }
+
     fn render_heatmap(&self, frame: &mut Frame, area: Rect) {
         if area.is_empty() || area.width < 4 || area.height < 3 {
             return;
@@ -573,6 +638,31 @@ impl Screen for DataViz {
     type Message = Event;
 
     fn update(&mut self, event: &Event) -> Cmd<Self::Message> {
+        if let Event::Mouse(mouse) = event
+            && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+        {
+            let spark = self.layout_sparkline.get();
+            let bar = self.layout_barchart.get();
+            let spectrum = self.layout_spectrum.get();
+            let line = self.layout_linechart.get();
+            let canvas = self.layout_canvas.get();
+            let heatmap = self.layout_heatmap.get();
+            self.focus = if spark.contains(mouse.x, mouse.y) {
+                ChartPanel::Sparkline
+            } else if bar.contains(mouse.x, mouse.y) {
+                ChartPanel::BarChart
+            } else if spectrum.contains(mouse.x, mouse.y) {
+                ChartPanel::Spectrum
+            } else if line.contains(mouse.x, mouse.y) {
+                ChartPanel::LineChart
+            } else if canvas.contains(mouse.x, mouse.y) {
+                ChartPanel::Canvas
+            } else if heatmap.contains(mouse.x, mouse.y) {
+                ChartPanel::Heatmap
+            } else {
+                self.focus
+            };
+        }
         if let Event::Key(KeyEvent {
             code: KeyCode::Right,
             modifiers,
@@ -645,9 +735,13 @@ impl Screen for DataViz {
             .constraints([Constraint::Min(1), Constraint::Fixed(1)])
             .split(area);
 
-        // 2x3 grid of chart panels
+        // 3x3 grid of chart panels + micro strip
         let rows = Flex::vertical()
-            .constraints([Constraint::Percentage(50.0), Constraint::Percentage(50.0)])
+            .constraints([
+                Constraint::Percentage(42.0),
+                Constraint::Percentage(38.0),
+                Constraint::Percentage(20.0),
+            ])
             .split(main[0]);
 
         let top_cols = Flex::horizontal()
@@ -658,7 +752,7 @@ impl Screen for DataViz {
             ])
             .split(rows[0]);
 
-        let bot_cols = Flex::horizontal()
+        let mid_cols = Flex::horizontal()
             .constraints([
                 Constraint::Percentage(33.0),
                 Constraint::Percentage(33.0),
@@ -666,12 +760,20 @@ impl Screen for DataViz {
             ])
             .split(rows[1]);
 
+        self.layout_sparkline.set(top_cols[0]);
+        self.layout_barchart.set(top_cols[1]);
+        self.layout_spectrum.set(top_cols[2]);
+        self.layout_linechart.set(mid_cols[0]);
+        self.layout_canvas.set(mid_cols[1]);
+        self.layout_heatmap.set(mid_cols[2]);
+
         self.render_sparkline_panel(frame, top_cols[0]);
         self.render_barchart_panel(frame, top_cols[1]);
         self.render_spectrum_panel(frame, top_cols[2]);
-        self.render_linechart_panel(frame, bot_cols[0]);
-        self.render_canvas_panel(frame, bot_cols[1]);
-        self.render_heatmap_panel(frame, bot_cols[2]);
+        self.render_linechart_panel(frame, mid_cols[0]);
+        self.render_canvas_panel(frame, mid_cols[1]);
+        self.render_heatmap_panel(frame, mid_cols[2]);
+        self.render_micro_panels(frame, rows[2]);
 
         // Status bar
         let status = format!(

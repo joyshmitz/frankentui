@@ -9,13 +9,16 @@ use ftui_core::geometry::Rect;
 use ftui_extras::charts::Sparkline;
 use ftui_extras::filesize;
 use ftui_extras::syntax::{GenericTokenizer, GenericTokenizerConfig, SyntaxHighlighter};
-use ftui_extras::text_effects::{ColorGradient, Direction, StyledText, TextEffect};
+use ftui_extras::text_effects::{
+    ColorGradient, CursorPosition, CursorStyle, Direction, StyledMultiLine, StyledText, TextEffect,
+};
 use ftui_layout::{Constraint, Flex};
 use ftui_render::cell::PackedRgba;
 use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
 use ftui_style::{Style, StyleFlags};
 use ftui_text::search::search_ascii_case_insensitive;
+use ftui_text::{display_width, grapheme_count, grapheme_width, graphemes};
 use ftui_widgets::StatefulWidget;
 use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
@@ -23,8 +26,8 @@ use ftui_widgets::borders::{BorderType, Borders};
 use ftui_widgets::input::TextInput;
 use ftui_widgets::json_view::JsonView;
 use ftui_widgets::paragraph::Paragraph;
+use ftui_widgets::progress::{MiniBar, MiniBarColors};
 use ftui_widgets::scrollbar::{Scrollbar, ScrollbarOrientation, ScrollbarState};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{HelpEntry, Screen};
 use crate::app::ScreenId;
@@ -199,6 +202,7 @@ pub struct CodeExplorer {
     /// Layout hit areas for mouse focus.
     layout_input: Cell<Rect>,
     layout_code: Cell<Rect>,
+    layout_telemetry: Cell<Rect>,
     layout_info: Cell<Rect>,
     layout_context: Cell<Rect>,
     layout_hotspots: Cell<Rect>,
@@ -267,6 +271,7 @@ impl CodeExplorer {
             focus: FocusPanel::Code,
             layout_input: Cell::new(Rect::default()),
             layout_code: Cell::new(Rect::default()),
+            layout_telemetry: Cell::new(Rect::default()),
             layout_info: Cell::new(Rect::default()),
             layout_context: Cell::new(Rect::default()),
             layout_hotspots: Cell::new(Rect::default()),
@@ -480,6 +485,23 @@ impl CodeExplorer {
         self.match_density = density;
     }
 
+    fn synthetic_series(
+        &self,
+        len: usize,
+        base: f64,
+        amp: f64,
+        speed: f64,
+        phase: f64,
+    ) -> Vec<f64> {
+        let mut out = Vec::with_capacity(len.max(1));
+        for i in 0..len.max(1) {
+            let t = self.time * speed + i as f64 * 0.2 + phase;
+            let v = base + amp * t.sin();
+            out.push(v.clamp(0.0, 100.0));
+        }
+        out
+    }
+
     fn set_current_match(&mut self, idx: usize) {
         if self.search_matches.is_empty() {
             return;
@@ -496,6 +518,7 @@ impl CodeExplorer {
         self.goto_input.set_focused(false);
         let input = self.layout_input.get();
         let code = self.layout_code.get();
+        let telemetry = self.layout_telemetry.get();
         let info = self.layout_info.get();
         let context = self.layout_context.get();
         let hotspots = self.layout_hotspots.get();
@@ -508,6 +531,10 @@ impl CodeExplorer {
         }
         if code.contains(x, y) {
             self.focus = FocusPanel::Code;
+            return;
+        }
+        if !telemetry.is_empty() && telemetry.contains(x, y) {
+            self.focus = FocusPanel::Telemetry;
             return;
         }
         if info.contains(x, y) {
@@ -577,6 +604,7 @@ impl ExplorerMode {
 enum FocusPanel {
     Input,
     Code,
+    Telemetry,
     Info,
     Context,
     Hotspots,
@@ -784,8 +812,24 @@ impl Screen for CodeExplorer {
             .constraints([Constraint::Percentage(72.0), Constraint::Percentage(28.0)])
             .split(body_area);
 
-        self.layout_code.set(h_chunks[0]);
-        self.render_code_panel(frame, h_chunks[0]);
+        let (code_area, telemetry_area) = if h_chunks[0].height >= 12 {
+            let rows = Flex::vertical()
+                .constraints([Constraint::Percentage(72.0), Constraint::Percentage(28.0)])
+                .split(h_chunks[0]);
+            (rows[0], Some(rows[1]))
+        } else {
+            (h_chunks[0], None)
+        };
+
+        self.layout_code.set(code_area);
+        self.render_code_panel(frame, code_area);
+        if let Some(telemetry) = telemetry_area {
+            self.layout_telemetry.set(telemetry);
+            self.render_telemetry_panel(frame, telemetry);
+            chrome::register_pane_hit(frame, telemetry, ScreenId::CodeExplorer);
+        } else {
+            self.layout_telemetry.set(Rect::default());
+        }
         match self.mode {
             ExplorerMode::Source => self.render_sidebar_source(frame, h_chunks[1]),
             ExplorerMode::QueryLab => self.render_sidebar_query_lab(frame, h_chunks[1]),
@@ -793,7 +837,7 @@ impl Screen for CodeExplorer {
         }
         self.render_status_bar(frame, status_area);
 
-        chrome::register_pane_hit(frame, h_chunks[0], ScreenId::CodeExplorer);
+        chrome::register_pane_hit(frame, code_area, ScreenId::CodeExplorer);
         chrome::register_pane_hit(frame, h_chunks[1], ScreenId::CodeExplorer);
         chrome::register_pane_hit(frame, status_area, ScreenId::CodeExplorer);
         if self.search_active || self.goto_active {
@@ -1136,7 +1180,7 @@ impl CodeExplorer {
                 if !before.is_empty() && cursor_x < max_x {
                     let remaining = max_x.saturating_sub(cursor_x);
                     let clipped = truncate_to_width(before, remaining);
-                    let width = UnicodeWidthStr::width(clipped.as_str()) as u16;
+                    let width = display_width(clipped.as_str()) as u16;
                     if width > 0 {
                         let area = Rect::new(cursor_x, line_y, width.min(remaining), 1);
                         Paragraph::new(clipped)
@@ -1153,7 +1197,7 @@ impl CodeExplorer {
                 let matched = &line[start..end];
                 let remaining = max_x.saturating_sub(cursor_x);
                 let clipped = truncate_to_width(matched, remaining);
-                let width = UnicodeWidthStr::width(clipped.as_str()) as u16;
+                let width = display_width(clipped.as_str()) as u16;
                 if width == 0 {
                     break;
                 }
@@ -1198,7 +1242,7 @@ impl CodeExplorer {
                 let tail = &line[last..];
                 let remaining = max_x.saturating_sub(cursor_x);
                 let clipped = truncate_to_width(tail, remaining);
-                let width = UnicodeWidthStr::width(clipped.as_str()) as u16;
+                let width = display_width(clipped.as_str()) as u16;
                 if width > 0 {
                     Paragraph::new(clipped)
                         .style(Style::new().fg(theme::fg::SECONDARY))
@@ -1213,6 +1257,126 @@ impl CodeExplorer {
             .thumb_style(Style::new().fg(theme::accent::PRIMARY))
             .track_style(Style::new().fg(theme::bg::SURFACE));
         StatefulWidget::render(&scrollbar, scrollbar_area, frame, &mut scrollbar_state);
+    }
+
+    fn render_telemetry_panel(&self, frame: &mut Frame, area: Rect) {
+        if area.is_empty() || area.height < 3 || area.width < 12 {
+            return;
+        }
+
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("Telemetry Deck")
+            .title_alignment(Alignment::Center)
+            .style(theme::panel_border_style(
+                self.focus == FocusPanel::Telemetry,
+                theme::screen_accent::CODE_EXPLORER,
+            ));
+        let inner = block.inner(area);
+        block.render(area, frame);
+
+        if inner.is_empty() {
+            return;
+        }
+
+        let cols = Flex::horizontal()
+            .gap(theme::spacing::XS)
+            .constraints([
+                Constraint::Percentage(34.0),
+                Constraint::Percentage(33.0),
+                Constraint::Percentage(33.0),
+            ])
+            .split(inner);
+
+        let series_len = inner.width.max(8) as usize;
+        let io_series = self.synthetic_series(series_len, 45.0, 20.0, 0.35, 0.0);
+        let cache_series = self.synthetic_series(series_len, 70.0, 15.0, 0.25, 1.1);
+
+        for (idx, col) in cols.iter().enumerate() {
+            if col.is_empty() || col.height < 2 {
+                continue;
+            }
+            let rows = Flex::vertical()
+                .constraints([Constraint::Fixed(1), Constraint::Min(1)])
+                .split(*col);
+            let label = match idx {
+                0 => "IO Lane",
+                1 => "Cache Hit",
+                _ => "Lock + TX",
+            };
+            Paragraph::new(truncate_to_width(label, rows[0].width))
+                .style(theme::muted())
+                .render(rows[0], frame);
+
+            if rows[1].is_empty() {
+                continue;
+            }
+
+            match idx {
+                0 => {
+                    Sparkline::new(&io_series)
+                        .style(Style::new().fg(theme::accent::PRIMARY))
+                        .gradient(
+                            theme::accent::PRIMARY.into(),
+                            theme::accent::ACCENT_7.into(),
+                        )
+                        .render(rows[1], frame);
+                }
+                1 => {
+                    Sparkline::new(&cache_series)
+                        .style(Style::new().fg(theme::accent::SUCCESS))
+                        .gradient(
+                            theme::accent::SUCCESS.into(),
+                            theme::accent::ACCENT_9.into(),
+                        )
+                        .render(rows[1], frame);
+                }
+                _ => {
+                    let sub_rows = Flex::vertical()
+                        .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
+                        .split(rows[1]);
+                    let colors = MiniBarColors::new(
+                        theme::accent::PRIMARY.into(),
+                        theme::accent::SUCCESS.into(),
+                        theme::accent::WARNING.into(),
+                        theme::accent::ACCENT_10.into(),
+                    );
+                    let lock = (0.2 + (self.time * 0.8).sin() * 0.1).clamp(0.0, 1.0);
+                    let tx = (0.6 + (self.time * 0.5).cos() * 0.2).clamp(0.0, 1.0);
+                    let bar_width = sub_rows[0].width.saturating_sub(6);
+                    if bar_width > 0 {
+                        Paragraph::new("LCK").style(theme::muted()).render(
+                            Rect::new(sub_rows[0].x, sub_rows[0].y, 3, sub_rows[0].height),
+                            frame,
+                        );
+                        MiniBar::new(lock, bar_width).colors(colors).render(
+                            Rect::new(
+                                sub_rows[0].x + 3,
+                                sub_rows[0].y,
+                                bar_width,
+                                sub_rows[0].height,
+                            ),
+                            frame,
+                        );
+
+                        Paragraph::new("TX").style(theme::muted()).render(
+                            Rect::new(sub_rows[1].x, sub_rows[1].y, 3, sub_rows[1].height),
+                            frame,
+                        );
+                        MiniBar::new(tx, bar_width).colors(colors).render(
+                            Rect::new(
+                                sub_rows[1].x + 3,
+                                sub_rows[1].y,
+                                bar_width,
+                                sub_rows[1].height,
+                            ),
+                            frame,
+                        );
+                    }
+                }
+            }
+        }
     }
 
     fn render_sidebar_source(&self, frame: &mut Frame, area: Rect) {
@@ -1414,14 +1578,26 @@ impl CodeExplorer {
         let studio_inner = studio_block.inner(rows[0]);
         studio_block.render(rows[0], frame);
         let query = QUERY_SNIPPETS[self.query_index()];
-        for (i, line) in query.lines().enumerate() {
-            let y = studio_inner.y + i as u16;
-            if y >= studio_inner.y + studio_inner.height {
-                break;
-            }
-            let area = Rect::new(studio_inner.x, y, studio_inner.width, 1);
-            let text = truncate_to_width(line, studio_inner.width);
-            let fx = StyledText::new(text)
+        let max_lines = studio_inner.height as usize;
+        let mut lines = Vec::new();
+        for line in query.lines().take(max_lines) {
+            lines.push(truncate_to_width(line, studio_inner.width));
+        }
+        if !lines.is_empty() {
+            let total_chars = lines
+                .iter()
+                .map(|line| grapheme_count(line) + 1)
+                .sum::<usize>()
+                .max(1);
+            let progress = ((self.time * 0.6).sin() * 0.5 + 0.5).clamp(0.0, 1.0);
+            let visible_chars = total_chars as f64 * progress;
+            let styled = StyledMultiLine::new(lines)
+                .effect(TextEffect::Typewriter { visible_chars })
+                .effect(TextEffect::Cursor {
+                    style: CursorStyle::Block,
+                    blink_speed: 2.0,
+                    position: CursorPosition::AfterReveal,
+                })
                 .effect(TextEffect::AnimatedGradient {
                     gradient: ColorGradient::matrix(),
                     speed: 0.65,
@@ -1433,8 +1609,9 @@ impl CodeExplorer {
                     scroll_speed: 0.7,
                     flicker: 0.05,
                 })
+                .base_color(theme::fg::PRIMARY.into())
                 .time(self.time);
-            fx.render(area, frame);
+            styled.render(studio_inner, frame);
         }
 
         // Panel 2: Live Preview
@@ -1521,19 +1698,27 @@ impl CodeExplorer {
             ));
         let plan_inner = plan_block.inner(rows[0]);
         plan_block.render(rows[0], frame);
-        for (i, line) in PLAN_GRAPH.iter().enumerate() {
-            let y = plan_inner.y + i as u16;
-            if y >= plan_inner.y + plan_inner.height {
-                break;
-            }
-            let area = Rect::new(plan_inner.x, y, plan_inner.width, 1);
-            let fx = StyledText::new(truncate_to_width(line, plan_inner.width))
+        let max_lines = plan_inner.height as usize;
+        let mut plan_lines = Vec::new();
+        for line in PLAN_GRAPH.iter().take(max_lines) {
+            plan_lines.push(truncate_to_width(line, plan_inner.width));
+        }
+        if !plan_lines.is_empty() {
+            let fx = StyledMultiLine::new(plan_lines)
                 .effect(TextEffect::AnimatedGradient {
                     gradient: ColorGradient::ice(),
                     speed: 0.4,
                 })
+                .effect(TextEffect::Scanline {
+                    intensity: 0.15,
+                    line_gap: 2,
+                    scroll: true,
+                    scroll_speed: 0.45,
+                    flicker: 0.04,
+                })
+                .base_color(theme::fg::PRIMARY.into())
                 .time(self.time);
-            fx.render(area, frame);
+            fx.render(plan_inner, frame);
         }
 
         // Panel 2: IO + Cache telemetry
@@ -1788,12 +1973,12 @@ fn truncate_to_width(text: &str, max_width: u16) -> String {
     let mut out = String::new();
     let mut width = 0usize;
     let max = max_width as usize;
-    for ch in text.chars() {
-        let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+    for grapheme in graphemes(text) {
+        let w = grapheme_width(grapheme);
         if width + w > max {
             break;
         }
-        out.push(ch);
+        out.push_str(grapheme);
         width += w;
     }
     out

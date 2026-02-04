@@ -17,13 +17,12 @@ use ftui_layout::{Constraint, Flex};
 use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
 use ftui_style::Style;
-use ftui_text::graphemes;
+use ftui_text::{display_width, grapheme_width, graphemes};
 use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
 use ftui_widgets::borders::{BorderType, Borders};
 use ftui_widgets::paragraph::Paragraph;
 use ftui_widgets::tree::{Tree, TreeGuides, TreeNode};
-use unicode_width::UnicodeWidthChar;
 
 use super::{HelpEntry, Screen};
 use crate::theme;
@@ -516,19 +515,8 @@ fn format_entry_line(entry: &FileEntry, width: u16) -> String {
     fit_to_width(&line, width)
 }
 
-fn grapheme_width(grapheme: &str) -> usize {
-    grapheme
-        .chars()
-        .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
-        .max()
-        .unwrap_or(0)
-}
-
 fn text_width(text: &str) -> usize {
-    if text.is_ascii() {
-        return text.len();
-    }
-    graphemes(text).map(grapheme_width).sum()
+    display_width(text)
 }
 
 fn pad_to_width(text: &str, width: usize) -> String {

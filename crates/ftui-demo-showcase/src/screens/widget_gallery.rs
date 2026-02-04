@@ -2,7 +2,9 @@
 
 //! Widget Gallery screen — showcases every available widget type.
 
-use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind};
+use std::cell::Cell;
+
+use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEventKind};
 use ftui_core::geometry::Rect;
 use ftui_layout::{Constraint, Flex};
 use ftui_render::frame::Frame;
@@ -99,6 +101,7 @@ pub struct WidgetGallery {
     log_viewer_state: RefCell<LogViewerState>,
     virtualized_items: Vec<GalleryVirtualItem>,
     virtualized_state: RefCell<VirtualizedListState>,
+    layout_tabs: Cell<Rect>,
 }
 
 impl Default for WidgetGallery {
@@ -155,7 +158,7 @@ impl WidgetGallery {
         virtualized_state.selected = Some(2);
 
         Self {
-            current_section: 0,
+            current_section: 1,
             tick_count: 0,
             spinner_state: SpinnerState::default(),
             file_picker_state: RefCell::new(file_picker_state),
@@ -163,6 +166,7 @@ impl WidgetGallery {
             log_viewer_state: RefCell::new(LogViewerState::default()),
             virtualized_items,
             virtualized_state: RefCell::new(virtualized_state),
+            layout_tabs: Cell::new(Rect::default()),
         }
     }
 }
@@ -171,6 +175,20 @@ impl Screen for WidgetGallery {
     type Message = Event;
 
     fn update(&mut self, event: &Event) -> Cmd<Self::Message> {
+        if let Event::Mouse(mouse) = event {
+            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                let tabs = self.layout_tabs.get();
+                if !tabs.is_empty() && tabs.contains(mouse.x, mouse.y) && tabs.width > 0 {
+                    let rel = mouse.x.saturating_sub(tabs.x) as usize;
+                    let idx = (rel * SECTION_COUNT) / tabs.width as usize;
+                    if idx < SECTION_COUNT {
+                        self.current_section = idx;
+                    }
+                }
+            }
+            return Cmd::None;
+        }
+
         if let Event::Key(KeyEvent {
             code,
             kind: KeyEventKind::Press,
@@ -215,6 +233,7 @@ impl Screen for WidgetGallery {
             ])
             .split(area);
 
+        self.layout_tabs.set(v_chunks[0]);
         self.render_section_tabs(frame, v_chunks[0]);
         self.render_section_content(frame, v_chunks[1]);
         self.render_paginator(frame, v_chunks[2]);
@@ -229,6 +248,10 @@ impl Screen for WidgetGallery {
             HelpEntry {
                 key: "k/↑/←",
                 action: "Previous section",
+            },
+            HelpEntry {
+                key: "Mouse",
+                action: "Click tab to switch",
             },
         ]
     }
@@ -1898,7 +1921,7 @@ mod tests {
     #[test]
     fn gallery_initial_state() {
         let gallery = WidgetGallery::new();
-        assert_eq!(gallery.current_section, 0);
+        assert_eq!(gallery.current_section, 1);
         assert_eq!(gallery.tick_count, 0);
     }
 
@@ -1942,7 +1965,7 @@ mod tests {
     #[test]
     fn gallery_section_navigation() {
         let mut gallery = WidgetGallery::new();
-        assert_eq!(gallery.current_section, 0);
+        assert_eq!(gallery.current_section, 1);
 
         // Navigate forward with j
         let ev = Event::Key(KeyEvent {
@@ -1951,11 +1974,11 @@ mod tests {
             kind: KeyEventKind::Press,
         });
         gallery.update(&ev);
-        assert_eq!(gallery.current_section, 1);
+        assert_eq!(gallery.current_section, 2);
 
         // Navigate forward again
         gallery.update(&ev);
-        assert_eq!(gallery.current_section, 2);
+        assert_eq!(gallery.current_section, 3);
 
         // Navigate backward with k
         let ev_back = Event::Key(KeyEvent {
@@ -1964,13 +1987,13 @@ mod tests {
             kind: KeyEventKind::Press,
         });
         gallery.update(&ev_back);
-        assert_eq!(gallery.current_section, 1);
+        assert_eq!(gallery.current_section, 2);
     }
 
     #[test]
     fn gallery_section_navigation_arrows() {
         let mut gallery = WidgetGallery::new();
-        assert_eq!(gallery.current_section, 0);
+        assert_eq!(gallery.current_section, 1);
 
         let ev_down = Event::Key(KeyEvent {
             code: KeyCode::Down,
@@ -1978,7 +2001,7 @@ mod tests {
             kind: KeyEventKind::Press,
         });
         gallery.update(&ev_down);
-        assert_eq!(gallery.current_section, 1);
+        assert_eq!(gallery.current_section, 2);
 
         let ev_up = Event::Key(KeyEvent {
             code: KeyCode::Up,
@@ -1986,14 +2009,14 @@ mod tests {
             kind: KeyEventKind::Press,
         });
         gallery.update(&ev_up);
-        assert_eq!(gallery.current_section, 0);
+        assert_eq!(gallery.current_section, 1);
     }
 
     #[test]
     fn gallery_section_wrap_around() {
         let mut gallery = WidgetGallery::new();
 
-        // Navigate backward from 0 wraps to last section
+        // Navigate backward from first visible section wraps to last section
         let ev_back = Event::Key(KeyEvent {
             code: KeyCode::Char('k'),
             modifiers: Default::default(),

@@ -232,7 +232,7 @@ const ALIGNMENTS: &[Alignment] = &[Alignment::Left, Alignment::Center, Alignment
 /// Base characters to advance per tick during streaming simulation.
 const STREAM_CHARS_PER_TICK: usize = 3;
 /// Global speed multiplier for the streaming demo.
-const STREAM_SPEED_MULTIPLIER: usize = 3;
+const STREAM_SPEED_MULTIPLIER: usize = 9;
 
 struct MarkdownPanel {
     text: Text,
@@ -809,6 +809,7 @@ impl Screen for MarkdownRichText {
 
         // Main layout: three columns - left markdown, center streaming, right panels
         let cols = Flex::horizontal()
+            .gap(theme::spacing::XS)
             .constraints([
                 Constraint::Percentage(35.0),
                 Constraint::Percentage(35.0),
@@ -824,6 +825,7 @@ impl Screen for MarkdownRichText {
 
         // Right: Auxiliary panels
         let right_rows = Flex::vertical()
+            .gap(theme::spacing::XS)
             .constraints([
                 Constraint::Fixed(8),
                 Constraint::Fixed(1),

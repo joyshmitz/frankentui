@@ -14,6 +14,7 @@ use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
 use ftui_style::{Style, StyleFlags};
 use ftui_text::search::search_ascii_case_insensitive;
+use ftui_text::{display_width, grapheme_width, graphemes};
 use ftui_widgets::StatefulWidget;
 use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
@@ -21,7 +22,6 @@ use ftui_widgets::borders::{BorderType, Borders};
 use ftui_widgets::input::TextInput;
 use ftui_widgets::paragraph::Paragraph;
 use ftui_widgets::scrollbar::{Scrollbar, ScrollbarOrientation, ScrollbarState};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{HelpEntry, Screen};
 use crate::app::ScreenId;
@@ -975,7 +975,7 @@ impl Shakespeare {
                 if !before.is_empty() && cursor_x < max_x {
                     let remaining = max_x.saturating_sub(cursor_x);
                     let clipped = truncate_to_width(before, remaining);
-                    let width = UnicodeWidthStr::width(clipped.as_str()) as u16;
+                    let width = display_width(clipped.as_str()) as u16;
                     if width > 0 {
                         let area = Rect::new(cursor_x, line_y, width.min(remaining), 1);
                         Paragraph::new(clipped)
@@ -992,7 +992,7 @@ impl Shakespeare {
                 let matched = &line[start..end];
                 let remaining = max_x.saturating_sub(cursor_x);
                 let clipped = truncate_to_width(matched, remaining);
-                let width = UnicodeWidthStr::width(clipped.as_str()) as u16;
+                let width = display_width(clipped.as_str()) as u16;
                 if width == 0 {
                     break;
                 }
@@ -1037,7 +1037,7 @@ impl Shakespeare {
                 let tail = &line[last..];
                 let remaining = max_x.saturating_sub(cursor_x);
                 let clipped = truncate_to_width(tail, remaining);
-                let width = UnicodeWidthStr::width(clipped.as_str()) as u16;
+                let width = display_width(clipped.as_str()) as u16;
                 if width > 0 {
                     Paragraph::new(clipped)
                         .style(Style::new().fg(theme::fg::SECONDARY))
@@ -1549,12 +1549,12 @@ fn truncate_to_width(text: &str, max_width: u16) -> String {
     let mut out = String::new();
     let mut width = 0usize;
     let max = max_width as usize;
-    for ch in text.chars() {
-        let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+    for grapheme in graphemes(text) {
+        let w = grapheme_width(grapheme);
         if width + w > max {
             break;
         }
-        out.push(ch);
+        out.push_str(grapheme);
         width += w;
     }
     out

@@ -35,15 +35,17 @@ use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
 use ftui_style::Style;
 use ftui_text::{Line, Span, Text, WrapMode};
+use ftui_text::{display_width, grapheme_count, grapheme_width, graphemes};
 use ftui_widgets::Badge;
 use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
 use ftui_widgets::borders::{BorderType, Borders};
 use ftui_widgets::paragraph::Paragraph;
 use ftui_widgets::progress::{MiniBar, MiniBarColors};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{HelpEntry, Screen};
+use crate::app::ScreenId;
+use crate::chrome;
 use crate::data::{AlertSeverity, SimulatedData};
 use crate::theme;
 
@@ -126,6 +128,49 @@ fn main() -> ftui::Result<()> {
     app.push("seed", 42);
     Program::new(&mut app).run()
 }
+
+#[derive(Debug, Clone)]
+struct Budget {
+    frame_limit_ms: u64,
+    dirty_rows: usize,
+    violations: Vec<String>,
+}
+
+impl Budget {
+    fn new(frame_limit_ms: u64) -> Self {
+        Self {
+            frame_limit_ms,
+            dirty_rows: 0,
+            violations: Vec::new(),
+        }
+    }
+
+    fn note_dirty(&mut self) {
+        self.dirty_rows = self.dirty_rows.saturating_add(1);
+        if self.dirty_rows > 120 {
+            self.violations.push("Diff overflow".to_string());
+        }
+    }
+
+    fn seal(mut self) -> Self {
+        if self.violations.is_empty() {
+            self.violations.push("OK".to_string());
+        }
+        self
+    }
+}
+
+fn coalesce<T: Clone>(primary: Option<T>, fallback: T) -> T {
+    primary.unwrap_or(fallback)
+}
+
+fn build_budget(frame_time_ms: u64, dirty_rows: usize) -> Budget {
+    let mut budget = Budget::new(frame_time_ms);
+    for _ in 0..dirty_rows {
+        budget.note_dirty();
+    }
+    budget.seal()
+}
 "###,
     },
     CodeSample {
@@ -185,6 +230,48 @@ export function diff<T>(a: readonly T[], b: readonly T[]): T[] {
   const set = new Set(b);
   return a.filter((x) => !set.has(x));
 }
+
+type Budget = {
+  frameMs: number;
+  dirtyRows: number;
+  violations: string[];
+};
+
+export class EventBus<T> {
+  private listeners = new Set<(event: T) => void>();
+  on(fn: (event: T) => void): () => void {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+  emit(event: T): void {
+    for (const fn of this.listeners) fn(event);
+  }
+}
+
+const THEME = {
+  accent: ["#67e8f9", "#f472b6", "#fbbf24"],
+  surface: "#0b1220",
+} as const;
+
+export async function buildBudget(
+  dirtyRows: number,
+  frameMs = 16
+): Promise<Budget> {
+  const violations = dirtyRows > 120 ? ["Diff overflow"] : ["OK"];
+  return { frameMs, dirtyRows, violations };
+}
+
+export async function streamFrames(
+  source: AsyncIterable<Frame>,
+  bus: EventBus<Frame>
+): Promise<number> {
+  let count = 0;
+  for await (const frame of source) {
+    bus.emit(frame);
+    if (frame.dirty) count++;
+  }
+  return count;
+}
 "###,
     },
     CodeSample {
@@ -222,6 +309,26 @@ def bucket(frames: Iterable[Frame]) -> dict[bool, list[Frame]]:
     for f in frames:
         out[f.dirty].append(f)
     return out
+
+@dataclass(slots=True)
+class Budget:
+    frame_ms: int
+    dirty_rows: int
+    violations: list[str] = field(default_factory=list)
+
+    def seal(self) -> "Budget":
+        if not self.violations:
+            self.violations.append("OK")
+        return self
+
+def build_budget(frame_ms: int, dirty_rows: int) -> Budget:
+    violations = ["Diff overflow"] if dirty_rows > 120 else []
+    return Budget(frame_ms, dirty_rows, violations).seal()
+
+async def stream(frames: AsyncIterator[Frame], sink: Sink) -> None:
+    async for f in frames:
+        if f.dirty:
+            await sink.write(f"stream id={f.id} tags={f.tags}")
 "###,
     },
     CodeSample {
@@ -298,6 +405,25 @@ func Compute(ctx context.Context, a, b []Frame) (int, error) {
     fmt.Println("done in", 5*time.Millisecond)
     return changed, nil
 }
+
+type Budget struct {
+    FrameMS   int
+    DirtyRows int
+    Notes     []string
+}
+
+func BuildBudget(frameMS, dirtyRows int) Budget {
+    notes := []string{"OK"}
+    if dirtyRows > 120 {
+        notes = []string{"Diff overflow"}
+    }
+    return Budget{FrameMS: frameMS, DirtyRows: dirtyRows, Notes: notes}
+}
+
+func WithTimeout(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+    ctx, cancel := context.WithTimeout(parent, d)
+    return ctx, cancel
+}
 "###,
     },
     CodeSample {
@@ -339,7 +465,24 @@ LEFT JOIN LATERAL (
   ORDER BY t.count DESC
   LIMIT 1
 ) t ON true
-ORDER BY j.avg_ratio DESC;"###,
+ORDER BY j.avg_ratio DESC;
+
+WITH perf AS (
+  SELECT frame_id,
+         max(changed_cells) AS spike,
+         avg(changed_cells) AS mean_cells,
+         count(*) FILTER (WHERE changed_cells > 500) AS bursts
+  FROM frame_metrics
+  WHERE ts >= now() - interval '24 hours'
+  GROUP BY frame_id
+)
+SELECT p.frame_id,
+       p.spike,
+       p.mean_cells,
+       p.bursts,
+       (p.bursts > 3) AS needs_budget
+FROM perf p
+ORDER BY p.spike DESC;"###,
     },
     CodeSample {
         label: "JSON",
@@ -369,6 +512,25 @@ ORDER BY j.avg_ratio DESC;"###,
     "sampleRate": 0.25,
     "exporter": "otlp",
     "endpoint": "http://localhost:4317"
+  },
+  "pipelines": [
+    {
+      "name": "diff",
+      "maxRows": 120,
+      "priorities": ["text", "widgets", "chrome"]
+    },
+    {
+      "name": "present",
+      "writer": "inline",
+      "flushBytes": 65536,
+      "rateLimitFps": 60
+    }
+  ],
+  "alerts": {
+    "errorBudget": 0.02,
+    "p95Ms": 14,
+    "p99Ms": 20,
+    "channels": ["stderr", "otlp", "ndjson"]
   }
 }"###,
     },
@@ -399,6 +561,23 @@ theme:
   name: NordicFrost
   accent: "#6AD1E3"
   background: "#0E141B"
+
+alerts:
+  error_budget: 0.02
+  p95_ms: 14
+  p99_ms: 20
+  channels: [stderr, otlp, ndjson]
+
+telemetry:
+  sampling: 0.25
+  tags:
+    service: ftui
+    build: nightly
+  exporters:
+    - type: otlp
+      endpoint: http://localhost:4317
+    - type: file
+      path: /var/log/ftui.ndjson
 "###,
     },
     CodeSample {
@@ -441,6 +620,20 @@ curl -sS -H "Content-Type: application/json" -d "$payload" http://localhost:8080
   | while read -r id; do
       printf "session=%s checksum=%s\n" "$id" "$(checksum "$id")"
     done
+
+rotate_logs() {
+  local max=5
+  for ((i=max; i>=1; i--)); do
+    if [[ -f "${LOG}.${i}" ]]; then
+      mv "${LOG}.${i}" "${LOG}.$((i+1))"
+    fi
+  done
+  [[ -f "$LOG" ]] && mv "$LOG" "${LOG}.1"
+}
+
+if [[ "${1:-}" == "--rotate" ]]; then
+  rotate_logs
+fi
 "###,
     },
     CodeSample {
@@ -492,6 +685,20 @@ int main() {
   std::sort(ids.begin(), ids.end());
   return static_cast<int>(budget.render.count() + budget.present.count() + ids.size());
 }
+
+struct Metrics {
+  double fps = 0.0;
+  double p95 = 0.0;
+  std::vector<std::string> notes;
+};
+
+inline Metrics summarize(const std::vector<Frame<std::string>>& frames) {
+  Metrics m;
+  m.fps = 60.0 - static_cast<double>(frames.size());
+  m.p95 = 12.8;
+  m.notes.push_back("inline");
+  return m;
+}
 "###,
     },
     CodeSample {
@@ -528,6 +735,14 @@ suspend fun pipeline(frames: List<Frame>, budget: Budget): Int {
     .filter { it.dirty }
     .collect { count += it.tags.size }
   return if (budget.overBudget(5.0)) -1 else count
+}
+
+data class BudgetSnapshot(val frameMs: Double, val dirty: Int, val ok: Boolean)
+
+suspend fun analyze(frames: List<Frame>): BudgetSnapshot {
+  val dirty = frames.count { it.dirty }
+  delay(2)
+  return BudgetSnapshot(frameMs = 12.0, dirty = dirty, ok = dirty < 120)
 }
 "###,
     },
@@ -574,6 +789,13 @@ $frames = 1..5 | ForEach-Object {
   [Frame]::new($_, ($_ % 2 -eq 0), @{ idx = $_; ts = (Get-Date) })
 }
 Invoke-Pipeline -Frames $frames
+
+$budget = [pscustomobject]@{
+  frameMs = 12
+  dirty = ($frames | Where-Object { $_.Dirty }).Count
+  ok = $true
+}
+$budget | ConvertTo-Json -Depth 4
 "###,
     },
     CodeSample {
@@ -608,6 +830,15 @@ static class Pipeline
         return total;
     }
 }
+
+static class Budget
+{
+    public static (bool ok, int dirty) Check(IEnumerable<Frame> frames, int limit)
+    {
+        var dirty = frames.Count(f => f.Dirty);
+        return (dirty <= limit, dirty);
+    }
+}
 "###,
     },
     CodeSample {
@@ -635,6 +866,9 @@ end
 
 frames = (1..5).map { |i| Frame.new(id: i, dirty: i.even?, tags: { idx: i.to_s }) }
 Pipeline.run(frames)
+
+budget = { frame_ms: 12, dirty_rows: frames.count(&:dirty) }
+puts "budget=#{budget}"
 "###,
     },
     CodeSample {
@@ -717,6 +951,8 @@ class Main {
         System.out.println("count=" + result + " diff=" + pipeline.diff(frames, frames).size());
     }
 }
+
+record BudgetSnapshot(int frameMs, int dirty, boolean ok) {}
 "###,
     },
     CodeSample {
@@ -791,6 +1027,10 @@ int main(void) {
     printf("count=%u changed=%u score=%u\n", count, changed, score);
     return 0;
 }
+
+static bool budget_ok(budget_t budget, uint32_t elapsed_ms) {
+    return elapsed_ms <= (budget.render_ms + budget.present_ms);
+}
 "###,
     },
     CodeSample {
@@ -845,6 +1085,19 @@ func render(frames: [Frame]) async throws -> Int {
     return frames.filter { $0.dirty }.map { $0.tags.count }.reduce(0, +)
 }
 
+struct Metric {
+    let name: String
+    let value: Int
+}
+
+func summarize(_ frames: [Frame]) -> [Metric] {
+    let dirty = frames.filter { $0.dirty }.count
+    return [
+        Metric(name: "dirty", value: dirty),
+        Metric(name: "total", value: frames.count),
+    ]
+}
+
 @main
 struct Main {
     static func main() async {
@@ -855,8 +1108,18 @@ struct Main {
         let budget = Budget(renderMs: 8, presentMs: 4)
         let count = try? await render(frames: frames)
         let elapsed = 7
+        let metrics = summarize(frames)
+        for metric in metrics {
+            print("\(metric.name)=\(metric.value)")
+        }
         print("count=\(count ?? -1) diff=\(diff(frames, frames).count) over=\(await budget.overBudget(elapsed))")
     }
+}
+
+struct BudgetSnapshot: Codable {
+    let frameMs: Int
+    let dirty: Int
+    let ok: Bool
 }
 "###,
     },
@@ -928,7 +1191,23 @@ foreach ($pipeline->stream($frames) as $frame) {
     $count += count($frame->tags);
 }
 $elapsed = (float) (new DateTimeImmutable())->format("v");
-echo "count={$count} diff=" . count($pipeline->diff($frames, $frames)) . " over=" . ($pipeline->overBudget($elapsed) ? "yes" : "no");
+function summarize(array $frames): array {
+    $dirty = array_filter($frames, fn(Frame $f) => $f->dirty);
+    return [
+        "dirty" => count($dirty),
+        "total" => count($frames),
+    ];
+}
+
+$summary = summarize($frames);
+echo "count={$count} diff=" . count($pipeline->diff($frames, $frames)) .
+     " over=" . ($pipeline->overBudget($elapsed) ? "yes" : "no") .
+     " dirty=" . $summary["dirty"] . "/" . $summary["total"];
+
+echo "\n" . json_encode([
+    "budget" => ["frameMs" => 12, "dirty" => $summary["dirty"]],
+    "mode" => Mode::Inline->value,
+], JSON_PRETTY_PRINT);
 "###,
     },
     CodeSample {
@@ -962,12 +1241,35 @@ echo "count={$count} diff=" . count($pipeline->diff($frames, $frames)) . " over=
         <button type="button" aria-pressed="false">Toggle Mode</button>
         <span id="fps">60</span>
       </section>
+      <section class="grid" aria-label="metrics">
+        <article class="card">
+          <h2>Deterministic Render</h2>
+          <p>Buffer → Diff → Presenter</p>
+        </article>
+        <article class="card">
+          <h2>Inline UI</h2>
+          <p>Scrollback preserved</p>
+        </article>
+      </section>
+      <section aria-live="polite" id="log">ready…</section>
       <template id="card">
         <article><slot></slot></article>
       </template>
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path d="M4 12h16M12 4v16" />
       </svg>
+      <section class="grid" aria-label="panels">
+        <article class="card">
+          <h3>Inline Mode</h3>
+          <p>Scrollback preserved, cursor saved/restored.</p>
+          <pre><code>ScreenMode::Inline { ui_height: 12 }</code></pre>
+        </article>
+        <article class="card">
+          <h3>Alt Screen</h3>
+          <p>Full-screen takeover for immersive apps.</p>
+          <pre><code>ScreenMode::AltScreen</code></pre>
+        </article>
+      </section>
     </main>
   </body>
 </html>
@@ -1002,10 +1304,31 @@ echo "count={$count} diff=" . count($pipeline->diff($frames, $frames)) . " over=
     background: color-mix(in oklab, var(--bg), var(--accent) 12%);
     box-shadow: 0 20px 60px rgb(0 0 0 / 0.35);
   }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+  }
+
+  #log {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    opacity: 0.8;
+  }
 }
 
 @supports (backdrop-filter: blur(12px)) {
   .glass { backdrop-filter: blur(12px); }
+}
+
+@container (min-width: 300px) {
+  .card { transform: translateY(-2px); }
+}
+
+@property --glow {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0.0;
 }
 
 @keyframes pulse {
@@ -1016,6 +1339,24 @@ echo "count={$count} diff=" . count($pipeline->diff($frames, $frames)) . " over=
 
 @media (prefers-reduced-motion: reduce) {
   .pulse { animation: none; }
+}
+
+.badge {
+  display: inline-flex;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--accent), black 60%);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.pulse {
+  animation: pulse 2.4s ease-in-out infinite;
+}
+
+.glow {
+  box-shadow: 0 0 calc(var(--glow) * 24px) rgba(106, 209, 227, 0.4);
 }
 "###,
     },
@@ -1050,6 +1391,21 @@ end
 
 set -l budget 3
 render $budget
+
+if test (count $argv) -gt 0
+  argparse 'b/budget=' -- $argv
+  if set -q _flag_budget
+    set budget $_flag_budget
+    render $budget
+  end
+end
+
+function budget_report --argument budget
+  set -l dirty (math $budget + 2)
+  echo "budget=$budget dirty=$dirty ok="(test $dirty -lt 8; and echo yes; or echo no)
+end
+
+budget_report $budget
 "###,
     },
     CodeSample {
@@ -1083,6 +1439,14 @@ local function render(frames)
   return total
 end
 
+local function stats(frames)
+  local dirty = 0
+  for _, f in ipairs(frames) do
+    if f.dirty then dirty = dirty + 1 end
+  end
+  return { dirty = dirty, total = #frames }
+end
+
 local frames = {
   Frame.new(1, true, { "inline", "focus" }),
   Frame.new(2, false, { "alt" }),
@@ -1090,7 +1454,17 @@ local frames = {
 
 local result = render(frames)
 local changed = diff(frames, frames)
+local summary = stats(frames)
 print(("count=%d diff=%d"):format(result, #changed))
+print(("dirty=%d/%d"):format(summary.dirty, summary.total))
+
+local function budget(frames, limit)
+  local summary = stats(frames)
+  return { ok = summary.dirty <= limit, dirty = summary.dirty, limit = limit }
+end
+
+local report = budget(frames, 3)
+print(("budget ok=%s dirty=%d limit=%d"):format(tostring(report.ok), report.dirty, report.limit))
 "###,
     },
     CodeSample {
@@ -1127,6 +1501,15 @@ render <- function(frames) {
 count <- render(frames)
 changed <- diff_ids(frames, frames)
 message(glue::glue("count={count} diff={length(changed)}"))
+
+summary <- frames %>%
+  mutate(tag_count = map_int(tags, length)) %>%
+  summarise(dirty = sum(dirty), total = n(), tags = sum(tag_count))
+
+print(summary)
+
+budget <- tibble(frame_ms = 12, dirty = summary$dirty, ok = summary$dirty < 5)
+print(budget)
 "###,
     },
 ];
@@ -1159,6 +1542,33 @@ fn render(frame: &mut Frame) {
 { "mode": "inline", "ui_height": 12 }
 ```
 
+```mermaid
+graph TD
+  A[Input] --> B[Runtime]
+  B --> C[Frame]
+  C --> D[BufferDiff]
+  D --> E[Presenter]
+```
+
+```diff
+- write-stdout
++ buffered-presenter
+```
+
+| Stat | Value | Trend |
+| :-- | --: | :--: |
+| FPS | 60 | ▲ |
+| Diff | 3.2ms | ▼ |
+
+<details>
+<summary>Budget Policy</summary>
+
+- render: 8ms
+- present: 4ms
+- degrade: on overflow
+
+</details>
+
 > [!NOTE]
 > Math: `E = mc^2` and `∑ᵢ xᵢ`
 
@@ -1175,7 +1585,7 @@ Footnote[^1] and **links**: https://ftui.dev
 ## Task List
 - [x] Dirty-row tracking
 - [x] ANSI cost model
-- [ ] GPU? nope
+- [ ] Benchmarks
 
 | Metric | Target |
 | --- | --- |
@@ -1188,6 +1598,16 @@ FTUI_HARNESS_SCREEN_MODE=inline cargo run -p ftui-harness
 
 > [!TIP]
 > Use `Cmd::batch` for side effects.
+
+```toml
+[profile.release]
+opt-level = "z"
+lto = true
+panic = "abort"
+```
+
+> [!WARNING]
+> Never call `process::exit()` before `TerminalSession` drops.
 "###,
 ];
 
@@ -1392,6 +1812,8 @@ enum ChartMode {
     Lines,
     Bars,
     Heatmap,
+    Matrix,
+    Composite,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1412,7 +1834,9 @@ impl ChartMode {
             Self::Pulse => Self::Lines,
             Self::Lines => Self::Bars,
             Self::Bars => Self::Heatmap,
-            Self::Heatmap => Self::Pulse,
+            Self::Heatmap => Self::Matrix,
+            Self::Matrix => Self::Composite,
+            Self::Composite => Self::Pulse,
         }
     }
 
@@ -1422,6 +1846,8 @@ impl ChartMode {
             Self::Lines => "Lines",
             Self::Bars => "Bars",
             Self::Heatmap => "Heatmap",
+            Self::Matrix => "Matrix",
+            Self::Composite => "Composite",
         }
     }
 
@@ -1431,6 +1857,8 @@ impl ChartMode {
             Self::Lines => "braille line chart + legend",
             Self::Bars => "grouped or stacked volumes",
             Self::Heatmap => "animated intensity grid",
+            Self::Matrix => "quad tiles: radar, heat, volumes",
+            Self::Composite => "multilayer KPI + trend deck",
         }
     }
 }
@@ -1575,7 +2003,7 @@ impl Dashboard {
         }
         let md = self.current_markdown_sample();
         let max_len = md.len();
-        let mut new_pos = self.md_stream_pos.saturating_add(6);
+        let mut new_pos = self.md_stream_pos.saturating_add(18);
         while new_pos < max_len && !md.is_char_boundary(new_pos) {
             new_pos += 1;
         }
@@ -1740,6 +2168,17 @@ impl Dashboard {
         self.last_frame = Some(now);
     }
 
+    fn render_panel_hint(&self, frame: &mut Frame, area: Rect, hint: &str) {
+        if area.is_empty() || area.height < 1 || area.width < 8 {
+            return;
+        }
+        let hint_area = Rect::new(area.x, area.y + area.height - 1, area.width, 1);
+        let text = truncate_to_width(hint, hint_area.width);
+        Paragraph::new(text)
+            .style(Style::new().fg(theme::fg::MUTED).bg(theme::alpha::SURFACE))
+            .render(hint_area, frame);
+    }
+
     // =========================================================================
     // Panel Renderers
     // =========================================================================
@@ -1816,6 +2255,7 @@ impl Dashboard {
         Canvas::from_painter(&painter)
             .style(Style::new().fg(theme::fg::PRIMARY))
             .render(inner, frame);
+        self.render_panel_hint(frame, inner, "Click → Visual Effects");
     }
 
     /// Render the charts showcase panel.
@@ -1852,7 +2292,26 @@ impl Dashboard {
         };
 
         if let Some(header_area) = header {
-            let hint = format!("g:cycle · {}", self.chart_mode.subtitle());
+            let cpu_last = self
+                .simulated_data
+                .cpu_history
+                .back()
+                .copied()
+                .unwrap_or(0.0);
+            let mem_last = self
+                .simulated_data
+                .memory_history
+                .back()
+                .copied()
+                .unwrap_or(0.0);
+            let eps = self.simulated_data.events_per_second;
+            let hint = format!(
+                "g:cycle · {} · CPU {} · MEM {} · EPS {}",
+                self.chart_mode.subtitle(),
+                Self::format_percent(cpu_last),
+                Self::format_percent(mem_last),
+                eps.round() as u64
+            );
             Paragraph::new(hint)
                 .style(Style::new().fg(theme::fg::MUTED))
                 .render(header_area, frame);
@@ -1863,7 +2322,10 @@ impl Dashboard {
             ChartMode::Lines => self.render_line_charts(frame, content),
             ChartMode::Bars => self.render_bar_charts(frame, content),
             ChartMode::Heatmap => self.render_heatmap_charts(frame, content),
+            ChartMode::Matrix => self.render_matrix_charts(frame, content),
+            ChartMode::Composite => self.render_composite_charts(frame, content),
         }
+        self.render_panel_hint(frame, inner, "Click → Data Viz");
     }
 
     fn render_pulse_charts(&self, frame: &mut Frame, area: Rect) {
@@ -2206,6 +2668,267 @@ impl Dashboard {
         }
     }
 
+    fn render_chart_tile<F>(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        title: &str,
+        accent: PackedRgba,
+        render: F,
+    ) where
+        F: FnOnce(&Self, &mut Frame, Rect),
+    {
+        if area.is_empty() || area.width < 6 || area.height < 3 {
+            return;
+        }
+
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Square)
+            .title(title)
+            .title_alignment(Alignment::Center)
+            .style(Style::new().fg(accent));
+        let inner = block.inner(area);
+        block.render(area, frame);
+        if inner.is_empty() {
+            return;
+        }
+        render(self, frame, inner);
+    }
+
+    fn render_matrix_charts(&self, frame: &mut Frame, area: Rect) {
+        if area.is_empty() {
+            return;
+        }
+
+        if area.width < 22 || area.height < 8 {
+            self.render_minimal_sparkline(frame, area);
+            return;
+        }
+
+        let rows = Flex::vertical()
+            .gap(theme::spacing::XS)
+            .constraints([Constraint::Percentage(50.0), Constraint::Percentage(50.0)])
+            .split(area);
+        let top = Flex::horizontal()
+            .gap(theme::spacing::XS)
+            .constraints([Constraint::Percentage(50.0), Constraint::Percentage(50.0)])
+            .split(rows[0]);
+        let bottom = Flex::horizontal()
+            .gap(theme::spacing::XS)
+            .constraints([Constraint::Percentage(50.0), Constraint::Percentage(50.0)])
+            .split(rows[1]);
+
+        let net_in: Vec<f64> = self.simulated_data.network_in.iter().copied().collect();
+        let net_out: Vec<f64> = self.simulated_data.network_out.iter().copied().collect();
+
+        self.render_chart_tile(
+            frame,
+            top[0],
+            "Heat Pulse",
+            theme::accent::ACCENT_7.into(),
+            |this, frame, inner| {
+                this.render_heatmap_charts(frame, inner);
+            },
+        );
+
+        self.render_chart_tile(
+            frame,
+            top[1],
+            "Throughput",
+            theme::accent::PRIMARY.into(),
+            |this, frame, inner| {
+                let rows = Flex::vertical()
+                    .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
+                    .split(inner);
+                let net_in_last = net_in.last().copied().unwrap_or(0.0);
+                let net_out_last = net_out.last().copied().unwrap_or(0.0);
+                this.render_labeled_sparkline(
+                    frame,
+                    rows[0],
+                    "IN",
+                    Self::format_rate(net_in_last),
+                    &net_in,
+                    theme::accent::PRIMARY.into(),
+                    (
+                        theme::accent::PRIMARY.into(),
+                        theme::accent::ACCENT_6.into(),
+                    ),
+                );
+                this.render_labeled_sparkline(
+                    frame,
+                    rows[1],
+                    "OUT",
+                    Self::format_rate(net_out_last),
+                    &net_out,
+                    theme::accent::SECONDARY.into(),
+                    (
+                        theme::accent::SECONDARY.into(),
+                        theme::accent::ACCENT_10.into(),
+                    ),
+                );
+            },
+        );
+
+        self.render_chart_tile(
+            frame,
+            bottom[0],
+            "Latency Buckets",
+            theme::accent::WARNING.into(),
+            |_this, frame, inner| {
+                let base = 28.0 + (self.time * 1.7).sin() * 6.0;
+                let p50 = (base + 6.0).clamp(10.0, 60.0);
+                let p95 = (base + 20.0).clamp(20.0, 95.0);
+                let p99 = (base + 40.0).clamp(30.0, 140.0);
+                let groups = vec![
+                    BarGroup::new("p50", vec![p50]),
+                    BarGroup::new("p95", vec![p95]),
+                    BarGroup::new("p99", vec![p99]),
+                ];
+                BarChart::new(groups)
+                    .direction(BarDirection::Vertical)
+                    .mode(BarMode::Grouped)
+                    .bar_width(2)
+                    .bar_gap(1)
+                    .colors(vec![
+                        theme::accent::SUCCESS.into(),
+                        theme::accent::WARNING.into(),
+                        theme::accent::ERROR.into(),
+                    ])
+                    .max(150.0)
+                    .render(inner, frame);
+            },
+        );
+
+        self.render_chart_tile(
+            frame,
+            bottom[1],
+            "Budget + Errors",
+            theme::accent::ACCENT_4.into(),
+            |_this, frame, inner| {
+                let rows = Flex::vertical()
+                    .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
+                    .split(inner);
+                let error_budget = (0.6 + (self.time * 0.8).sin() * 0.2).clamp(0.0, 1.0);
+                let sla = (0.92 + (self.time * 0.35).cos() * 0.04).clamp(0.0, 1.0);
+                let colors = MiniBarColors::new(
+                    theme::accent::PRIMARY.into(),
+                    theme::accent::SUCCESS.into(),
+                    theme::accent::WARNING.into(),
+                    theme::accent::ACCENT_10.into(),
+                );
+                self.render_mini_bar_row(frame, rows[0], "SLA", sla, colors);
+                self.render_mini_bar_row(frame, rows[1], "BGT", error_budget, colors);
+            },
+        );
+    }
+
+    fn render_composite_charts(&self, frame: &mut Frame, area: Rect) {
+        if area.is_empty() {
+            return;
+        }
+
+        if area.width < 24 || area.height < 6 {
+            self.render_minimal_sparkline(frame, area);
+            return;
+        }
+
+        let rows = Flex::vertical()
+            .constraints([
+                Constraint::Fixed(2),
+                Constraint::Min(3),
+                Constraint::Fixed(2),
+            ])
+            .split(area);
+
+        let cpu_last = self
+            .simulated_data
+            .cpu_history
+            .back()
+            .copied()
+            .unwrap_or(0.0);
+        let mem_last = self
+            .simulated_data
+            .memory_history
+            .back()
+            .copied()
+            .unwrap_or(0.0);
+        let net_in_last = self
+            .simulated_data
+            .network_in
+            .back()
+            .copied()
+            .unwrap_or(0.0);
+        let net_out_last = self
+            .simulated_data
+            .network_out
+            .back()
+            .copied()
+            .unwrap_or(0.0);
+
+        let spans = vec![
+            Span::styled("CPU ", Style::new().fg(theme::accent::PRIMARY).bold()),
+            Span::styled(
+                Self::format_percent(cpu_last),
+                Style::new().fg(theme::fg::PRIMARY),
+            ),
+            Span::raw("  "),
+            Span::styled("MEM ", Style::new().fg(theme::accent::SUCCESS).bold()),
+            Span::styled(
+                Self::format_percent(mem_last),
+                Style::new().fg(theme::fg::PRIMARY),
+            ),
+            Span::raw("  "),
+            Span::styled("NET ", Style::new().fg(theme::accent::WARNING).bold()),
+            Span::styled(
+                Self::format_rate((net_in_last + net_out_last) * 0.5),
+                Style::new().fg(theme::fg::PRIMARY),
+            ),
+        ];
+        Paragraph::new(Line::from_spans(spans))
+            .style(Style::new().bg(theme::alpha::SURFACE))
+            .render(rows[0], frame);
+
+        let cpu_points: Vec<(f64, f64)> = self
+            .simulated_data
+            .cpu_history
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (i as f64, *v))
+            .collect();
+        let mem_points: Vec<(f64, f64)> = self
+            .simulated_data
+            .memory_history
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (i as f64, *v))
+            .collect();
+        let palette = Self::chart_palette_extended();
+        let series = vec![
+            Series::new("CPU", &cpu_points, palette[0]).markers(true),
+            Series::new("MEM", &mem_points, palette[1]),
+        ];
+        LineChart::new(series)
+            .style(Style::new().fg(theme::fg::PRIMARY))
+            .legend(false)
+            .y_bounds(0.0, 100.0)
+            .render(rows[1], frame);
+
+        let cols = Flex::horizontal()
+            .constraints([Constraint::Percentage(50.0), Constraint::Percentage(50.0)])
+            .split(rows[2]);
+        let colors = MiniBarColors::new(
+            theme::accent::PRIMARY.into(),
+            theme::accent::SUCCESS.into(),
+            theme::accent::WARNING.into(),
+            theme::accent::ACCENT_10.into(),
+        );
+        let ingest = (0.55 + (self.time * 0.6).sin() * 0.2).clamp(0.0, 1.0);
+        let cache = (0.7 + (self.time * 0.4).cos() * 0.15).clamp(0.0, 1.0);
+        self.render_mini_bar_row(frame, cols[0], "ING", ingest, colors);
+        self.render_mini_bar_row(frame, cols[1], "CCH", cache, colors);
+    }
+
     fn render_minimal_sparkline(&self, frame: &mut Frame, area: Rect) {
         let data: Vec<f64> = self.simulated_data.cpu_history.iter().copied().collect();
         if data.is_empty() {
@@ -2235,9 +2958,9 @@ impl Dashboard {
             return;
         }
 
-        let label_width = label.chars().count().max(3) as u16 + 1;
+        let label_width = display_width(label).max(3) as u16 + 1;
         let label_width = label_width.min(area.width);
-        let value_width = value_label.chars().count().min(area.width as usize) as u16;
+        let value_width = display_width(value_label.as_str()).min(area.width as usize) as u16;
         let value_x = area.x + area.width.saturating_sub(value_width);
         let label_area = Rect::new(area.x, area.y, label_width, 1);
         let value_area = Rect::new(value_x, area.y, value_width, 1);
@@ -2317,6 +3040,7 @@ impl Dashboard {
 
         // Render as paragraph with styled text
         render_text(frame, inner, &highlighted);
+        self.render_panel_hint(frame, inner, "Click → Code Explorer");
     }
 
     /// Render system info panel.
@@ -2374,6 +3098,7 @@ impl Dashboard {
             Paragraph::new(info)
                 .style(Style::new().fg(theme::fg::SECONDARY))
                 .render(inner, frame);
+            self.render_panel_hint(frame, inner, "Click → Performance");
             return;
         }
 
@@ -2411,8 +3136,13 @@ impl Dashboard {
         }
 
         let remaining = inner.height.saturating_sub(cursor_y - inner.y);
-        let bars_height = if remaining >= 4 { 3 } else { 0 };
-        let stats_height = remaining.saturating_sub(bars_height).max(1);
+        let spark_height = if remaining >= 6 { 2 } else { 0 };
+        let bars_height = if remaining.saturating_sub(spark_height) >= 4 {
+            3
+        } else {
+            0
+        };
+        let stats_height = remaining.saturating_sub(bars_height + spark_height).max(1);
         let stats_area = Rect::new(inner.x, cursor_y, inner.width, stats_height);
         self.render_info_stats(
             frame,
@@ -2426,7 +3156,13 @@ impl Dashboard {
         if bars_height > 0 {
             let bars_area = Rect::new(inner.x, cursor_y, inner.width, bars_height);
             self.render_mini_bars(frame, bars_area);
+            cursor_y = cursor_y.saturating_add(bars_height);
         }
+        if spark_height > 0 {
+            let spark_area = Rect::new(inner.x, cursor_y, inner.width, spark_height);
+            self.render_info_sparkline_strip(frame, spark_area);
+        }
+        self.render_panel_hint(frame, inner, "Click → Performance");
     }
 
     fn render_info_badges(&self, frame: &mut Frame, area: Rect) {
@@ -2479,7 +3215,7 @@ impl Dashboard {
                 color1: theme::accent::PRIMARY.into(),
                 color2: theme::accent::ACCENT_8.into(),
                 speed: 1.2,
-                wavelength: 8.0,
+                wavelength: 6.0,
             })
             .base_color(status_color)
             .time(self.time);
@@ -2531,6 +3267,24 @@ impl Dashboard {
             .unwrap_or(0.0);
         let alerts = self.simulated_data.alerts.len();
         let cells = dashboard_size.0 as u32 * dashboard_size.1 as u32;
+        let frame_ms = if self.fps > 0.0 {
+            1000.0 / self.fps
+        } else {
+            0.0
+        };
+        let (min_frame, max_frame) = self.frame_times.iter().fold(
+            (f64::INFINITY, f64::NEG_INFINITY),
+            |(min_v, max_v), sample| {
+                let ms = *sample as f64 / 1000.0;
+                (min_v.min(ms), max_v.max(ms))
+            },
+        );
+        let jitter_ms = if min_frame.is_finite() {
+            (max_frame - min_frame).abs()
+        } else {
+            0.0
+        };
+        let headroom = 16.0 - frame_ms;
 
         let cols = Flex::horizontal()
             .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
@@ -2541,6 +3295,7 @@ impl Dashboard {
             format!("Events/s: {:.0}", events_per_sec),
             format!("CPU: {:>3.0}%  MEM: {:>3.0}%", cpu, mem),
             format!("NET: {:>4.0}↓ / {:>4.0}↑", net_in, net_out),
+            format!("Frame: {frame_ms:>4.1}ms ±{jitter_ms:>3.1}"),
         ];
         let right_lines = [
             format!(
@@ -2550,6 +3305,7 @@ impl Dashboard {
             format!("Theme: {theme_name}"),
             format!("Alerts: {alerts}"),
             "Pipeline: BUF→DIFF→ANSI".to_string(),
+            format!("Headroom: {headroom:+.1}ms"),
         ];
 
         let left_count = left_lines
@@ -2646,6 +3402,21 @@ impl Dashboard {
                         .time(self.time)
                         .render(*row, frame);
                 }
+                4 => {
+                    let accent = if headroom < 0.0 {
+                        theme::intent::warning_text()
+                    } else {
+                        theme::intent::success_text()
+                    };
+                    StyledText::new(text)
+                        .effect(TextEffect::Pulse {
+                            speed: 1.1,
+                            min_alpha: 0.5,
+                        })
+                        .base_color(accent)
+                        .time(self.time)
+                        .render(*row, frame);
+                }
                 _ => {
                     Paragraph::new(text)
                         .style(
@@ -2656,6 +3427,70 @@ impl Dashboard {
                         .render(*row, frame);
                 }
             }
+        }
+    }
+
+    fn render_info_sparkline_strip(&self, frame: &mut Frame, area: Rect) {
+        if area.is_empty() || area.height < 1 {
+            return;
+        }
+
+        let rows = Flex::vertical()
+            .constraints(vec![Constraint::Fixed(1); area.height.min(2) as usize])
+            .split(area);
+
+        let frame_data: Vec<f64> = self
+            .frame_times
+            .iter()
+            .map(|sample| *sample as f64 / 1000.0)
+            .collect();
+        let frame_avg = if frame_data.is_empty() {
+            0.0
+        } else {
+            frame_data.iter().sum::<f64>() / frame_data.len() as f64
+        };
+        let frame_label = if frame_avg > 0.0 {
+            format!("{frame_avg:.1}ms")
+        } else {
+            "n/a".to_string()
+        };
+        let net_data: Vec<f64> = self
+            .simulated_data
+            .network_in
+            .iter()
+            .zip(self.simulated_data.network_out.iter())
+            .map(|(a, b)| a + b)
+            .collect();
+        let net_last = net_data.last().copied().unwrap_or(0.0);
+        let net_label = Self::format_rate(net_last);
+
+        if let Some(row) = rows.first() {
+            self.render_labeled_sparkline(
+                frame,
+                *row,
+                "FRM",
+                frame_label,
+                &frame_data,
+                theme::accent::ACCENT_6.into(),
+                (
+                    theme::accent::ACCENT_6.into(),
+                    theme::accent::ACCENT_3.into(),
+                ),
+            );
+        }
+        if let Some(row) = rows.get(1) {
+            self.render_labeled_sparkline(
+                frame,
+                *row,
+                "NET",
+                net_label,
+                &net_data,
+                theme::accent::ACCENT_8.into(),
+                (
+                    theme::accent::ACCENT_8.into(),
+                    theme::accent::ACCENT_10.into(),
+                ),
+            );
         }
     }
 
@@ -2800,6 +3635,7 @@ impl Dashboard {
         Paragraph::new(rendered)
             .wrap(WrapMode::Word)
             .render(inner, frame);
+        self.render_panel_hint(frame, inner, "Click → Markdown");
     }
 
     /// Render text effects showcase using complex GFM samples.
@@ -2891,7 +3727,7 @@ impl Dashboard {
                     let clipped = truncate_to_width(raw, max_width);
                     lines.push(clipped);
                 }
-                let text_len: usize = lines.iter().map(|l| l.chars().count()).sum();
+                let text_len: usize = lines.iter().map(|l| grapheme_count(l)).sum();
                 let effect = self.build_effect(demo.kind, text_len);
                 let styled = StyledMultiLine::new(lines)
                     .effect(effect)
@@ -2902,9 +3738,7 @@ impl Dashboard {
             }
         }
 
-        Paragraph::new("e: next set · stacked multi-preview")
-            .style(theme::muted())
-            .render(rows[2], frame);
+        self.render_panel_hint(frame, rows[2], "e: next set · click → Visual Effects");
     }
 
     /// Render activity feed showing recent simulated events.
@@ -2986,7 +3820,7 @@ impl Dashboard {
             let time_str = format!("{:02}:{:02}", ts_min, ts_sec);
 
             let prefix_plain = format!("{indicator} {label} {time_str} · ");
-            let prefix_width = UnicodeWidthStr::width(prefix_plain.as_str()) as u16;
+            let prefix_width = display_width(prefix_plain.as_str()) as u16;
             let prefix_area = Rect::new(inner.x, y, prefix_width.min(inner.width), 1);
 
             let prefix_line = Line::from_spans([
@@ -3027,6 +3861,7 @@ impl Dashboard {
                 .time(self.time);
             styled.render(inner, frame);
         }
+        self.render_panel_hint(frame, inner, "Click → Action Timeline");
     }
 
     /// Render navigation footer.
@@ -3039,6 +3874,20 @@ impl Dashboard {
         Paragraph::new(hint)
             .style(Style::new().fg(theme::fg::MUTED).bg(theme::alpha::SURFACE))
             .render(area, frame);
+    }
+
+    fn register_panel_links(&self, frame: &mut Frame) {
+        chrome::register_pane_hit(frame, self.layout_plasma.get(), ScreenId::VisualEffects);
+        chrome::register_pane_hit(frame, self.layout_charts.get(), ScreenId::DataViz);
+        chrome::register_pane_hit(frame, self.layout_code.get(), ScreenId::CodeExplorer);
+        chrome::register_pane_hit(frame, self.layout_info.get(), ScreenId::Performance);
+        chrome::register_pane_hit(frame, self.layout_text_fx.get(), ScreenId::VisualEffects);
+        chrome::register_pane_hit(frame, self.layout_activity.get(), ScreenId::ActionTimeline);
+        chrome::register_pane_hit(
+            frame,
+            self.layout_markdown.get(),
+            ScreenId::MarkdownRichText,
+        );
     }
 
     // =========================================================================
@@ -3198,14 +4047,12 @@ impl Dashboard {
         self.layout_markdown.set(Rect::default());
 
         // Sparklines (just CPU and MEM)
-        if !right_rows[0].is_empty() {
+        if !right_rows[0].is_empty() && !self.simulated_data.cpu_history.is_empty() {
             let spark_rows = Flex::vertical()
                 .constraints([Constraint::Fixed(1), Constraint::Fixed(1)])
                 .split(right_rows[0]);
 
             let cpu_data: Vec<f64> = self.simulated_data.cpu_history.iter().copied().collect();
-            let mem_data: Vec<f64> = self.simulated_data.memory_history.iter().copied().collect();
-
             if !spark_rows[0].is_empty() && !cpu_data.is_empty() {
                 let label_w = 4.min(spark_rows[0].width);
                 Paragraph::new("CPU ")
@@ -3227,7 +4074,10 @@ impl Dashboard {
                 }
             }
 
-            if spark_rows.len() > 1 && !spark_rows[1].is_empty() && !mem_data.is_empty() {
+            if spark_rows.len() > 1
+                && !spark_rows[1].is_empty()
+                && !self.simulated_data.memory_history.is_empty()
+            {
                 let label_w = 4.min(spark_rows[1].width);
                 Paragraph::new("MEM ")
                     .style(Style::new().fg(theme::fg::SECONDARY))
@@ -3242,6 +4092,8 @@ impl Dashboard {
                     1,
                 );
                 if !spark_area.is_empty() {
+                    let mem_data: Vec<f64> =
+                        self.simulated_data.memory_history.iter().copied().collect();
                     Sparkline::new(&mem_data)
                         .style(Style::new().fg(theme::accent::SUCCESS))
                         .render(spark_area, frame);
@@ -3304,7 +4156,7 @@ fn render_text(frame: &mut Frame, area: Rect, text: &Text) {
         // Render each span in the line
         let mut x_offset = 0u16;
         for span in line.spans() {
-            let text_len = span.content.chars().count() as u16;
+            let text_len = span.width().min(u16::MAX as usize) as u16;
             if x_offset >= area.width {
                 break;
             }
@@ -3330,12 +4182,12 @@ fn truncate_to_width(text: &str, max_width: u16) -> String {
     let mut out = String::new();
     let mut width = 0usize;
     let max = max_width as usize;
-    for ch in text.chars() {
-        let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+    for grapheme in graphemes(text) {
+        let w = grapheme_width(grapheme);
         if width + w > max {
             break;
         }
-        out.push(ch);
+        out.push_str(grapheme);
         width += w;
     }
     out
@@ -3426,6 +4278,7 @@ impl Screen for Dashboard {
                 "tiny"
             }
         };
+        self.register_panel_links(frame);
         crate::debug_render!(
             "dashboard",
             "layout={_layout}, area={}x{}, tick={}",

@@ -1597,6 +1597,8 @@ struct ReactionDiffusionState {
     // Chemical concentrations: U (activator) and V (inhibitor)
     u: Vec<f64>,
     v: Vec<f64>,
+    u_next: Vec<f64>,
+    v_next: Vec<f64>,
     width: usize,
     height: usize,
     initialized: bool,
@@ -1612,6 +1614,8 @@ impl Default for ReactionDiffusionState {
         Self {
             u: Vec::new(),
             v: Vec::new(),
+            u_next: Vec::new(),
+            v_next: Vec::new(),
             width: 0,
             height: 0,
             initialized: false,
@@ -1634,6 +1638,8 @@ impl ReactionDiffusionState {
         let size = width * height;
         self.u = vec![1.0; size];
         self.v = vec![0.0; size];
+        self.u_next = vec![0.0; size];
+        self.v_next = vec![0.0; size];
 
         // Seed with random spots of V
         for _ in 0..15 {
@@ -1666,35 +1672,42 @@ impl ReactionDiffusionState {
 
         let w = self.width;
         let h = self.height;
-        let mut new_u = self.u.clone();
-        let mut new_v = self.v.clone();
+        let size = w * h;
+        if self.u_next.len() != size {
+            self.u_next = vec![0.0; size];
+            self.v_next = vec![0.0; size];
+        }
+        self.u_next.copy_from_slice(&self.u);
+        self.v_next.copy_from_slice(&self.v);
+        {
+            let (u, v) = (&self.u, &self.v);
+            let (new_u, new_v) = (&mut self.u_next, &mut self.v_next);
 
-        // Gray-Scott reaction-diffusion equations
-        for y in 1..h - 1 {
-            for x in 1..w - 1 {
-                let idx = y * w + x;
-                let u = self.u[idx];
-                let v = self.v[idx];
+            // Gray-Scott reaction-diffusion equations
+            for y in 1..h - 1 {
+                for x in 1..w - 1 {
+                    let idx = y * w + x;
+                    let u_val = u[idx];
+                    let v_val = v[idx];
 
-                // Laplacian (5-point stencil)
-                let lap_u =
-                    self.u[idx - 1] + self.u[idx + 1] + self.u[idx - w] + self.u[idx + w] - 4.0 * u;
-                let lap_v =
-                    self.v[idx - 1] + self.v[idx + 1] + self.v[idx - w] + self.v[idx + w] - 4.0 * v;
+                    // Laplacian (5-point stencil)
+                    let lap_u = u[idx - 1] + u[idx + 1] + u[idx - w] + u[idx + w] - 4.0 * u_val;
+                    let lap_v = v[idx - 1] + v[idx + 1] + v[idx - w] + v[idx + w] - 4.0 * v_val;
 
-                // Reaction terms
-                let uvv = u * v * v;
-                let du_dt = self.du * lap_u - uvv + self.feed * (1.0 - u);
-                let dv_dt = self.dv * lap_v + uvv - (self.feed + self.kill) * v;
+                    // Reaction terms
+                    let uvv = u_val * v_val * v_val;
+                    let du_dt = self.du * lap_u - uvv + self.feed * (1.0 - u_val);
+                    let dv_dt = self.dv * lap_v + uvv - (self.feed + self.kill) * v_val;
 
-                // Euler integration with dt = 1.0
-                new_u[idx] = (u + du_dt).clamp(0.0, 1.0);
-                new_v[idx] = (v + dv_dt).clamp(0.0, 1.0);
+                    // Euler integration with dt = 1.0
+                    new_u[idx] = (u_val + du_dt).clamp(0.0, 1.0);
+                    new_v[idx] = (v_val + dv_dt).clamp(0.0, 1.0);
+                }
             }
         }
 
-        self.u = new_u;
-        self.v = new_v;
+        std::mem::swap(&mut self.u, &mut self.u_next);
+        std::mem::swap(&mut self.v, &mut self.v_next);
     }
 
     fn render(&self, painter: &mut Painter, width: u16, height: u16) {
@@ -2441,6 +2454,8 @@ struct SpinLatticeState {
     // Spin vectors stored as (theta, phi) spherical coordinates
     theta: Vec<f64>, // Polar angle
     phi: Vec<f64>,   // Azimuthal angle
+    theta_next: Vec<f64>,
+    phi_next: Vec<f64>,
     width: usize,
     height: usize,
     initialized: bool,
@@ -2457,6 +2472,8 @@ impl Default for SpinLatticeState {
         Self {
             theta: Vec::new(),
             phi: Vec::new(),
+            theta_next: Vec::new(),
+            phi_next: Vec::new(),
             width: 0,
             height: 0,
             initialized: false,
@@ -2481,6 +2498,8 @@ impl SpinLatticeState {
         // Initialize with slightly perturbed ferromagnetic state + domain walls
         self.theta = vec![0.0; size];
         self.phi = vec![0.0; size];
+        self.theta_next = vec![0.0; size];
+        self.phi_next = vec![0.0; size];
 
         for y in 0..height {
             for x in 0..width {
@@ -2504,75 +2523,84 @@ impl SpinLatticeState {
         let h = self.height;
         let dt = 0.1;
 
-        let mut new_theta = self.theta.clone();
-        let mut new_phi = self.phi.clone();
+        let size = w * h;
+        if self.theta_next.len() != size {
+            self.theta_next = vec![0.0; size];
+            self.phi_next = vec![0.0; size];
+        }
+        self.theta_next.copy_from_slice(&self.theta);
+        self.phi_next.copy_from_slice(&self.phi);
+        {
+            let (theta, phi) = (&self.theta, &self.phi);
+            let (new_theta, new_phi) = (&mut self.theta_next, &mut self.phi_next);
 
-        // Landau-Lifshitz-Gilbert dynamics
-        for y in 1..h - 1 {
-            for x in 1..w - 1 {
-                let idx = y * w + x;
+            // Landau-Lifshitz-Gilbert dynamics
+            for y in 1..h - 1 {
+                for x in 1..w - 1 {
+                    let idx = y * w + x;
 
-                // Current spin in Cartesian
-                let theta = self.theta[idx];
-                let phi = self.phi[idx];
-                let sx = theta.sin() * phi.cos();
-                let sy = theta.sin() * phi.sin();
-                let sz = theta.cos();
+                    // Current spin in Cartesian
+                    let theta_val = theta[idx];
+                    let phi_val = phi[idx];
+                    let sx = theta_val.sin() * phi_val.cos();
+                    let sy = theta_val.sin() * phi_val.sin();
+                    let sz = theta_val.cos();
 
-                // Effective field from exchange (sum of neighbor spins)
-                let mut hx = 0.0;
-                let mut hy = 0.0;
-                let mut hz = 0.0;
+                    // Effective field from exchange (sum of neighbor spins)
+                    let mut hx = 0.0;
+                    let mut hy = 0.0;
+                    let mut hz = 0.0;
 
-                for &(dx, dy) in &[(1i32, 0i32), (-1, 0), (0, 1), (0, -1)] {
-                    let nx = (x as i32 + dx) as usize;
-                    let ny = (y as i32 + dy) as usize;
-                    let nidx = ny * w + nx;
-                    let nt = self.theta[nidx];
-                    let np = self.phi[nidx];
-                    hx += self.exchange_j * nt.sin() * np.cos();
-                    hy += self.exchange_j * nt.sin() * np.sin();
-                    hz += self.exchange_j * nt.cos();
-                }
+                    for &(dx, dy) in &[(1i32, 0i32), (-1, 0), (0, 1), (0, -1)] {
+                        let nx = (x as i32 + dx) as usize;
+                        let ny = (y as i32 + dy) as usize;
+                        let nidx = ny * w + nx;
+                        let nt = theta[nidx];
+                        let np = phi[nidx];
+                        hx += self.exchange_j * nt.sin() * np.cos();
+                        hy += self.exchange_j * nt.sin() * np.sin();
+                        hz += self.exchange_j * nt.cos();
+                    }
 
-                // Anisotropy field (easy axis along z)
-                hz += self.anisotropy_k * sz;
+                    // Anisotropy field (easy axis along z)
+                    hz += self.anisotropy_k * sz;
 
-                // Thermal noise
-                hx += (rand_simple() - 0.5) * self.temperature;
-                hy += (rand_simple() - 0.5) * self.temperature;
-                hz += (rand_simple() - 0.5) * self.temperature;
+                    // Thermal noise
+                    hx += (rand_simple() - 0.5) * self.temperature;
+                    hy += (rand_simple() - 0.5) * self.temperature;
+                    hz += (rand_simple() - 0.5) * self.temperature;
 
-                // Torque: -S x H
-                let tx = sy * hz - sz * hy;
-                let ty = sz * hx - sx * hz;
-                let tz = sx * hy - sy * hx;
+                    // Torque: -S x H
+                    let tx = sy * hz - sz * hy;
+                    let ty = sz * hx - sx * hz;
+                    let tz = sx * hy - sy * hx;
 
-                // Damping torque: -alpha * S x (S x H)
-                let dtx = self.damping * (sy * tz - sz * ty);
-                let dty = self.damping * (sz * tx - sx * tz);
-                let dtz = self.damping * (sx * ty - sy * tx);
+                    // Damping torque: -alpha * S x (S x H)
+                    let dtx = self.damping * (sy * tz - sz * ty);
+                    let dty = self.damping * (sz * tx - sx * tz);
+                    let dtz = self.damping * (sx * ty - sy * tx);
 
-                // Update spin
-                let new_sx = sx + dt * (tx + dtx);
-                let new_sy = sy + dt * (ty + dty);
-                let new_sz = sz + dt * (tz + dtz);
+                    // Update spin
+                    let new_sx = sx + dt * (tx + dtx);
+                    let new_sy = sy + dt * (ty + dty);
+                    let new_sz = sz + dt * (tz + dtz);
 
-                // Normalize and convert back to spherical
-                let norm = (new_sx * new_sx + new_sy * new_sy + new_sz * new_sz).sqrt();
-                if norm > 0.001 {
-                    let nsx = new_sx / norm;
-                    let nsy = new_sy / norm;
-                    let nsz = new_sz / norm;
+                    // Normalize and convert back to spherical
+                    let norm = (new_sx * new_sx + new_sy * new_sy + new_sz * new_sz).sqrt();
+                    if norm > 0.001 {
+                        let nsx = new_sx / norm;
+                        let nsy = new_sy / norm;
+                        let nsz = new_sz / norm;
 
-                    new_theta[idx] = nsz.clamp(-1.0, 1.0).acos();
-                    new_phi[idx] = nsy.atan2(nsx);
+                        new_theta[idx] = nsz.clamp(-1.0, 1.0).acos();
+                        new_phi[idx] = nsy.atan2(nsx);
+                    }
                 }
             }
         }
 
-        self.theta = new_theta;
-        self.phi = new_phi;
+        std::mem::swap(&mut self.theta, &mut self.theta_next);
+        std::mem::swap(&mut self.phi, &mut self.phi_next);
     }
 
     fn render(&self, painter: &mut Painter, width: u16, height: u16, quality: FxQuality) {
@@ -3352,46 +3380,49 @@ impl Screen for VisualEffectsScreen {
         self.frame += 1;
         self.time += 0.1;
 
-        // Update all effects (so they're ready when switched to)
-        self.shape3d.update();
-        self.particles.update();
-
-        // Initialize dimension-dependent effects
-        if !self.matrix.initialized {
-            self.matrix.init(80);
+        // Update only the active effect to avoid heavy background work.
+        match self.effect {
+            EffectType::Shape3D => self.shape3d.update(),
+            EffectType::Particles => self.particles.update(),
+            EffectType::Matrix => {
+                if !self.matrix.initialized {
+                    self.matrix.init(80);
+                }
+                self.matrix.update(60);
+            }
+            EffectType::Tunnel => self.tunnel.update(),
+            EffectType::Fire => {
+                if !self.fire.initialized {
+                    self.fire.init(80, 50);
+                }
+                self.fire.update();
+            }
+            EffectType::ReactionDiffusion => {
+                if !self.reaction_diffusion.initialized {
+                    self.reaction_diffusion.init(100, 60);
+                }
+                let iterations = if self.frame.is_multiple_of(2) { 4 } else { 6 };
+                for _ in 0..iterations {
+                    self.reaction_diffusion.update();
+                }
+            }
+            EffectType::StrangeAttractor => self.attractor.update(),
+            EffectType::Mandelbrot => self.mandelbrot.update(),
+            EffectType::Lissajous => self.lissajous.update(),
+            EffectType::FlowField => self.flow_field.update(),
+            EffectType::Julia => self.julia.update(),
+            EffectType::WaveInterference => self.wave_interference.update(),
+            EffectType::Spiral => self.spiral.update(),
+            EffectType::SpinLattice => {
+                if !self.spin_lattice.initialized {
+                    self.spin_lattice.init(60, 40);
+                }
+                if self.frame.is_multiple_of(2) {
+                    self.spin_lattice.update();
+                }
+            }
+            EffectType::Metaballs | EffectType::Plasma => {}
         }
-        self.matrix.update(60);
-
-        self.tunnel.update();
-
-        if !self.fire.initialized {
-            self.fire.init(80, 50);
-        }
-        self.fire.update();
-
-        // Mathematical effects
-        if !self.reaction_diffusion.initialized {
-            self.reaction_diffusion.init(100, 60);
-        }
-        // Run multiple iterations per tick for visible evolution
-        for _ in 0..8 {
-            self.reaction_diffusion.update();
-        }
-
-        self.attractor.update();
-        self.mandelbrot.update();
-        self.lissajous.update();
-        self.flow_field.update();
-
-        // New effects
-        self.julia.update();
-        self.wave_interference.update();
-        self.spiral.update();
-
-        if !self.spin_lattice.initialized {
-            self.spin_lattice.init(60, 40);
-        }
-        self.spin_lattice.update();
 
         // Update text effects animation (bd-2b82)
         self.text_effects.tick();

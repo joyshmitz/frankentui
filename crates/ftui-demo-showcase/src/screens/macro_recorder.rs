@@ -7,6 +7,7 @@
 //! - Deterministic playback with speed control
 //! - Timeline and scenario runner panels
 
+use std::cell::Cell;
 use std::time::{Duration, Instant};
 
 use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseEvent};
@@ -106,6 +107,9 @@ pub struct MacroRecorderScreen {
     timeline_cursor: usize,
     scenario_index: usize,
     status_note: Option<String>,
+    layout_controls: Cell<Rect>,
+    layout_timeline: Cell<Rect>,
+    layout_scenarios: Cell<Rect>,
 }
 
 impl Default for MacroRecorderScreen {
@@ -136,6 +140,9 @@ impl MacroRecorderScreen {
             status_note: Some(
                 "Press Space to record or Enter in Scenarios to load a demo".to_string(),
             ),
+            layout_controls: Cell::new(Rect::default()),
+            layout_timeline: Cell::new(Rect::default()),
+            layout_scenarios: Cell::new(Rect::default()),
         }
     }
 
@@ -157,6 +164,16 @@ impl MacroRecorderScreen {
 
     pub fn set_terminal_size(&mut self, width: u16, height: u16) {
         self.terminal_size = (width, height);
+    }
+
+    fn set_focus(&mut self, focus: FocusPanel) {
+        self.focus = focus;
+        let label = match focus {
+            FocusPanel::Controls => "Controls",
+            FocusPanel::Timeline => "Timeline",
+            FocusPanel::Scenarios => "Scenarios",
+        };
+        self.status_note = Some(format!("Focus: {label} (Tab or Ctrl+Arrows)"));
     }
 
     pub fn drain_playback_events(&mut self) -> Vec<Event> {
@@ -385,18 +402,34 @@ impl MacroRecorderScreen {
 
         let (code, modifiers) = (*code, *modifiers);
 
-        if modifiers.contains(Modifiers::CTRL) {
+        if modifiers.contains(Modifiers::CTRL) || modifiers.contains(Modifiers::ALT) {
             match code {
                 KeyCode::Left | KeyCode::Up => {
-                    self.focus = self.focus.prev();
+                    let next = self.focus.prev();
+                    self.set_focus(next);
                     return;
                 }
                 KeyCode::Right | KeyCode::Down => {
-                    self.focus = self.focus.next();
+                    let next = self.focus.next();
+                    self.set_focus(next);
                     return;
                 }
                 _ => {}
             }
+        }
+
+        match (code, modifiers) {
+            (KeyCode::Tab, Modifiers::NONE) => {
+                let next = self.focus.next();
+                self.set_focus(next);
+                return;
+            }
+            (KeyCode::BackTab, _) => {
+                let next = self.focus.prev();
+                self.set_focus(next);
+                return;
+            }
+            _ => {}
         }
 
         if self.focus == FocusPanel::Timeline {
@@ -506,6 +539,10 @@ impl MacroRecorderScreen {
             return;
         }
         if self.playback.is_none() {
+            // Defensive: keep UI consistent if playback disappears unexpectedly.
+            self.state = UiState::Stopped;
+            self.playback_last_tick = None;
+            self.status_note = Some("Playback halted (missing macro)".to_string());
             return;
         }
 
@@ -513,12 +550,19 @@ impl MacroRecorderScreen {
         let delta_ticks = tick_count.saturating_sub(*last_tick).max(1);
         *last_tick = tick_count;
 
-        let (events, done, playhead_pos) = {
-            let playback = self.playback.as_mut().expect("playback checked above");
-            let delta = Duration::from_millis(delta_ticks * TICK_MS);
-            let events = playback.advance(delta);
-            (events, playback.is_done(), playback.position())
+        let playback = match self.playback.as_mut() {
+            Some(playback) => playback,
+            None => {
+                self.state = UiState::Stopped;
+                self.playback_last_tick = None;
+                self.status_note = Some("Playback halted (missing macro)".to_string());
+                return;
+            }
         };
+        let delta = Duration::from_millis(delta_ticks * TICK_MS);
+        let events = playback.advance(delta);
+        let done = playback.is_done();
+        let playhead_pos = playback.position();
 
         self.pending_playback.extend(events);
         if done {
@@ -1033,6 +1077,23 @@ impl Screen for MacroRecorderScreen {
         if let Event::Resize { width, height } = event {
             self.terminal_size = (*width, *height);
         }
+        if let Event::Mouse(mouse) = event
+            && matches!(
+                mouse.kind,
+                ftui_core::event::MouseEventKind::Down(ftui_core::event::MouseButton::Left)
+            )
+        {
+            let controls = self.layout_controls.get();
+            let timeline = self.layout_timeline.get();
+            let scenarios = self.layout_scenarios.get();
+            if controls.contains(mouse.x, mouse.y) {
+                self.set_focus(FocusPanel::Controls);
+            } else if timeline.contains(mouse.x, mouse.y) {
+                self.set_focus(FocusPanel::Timeline);
+            } else if scenarios.contains(mouse.x, mouse.y) {
+                self.set_focus(FocusPanel::Scenarios);
+            }
+        }
         self.handle_controls(event);
         Cmd::None
     }
@@ -1049,6 +1110,7 @@ impl Screen for MacroRecorderScreen {
             .constraints([Constraint::Fixed(controls_height), Constraint::Min(1)])
             .split(area);
 
+        self.layout_controls.set(sections[0]);
         self.render_controls_panel(frame, sections[0]);
 
         let bottom = Flex::horizontal()
@@ -1059,6 +1121,8 @@ impl Screen for MacroRecorderScreen {
             .constraints([Constraint::Percentage(45.0), Constraint::Percentage(55.0)])
             .split(bottom[1]);
 
+        self.layout_timeline.set(bottom[0]);
+        self.layout_scenarios.set(right[1]);
         self.render_timeline_panel(frame, bottom[0]);
         self.render_event_detail_panel(frame, right[0]);
         self.render_scenarios_panel(frame, right[1]);
@@ -1075,8 +1139,12 @@ impl Screen for MacroRecorderScreen {
                 action: "Play / Pause",
             },
             HelpEntry {
-                key: "Ctrl+\u{2190}/\u{2191}/\u{2192}/\u{2193}",
+                key: "Ctrl/Alt+\u{2190}/\u{2191}/\u{2192}/\u{2193}",
                 action: "Switch panel focus",
+            },
+            HelpEntry {
+                key: "Tab/Shift+Tab",
+                action: "Cycle focus",
             },
             HelpEntry {
                 key: "\u{2191}/\u{2193}",
@@ -1093,6 +1161,10 @@ impl Screen for MacroRecorderScreen {
             HelpEntry {
                 key: "Esc",
                 action: "Stop playback",
+            },
+            HelpEntry {
+                key: "Mouse",
+                action: "Click panel to focus",
             },
         ]
     }
@@ -1369,15 +1441,18 @@ mod tests {
         let mut screen = MacroRecorderScreen::new();
         // Trigger "No macro recorded" error
         screen.start_playback(0);
-        match &screen.state {
-            UiState::Error(msg) => {
-                assert!(
-                    msg.contains("press 'r'"),
-                    "Error should include recovery action, got: {msg}"
-                );
-            }
-            other => panic!("Expected Error state, got {:?}", other),
-        }
+        assert!(
+            matches!(&screen.state, UiState::Error(_)),
+            "Expected Error state, got {:?}",
+            screen.state
+        );
+        let UiState::Error(msg) = &screen.state else {
+            return;
+        };
+        assert!(
+            msg.contains("press 'r'"),
+            "Error should include recovery action, got: {msg}"
+        );
     }
 
     #[test]

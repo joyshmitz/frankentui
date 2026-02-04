@@ -8,10 +8,12 @@
 //! - `TextArea` (multi-line editor with line numbers)
 //! - Panel-based focus management
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 
-use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers};
+use ftui_core::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseButton, MouseEventKind,
+};
 use ftui_core::geometry::Rect;
 use ftui_extras::forms::{Form, FormField, FormState, FormValue, ValidationError};
 use ftui_layout::{Constraint, Flex};
@@ -139,6 +141,11 @@ pub struct FormsInput {
     redo_stack: VecDeque<UndoEntry>,
     undo_panel_visible: bool,
     undo_keys: UndoKeybindings,
+    layout_form: Cell<Rect>,
+    layout_input: Cell<Rect>,
+    layout_editor: Cell<Rect>,
+    layout_search: Cell<Rect>,
+    layout_password: Cell<Rect>,
 }
 
 impl Default for FormsInput {
@@ -260,6 +267,11 @@ impl FormsInput {
             redo_stack: VecDeque::new(),
             undo_panel_visible: false,
             undo_keys: UndoKeybindings::default(),
+            layout_form: Cell::new(Rect::default()),
+            layout_input: Cell::new(Rect::default()),
+            layout_editor: Cell::new(Rect::default()),
+            layout_search: Cell::new(Rect::default()),
+            layout_password: Cell::new(Rect::default()),
         };
         state.apply_theme();
         state.form_state.borrow_mut().init_tracking(&state.form);
@@ -743,6 +755,7 @@ impl FormsInput {
     }
 
     fn render_form_panel(&self, frame: &mut Frame, area: Rect) {
+        self.layout_form.set(area);
         let border_style = theme::panel_border_style(
             self.focus == FocusPanel::Form,
             theme::screen_accent::FORMS_INPUT,
@@ -811,6 +824,7 @@ impl FormsInput {
     }
 
     fn render_input_panel(&self, frame: &mut Frame, area: Rect) {
+        self.layout_input.set(area);
         let input_focused =
             self.focus == FocusPanel::SearchInput || self.focus == FocusPanel::PasswordInput;
         let border_style =
@@ -848,6 +862,7 @@ impl FormsInput {
 
         // Search row
         if !rows[0].is_empty() {
+            self.layout_search.set(rows[0]);
             let cols = Flex::horizontal()
                 .constraints([Constraint::Fixed(10), Constraint::Min(1)])
                 .split(rows[0]);
@@ -858,6 +873,7 @@ impl FormsInput {
 
         // Password row
         if rows.len() > 1 && !rows[1].is_empty() {
+            self.layout_password.set(rows[1]);
             let cols = Flex::horizontal()
                 .constraints([Constraint::Fixed(10), Constraint::Min(1)])
                 .split(rows[1]);
@@ -868,6 +884,7 @@ impl FormsInput {
     }
 
     fn render_editor_panel(&self, frame: &mut Frame, area: Rect) {
+        self.layout_editor.set(area);
         let border_style = theme::panel_border_style(
             self.focus == FocusPanel::TextEditor,
             theme::screen_accent::FORMS_INPUT,
@@ -895,6 +912,29 @@ impl Screen for FormsInput {
     type Message = Event;
 
     fn update(&mut self, event: &Event) -> Cmd<Self::Message> {
+        if let Event::Mouse(mouse) = event {
+            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                let form = self.layout_form.get();
+                let input = self.layout_input.get();
+                let editor = self.layout_editor.get();
+                let search = self.layout_search.get();
+                let password_rect = self.layout_password.get();
+                if form.contains(mouse.x, mouse.y) {
+                    self.focus = FocusPanel::Form;
+                } else if search.contains(mouse.x, mouse.y) {
+                    self.focus = FocusPanel::SearchInput;
+                } else if password_rect.contains(mouse.x, mouse.y) {
+                    self.focus = FocusPanel::PasswordInput;
+                } else if input.contains(mouse.x, mouse.y) {
+                    self.focus = FocusPanel::SearchInput;
+                } else if editor.contains(mouse.x, mouse.y) {
+                    self.focus = FocusPanel::TextEditor;
+                }
+                self.update_focus_states();
+                self.update_status();
+            }
+            return Cmd::None;
+        }
         if let Event::Key(KeyEvent {
             code,
             modifiers,
@@ -968,6 +1008,34 @@ impl Screen for FormsInput {
             ..
         }) = event
             && modifiers.contains(Modifiers::ALT)
+        {
+            self.focus = self.focus.prev();
+            self.update_focus_states();
+            self.update_status();
+            return Cmd::None;
+        }
+        if let Event::Key(KeyEvent {
+            code: KeyCode::Down,
+            modifiers,
+            kind: KeyEventKind::Press,
+            ..
+        }) = event
+            && modifiers.is_empty()
+            && !matches!(self.focus, FocusPanel::Form | FocusPanel::TextEditor)
+        {
+            self.focus = self.focus.next();
+            self.update_focus_states();
+            self.update_status();
+            return Cmd::None;
+        }
+        if let Event::Key(KeyEvent {
+            code: KeyCode::Up,
+            modifiers,
+            kind: KeyEventKind::Press,
+            ..
+        }) = event
+            && modifiers.is_empty()
+            && !matches!(self.focus, FocusPanel::Form | FocusPanel::TextEditor)
         {
             self.focus = self.focus.prev();
             self.update_focus_states();
@@ -1052,6 +1120,10 @@ impl Screen for FormsInput {
                 action: "Switch panel",
             },
             HelpEntry {
+                key: "\u{2191}/\u{2193}",
+                action: "Switch input panel",
+            },
+            HelpEntry {
                 key: "Ctrl+Z",
                 action: "Undo",
             },
@@ -1086,6 +1158,10 @@ impl Screen for FormsInput {
             HelpEntry {
                 key: "Esc",
                 action: "Cancel form",
+            },
+            HelpEntry {
+                key: "Mouse",
+                action: "Click panel to focus",
             },
         ]
     }
