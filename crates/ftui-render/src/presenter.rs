@@ -2636,6 +2636,8 @@ mod tests {
             .ok()
             .and_then(|value| value.parse::<u32>().ok())
             .unwrap_or(200);
+        let mode = env::var("FTUI_EMIT_STYLE_BENCH_MODE").unwrap_or_default();
+        let emit_json = mode != "raw";
 
         let mut styles = Vec::with_capacity(128);
         let mut rng = 0x00A5_A51E_AF42_u64;
@@ -2666,6 +2668,7 @@ mod tests {
 
         let mut presenter = test_presenter();
         let mut jsonl = Vec::new();
+        let mut sink = 0u64;
 
         for i in 0..iterations {
             let old = styles[i as usize % styles.len()];
@@ -2679,16 +2682,24 @@ mod tests {
             let elapsed_us = start.elapsed().as_micros() as u64;
             let bytes = presenter.writer.bytes_written();
 
-            writeln!(
-                &mut jsonl,
-                "{{\"iter\":{i},\"emit_time_us\":{elapsed_us},\"bytes\":{bytes}}}"
-            )
-            .unwrap();
+            if emit_json {
+                writeln!(
+                    &mut jsonl,
+                    "{{\"iter\":{i},\"emit_time_us\":{elapsed_us},\"bytes\":{bytes}}}"
+                )
+                .unwrap();
+            } else {
+                sink = sink.wrapping_add(elapsed_us ^ bytes);
+            }
         }
 
-        let text = String::from_utf8(jsonl).unwrap();
-        let lines: Vec<&str> = text.lines().collect();
-        assert_eq!(lines.len() as u32, iterations);
+        if emit_json {
+            let text = String::from_utf8(jsonl).unwrap();
+            let lines: Vec<&str> = text.lines().collect();
+            assert_eq!(lines.len() as u32, iterations);
+        } else {
+            std::hint::black_box(sink);
+        }
     }
 
     #[test]
