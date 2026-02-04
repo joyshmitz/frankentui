@@ -1,27 +1,34 @@
 ╭──────────────────────────────────────────── Terminal Capability Explorer ────────────────────────────────────────────╮
-│Profile: xterm-256color | View: Simulation | Color depth: 256                                                         │
-│Mux: no | Sync output: no                                                                                             │
-│Hyperlinks: no | Clipboard: no | overrides: none                                                                      │
+│Detected: xterm-256color | Simulated: xterm-256color | View: Simulation                                               │
+│Color depth: 256 | Mux: no | Sync output: no                                                                          │
+│Scroll region: yes | Hyperlinks: no | Clipboard: no | overrides: none                                                 │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-╭ Capability Matrix ─────────────────────────────────────────────────╮╭ Profile Simulation ────────────────────────────╮
-│Capability                Detected  Effective Fallback              ││  detected                                      │
-│True color (24-bit)       no        no        256-color             ││  modern                                        │
-│256-color palette         yes       yes       enabled               ││> xterm-256color                                │
-│Synchronized output       no        no        unsynced repaint      ││  xterm                                         │
-│Scroll region (DECSTBM)   yes       yes       enabled               ││  vt100                                         │
-│OSC 8 hyperlinks          no        no        plain text            ││  dumb                                          │
-│Kitty keyboard protocol   no        no        legacy keys           ││  tmux                                          │
-│Focus events              no        no        no focus events       ││  screen                                        │
-│Bracketed paste           yes       yes       enabled               ││  zellij                                        │
-│SGR mouse                 yes       yes       enabled               ││  kitty                                         │
-│OSC 52 clipboard          no        no        clipboard disabled    ││  windows-console                               │
+╭ Detected vs Simulated ─────────────────────────────────────────────╮╭ Profile Simulation ────────────────────────────╮
+│Capability                                    Detected  Simulated Δ ││Simulated profile: xterm-256color               │
+│True color (24-bit)                           no        no          ││  detected                                      │
+│256-color palette                             yes       yes         ││  modern                                        │
+│Synchronized output                           no        no          ││> xterm-256color                                │
+│Scroll region (DECSTBM)                       yes       yes         ││  xterm                                         │
+│OSC 8 hyperlinks                              no        no          ││  vt100                                         │
+│Kitty keyboard protocol                       no        no          ││  dumb                                          │
+│Focus events                                  no        no          ││  tmux                                          │
+│Bracketed paste                               yes       yes         ││  screen                                        │
+│SGR mouse                                     yes       yes         ││  zellij                                        │
+│OSC 52 clipboard                              no        no          ││  kitty                                         │
+│                                                                    ││  windows-console                               │
 │                                                                    ││  linux                                         │
 │                                                                    ││P: cycle profiles | R: reset to detected        │
 │                                                                    ││                                                │
 │                                                                    ││                                                │
-│                                                                    ││                                                │
-│                                                                    ││                                                │
 │                                                                    ││Preview: color=256 sync=no mux=no               │
+│                                                                    │╰────────────────────────────────────────────────╯
+│                                                                    │╭ Fallback Policy ───────────────────────────────╮
+│                                                                    ││Sync output: no (terminal lacks support)        │
+│                                                                    ││Scroll region: yes (enabled)                    │
+│                                                                    ││Mux safety: inactive                            │
+│                                                                    ││                                                │
+│                                                                    ││                                                │
+│                                                                    ││                                                │
 │                                                                    ││                                                │
 │                                                                    │╰────────────────────────────────────────────────╯
 │                                                                    │╭ Environment ───────────────────────────────────╮
@@ -30,11 +37,4 @@
 │                                                                    ││COLORTERM=truecolor                             │
 │                                                                    ││NO_COLOR=no                                     │
 │                                                                    ││MUX: tmux=no screen=no zellij=no                │
-│                                                                    ││KITTY_WINDOW_ID=no WT_SESSION=no                │
-│                                                                    ││Policy: use_sync_output=no use_scroll_region=yes│
-│                                                                    ││Policy: use_hyperlinks=no use_clipboard=no      │
-│                                                                    ││Passthrough wrap: no                            │
-│                                                                    ││                                                │
-│                                                                    ││                                                │
-│                                                                    ││                                                │
 ╰────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────────────╯

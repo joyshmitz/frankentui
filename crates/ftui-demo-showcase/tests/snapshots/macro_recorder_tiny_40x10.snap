@@ -1,10 +1,10 @@
 ╭────────────Macro Recorder────────────╮
 │State: ○ Idle   Events: 0   Duration: │
-│Controls: r record/stop  p play/pause │
 │Speed: 1.00x   Loop: Off   Progress:  │
-│                                      │
+│Focus: [Controls]  [Timeline]  [Scenar│
+│Space/r record/stop  Enter/p play/paus│
 ╰──────────────────────────────────────╯
-╭───────Timeline───────╮╭Scenario Runne╮
-│No macro recorded yet.││Preset scenari│
-│                      ││              │
+╭───────Timeline───────╮╭─Event Detail─╮
+│No macro loaded.      │╰──────────────╯
+│Space to record, or se│╭Scenario Runne╮
 ╰──────────────────────╯╰──────────────╯

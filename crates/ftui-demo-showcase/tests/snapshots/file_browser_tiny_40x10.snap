@@ -1,10 +1,10 @@
-╭─────Project Tree──────╮╭Files (23 ite╮
-│? my-app              ││? / ? home │
-│├── ? src             ││  Name       │
-││   ├── ? main.rs     ││?  drwxr-xr-│
-││   ├── ? lib.rs      ││?  drwxr-xr-│
-││   └── ? models      ││?  drwxr-xr-│
-││       ├── ? user.rs ││?  drwxr-xr-│
-││       └── ? post.rs ││?  drwxr-xr-│
-╰───────────────────────╯╰─────────────╯
+╭─────Project Tree──────╮ ╭Files (23 i╮ 
+│? my-app              │ │? / ? hom│ 
+│├── ? src             │ │  Name     │ 
+││   ├── ? main.rs     │ │?  drwxr-x│ 
+││   ├── ? lib.rs      │ │?  drwxr-x│ 
+││   └── ? models      │ │?  drwxr-x│ 
+││       ├── ? user.rs │ │?  drwxr-x│ 
+││       └── ? post.rs │ │?  drwxr-x│ 
+╰───────────────────────╯ ╰───────────╯ 
 ? .git  | h/l: panels | j/k: navigate |

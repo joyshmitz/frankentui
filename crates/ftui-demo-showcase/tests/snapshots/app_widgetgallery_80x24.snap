@@ -1,24 +1,24 @@
  1: Dash │ 2: Shakes │ 3: Code │ 4: Widgets │ 5: Layout │ 6: Forms │ 7: DataViz 
 ╭────────────────────────────────Widget Gallery────────────────────────────────╮
-│▸ A: Inputs │   B: Display │   C: Status │   D: Data Viz │   E: Navigation │  │
-│╭TextInput────────────────────────────╮╭Masked Input─────────────────────────╮│
-││demo@example.com                     ││••••••                               ││
-│╰─────────────────────────────────────╯╰─────────────────────────────────────╯│
-│╭TextArea────────────────────────────────────────────────────────────────────╮│
-││1  FrankenTUI text area                                                     ││
-││2  - Multi-line editing                                                     ││
-││3  - Soft wrap enabled                                                      ││
-││4  - Line numbers                                                           ││
-│╰────────────────────────────────────────────────────────────────────────────╯│
-│╭Checkboxes + Radios──────────────────╮╭Select + Number + Slider─────────────╮│
-││[ ] Enable autosave                  ││Select: [High ▾]                     ││
-││[x] Sync on save                     ││Number: [-]  42  [+]                 ││
-││( ) Light theme                      ││Slider: 30%  [■■■■■─────]            ││
-││(*) Dark theme                       ││                                     ││
-││                                     ││                                     ││
-││                                     ││                                     ││
-││                                     ││                                     ││
-│╰─────────────────────────────────────╯╰─────────────────────────────────────╯│
-│*.......                                                                      │
+│  A: Inputs │ ▸ B: Display │   C: Status │   D: Data Viz │   E: Navigation │  │
+│+ASCII------+┌──Square───┐╭────Rounded╮╭Text Style Flags─────────────────────╮│
+│|Border: ASC|│Border: Squ││Border: Rou││Bold            Dim                  ││
+│|Align: Left|│Align: Cent││Align: Righ││Italic          Underline            ││
+│+-----------+└───────────┘╰───────────╯│DblUnder        CurlyUL              ││
+│╔Double═════╗┏━━━Heavy━━━┓╭─────Custom╮│Blink           Reverse              ││
+│║Border: Dou║┃Border: Hea┃│Border: Cus││Hidden          Strike               ││
+│║Align: Left║┃Align: Cent┃│Align: Righ││Bold+Italic     Bold+Under           ││
+│╚═══════════╝┗━━━━━━━━━━━┛╰───────────╯╰─────────────────────────────────────╯│
+│╭Paragraph Wrap───────────╮╭Lists───────────────────╮╭Code Block─────────────╮│
+││Word: The quick brown fox││• Bullet item           ││fn main() {            ││
+││jumps over the lazy dog. ││• Second item           ││    println!("hello"); ││
+││                         ││  ◦ Nested item         ││}                      ││
+││Char: The quick brown fox│╰────────────────────────╯│                       ││
+││ jumps over the lazy dog.│╭Table───────────────────╮╰───────────────────────╯│
+││                         ││Name       Type  Size   │╭Blockquote + Rule──────╮│
+││None: The quick brown fox││main.rs    Rust  4.2 KB ││> Deterministic output ││
+││                         ││README.md  MD    3.4 KB ││───────────────────────││
+│╰─────────────────────────╯╰────────────────────────╯╰───────────────────────╯│
+│.*......                                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Widget Gallery [4/28]  Cyberpunk Aurora         tick:0 frm:0         0x0 00:00 
+ Widget Gallery [4/34]  Cyberpunk Aurora         tick:0 frm:0         0x0 00:00 

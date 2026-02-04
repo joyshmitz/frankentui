@@ -1,24 +1,24 @@
 ╭────────────────────────────────Macro Recorder────────────────────────────────╮
-│State: ■ Stopped   Events: 3   Duration: 0ms   Filtered: 0                    │
-│Controls: r record/stop  p play/pause  l loop  +/- speed  Esc stop            │
-│Speed: 1.00x   Loop: Off   Progress: 100%                                     │
-│                                                                              │
+│State: ■ Stopped   Events: 3   Duration: 0ms                                  │
+│Speed: 1.00x   Loop: Off   Progress: 100%   Filtered: 0                       │
+│Focus: [Controls]  [Timeline]  [Scenarios]   Ctrl+Arrows switch panel         │
+│Space/r record/stop  Enter/p play/pause  Esc stop  L loop  +/- speed          │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-╭───────────────────Timeline───────────────────╮╭───────Scenario Runner────────╮
-│○ 001  +   0ms  @    0ms  a                   ││Preset scenarios (WIP)        │
-│○ 002  +   0ms  @    0ms  b                   ││                              │
-│○ 003  +   0ms  @    0ms  c                   ││Tab Tour                      │
-│                                              ││  Cycle screens, toggle help, │
+╭───────────────────Timeline───────────────────╮╭─────────Event Detail─────────╮
+│○ 001  +   0ms  @    0ms  a                   ││Selected: #000                │
+│○ 002  +   0ms  @    0ms  b                   ││Delay:    0ms   At:     0ms   │
+│○ 003  +   0ms  @    0ms  c                   ││                              │
+│                                              ││Event: a                      │
+│                                              ││Kind: Press                   │
+│                                              ││Modifiers: Modifiers(0x0)     │
+│                                              │╰──────────────────────────────╯
+│                                              │╭───────Scenario Runner────────╮
+│                                              ││Preset scenarios (Enter to loa│
+│                                              ││                              │
+│                                              ││Tab Tour                      │
+│                                              ││  Cycle tabs and toggle the he│
 │                                              ││                              │
 │                                              ││Search Flow                   │
-│                                              ││  Open Shakespeare screen, sea│
-│                                              ││                              │
-│                                              ││Layout Lab                    │
-│                                              ││  Adjust constraints and switc│
-│                                              ││                              │
-│                                              ││                              │
-│                                              ││                              │
-│                                              ││                              │
-│                                              ││                              │
+│                                              ││  Open palette, type a target,│
 │                                              ││                              │
 ╰──────────────────────────────────────────────╯╰──────────────────────────────╯

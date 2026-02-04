@@ -1,40 +1,40 @@
  1: Dash │ 2: Shakes │ 3: Code │ 4: Widgets │ 5: Layout │ 6: Forms │ 7: DataViz │ 8: Files │ 9: Adv │ 0: Perf │ -: Caps 
 ╭──────────────────────────────────────────────────────Dashboard───────────────────────────────────────────────────────╮
 │FRANKENTUI DASHBOARD                                                                                                  │
-│╭────────Plasma────────╮╭─────────────Charts──────────────╮╭──────────────Code───────────────╮╭─────────Info─────────╮│
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││CPU ▃ ▃▃▂▂▁▁▄▃▄▂▅▅▅▆▂▄▅▃▆▅▄▄▆▆▅▆▇││// FrankenTUI                    ││FPS: 0                ││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││MEM ▅▂ ▃▁▄▄▂▂▇▅▃▅▂▃▄▆▄▇█▂▆▅▄▂▇▅▆█││use ftui::*;                     ││118x36                ││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿╔════════════════════════ ⌨ Keyboard Shortcuts ════════════════════════╗Cyberpunk Aurora      ││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│Navigation                       ││fn main() {                      │║Tick: 30              ││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[1-9, 0]                 Switch to screen by number                 │║                      ││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[Tab / L]                Next screen                                │║                      ││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[S-Tab / H]              Previous screen                            │║                      ││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│                                 ││                                 │║                      ││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│View                             ││                                 │║                      ││
+│╭────────Plasma────────╮╭─────────Charts · Pulse──────────╮╭───────Code · Rust (1/28)────────╮╭─────────Info─────────╮│
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││g:cycle · sparklines + mini bars ││// runtime.rs                    ││FrankenTUI Kernel · LI││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││CPU ▃ ▃▃▂▂▁▁▄▃▄▂▅▅▅▆▂▄▅▃▆▅▄▄▆ 46%││use std::{collections::HashMap, s││ INLINE   BRAILLE FX  ││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿╔════════════════════════ ⌨ Keyboard Shortcuts ════════════════════════╗Status: NOMINAL │ Even││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│Navigation ▁   ▇▁▁    ▁ █▁▁▁▁█ 14││use ftui_core::event::Event;     │║FPS: 0  TicSize: 118x3││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[1-9, 0]                 Switch to screen by number:cell::Cell;     │║Events/s: 1Theme: Cybe││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[Tab / L]                Next screense ftui_render::frame::Frame;   │║CPU:  46%  Alerts: 1  ││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[S-Tab / H]              Previous screentui_runtime::{Cmd, Model, Pr│║NET:   14↓ Pipeline: B││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│                                 ││                                 │║Frame:  0.0Headroom: +││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│View                             ││#[derive(Debug, Clone)]          │║                      ││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[?]                      Toggle this help overlay                   │║                      ││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[A]                      Toggle A11y panel                          │║                      ││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[F12]                    Toggle debug overlay                       │║                      ││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│                                 ││                                 │║                      ││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│Editing                          ││                                 │║                      ││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[Ctrl+Z]                 Undo    ││                                 │║CPU ██████░░░░░░░  46%││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[Ctrl+Y / Ctrl+Shift+Z]  Redo    ││                                 │║MEM █████░░░░░░░░  41%││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│                                 ││                                 │║DSK █████████░░░░  67%││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[A]                      Toggle A11y panelk(u64),                   │║                      ││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[F12]                    Toggle debug overlay { w: u16, h: u16 },   │║                      ││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│                                 ││    Log(String),                 │║CPU ██████░░░░░░░  46%││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│Editing                          ││    Quit,                        │║MEM █████░░░░░░░░  41%││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[Ctrl+Z]                 Undo    ││}                                │║NET █░░░░░░░░░░░░   8%││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[Ctrl+Y / Ctrl+Shift+Z]  Redo    ││                                 │║FRM                n/a││
+││Click → Visual Effects║│Click → Data Viz                 ││Click → Code ExplorerSync + 'stat│║Click → Performance163││
 │╰──────────────────────║╰Global───────────────────────────╯╰─────────────────────────────────╯║──────────────────────╯│
-│╭─────────Statistics───║─[Ctrl+K]                 Open command palette──────╮╭───────────────M║rkdown────────────────╮│
-││28S 45W 7E            ║ [Ctrl+T]                 Cycle color theme         ││Bold italic `cod║` E=mc²               ││
-││                      ║ [H/M/L]                  A11y: high contrast, reduced motion, large  ║                      ││
-││                      ║ [q / Ctrl+C]             Quit application          ││                ║                      ││
-││                      ║     ││                                             ││                ║                      ││
-││                      ║ Dashboard Controls                                 ││                ║                      ││
-││                      ║ [r]                      Reset animations          ││                ║                      ││
-││                      ║ [t]                      Cycle theme               ││                ║                      ││
-││                      ║     ││                                             ││                ║                      ││
-││                      ║     ││                                             ││                ║                      ││
-││                      ║     ││                                             ││                ║                      ││
-││                      ╚═══════════════════════Press ? or Esc to close════════════════════════╝                      ││
+│╭───Text FX · 3-Up (1/2║)[Ctrl+K]                 Open command palette──────╮╭───────Markdown ║ Streaming… 0%────────╮│
+││Sample 1 of 3 · 3-Up s║a[Ctrl+T]                 Cycle color theme core 3  ││▌               ║                      ││
+││1 · None · S1         ║ [H/M/L]                  A11y: high contrast, reduced motion, large  ║                      ││
+││# FX Lab              ║ [q / Ctrl+C]             Quit application          ││                ║                      ││
+││> *"Render truth, not ║ixels││                                             ││                ║                      ││
+││2 · FadeIn · S2       ║ Dashboard Controls                                 ││                ║                      ││
+││## GFM Stress         ║ [r]                      Reset animations          ││                ║                      ││
+││1. **Bold** + _italic_║ [c]                      Cycle code language       ││                ║                      ││
+││3 · FadeOut · S3      ║ [e]                      Cycle text effects        ││                ║                      ││
+││### Mixed             ║ [m]                      Cycle markdown sample     ││                ║                      ││
+││- [x] Tasks           ║     ││                                             ││                ║                      ││
+││- [ ] Benchmarks      ╚═══════════════════════Press ? or Esc to close════════════════════════╝                      ││
 ││                            ││                                             ││                                       ││
-││                            ││                                             ││                                       ││
+││e: next set · click → Visual││Click → Action Timeline                      ││Click → Markdown                       ││
 │╰────────────────────────────╯╰─────────────────────────────────────────────╯╰───────────────────────────────────────╯│
-│1-9:screens | Tab:next | t:theme | ?:help | q:quit                                                                    │
+│g:charts c:code e:fx m:md | 1-9:screens | Tab:next | t:theme | ?:help | q:quit                                        │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
- Dashboard [1/28]  Cyberpunk Aurora                               tick:0 frm:0                                0x0 00:00 
+ Dashboard [1/34]  Cyberpunk Aurora                               tick:0 frm:0                                0x0 00:00 

@@ -1,24 +1,24 @@
  1: Dash │ 2: Shakes │ 3: Code │ 4: Widgets │ 5: Layout │ 6: Forms │ 7: DataViz 
 ╭────────────────────────────────Macro Recorder────────────────────────────────╮
 │╭───────────────────────────────Macro Recorder───────────────────────────────╮│
-││State: ○ Idle   Events: 0   Duration: 0ms   Filtered: 0                     ││
-││Controls: r record/stop  p play/pause  l loop  +/- speed  Esc stop          ││
-││Speed: 1.00x   Loop: Off   Progress:   0%                                   ││
-││                                                                            ││
+││State: ○ Idle   Events: 0   Duration: 0ms                                   ││
+││Speed: 1.00x   Loop: Off   Progress:   0%   Filtered: 0                     ││
+││Focus: [Controls]  [Timeline]  [Scenarios]   Ctrl+Arrows switch panel       ││
+││Space/r record/stop  Enter/p play/pause  Esc stop  L loop  +/- speed        ││
 │╰────────────────────────────────────────────────────────────────────────────╯│
-│╭──────────────────Timeline───────────────────╮╭───────Scenario Runner───────╮│
-││No macro recorded yet.                       ││Preset scenarios (WIP)       ││
+│╭──────────────────Timeline───────────────────╮╭────────Event Detail─────────╮│
+││No macro loaded.                             ││Select a scenario or record a││
+││Space to record, or select a scenario and pre││                             ││
+││                                             ││                             ││
+││                                             ││                             ││
+││                                             │╰─────────────────────────────╯│
+││                                             │╭───────Scenario Runner───────╮│
+││                                             ││Preset scenarios (Enter to lo││
 ││                                             ││                             ││
 ││                                             ││Tab Tour                     ││
-││                                             ││  Cycle screens, toggle help,││
+││                                             ││  Cycle tabs and toggle the h││
 ││                                             ││                             ││
 ││                                             ││Search Flow                  ││
-││                                             ││  Open Shakespeare screen, se││
-││                                             ││                             ││
-││                                             ││Layout Lab                   ││
-││                                             ││  Adjust constraints and swit││
-││                                             ││                             ││
-││                                             ││                             ││
 │╰─────────────────────────────────────────────╯╰─────────────────────────────╯│
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Macro Recorder [12/28]  Cyberpunk Aurora        tick:0 frm:0         0x0 00:00 
+ Macro Recorder [12/34]  Cyberpunk Aurora        tick:0 frm:0         0x0 00:00 

@@ -1,10 +1,10 @@
-▸ A: Inputs │   B: Display │   C: Status
-╭TextInput─────────╮╭Masked Input──────╮
-│demo@example.com  ││••••••            │
-╰──────────────────╯╰──────────────────╯
-╭TextArea──────────────────────────────╮
-│1  FrankenTUI text area               │
-│2  - Multi-line editing               │
-│3  - Soft wrap enabled                │
-╰──────────────────────────────────────╯
-*.......                                
+  A: Inputs │ ▸ B: Display │   C: Status
++ASCII+┌Squar┐╭Roun╮╭Text Style Flags──╮
++-----+└─────┘╰────╯│Bold              │
+╔Doubl╗┏Heavy┓╭Cust╮│Dim               │
+╚═════╝┗━━━━━┛╰────╯╰──────────────────╯
+╭Paragraph Wr╮╭Lists──────╮╭Code Block─╮
+│Word: The   │╰───────────╯╰───────────╯
+│Char: The qu│╭Table──────╮╭Blockquote ╮
+╰────────────╯╰───────────╯╰───────────╯
+.*......                                

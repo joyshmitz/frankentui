@@ -1,24 +1,24 @@
-▸ A: Inputs │   B: Display │   C: Status │   D: Data Viz │   E: Navigation │   F
-╭TextInput─────────────────────────────╮╭Masked Input──────────────────────────╮
-│demo@example.com                      ││••••••                                │
-╰──────────────────────────────────────╯╰──────────────────────────────────────╯
-╭TextArea──────────────────────────────────────────────────────────────────────╮
-│1  FrankenTUI text area                                                       │
-│2  - Multi-line editing                                                       │
-│3  - Soft wrap enabled                                                        │
-│4  - Line numbers                                                             │
-╰──────────────────────────────────────────────────────────────────────────────╯
-╭Checkboxes + Radios───────────────────╮╭Select + Number + Slider──────────────╮
-│[ ] Enable autosave                   ││Select: [High ▾]                      │
-│[x] Sync on save                      ││Number: [-]  42  [+]                  │
-│( ) Light theme                       ││Slider: 30%  [■■■■■─────]             │
-│(*) Dark theme                        ││                                      │
-│                                      ││                                      │
-│                                      ││                                      │
-│                                      ││                                      │
-│                                      ││                                      │
-│                                      ││                                      │
-│                                      ││                                      │
-│                                      ││                                      │
-╰──────────────────────────────────────╯╰──────────────────────────────────────╯
-*.......                                                                        
+  A: Inputs │ ▸ B: Display │   C: Status │   D: Data Viz │   E: Navigation │   F
++ASCII------+┌──Square───┐╭────Rounded╮ ╭Text Style Flags──────────────────────╮
+|Border: ASC|│Border: Squ││Border: Rou│ │Bold            Dim                   │
+|Align: Left|│Align: Cent││Align: Righ│ │Italic          Underline             │
+|           |│           ││           │ │DblUnder        CurlyUL               │
++-----------+└───────────┘╰───────────╯ │Blink           Reverse               │
+╔Double═════╗┏━━━Heavy━━━┓╭─────Custom╮ │Hidden          Strike                │
+║Border: Dou║┃Border: Hea┃│Border: Cus│ │Bold+Italic     Bold+Under            │
+║Align: Left║┃Align: Cent┃│Align: Righ│ │Dim+Italic      All Flags             │
+║           ║┃           ┃│           │ │                                      │
+╚═══════════╝┗━━━━━━━━━━━┛╰───────────╯ ╰──────────────────────────────────────╯
+╭Paragraph Wrap───────────╮╭Lists───────────────────╮╭Code Block──────────────╮ 
+│Word: The quick brown fox││• Bullet item           ││fn main() {             │ 
+│jumps over the lazy dog. ││• Second item           ││    println!("hello");  │ 
+│                         ││  ◦ Nested item         ││}                       │ 
+│Char: The quick brown fox│╰────────────────────────╯│                        │ 
+│ jumps over the lazy dog.│╭Table───────────────────╮│                        │ 
+│                         ││Name       Type  Size   │╰────────────────────────╯ 
+│None: The quick brown fox││main.rs    Rust  4.2 KB │╭Blockquote + Rule───────╮ 
+│                         ││README.md  MD    3.4 KB ││> Deterministic output b│ 
+│                         ││config.tom TOML  1.1 KB ││                        │ 
+│                         ││                        ││────────────────────────│ 
+╰─────────────────────────╯╰────────────────────────╯╰────────────────────────╯ 
+.*......                                                                        

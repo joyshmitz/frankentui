@@ -1,40 +1,40 @@
-╭───────────Markdown Renderer────────────╮╭LLM Streaming Simulation | Streaming... ╮╭──────────Style Sampler───────────╮
-│GitHub-Flavored Markdown                ││▌                                       ││Bold  Dim  Italic  Underline      │
-│                                        ││                                        ││Strikethrough  Reverse  Blink     │
-│Math & LaTeX Support                    ││                                        ││Dbl-Underline  Curly-Underline  [H│
-│                                        ││                                        ││                                  │
-│Inline math like E = mc² and α + β = γ  ││                                        ││Error  Success  Warning  Link  Cod│
-│renders to Unicode.                     ││                                        ││                                  │
-│                                        ││                                        │╰──────────────────────────────────╯
-│Display math for complex equations:     ││                                        │────────────────────────────────────
-│                                        ││                                        │╭─────Wrap: Char | Align: Left─────╮
-│  ∑ᵢ₌₁ⁿ xᵢ = n(n+1)/2                   ││                                        ││w: cycle wrap | a: cycle alignment│
-│                                        ││                                        ││The quick brown fox jumps over the│
-│  f(x) = ∫_{−∞}^{∞} e^{−x²} dx = √{π}   ││                                        ││ lazy dog. Supercalifragilisticexp│
-│                                        ││                                        ││ialidocious is quite a long word t│
-│Greek letters: α, β, γ, δ, ε            ││                                        ││hat tests character-level wrapping│
-│                                        ││                                        ││ behavior. ???? contains CJK c│
-│Operators: ×, ÷, ±, ≤, ≥, ≠, ≈          ││                                        ││haracters that are double-width.  │
-│                                        ││                                        ││? Ferris says hello!             │
-│Task Lists                              ││                                        ││                                  │
-│✓ Implement markdown parser             ││                                        ││                                  │
-│✓ Add LaTeX to Unicode conversion       ││                                        ││                                  │
-│✓ Support task list checkboxes          ││                                        ││                                  │
-│☐ Add syntax highlighting               ││                                        ││                                  │
-│☐ Write comprehensive tests             ││                                        ││                                  │
-│                                        ││                                        ││                                  │
-│Admonitions                             ││                                        ││                                  │
-│                                        ││                                        ││                                  │
-│?  NOTE                                ││                                        ││                                  │
-│┃ This is an informational note with    ││                                        ││                                  │
-│helpful context.                        ││                                        ││                                  │
-│                                        ││                                        ││                                  │
-│? TIP                                  ││                                        ││                                  │
-│┃ Pro tip: Use keyboard shortcuts for   ││                                        ││                                  │
-│faster navigation.                      ││                                        ││                                  │
-│                                        ││                                        ││                                  │
-│? IMPORTANT                            ││  [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]││                                  │
-│┃ Critical information that users need  ││  Detection: 0 indicators | Uncertain   ││                                  │
-│to know.                                ││  Confidence: 0% | Chars: 0/1304        ││                                  │
-│                                        ││  Space: play/pause | r: restart | ↑↓: s││                                  │
-╰────────────────────────────────────────╯╰────────────────────────────────────────╯╰──────────────────────────────────╯
+╭───────────Markdown Renderer───────────╮ ╭LLM Streaming Simulation | Streaming...╮ ╭──────────Style Sampler───────────╮
+│GitHub-Flavored Markdown               │ │▌                                      │ │Bold  Dim  Italic  Underline      │
+│                                       │ │                                       │ │Strikethrough  Reverse  Blink     │
+│Math & LaTeX Support                   │ │                                       │ │Dbl-Underline  Curly-Underline  [H│
+│                                       │ │                                       │ │                                  │
+│Inline math like E = mc² and α + β = γ │ │                                       │ │Error  Success  Warning  Link  Cod│
+│renders to Unicode.                    │ │                                       │ │                                  │
+│                                       │ │                                       │ ╰──────────────────────────────────╯
+│Display math for complex equations:    │ │                                       │                                     
+│                                       │ │                                       │ ╭─────────Unicode Showcase─────────╮
+│  ∑ᵢ₌₁ⁿ xᵢ = n(n+1)/2                  │ │                                       │ │Text          Type          Cells │
+│                                       │ │                                       │ │Hello         ASCII         5     │
+│  f(x) = ∫_{−∞}^{∞} e^{−x²} dx = √{π}  │ │                                       │ │????      CJK           8     │
+│                                       │ │                                       │ │?????    Hiragana      10    │
+│Greek letters: α, β, γ, δ, ε           │ │                                       │ │???        Emoji         6     │
+│                                       │ │                                       │ │café          Latin+accent  4     │
+│Operators: ×, ÷, ±, ≤, ≥, ≠, ≈         │ │                                       │ │α β γ δ       Greek         7     │
+│                                       │ │                                       │ │→ ← ↑ ↓       Arrows        7     │
+│Task Lists                             │ │                                       │ ╰──────────────────────────────────╯
+│✓ Implement markdown parser            │ │                                       │                                     
+│✓ Add LaTeX to Unicode conversion      │ │                                       │ ╭─────Wrap: Char | Align: Left─────╮
+│✓ Support task list checkboxes         │ │                                       │ │w: cycle wrap | a: cycle alignment│
+│☐ Add syntax highlighting              │ │                                       │ │The quick brown fox jumps over the│
+│☐ Write comprehensive tests            │ │                                       │ │ lazy dog. Supercalifragilisticexp│
+│                                       │ │                                       │ │ialidocious is quite a long word t│
+│Admonitions                            │ │                                       │ │hat tests character-level wrapping│
+│                                       │ │                                       │ │ behavior. ???? contains CJK c│
+│?  NOTE                               │ │                                       │ │haracters that are double-width.  │
+│┃ This is an informational note with   │ │                                       │ │? Ferris says hello!             │
+│helpful context.                       │ │                                       │ │                                  │
+│                                       │ │                                       │ │                                  │
+│? TIP                                 │ │                                       │ │                                  │
+│┃ Pro tip: Use keyboard shortcuts for  │ │                                       │ │                                  │
+│faster navigation.                     │ │                                       │ │                                  │
+│                                       │ │                                       │ │                                  │
+│? IMPORTANT                           │ │  [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]│ │                                  │
+│┃ Critical information that users need │ │  Detection: 0 indicators | Uncertain  │ │                                  │
+│to know.                               │ │  Confidence: 0% | Chars: 0/838        │ │                                  │
+│                                       │ │  Space: play/pause | r: restart | ↑↓: │ │                                  │
+╰───────────────────────────────────────╯ ╰───────────────────────────────────────╯ ╰──────────────────────────────────╯

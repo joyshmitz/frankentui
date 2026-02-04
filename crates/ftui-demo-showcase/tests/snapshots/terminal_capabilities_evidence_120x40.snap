@@ -1,7 +1,7 @@
 ╭──────────────────────────────────────────── Terminal Capability Explorer ────────────────────────────────────────────╮
-│Profile: modern | View: Evidence | Color depth: truecolor                                                             │
-│Mux: no | Sync output: yes                                                                                            │
-│Hyperlinks: yes | Clipboard: yes | overrides: none                                                                    │
+│Detected: xterm-256color | Simulated: modern | View: Evidence                                                         │
+│Color depth: truecolor | Mux: no | Sync output: yes                                                                   │
+│Scroll region: yes | Hyperlinks: yes | Clipboard: yes | overrides: none                                               │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭ Capability Matrix ─────────────────────────────────────────────────╮╭ Evidence Ledger ───────────────────────────────╮
 │Capability                Detected  Effective Fallback              ││Capability: True color (24-bit) (likely supporte│
@@ -21,6 +21,13 @@
 │                                                                    ││                                                │
 │                                                                    ││                                                │
 │                                                                    ││                                                │
+│                                                                    │╰────────────────────────────────────────────────╯
+│                                                                    │╭ Fallback Policy ───────────────────────────────╮
+│                                                                    ││Sync output: yes (enabled)                      │
+│                                                                    ││Scroll region: yes (enabled)                    │
+│                                                                    ││Mux safety: inactive                            │
+│                                                                    ││                                                │
+│                                                                    ││                                                │
 │                                                                    ││                                                │
 │                                                                    ││                                                │
 │                                                                    │╰────────────────────────────────────────────────╯
@@ -30,11 +37,4 @@
 │                                                                    ││COLORTERM=truecolor                             │
 │                                                                    ││NO_COLOR=no                                     │
 │                                                                    ││MUX: tmux=no screen=no zellij=no                │
-│                                                                    ││KITTY_WINDOW_ID=no WT_SESSION=no                │
-│                                                                    ││Policy: use_sync_output=yes use_scroll_region=ye│
-│                                                                    ││Policy: use_hyperlinks=yes use_clipboard=yes    │
-│                                                                    ││Passthrough wrap: no                            │
-│                                                                    ││                                                │
-│                                                                    ││                                                │
-│                                                                    ││                                                │
 ╰────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────────────╯

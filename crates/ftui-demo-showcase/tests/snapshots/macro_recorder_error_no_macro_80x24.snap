@@ -1,24 +1,24 @@
 ╭────────────────────────────────Macro Recorder────────────────────────────────╮
-│State: ⚠ Error   Events: 0   Duration: 0ms   Filtered: 0                      │
-│Controls: r record/stop  p play/pause  l loop  +/- speed  Esc stop            │
-│Speed: 1.00x   Loop: Off   Progress:   0%                                     │
-│⚠ Error: No macro recorded — press 'r' to start recording                     │
-│                                                                              │
+│State: ⚠ Error   Events: 0   Duration: 0ms                                    │
+│Speed: 1.00x   Loop: Off   Progress:   0%   Filtered: 0                       │
+│Focus: [Controls]  [Timeline]  [Scenarios]   Ctrl+Arrows switch panel         │
+│Space/r record/stop  Enter/p play/pause  Esc stop  L loop  +/- speed          │
+│Press Space to record or Enter in Scenarios to load a demo                    │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-╭───────────────────Timeline───────────────────╮╭───────Scenario Runner────────╮
-│No macro recorded yet.                        ││Preset scenarios (WIP)        │
+╭───────────────────Timeline───────────────────╮╭─────────Event Detail─────────╮
+│No macro loaded.                              ││Select a scenario or record a │
+│Space to record, or select a scenario and pres││                              │
+│                                              ││                              │
+│                                              ││                              │
+│                                              ││                              │
+│                                              ││                              │
+│                                              │╰──────────────────────────────╯
+│                                              │╭───────Scenario Runner────────╮
+│                                              ││Preset scenarios (Enter to loa│
 │                                              ││                              │
 │                                              ││Tab Tour                      │
-│                                              ││  Cycle screens, toggle help, │
+│                                              ││  Cycle tabs and toggle the he│
 │                                              ││                              │
 │                                              ││Search Flow                   │
-│                                              ││  Open Shakespeare screen, sea│
-│                                              ││                              │
-│                                              ││Layout Lab                    │
-│                                              ││  Adjust constraints and switc│
-│                                              ││                              │
-│                                              ││                              │
-│                                              ││                              │
-│                                              ││                              │
-│                                              ││                              │
+│                                              ││  Open palette, type a target,│
 ╰──────────────────────────────────────────────╯╰──────────────────────────────╯

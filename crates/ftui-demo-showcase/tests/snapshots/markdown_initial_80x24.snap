@@ -1,24 +1,24 @@
-╭────Markdown Renderer─────╮╭LLM Streaming Simulation |╮╭────Style Sampler─────╮
-│GitHub-Flavored Markdown  ││▌                         ││Bold  Dim  Italic  Und│
-│                          ││                          ││Strikethrough  Reverse│
-│Math & LaTeX Support      ││                          ││Dbl-Underline  Curly-U│
-│                          ││                          ││                      │
-│Inline math like E = mc²  ││                          ││Error  Success  Warnin│
-│and α + β = γ renders to  ││                          ││                      │
-│Unicode.                  ││                          │╰──────────────────────╯
-│                          ││                          │────────────────────────
-│Display math for complex  ││                          │╭Wrap: Word | Align: Le╮
-│equations:                ││                          ││w: cycle wrap | a: cyc│
-│                          ││                          ││The quick brown fox   │
-│  ∑ᵢ₌₁ⁿ xᵢ = n(n+1)/2     ││                          ││jumps over the lazy   │
-│                          ││                          ││dog.                  │
-│  f(x) = ∫_{−∞}^{∞}       ││                          ││Supercalifragilisticex│
-│e^{−x²} dx = √{π}         ││                          ││is quite a long word  │
-│                          ││                          ││that tests            │
-│Greek letters: α, β, γ, δ,││                          ││character-level       │
-│ε                         ││                          ││wrapping behavior.    │
-│                          ││  [░░░░░░░░░░░░░░░░░░░░░░]││???? contains CJK │
-│Operators: ×, ÷, ±, ≤, ≥, ││  Detection: 0 indicators ││characters that are   │
-│≠, ≈                      ││  Confidence: 0% | Chars: ││double-width. ?      │
-│                          ││  Space: play/pause | r: r││Ferris says hello!    │
-╰──────────────────────────╯╰──────────────────────────╯╰──────────────────────╯
+╭────Markdown Renderer────╮ ╭LLM Streaming Simulation ╮ ╭────Style Sampler─────╮
+│GitHub-Flavored Markdown │ │▌                        │ │Bold  Dim  Italic  Und│
+│                         │ │                         │ │Strikethrough  Reverse│
+│Math & LaTeX Support     │ │                         │ │Dbl-Underline  Curly-U│
+│                         │ │                         │ │                      │
+│Inline math like E = mc² │ │                         │ │Error  Success  Warnin│
+│and α + β = γ renders to │ │                         │ │                      │
+│Unicode.                 │ │                         │ ╰──────────────────────╯
+│                         │ │                         │                         
+│Display math for complex │ │                         │ ╭───Unicode Showcase───╮
+│equations:               │ │                         │ │Text         Type     │
+│                         │ │                         │ │Hello        ASCII    │
+│  ∑ᵢ₌₁ⁿ xᵢ = n(n+1)/2    │ │                         │ │????     CJK      │
+│                         │ │                         │ │?????   Hiragana │
+│  f(x) = ∫_{−∞}^{∞}      │ │                         │ │???       Emoji    │
+│e^{−x²} dx = √{π}        │ │                         │ │café         Latin+ac │
+│                         │ │                         │ │α β γ δ      Greek    │
+│Greek letters: α, β, γ, δ│ │                         │ │→ ← ↑ ↓      Arrows   │
+│, ε                      │ │                         │ ╰──────────────────────╯
+│                         │ │  [░░░░░░░░░░░░░░░░░░░░░]│                         
+│Operators: ×, ÷, ±, ≤, ≥,│ │  Detection: 0 indicators│ ╭Wrap: Word | Align: Le╮
+│≠, ≈                     │ │  Confidence: 0% | Chars:│ │w: cycle wrap | a: cyc│
+│                         │ │  Space: play/pause | r: │ │The quick brown fox   │
+╰─────────────────────────╯ ╰─────────────────────────╯ ╰──────────────────────╯

@@ -1,40 +1,40 @@
-╭───────────Markdown Renderer────────────╮╭LLM Streaming Simulation | Streaming... ╮╭──────────Style Sampler───────────╮
-│                                        ││▌                                       ││Bold  Dim  Italic  Underline      │
-│  f(x) = ∫_{−∞}^{∞} e^{−x²} dx = √{π}   ││                                        ││Strikethrough  Reverse  Blink     │
-│                                        ││                                        ││Dbl-Underline  Curly-Underline  [H│
-│Greek letters: α, β, γ, δ, ε            ││                                        ││                                  │
-│                                        ││                                        ││Error  Success  Warning  Link  Cod│
-│Operators: ×, ÷, ±, ≤, ≥, ≠, ≈          ││                                        ││                                  │
-│                                        ││                                        │╰──────────────────────────────────╯
-│Task Lists                              ││                                        │────────────────────────────────────
-│✓ Implement markdown parser             ││                                        │╭─────Wrap: Word | Align: Left─────╮
-│✓ Add LaTeX to Unicode conversion       ││                                        ││w: cycle wrap | a: cycle alignment│
-│✓ Support task list checkboxes          ││                                        ││The quick brown fox jumps over the│
-│☐ Add syntax highlighting               ││                                        ││lazy dog.                         │
-│☐ Write comprehensive tests             ││                                        ││Supercalifragilisticexpialidocious│
-│                                        ││                                        ││is quite a long word that tests   │
-│Admonitions                             ││                                        ││character-level wrapping behavior.│
-│                                        ││                                        ││???? contains CJK characters  │
-│?  NOTE                                ││                                        ││that are double-width. ? Ferris  │
-│┃ This is an informational note with    ││                                        ││says hello!                       │
-│helpful context.                        ││                                        ││                                  │
-│                                        ││                                        ││                                  │
-│? TIP                                  ││                                        ││                                  │
-│┃ Pro tip: Use keyboard shortcuts for   ││                                        ││                                  │
-│faster navigation.                      ││                                        ││                                  │
-│                                        ││                                        ││                                  │
-│? IMPORTANT                            ││                                        ││                                  │
-│┃ Critical information that users need  ││                                        ││                                  │
-│to know.                                ││                                        ││                                  │
-│                                        ││                                        ││                                  │
-│?  WARNING                             ││                                        ││                                  │
-│┃ Potential issues or things to be      ││                                        ││                                  │
-│careful about.                          ││                                        ││                                  │
-│                                        ││                                        ││                                  │
-│? CAUTION                              ││                                        ││                                  │
-│┃ Dangerous actions that may cause      ││                                        ││                                  │
-│problems.                               ││  [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]││                                  │
-│                                        ││  Detection: 0 indicators | Uncertain   ││                                  │
-│Footnotes                               ││  Confidence: 0% | Chars: 0/1304        ││                                  │
-│                                        ││  Space: play/pause | r: restart | ↑↓: s││                                  │
-╰────────────────────────────────────────╯╰────────────────────────────────────────╯╰──────────────────────────────────╯
+╭───────────Markdown Renderer───────────╮ ╭LLM Streaming Simulation | Streaming...╮ ╭──────────Style Sampler───────────╮
+│                                       │ │▌                                      │ │Bold  Dim  Italic  Underline      │
+│  f(x) = ∫_{−∞}^{∞} e^{−x²} dx = √{π}  │ │                                       │ │Strikethrough  Reverse  Blink     │
+│                                       │ │                                       │ │Dbl-Underline  Curly-Underline  [H│
+│Greek letters: α, β, γ, δ, ε           │ │                                       │ │                                  │
+│                                       │ │                                       │ │Error  Success  Warning  Link  Cod│
+│Operators: ×, ÷, ±, ≤, ≥, ≠, ≈         │ │                                       │ │                                  │
+│                                       │ │                                       │ ╰──────────────────────────────────╯
+│Task Lists                             │ │                                       │                                     
+│✓ Implement markdown parser            │ │                                       │ ╭─────────Unicode Showcase─────────╮
+│✓ Add LaTeX to Unicode conversion      │ │                                       │ │Text          Type          Cells │
+│✓ Support task list checkboxes         │ │                                       │ │Hello         ASCII         5     │
+│☐ Add syntax highlighting              │ │                                       │ │????      CJK           8     │
+│☐ Write comprehensive tests            │ │                                       │ │?????    Hiragana      10    │
+│                                       │ │                                       │ │???        Emoji         6     │
+│Admonitions                            │ │                                       │ │café          Latin+accent  4     │
+│                                       │ │                                       │ │α β γ δ       Greek         7     │
+│?  NOTE                               │ │                                       │ │→ ← ↑ ↓       Arrows        7     │
+│┃ This is an informational note with   │ │                                       │ ╰──────────────────────────────────╯
+│helpful context.                       │ │                                       │                                     
+│                                       │ │                                       │ ╭─────Wrap: Word | Align: Left─────╮
+│? TIP                                 │ │                                       │ │w: cycle wrap | a: cycle alignment│
+│┃ Pro tip: Use keyboard shortcuts for  │ │                                       │ │The quick brown fox jumps over the│
+│faster navigation.                     │ │                                       │ │lazy dog.                         │
+│                                       │ │                                       │ │Supercalifragilisticexpialidocious│
+│? IMPORTANT                           │ │                                       │ │is quite a long word that tests   │
+│┃ Critical information that users need │ │                                       │ │character-level wrapping behavior.│
+│to know.                               │ │                                       │ │???? contains CJK characters  │
+│                                       │ │                                       │ │that are double-width. ? Ferris  │
+│?  WARNING                            │ │                                       │ │says hello!                       │
+│┃ Potential issues or things to be     │ │                                       │ │                                  │
+│careful about.                         │ │                                       │ │                                  │
+│                                       │ │                                       │ │                                  │
+│? CAUTION                             │ │                                       │ │                                  │
+│┃ Dangerous actions that may cause     │ │                                       │ │                                  │
+│problems.                              │ │  [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]│ │                                  │
+│                                       │ │  Detection: 0 indicators | Uncertain  │ │                                  │
+│Footnotes                              │ │  Confidence: 0% | Chars: 0/838        │ │                                  │
+│                                       │ │  Space: play/pause | r: restart | ↑↓: │ │                                  │
+╰───────────────────────────────────────╯ ╰───────────────────────────────────────╯ ╰──────────────────────────────────╯

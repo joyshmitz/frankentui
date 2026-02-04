@@ -1,24 +1,24 @@
  1: Dash │ 2: Shakes │ 3: Code │ 4: Widgets │ 5: Layout │ 6: Forms │ 7: DataViz 
 ╭───────────────────────────────────Markdown───────────────────────────────────╮
-│╭────Markdown Renderer────╮╭LLM Streaming Simulation ╮╭────Style Sampler────╮ │
-││GitHub-Flavored Markdown ││▌                        ││Bold  Dim  Italic  Un│ │
-││                         ││                         ││Strikethrough  Revers│ │
-││Math & LaTeX Support     ││                         ││Dbl-Underline  Curly-│ │
-││                         ││                         ││                     │ │
-││Inline math like E = mc² ││                         ││Error  Success  Warni│ │
-││and α + β = γ renders to ││                         ││                     │ │
-││Unicode.                 ││                         │╰─────────────────────╯ │
-││                         ││                         │─────────────────────── │
-││Display math for complex ││                         │╭Wrap: Word | Align: L╮ │
-││equations:               ││                         ││w: cycle wrap | a: cy│ │
-││                         ││                         ││The quick brown fox  │ │
-││  ∑ᵢ₌₁ⁿ xᵢ = n(n+1)/2    ││                         ││jumps over the lazy  │ │
-││                         ││                         ││dog.                 │ │
-││  f(x) = ∫_{−∞}^{∞}      ││                         ││Supercalifragilistice│ │
-││e^{−x²} dx = √{π}        ││  [░░░░░░░░░░░░░░░░░░░░░]││is quite a long word │ │
-││                         ││  Detection: 0 indicators││that tests           │ │
-││Greek letters: α, β, γ, δ││  Confidence: 0% | Chars:││character-level      │ │
-││, ε                      ││  Space: play/pause | r: ││wrapping behavior.   │ │
-│╰─────────────────────────╯╰─────────────────────────╯╰─────────────────────╯ │
+│╭────Markdown Renderer────╮ ╭LLM Streaming Simulation ╮ ╭───Style Sampler────╮│
+││GitHub-Flavored Markdown │ │▌                        │ │Bold  Dim  Italic  U││
+││                         │ │                         │ │Strikethrough  Rever││
+││Math & LaTeX Support     │ │                         │ │Dbl-Underline  Curly││
+││                         │ │                         │ │                    ││
+││Inline math like E = mc² │ │                         │ │Error  Success  Warn││
+││and α + β = γ renders to │ │                         │ │                    ││
+││Unicode.                 │ │                         │ ╰────────────────────╯│
+││                         │ │                         │                       │
+││Display math for complex │ │                         │ ╭──Unicode Showcase──╮│
+││equations:               │ │                         │ │Text         Type   ││
+││                         │ │                         │ │Hello        ASCII  ││
+││  ∑ᵢ₌₁ⁿ xᵢ = n(n+1)/2    │ │                         │ │????     CJK    ││
+││                         │ │                         │ │?????   Hiraga ││
+││  f(x) = ∫_{−∞}^{∞}      │ │                         │ │???       Emoji  ││
+││e^{−x²} dx = √{π}        │ │  [░░░░░░░░░░░░░░░░░░░░░]│ │café         Latin+ ││
+││                         │ │  Detection: 0 indicators│ │α β γ δ      Greek  ││
+││Greek letters: α, β, γ, δ│ │  Confidence: 0% | Chars:│ │→ ← ↑ ↓      Arrows ││
+││, ε                      │ │  Space: play/pause | r: │ ╰────────────────────╯│
+│╰─────────────────────────╯ ╰─────────────────────────╯                       │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Markdown [13/28]  Cyberpunk Aurora           tick:0 frm:0            0x0 00:00 
+ Markdown [13/34]  Cyberpunk Aurora           tick:0 frm:0            0x0 00:00 

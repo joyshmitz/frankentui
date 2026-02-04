@@ -1,35 +1,35 @@
 ╭────────────────────────────────────────────────────Macro Recorder────────────────────────────────────────────────────╮
-│State: ○ Idle   Events: 0   Duration: 0ms   Filtered: 0                                                               │
-│Controls: r record/stop  p play/pause  l loop  +/- speed  Esc stop                                                    │
-│Speed: 1.00x   Loop: Off   Progress:   0%                                                                             │
-│                                                                                                                      │
+│State: ○ Idle   Events: 0   Duration: 0ms                                                                             │
+│Speed: 1.00x   Loop: Off   Progress:   0%   Filtered: 0                                                               │
+│Focus: [Controls]  [Timeline]  [Scenarios]   Ctrl+Arrows switch panel                                                 │
+│Space/r record/stop  Enter/p play/pause  Esc stop  L loop  +/- speed                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-╭───────────────────────────────Timeline───────────────────────────────╮╭───────────────Scenario Runner────────────────╮
-│No macro recorded yet.                                                ││Preset scenarios (WIP)                        │
+╭───────────────────────────────Timeline───────────────────────────────╮╭─────────────────Event Detail─────────────────╮
+│No macro loaded.                                                      ││Select a scenario or record a macro to see det│
+│Space to record, or select a scenario and press Enter.                ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      ││                                              │
+│                                                                      │╰──────────────────────────────────────────────╯
+│                                                                      │╭───────────────Scenario Runner────────────────╮
+│                                                                      ││Preset scenarios (Enter to load)              │
 │                                                                      ││                                              │
 │                                                                      ││Tab Tour                                      │
-│                                                                      ││  Cycle screens, toggle help, return to record│
+│                                                                      ││  Cycle tabs and toggle the help overlay      │
 │                                                                      ││                                              │
 │                                                                      ││Search Flow                                   │
-│                                                                      ││  Open Shakespeare screen, search for a phrase│
+│                                                                      ││  Open palette, type a target, confirm        │
 │                                                                      ││                                              │
 │                                                                      ││Layout Lab                                    │
-│                                                                      ││  Adjust constraints and switch grid presets  │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
-│                                                                      ││                                              │
+│                                                                      ││  Cycle screens and n/p adjustments           │
 │                                                                      ││                                              │
 │                                                                      ││                                              │
 │                                                                      ││                                              │

@@ -1,10 +1,10 @@
-╭Markdown Ren╮╭LLM Streamin╮╭Style Samp╮
-│GitHub-Flavo││▌           ││Bold  Dim │
-│Markdown    ││            ││Strikethro│
-│            ││            ││Dbl-Underl│
-│Math & LaTeX││            ││          │
-│Support     ││            ││Error  Suc│
-│            ││  [░░░░░░░░]││          │
-│Inline math ││  Detection:│╰──────────╯
-│like E = mc²││  Confidence│────────────
-╰────────────╯╰────────────╯╰Wrap: Word╯
+╭Markdown Re╮ ╭LLM Streami╮ ╭Style Samp╮
+│GitHub-Flav│ │▌          │ │Bold  Dim │
+│Markdown   │ │           │ │Strikethro│
+│           │ │           │ │Dbl-Underl│
+│Math &     │ │           │ │          │
+│LaTeX      │ │           │ │Error  Suc│
+│Support    │ │  [░░░░░░░]│ │          │
+│           │ │  Detection│ ╰──────────╯
+│Inline math│ │  Confidenc│             
+╰───────────╯ ╰───────────╯             

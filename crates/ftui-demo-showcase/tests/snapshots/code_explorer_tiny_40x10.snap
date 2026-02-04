@@ -1,10 +1,10 @@
-╔═════════sqlite3.c══════════╗╭File Inf╮
-║     1 /*******************█║│{       │
-║     2 ** This file is an a│║│  "filen│
-║     3 ** version 3.48.0.  │║╰────────╯
-║     4 ** single large file│║╭Context─╮
-║     5 ** unit.  This allow│║│Line 1  │
-║     6 ** possible if the f│║│        │
-║     7 ** of 5% or more are│║│Nearest │
-╚════════════════════════════╝╰────────╯
- Line 1/261044 (0%) | 9.2 MB | C        
+╔═════════sqlite3.c═════════╗╭File Info╮
+║      1 /*****************█║│{        │
+║      2 ** This file is an│║╰─────────╯
+║      3 ** version 3.48.0.│║╭─Context─╮
+║      4 ** single large fi│║│Line 1   │
+║      5 ** unit.  This all│║╰─────────╯
+║      6 ** possible if the│║╭Hotspots ╮
+║      7 ** of 5% or more a│║│         │
+╚═══════════════════════════╝╰─────────╯
+ Mode: Source · Line 1/261044 (0%) · Mat
