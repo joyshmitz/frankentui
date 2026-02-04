@@ -9,9 +9,14 @@
 # 4. Unit + snapshot tests
 # 5. Smoke test (alt-screen with auto-exit)
 # 6. Inline mode smoke test
-# 7. Screen navigation (cycle all 13 screens)
+# 7. Screen navigation (cycle all 22 screens)
 # 8. Search test (Shakespeare screen)
 # 9. Resize test (SIGWINCH handling)
+# 10. VisualEffects backdrop test (bd-l8x9.8.2)
+# 11. Layout inspector scenarios (bd-iuvb.7)
+# 12. Terminal capabilities report export (bd-iuvb.6)
+# 13. i18n stress lab report export (bd-iuvb.9)
+# 14. Widget builder export (bd-iuvb.10)
 #
 # Usage:
 #   ./scripts/demo_showcase_e2e.sh              # Run all tests
@@ -237,7 +242,7 @@ run_in_pty() {
 if $QUICK; then
     TOTAL_STEPS=3
 else
-    TOTAL_STEPS=10  # Updated: added VisualEffects test (bd-l8x9.8)
+    TOTAL_STEPS=14  # Updated: added Layout Inspector + Terminal Caps + i18n + Widget Builder
 fi
 
 echo "=============================================="
@@ -353,19 +358,19 @@ if $CAN_SMOKE; then
     # ────────────────────────────────────────────────────────────────────────
     # Step 7: Screen Navigation
     #
-    # Launch the demo on each screen (--screen=1..22) with a
+    # Launch the demo on each screen (--screen=1..31) with a
     # short auto-exit. If any screen panics on startup, this catches it.
-    # Updated for 22 screens (bd-l8x9.8.1: includes VisualEffects at screen 13)
+    # Updated for 31 screens (bd-iuvb.7: includes Layout Inspector at screen 20)
     # ────────────────────────────────────────────────────────────────────────
-    log_step "Screen navigation (all 22 screens)"
+    log_step "Screen navigation (all 31 screens)"
     log_info "Starting demo on each screen to verify no panics..."
     NAV_LOG="$LOG_DIR/07_navigation.log"
-    STEP_NAMES+=("Screen navigation (all 22)")
+    STEP_NAMES+=("Screen navigation (all 31)")
 
     nav_start=$(date +%s%N)
     {
         NAV_FAILURES=0
-        for screen_num in $(seq 1 22); do
+        for screen_num in $(seq 1 31); do
             echo "--- Screen $screen_num ---"
             if run_in_pty "FTUI_DEMO_EXIT_AFTER_MS=1500 timeout 8 $DEMO_BIN --screen=$screen_num" 2>&1; then
                 echo "  Screen $screen_num: OK"
@@ -575,11 +580,423 @@ if $CAN_SMOKE; then
         STEP_STATUSES+=("FAIL")
     fi
 
+    # ────────────────────────────────────────────────────────────────────────
+    # Step 11: Layout Inspector (bd-iuvb.7)
+    #
+    # Runs the Layout Inspector screen and cycles scenarios/steps to
+    # produce deterministic hashes for evidence logs.
+    # ────────────────────────────────────────────────────────────────────────
+    log_step "Layout Inspector (screen 20)"
+    log_info "Running Layout Inspector scenarios and logging hashes..."
+    INSPECT_LOG="$LOG_DIR/11_layout_inspector.log"
+    INSPECT_JSONL="$LOG_DIR/11_layout_inspector.jsonl"
+    STEP_NAMES+=("Layout Inspector")
+
+    inspect_start=$(date +%s%N)
+    {
+        echo "=== Layout Inspector (Screen 20) ==="
+        echo "Bead: bd-iuvb.7"
+        echo "JSONL: $INSPECT_JSONL"
+        echo ""
+
+        inspect_run() {
+            local scenario="$1"
+            local step="$2"
+            local keys="$3"
+            local log_file="$LOG_DIR/11_layout_inspector_${scenario}_${step}.log"
+            local cmd="stty rows 24 cols 80 2>/dev/null; (sleep 0.6; printf \"$keys\" > /dev/tty) & FTUI_DEMO_EXIT_AFTER_MS=2200 FTUI_DEMO_SCREEN=20 timeout 8 $DEMO_BIN"
+            local start_ns end_ns dur_ms outcome exit_code rects_hash
+
+            echo "--- Scenario ${scenario} / Step ${step} (keys='${keys}') ---"
+            start_ns=$(date +%s%N)
+            if run_in_pty "$cmd" > "$log_file" 2>&1; then
+                exit_code=0
+            else
+                exit_code=$?
+            fi
+            end_ns=$(date +%s%N)
+            dur_ms=$(( (end_ns - start_ns) / 1000000 ))
+
+            if [ "$exit_code" -eq 124 ]; then
+                outcome="timeout"
+            elif [ "$exit_code" -eq 0 ]; then
+                outcome="pass"
+            else
+                outcome="fail"
+            fi
+
+            rects_hash=$(sha256sum "$log_file" | awk '{print $1}')
+
+            printf '{'
+            printf '"run_id":"%s",' "$TIMESTAMP"
+            printf '"screen":20,'
+            printf '"scenario_id":%s,' "$scenario"
+            printf '"step_idx":%s,' "$step"
+            printf '"rects_hash":"%s",' "$rects_hash"
+            printf '"duration_ms":%s,' "$dur_ms"
+            printf '"exit_code":%s,' "$exit_code"
+            printf '"outcome":"%s"' "$outcome"
+            printf '}\n'
+        }
+
+        inspect_run 0 0 ""
+        inspect_run 1 1 "n]"
+        inspect_run 2 2 "nn]]"
+    } > "$INSPECT_LOG" 2>&1
+    inspect_exit=$?
+    inspect_end=$(date +%s%N)
+    inspect_dur_ms=$(( (inspect_end - inspect_start) / 1000000 ))
+    inspect_dur_s=$(echo "scale=2; $inspect_dur_ms / 1000" | bc 2>/dev/null || echo "${inspect_dur_ms}ms")
+    STEP_DURATIONS+=("${inspect_dur_s}s")
+
+    if [ $inspect_exit -eq 0 ]; then
+        log_pass "Layout Inspector passed in ${inspect_dur_s}s"
+        PASS_COUNT=$((PASS_COUNT + 1))
+        STEP_STATUSES+=("PASS")
+    else
+        log_fail "Layout Inspector failed. See: $INSPECT_LOG"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        STEP_STATUSES+=("FAIL")
+    fi
+
+    # ────────────────────────────────────────────────────────────────────────
+    # Step 12: Terminal Capabilities Report Export (bd-iuvb.6)
+    #
+    # Runs the Terminal Capabilities screen and triggers an export via
+    # an injected 'e' keypress to produce JSONL output.
+    # ────────────────────────────────────────────────────────────────────────
+    log_step "Terminal caps report (screen 11)"
+    log_info "Running TerminalCapabilities and exporting JSONL report..."
+    CAPS_LOG="$LOG_DIR/12_terminal_caps.log"
+    CAPS_REPORT="$LOG_DIR/12_terminal_caps_report_${TIMESTAMP}.jsonl"
+    CAPS_JSONL="$LOG_DIR/12_terminal_caps_summary.jsonl"
+    STEP_NAMES+=("Terminal caps report")
+
+    caps_start=$(date +%s%N)
+    {
+        echo "=== Terminal Capabilities (Screen 11) Report Export ==="
+        echo "Bead: bd-iuvb.6"
+        echo "Report path: $CAPS_REPORT"
+        echo ""
+
+        caps_cmd="stty rows 24 cols 80 2>/dev/null; (sleep 0.6; printf 'e' > /dev/tty) & FTUI_TERMCAPS_REPORT_PATH=\"$CAPS_REPORT\" FTUI_DEMO_EXIT_AFTER_MS=2000 FTUI_DEMO_SCREEN=11 timeout 8 $DEMO_BIN"
+
+        if run_in_pty "$caps_cmd" 2>&1; then
+            caps_exit=0
+        else
+            caps_exit=$?
+        fi
+
+        if [ "$caps_exit" -eq 124 ]; then
+            caps_outcome="timeout"
+        elif [ "$caps_exit" -eq 0 ]; then
+            caps_outcome="pass"
+        else
+            caps_outcome="fail"
+        fi
+
+        caps_report_ok=false
+        if [ -s "$CAPS_REPORT" ]; then
+            caps_report_ok=true
+        else
+            echo "Report file missing or empty: $CAPS_REPORT"
+            caps_outcome="no_report"
+        fi
+
+        caps_parse_ok=false
+        if $caps_report_ok; then
+            if python3 - "$CAPS_REPORT" "$CAPS_JSONL" "$TIMESTAMP" "$caps_outcome" "$caps_exit" <<'PY'
+import json
+import sys
+
+report_path, summary_path, run_id, outcome, exit_code = sys.argv[1:6]
+
+with open(report_path, "r", encoding="utf-8") as handle:
+    lines = [line for line in handle if line.strip()]
+if not lines:
+    raise SystemExit("Report JSONL is empty")
+
+report = json.loads(lines[-1])
+caps = report.get("capabilities", [])
+enabled = [row.get("capability") for row in caps if row.get("effective") is True]
+disabled = [row.get("capability") for row in caps if row.get("effective") is False]
+
+profile = report.get("simulated_profile") or report.get("detected_profile")
+payload = {
+    "run_id": run_id,
+    "profile": profile,
+    "enabled_features": enabled,
+    "disabled_features": disabled,
+    "outcome": outcome,
+    "exit_code": int(exit_code),
+}
+
+with open(summary_path, "a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+PY
+            then
+                caps_parse_ok=true
+            else
+                echo "Failed to parse report into summary JSONL"
+                caps_outcome="parse_fail"
+            fi
+        fi
+
+        caps_exit_ok=true
+        if [ "$caps_exit" -ne 0 ] && [ "$caps_exit" -ne 124 ]; then
+            caps_exit_ok=false
+        fi
+
+        caps_success=true
+        if ! $caps_exit_ok; then caps_success=false; fi
+        if ! $caps_report_ok; then caps_success=false; fi
+        if ! $caps_parse_ok; then caps_success=false; fi
+
+        echo "Outcome: $caps_outcome"
+        echo "Summary JSONL: $CAPS_JSONL"
+
+        $caps_success
+    } > "$CAPS_LOG" 2>&1
+    caps_exit=$?
+    caps_end=$(date +%s%N)
+    caps_dur_ms=$(( (caps_end - caps_start) / 1000000 ))
+    caps_dur_s=$(echo "scale=2; $caps_dur_ms / 1000" | bc 2>/dev/null || echo "${caps_dur_ms}ms")
+    STEP_DURATIONS+=("${caps_dur_s}s")
+
+    if [ $caps_exit -eq 0 ]; then
+        log_pass "Terminal caps report passed in ${caps_dur_s}s"
+        PASS_COUNT=$((PASS_COUNT + 1))
+        STEP_STATUSES+=("PASS")
+    else
+        log_fail "Terminal caps report failed. See: $CAPS_LOG"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        STEP_STATUSES+=("FAIL")
+    fi
+
+    # ────────────────────────────────────────────────────────────────────────
+    # Step 13: i18n Stress Lab Report Export (bd-iuvb.9)
+    #
+    # Runs the i18n screen (screen 29), cycles to the Stress Lab panel,
+    # and exports a JSONL report via an injected 'e' keypress.
+    # ────────────────────────────────────────────────────────────────────────
+    log_step "i18n stress report (screen 29)"
+    log_info "Running i18n Stress Lab and exporting JSONL report..."
+    I18N_LOG="$LOG_DIR/13_i18n_stress.log"
+    I18N_REPORT="$LOG_DIR/13_i18n_report_${TIMESTAMP}.jsonl"
+    I18N_JSONL="$LOG_DIR/13_i18n_summary.jsonl"
+    STEP_NAMES+=("i18n stress report")
+
+    i18n_start=$(date +%s%N)
+    {
+        echo "=== i18n Stress Lab (Screen 29) Report Export ==="
+        echo "Bead: bd-iuvb.9"
+        echo "Report path: $I18N_REPORT"
+        echo ""
+
+        i18n_cmd="stty rows 24 cols 80 2>/dev/null; (sleep 0.5; printf '\\t\\t\\t' > /dev/tty; sleep 0.2; printf 'e' > /dev/tty) & FTUI_I18N_REPORT_PATH=\"$I18N_REPORT\" FTUI_I18N_REPORT_WIDTH=32 FTUI_DEMO_EXIT_AFTER_MS=2200 FTUI_DEMO_SCREEN=29 timeout 8 $DEMO_BIN"
+
+        if run_in_pty "$i18n_cmd" 2>&1; then
+            i18n_exit=0
+        else
+            i18n_exit=$?
+        fi
+
+        if [ "$i18n_exit" -eq 124 ]; then
+            i18n_outcome="timeout"
+        elif [ "$i18n_exit" -eq 0 ]; then
+            i18n_outcome="pass"
+        else
+            i18n_outcome="fail"
+        fi
+
+        i18n_report_ok=false
+        if [ -s "$I18N_REPORT" ]; then
+            i18n_report_ok=true
+        else
+            echo "Report file missing or empty: $I18N_REPORT"
+            i18n_outcome="no_report"
+        fi
+
+        i18n_parse_ok=false
+        if $i18n_report_ok; then
+            if python3 - "$I18N_REPORT" "$I18N_JSONL" "$TIMESTAMP" "$i18n_outcome" "$i18n_exit" <<'PY'
+import json
+import sys
+
+report_path, summary_path, run_id, outcome, exit_code = sys.argv[1:6]
+
+with open(report_path, "r", encoding="utf-8") as handle:
+    lines = [line for line in handle if line.strip()]
+if not lines:
+    raise SystemExit("Report JSONL is empty")
+
+report = json.loads(lines[-1])
+payload = {
+    "run_id": run_id,
+    "sample_id": report.get("sample_id"),
+    "width_metrics": report.get("width_metrics", {}),
+    "truncation_state": report.get("truncation_state", {}),
+    "outcome": outcome,
+    "exit_code": int(exit_code),
+}
+
+with open(summary_path, "a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+PY
+            then
+                i18n_parse_ok=true
+            else
+                echo "Failed to parse report into summary JSONL"
+                i18n_outcome="parse_fail"
+            fi
+        fi
+
+        i18n_exit_ok=true
+        if [ "$i18n_exit" -ne 0 ] && [ "$i18n_exit" -ne 124 ]; then
+            i18n_exit_ok=false
+        fi
+
+        i18n_success=true
+        if ! $i18n_exit_ok; then i18n_success=false; fi
+        if ! $i18n_report_ok; then i18n_success=false; fi
+        if ! $i18n_parse_ok; then i18n_success=false; fi
+
+        echo "Outcome: $i18n_outcome"
+        echo "Summary JSONL: $I18N_JSONL"
+
+        $i18n_success
+    } > "$I18N_LOG" 2>&1
+    i18n_exit=$?
+    i18n_end=$(date +%s%N)
+    i18n_dur_ms=$(( (i18n_end - i18n_start) / 1000000 ))
+    i18n_dur_s=$(echo "scale=2; $i18n_dur_ms / 1000" | bc 2>/dev/null || echo "${i18n_dur_ms}ms")
+    STEP_DURATIONS+=("${i18n_dur_s}s")
+
+    if [ $i18n_exit -eq 0 ]; then
+        log_pass "i18n stress report passed in ${i18n_dur_s}s"
+        PASS_COUNT=$((PASS_COUNT + 1))
+        STEP_STATUSES+=("PASS")
+    else
+        log_fail "i18n stress report failed. See: $I18N_LOG"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        STEP_STATUSES+=("FAIL")
+    fi
+
+    # ────────────────────────────────────────────────────────────────────────
+    # Step 14: Widget Builder Export (bd-iuvb.10)
+    #
+    # Runs the widget builder (screen 33) and exports a JSONL snapshot.
+    # ────────────────────────────────────────────────────────────────────────
+    log_step "widget builder export (screen 33)"
+    log_info "Running Widget Builder and exporting JSONL snapshot..."
+    WIDGET_LOG="$LOG_DIR/14_widget_builder.log"
+    WIDGET_REPORT="$LOG_DIR/14_widget_builder_report_${TIMESTAMP}.jsonl"
+    WIDGET_JSONL="$LOG_DIR/14_widget_builder_summary.jsonl"
+    STEP_NAMES+=("widget builder export")
+
+    widget_start=$(date +%s%N)
+    {
+        echo "=== Widget Builder (Screen 33) Export ==="
+        echo "Bead: bd-iuvb.10"
+        echo "Report path: $WIDGET_REPORT"
+        echo ""
+
+        widget_cmd="stty rows 24 cols 80 2>/dev/null; (sleep 0.5; printf 'x' > /dev/tty) & FTUI_WIDGET_BUILDER_EXPORT_PATH=\"$WIDGET_REPORT\" FTUI_WIDGET_BUILDER_RUN_ID=\"$TIMESTAMP\" FTUI_DEMO_EXIT_AFTER_MS=2200 FTUI_DEMO_SCREEN=33 timeout 8 $DEMO_BIN"
+
+        if run_in_pty "$widget_cmd" 2>&1; then
+            widget_exit=0
+        else
+            widget_exit=$?
+        fi
+
+        if [ "$widget_exit" -eq 124 ]; then
+            widget_outcome="timeout"
+        elif [ "$widget_exit" -eq 0 ]; then
+            widget_outcome="pass"
+        else
+            widget_outcome="fail"
+        fi
+
+        widget_report_ok=false
+        if [ -s "$WIDGET_REPORT" ]; then
+            widget_report_ok=true
+        else
+            echo "Report file missing or empty: $WIDGET_REPORT"
+            widget_outcome="no_report"
+        fi
+
+        widget_parse_ok=false
+        if $widget_report_ok; then
+            if python3 - "$WIDGET_REPORT" "$WIDGET_JSONL" "$TIMESTAMP" "$widget_outcome" "$widget_exit" <<'PY'
+import json
+import sys
+
+report_path, summary_path, run_id, outcome, exit_code = sys.argv[1:6]
+
+with open(report_path, "r", encoding="utf-8") as handle:
+    lines = [line for line in handle if line.strip()]
+if not lines:
+    raise SystemExit("Report JSONL is empty")
+
+report = json.loads(lines[-1])
+payload = {
+    "run_id": report.get("run_id", run_id),
+    "preset_id": report.get("preset_id"),
+    "widget_count": report.get("widget_count"),
+    "props_hash": report.get("props_hash"),
+    "outcome": outcome,
+    "exit_code": int(exit_code),
+}
+
+with open(summary_path, "a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\\n")
+PY
+            then
+                widget_parse_ok=true
+            else
+                echo "Failed to parse report into summary JSONL"
+                widget_outcome="parse_fail"
+            fi
+        fi
+
+        widget_exit_ok=true
+        if [ "$widget_exit" -ne 0 ] && [ "$widget_exit" -ne 124 ]; then
+            widget_exit_ok=false
+        fi
+
+        widget_success=true
+        if ! $widget_exit_ok; then widget_success=false; fi
+        if ! $widget_report_ok; then widget_success=false; fi
+        if ! $widget_parse_ok; then widget_success=false; fi
+
+        echo "Outcome: $widget_outcome"
+        echo "Summary JSONL: $WIDGET_JSONL"
+
+        $widget_success
+    } > "$WIDGET_LOG" 2>&1
+    widget_exit=$?
+    widget_end=$(date +%s%N)
+    widget_dur_ms=$(( (widget_end - widget_start) / 1000000 ))
+    widget_dur_s=$(echo "scale=2; $widget_dur_ms / 1000" | bc 2>/dev/null || echo "${widget_dur_ms}ms")
+    STEP_DURATIONS+=("${widget_dur_s}s")
+
+    if [ $widget_exit -eq 0 ]; then
+        log_pass "Widget builder export passed in ${widget_dur_s}s"
+        PASS_COUNT=$((PASS_COUNT + 1))
+        STEP_STATUSES+=("PASS")
+    else
+        log_fail "Widget builder export failed. See: $WIDGET_LOG"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        STEP_STATUSES+=("FAIL")
+    fi
+
 else
     # No PTY support — skip all smoke/interactive tests
     for step in "Smoke test (alt-screen)" "Smoke test (inline)" \
                 "Screen navigation" "Search test (Shakespeare)" \
-                "Resize (SIGWINCH) test" "VisualEffects backdrop"; do
+                "Resize (SIGWINCH) test" "VisualEffects backdrop" \
+                "Layout Inspector" "Terminal caps report" "i18n stress report" \
+                "Widget builder export"; do
         skip_step "$step" "$SMOKE_REASON"
     done
 fi

@@ -416,6 +416,92 @@ Likely modules:
 - Config: `crates/ftui-runtime/src/program.rs` (ProgramConfig)
 - Ledger logging: shared sink (bd-3e1t.4.7)
 
+### 3.14 Dirty-Span Tracking for Sparse Diffs
+This spec defines a per-row **dirty span** model used to avoid scanning full
+rows when only small contiguous ranges have changed.
+
+#### 3.14.1 Goals
+- Preserve exact diff output (bit-identical to full scan).
+- Reduce scan cost for sparse edits on large rows.
+- Keep overhead < 2% in dense cases.
+- Maintain determinism and explainability via evidence logs.
+
+#### 3.14.2 Data Model
+Each row `y` maintains an ordered list of half-open spans:
+```
+Span = { x0: u16, x1: u16 }  // represents [x0, x1), x0 < x1
+RowSpans[y] = Vec<Span> sorted by x0, non-overlapping, non-adjacent
+```
+Row state is:
+```
+RowState = { spans: Vec<Span>, overflow: bool }
+```
+If `overflow == true`, the row must be scanned fully and `spans` is ignored.
+
+#### 3.14.3 Invariants
+For each row `y`:
+- **Soundness**: if any cell `(x, y)` changed since last clear, then either:
+  - `overflow == true`, or
+  - there exists a span `s` with `s.x0 <= x < s.x1`.
+- **Order**: spans are strictly increasing by `x0`.
+- **Disjointness**: spans do not overlap or touch (`prev.x1 < next.x0`).
+- **Bounds**: `0 <= x0 < x1 <= width`.
+
+#### 3.14.4 Merge Policy (Interval Union)
+When marking a change range `[a, b)` in row `y`:
+1. Clamp to `[0, width)`; ignore if empty.
+2. If `overflow == true`, stop (row already full-scan).
+3. Find insertion point by `x0`.
+4. Merge with any span that overlaps or is adjacent:
+   - Overlap: `a <= s.x1 && b >= s.x0`
+   - Adjacency: `a == s.x1` or `b == s.x0`
+5. Replace the merged region with a single span `[min_x0, max_x1)`.
+6. Maintain sorted, disjoint list.
+
+This guarantees a minimal union of dirty intervals and deterministic ordering.
+
+#### 3.14.5 Overflow / Fallback Policy
+To bound memory and merge cost:
+- Each row has `MAX_SPANS_PER_ROW` (e.g., 64).
+- If inserting/merging would exceed the cap:
+  - set `overflow = true`
+  - clear spans (optional)
+  - future marks are ignored (full-row scan).
+
+Overflow reasons are logged (`cap_exceeded`, `span_merge_cost`, etc.).
+
+#### 3.14.6 Scan Order (Deterministic)
+When diffing with spans:
+1. Iterate rows `y = 0..height`.
+2. If `overflow == true`, scan full row left-to-right.
+3. Else scan spans in ascending `x0`, and within each span scan `x` increasing.
+
+This order is identical to the current row-major change list and ensures
+bit-for-bit stable diff output.
+
+#### 3.14.7 Evidence Ledger Fields
+Each diff decision that uses spans must emit:
+- `span_rows`: count of rows with non-empty spans
+- `span_count`: total spans across all rows
+- `span_coverage`: fraction of cells covered by spans
+- `span_overflow_rows`: rows forced to full scan
+- `fallback_reason`: `none` | `cap_exceeded` | `disabled` | `dense_override`
+- `scan_cost_estimate`: expected cells scanned (spans + overflow rows)
+
+#### 3.14.8 Tests (Required)
+Unit tests:
+- Merge/adjacency behavior (overlap, touch, disjoint).
+- Overflow triggers and behavior.
+- Deterministic ordering of spans after random insertions.
+
+Property tests:
+- Soundness: every changed cell is covered by a span or overflow.
+- Equivalence: diff output with spans equals full scan on random buffers.
+
+Benchmarks:
+- Sparse (<= 5%) edits on 200x60+ show measurable improvement.
+- Dense edits show < 2% overhead vs full scan.
+
 ---
 
 ## 4) Notes for Contributors

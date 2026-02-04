@@ -1,5 +1,170 @@
 # Session TODO List
 
+## Current Session (StormyEagle) — bd-3e1t.8.3 Strategy Selector + Evidence Log (2026-02-04)
+- [x] Read all of `AGENTS.md` and `README.md` to refresh constraints and architecture context
+- [x] Load skills: `extreme-software-optimization`, `beads-bv`, `agent-mail`
+- [x] Run `bv --robot-triage` and record top actionable pick
+- [x] `br show bd-3e1t.8.3` to review dependencies and acceptance criteria
+- [x] Claim bead: `br update bd-3e1t.8.3 --status in_progress`
+- [x] Register MCP Agent Mail session (StormyEagle)
+- [x] Announce start in Agent Mail thread `[bd-3e1t.8.3]`
+- [x] Attempt file reservations for `crates/ftui-runtime/src/terminal_writer.rs`, `crates/ftui-render/src/diff_strategy.rs`, `crates/ftui-runtime/src/program.rs`
+- [x] Notify overlapping holders (FoggyBridge, NavyWolf, BrownMarsh, CyanGrove) and wait for coordination
+- [ ] Receive confirmation or wait for conflicts to clear before editing reserved files
+- [ ] Code investigation: map diff strategy flow (TerminalWriter → DiffStrategySelector → BufferDiff) and evidence log schema
+- [ ] Code investigation: confirm span/tile stats integration and scan-cost estimation path
+- [ ] Document architecture findings for strategy selection + evidence log (paths + key invariants)
+- [ ] Extreme optimization loop (per skill):
+- [x] Baseline: `hyperfine --warmup 3 --runs 10 '/data/tmp/cargo-target/release/deps/diff_bench-898d498d962d95ae diff/full_vs_dirty'` → mean 24.1 ms ± 1.1 ms
+- [ ] Profile: obtain symbol-rich hotspot view (current perf/flamegraph still dominated by gnuplot/loader)
+- [ ] Try `--noplot`/GNUPLOT=: and direct perf on debuginfo bench to isolate ftui symbols
+- [ ] Build opportunity matrix (top 3 hotspots, score ≥ 2.0)
+- [ ] Capture golden outputs + checksums (`sha256sum` → `golden_checksums.txt`)
+- [ ] Implement one optimization lever (single change) for bd-3e1t.8.3
+- [ ] Verify checksums + re-profile to confirm improvement
+- [ ] Write isomorphism proof (ordering/ties/FP/RNG/checksums)
+- [ ] Update bead status + Agent Mail progress update
+- [ ] Release file reservations
+
+## Current Session (NavyWolf) — bd-3e1t.6.8 Span Config (2026-02-04)
+- [x] Run `bv --robot-next` and `bv --robot-triage` to identify top-impact beads
+- [x] Inspect ready/blocked issues with `br ready` and `br blocked`
+- [x] Select `bd-3e1t.6.8` (Config: span thresholds + feature flags) as next actionable bead
+- [x] `br update bd-3e1t.6.8 --status=in_progress`
+- [x] Register Agent Mail session as `NavyWolf`
+- [x] Notify `PearlMoose` about bd-3e1t.6.8 scope (span config) and planned changes
+- [ ] Coordinate file reservations for `crates/ftui-render/src/buffer.rs` and `crates/ftui-runtime/src/terminal_writer.rs` (resolve conflicts with FoggyBridge/BoldFinch)
+- [ ] Implement `DirtySpanConfig` (enabled/max_spans/merge_gap/guard_band) in `crates/ftui-render/src/buffer.rs`
+- [ ] Store span config in `Buffer`; add `set_dirty_span_config` + accessor
+- [ ] Apply span config in `mark_dirty_span` (guard band, merge gap, max spans); preserve dirty bits for tile path
+- [ ] Update `dirty_span_row` to return `None` when spans disabled
+- [ ] Update `dirty_span_stats` to use config values (and return zeros when spans disabled)
+- [ ] Update `mark_dirty_row_full`/`mark_all_dirty` to respect span-enabled flag
+- [ ] Add unit tests in `crates/ftui-render/src/buffer.rs` for span config:
+- [ ] Test: disabled spans -> no row spans + zero stats
+- [ ] Test: guard band expands span bounds
+- [ ] Test: max_spans_per_row overflow -> full row fallback
+- [ ] Extend `RuntimeDiffConfig` with `dirty_span_config` (default + builder methods)
+- [ ] Wire `RuntimeDiffConfig` span config into `TerminalWriter::take_render_buffer`
+- [ ] Update runtime config tests to assert span config defaults and builder behavior
+- [ ] Run quality gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo check --all-targets`
+- [ ] Post Agent Mail update in thread `bd-3e1t.6.8` with summary + next steps
+- [ ] Release file reservations for touched files
+
+## Current Session (BrownMarsh) — bd-3e1t.8 Diff-Strategy Selector (2026-02-04)
+- [x] Re-read `AGENTS.md` to refresh constraints
+- [x] Load skills: `extreme-software-optimization`, `beads-bv`, `agent-mail`
+- [x] Run `bv --robot-triage` and `bv --robot-next` (top pick in progress elsewhere)
+- [x] Run `br ready --json`; claim `bd-3e1t.8` (`br update ... --status in_progress`)
+- [x] Register Agent Mail session (BrownMarsh) + reserve `crates/ftui-runtime/src/program.rs` and `crates/ftui-runtime/src/simulator.rs`
+- [x] Notify `CrimsonSparrow` about bd-3e1t.8 scope to avoid overlap
+- [x] Baseline perf: `hyperfine --warmup 3 --runs 10 'cargo bench -p ftui-render --bench diff_bench -- --noplot "diff/full_vs_dirty/compute/200x60@2%"'` → mean 10.868 s
+- [x] Profile: `CARGO_PROFILE_BENCH_DEBUG=true cargo flamegraph -p ftui-render --bench diff_bench -- --noplot "diff/full_vs_dirty/compute/200x60@2%"` (symbols still dominated by loader/gnuplot)
+- [x] Add diff-strategy config sanitization + clamp invalid inputs
+- [x] Add test `sanitize_config_clamps_invalid_values` in `crates/ftui-render/src/diff_strategy.rs`
+- [x] Clamp `cells_changed` to `cells_scanned` in estimator `observe()`
+- [x] Fix Visual Effects compile errors (float RGB → `u8`, ensure `fps_input` init)
+- [x] Run quality gates: `cargo fmt`, `cargo test -p ftui-render sanitize_config_clamps_invalid_values`, `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`
+- [ ] Re-profile with a symbol-rich, longer-running workload (avoid loader dominance; consider Criterion profile-time)
+- [ ] Build opportunity matrix (top 3 hotspots) and pick score ≥ 2.0
+- [ ] Capture golden outputs + checksums for any perf change
+- [ ] Implement one optimization lever + verify checksums + re-profile
+- [ ] Write isomorphism proof (ordering/ties/FP/RNG/checksums)
+- [ ] Update bd-3e1t.8 subtask statuses (e.g., bd-3e1t.8.6 partial complete)
+- [ ] Post Agent Mail update for `bd-3e1t.8`
+- [ ] Release file reservations
+
+## Current Session (PearlMoose) — Tile-Skip + Evidence Schema (bd-3e1t.7) (2026-02-04)
+- [x] Run `bv --robot-next` to confirm top pick and note bd-3e1t.7.3 already in progress
+- [x] Mark `bd-3e1t.7` epic as `in_progress`
+- [x] Attempt to claim `bd-3e1t.4.10` (blocked) and record blocker list
+- [x] Add tile-skip equivalence tests for sparse patterns in `crates/ftui-render/src/diff.rs`
+- [x] Refactor proptests to canonical `proptest! { .. }` blocks to prevent macro parse failures
+- [x] Convert large-span property test to canonical `proptest!` form
+- [x] Wire tile helpers in `compute_dirty_changes` (use `scan_row_tiles*` to remove dead-code warnings)
+- [x] Remove `dead_code` allows on tile helper functions
+- [x] Add JSONL evidence schema parse test for resize coalescer (config/decision/summary fields)
+- [x] Fix clippy `manual_range_contains` in `crates/ftui-core/src/input_parser.rs`
+- [x] Fix clippy `match_like_matches_macro` in `crates/ftui-widgets/src/command_palette/mod.rs`
+- [x] Fix clippy `useless_vec` and `needless_range_loop` in `crates/ftui-demo-showcase/src/screens/i18n_demo.rs`
+- [x] Fix clippy `manual_range_contains` and `collapsible_if` in `crates/ftui-demo-showcase/src/screens/visual_effects.rs`
+- [x] Fix formatting nits in `crates/ftui-render/src/diff.rs` + `crates/ftui-widgets/src/textarea.rs`
+- [x] Run `cargo fmt --check`
+- [x] Run `cargo clippy --all-targets -- -D warnings`
+- [x] Run `cargo check --all-targets`
+- [x] Retry MCP Agent Mail: release reservation for `crates/ftui-render/benches/diff_bench.rs`
+- [x] Retry MCP Agent Mail: reserve `crates/ftui-render/src/diff.rs` for bd-3e1t.7 work
+- [x] Retry MCP Agent Mail: message RedHill with bd-3e1t.7 status + file overlap note
+- [ ] Once bd-3e1t.7.3 is complete, start bd-3e1t.7.4/7.5/7.6/7.7/7.8 (tests/bench/logging/e2e/config)
+- [ ] Consider SAT/tile benchmarks (bd-3e1t.7.5) after integration is confirmed by 7.3
+
+## Current Session (PearlEagle) — Showcase Overhaul (bd-1e3w) (2026-02-04)
+- [x] Run `bv --robot-triage` and record top picks
+- [x] Create bead `bd-1e3w` for showcase overhaul and set `in_progress`
+- [x] Register Agent Mail identity (PearlEagle) and reserve screen/app files
+- [ ] Coordinate with FoggyHeron re: `visual_effects.rs` conflict (FX crash/hang fix)
+- [x] Inventory all affected screens + exact files/regions
+- [x] Audit dashboard layout + focus handling + keybindings (first screen)
+- [x] Expand dashboard code samples (realistic, multi-language, longer, complex)
+- [x] Ensure syntax highlighting supports every dashboard language sample
+- [x] Implement single-key cycling through code samples (mouse + keyboard focus)
+- [x] Replace dashboard stats panel with multi-effect text showcase (2–3 effects at once)
+- [x] Dramatically upgrade dashboard info panel (rich status, badges, telemetry, hints)
+- [x] Beautify dashboard activity panel (color, gradients, dynamic highlights)
+- [x] Enhance dashboard charts pane + add chart-type cycling (more dense/compelling)
+- [x] Increase markdown streaming speed (3x) and keep smooth char boundaries
+- [x] Replace dashboard markdown samples with complex GFM, streamed in
+- [x] Add mouse click-to-focus for every dashboard pane (no dead zones)
+- [x] Markdown screen: fix border misalignment + enhance content/streaming
+- [x] Shakespeare screen: instant search-as-you-type with animated highlights
+- [x] Shakespeare screen: fast result navigation + jump UX + text effects
+- [x] Code Explorer (sqlite screen): add panels + features, more dynamic
+- [ ] Code Explorer: richer search UI + multi-panel stats + unique ftui features
+- [x] Widgets screen: enable arrow-key navigation everywhere
+- [ ] Widgets screen: default view jam-packed with impressive widget configs
+- [x] Forms screen: arrow-key navigation for all controls + clear focus
+- [x] DataViz screen: fill blank space with more visualizations/panes
+- [x] File browser screen: fix border alignment on problematic rows
+- [x] Macro recorder: redesign UX for clarity; make Ctrl+Arrow functional
+- [ ] Mouse: click any pane to focus control context on all multi-pane screens
+- [x] Visual FX: identify crash/hang (14th/15th effect) and fix safely
+- [ ] Global: ensure arrow keys navigate within every screen
+- [ ] Add/update tests where warranted (screens + input handling)
+- [ ] Run quality gates: `cargo fmt --check`, `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`
+- [ ] Update bead status + Agent Mail status posts
+- [ ] Release file reservations when complete
+
+## Current Session (AmberSnow) — Beads + Optimization + Deep Review (2026-02-04)
+- [x] Re-read `AGENTS.md` to refresh constraints
+- [x] Load `extreme-software-optimization` skill
+- [x] Run `bv --robot-triage` and record top recommendations
+- [x] Run `bv --robot-next` to confirm single highest-impact bead
+- [x] Run `br ready --json` and pick an unclaimed bead to start
+- [x] Set bead status to `in_progress` via `br update bd-3e1t.10.3 --status in_progress`
+- [x] Close bead `bd-3e1t.10.3` after simulator tests pass
+- [ ] Register Agent Mail session (if not already) and check inbox (MCP connection errors; retry)
+- [ ] Reserve file paths for the chosen bead (MCP file reservation) (blocked by MCP connection)
+- [ ] Announce start in Agent Mail thread `[bd-3e1t.10.3] Start: Simulator/bench` (blocked by MCP connection)
+- [x] For any issues found: identify root cause, implement fixes, add tests if warranted (fixed diff.rs proptest syntax; added scheduler simulator tests)
+- [x] Run targeted tests for scheduler simulator:
+- [x] `cargo test -p ftui-runtime smith_beats_fifo_on_mixed_workload`
+- [x] `cargo test -p ftui-runtime simulation_is_deterministic_per_policy`
+- [ ] Optimization loop (per skill):
+- [ ] Baseline: `hyperfine --warmup 3 --runs 10 '<command>'` (aborted; hyperfine run was excessively long; rerun with tighter output capture)
+- [ ] Profile: `cargo flamegraph ...` and identify top 3 hotspots
+- [ ] Build opportunity matrix (impact/confidence/effort) and pick score ≥ 2.0
+- [ ] Capture golden outputs + checksums (`sha256sum` → `golden_checksums.txt`)
+- [ ] Implement single-lever change, then verify checksums
+- [ ] Re-profile to confirm improvement and detect new hotspots
+- [ ] Write isomorphism proof (ordering/ties/FP/RNG/checksums)
+- [ ] Run quality gates after substantive changes:
+- [ ] `cargo fmt --check`
+- [ ] `cargo check --all-targets`
+- [ ] `cargo clippy --all-targets -- -D warnings`
+- [ ] Update bead status (close when complete) and sync beads (`br sync --flush-only`)
+- [ ] Post completion/update message in Agent Mail thread
+- [ ] Release file reservations when finished
+
 ## Current Session (Codex) — Architecture + Optimization + Beads (2026-02-04)
 - [x] Read **all** of `AGENTS.md` (rules, toolchain, constraints, workflows)
 - [x] Read **all** of `README.md` (purpose, architecture, algorithms, usage)
@@ -7,6 +172,7 @@
 - [x] Run `bv --robot-triage` and record actionable picks + blockers
 - [x] Run `bv --robot-next` and note top pick state (in-progress by another agent)
 - [x] Run `br ready --json` to list all actionable beads
+- [x] Re-run `bv --robot-triage` after new bead drops (2026-02-04)
 - [x] Spawn code investigation agent (explorer) to map architecture + hotspots
 - [x] Review explorer summary and extract concrete optimization candidates (buffer/diff/presenter hotspots noted)
 - [x] Identify current agent name for Agent Mail (register if needed) — BrightRiver
@@ -27,6 +193,29 @@
 - [x] Run required quality gates (cargo fmt/check, cargo check, cargo clippy -D warnings)
 - [x] Update bead with progress or close if complete (closed bd-3e1t.4.2 as already done)
 - [x] Post status update to Agent Mail thread with findings/results
+- [x] Claim `bd-3e1t.7` (Blockwise diff via summed-area table)
+- [x] Reserve edit surface for `bd-3e1t.7` (`crates/ftui-render/src/diff.rs`, `crates/ftui-render/src/buffer.rs`)
+- [x] Notify peers via Agent Mail thread `bd-3e1t.7`
+- [x] Audit `BufferDiff`/`Buffer` invariants to ensure blockwise skip preserves correctness
+- [x] Design blockwise scan scheme (row-major block skip + fine scan inside dirty blocks)
+- [x] Implement blockwise diff scan (skip clean blocks, fallback row-scan inside dirty blocks)
+- [x] Add/extend diff benchmarks for large-screen sparse scenarios (2% dirty)
+- [x] Add tests asserting blockwise diff preserves sparse row changes
+- [x] Run quality gates after blockwise diff changes
+- [x] Verify golden checksums after blockwise diff changes
+- [x] Attempt hyperfine via `cargo bench` (10 runs) — command too slow/timeout; killed and switched strategy
+- [x] Build bench binary (`cargo bench -p ftui-render --bench diff_bench --no-run`)
+- [x] Re-run hyperfine for `diff/full_vs_dirty` after blockwise scan (bench binary + reduced Criterion times): mean 24.8ms ± 0.7ms
+- [x] Re-profile with `cargo flamegraph` (debuginfo + plotting disabled) — `flamegraph.svg` generated, but symbols still dominated by loader/gnuplot
+- [ ] Extract usable hotspots (re-run flamegraph with symbol-friendly settings; avoid gnuplot noise)
+- [ ] Build **opportunity matrix** with top 3 hotspots and scores (blocked on usable profile)
+- [ ] Update isomorphism proof + opportunity matrix with post-change measurements
+- [ ] Decide whether full 2D SAT/quadtree is still needed vs current blockwise row scan
+- [x] Fix `diff.rs` proptests to use `proptest::proptest!` so clippy parses `in` syntax
+- [x] Fix `widget_builder.rs` stateful list rendering (UFCS) + sparkline data types + SUPER modifier
+- [x] Fix `program.rs` effect-queue imports and trait bounds (mpsc/thread/JoinHandle/HashMap + scheduler enums)
+- [x] Fix `quake.rs` imports (remove `ftui::ratatui`), add local math helpers, resolve clippy formatting
+- [x] Re-run quality gates after latest fixes: `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`
 
 ## Current Session (FoggyHawk) — bd-2qbx.3, bd-3k3x, bd-3vbf.27
 - [x] Commit & push previous session work (bd-2qbx.3 KeybindingHints + bd-2qbx.6 E2E tests)
@@ -399,3 +588,21 @@
 - [ ] **Claim next bead** (`br update <id> --status in_progress`).
 - [ ] **Announce in Agent Mail** thread for the chosen bead.
 - [ ] **Reserve file paths** for the new bead.
+
+## 20. Current Session (Gemini) — Code Review & Fixes (Table Style Composition & Presenter SGR)
+- [x] **Read Documentation**: `AGENTS.md`, `README.md`.
+- [x] **Codebase Investigation**: Mapped architecture, render pipeline, and widgets.
+- [x] **Identify Bug**: Discovered incorrect style composition in `Table` widget.
+- [x] **Fix**: Optimized `Table::render_row` style merging and allocation.
+- [x] **Identify Issue**: Presenter SGR cost model overestimated reset costs for transparent colors.
+- [x] **Fix**: Optimized `emit_style_delta` to account for cheap color resets.
+- [x] **Audit**: Verified `Block` widget (found clean).
+- [x] **Identify Safety Issue**: `TerminalSession::cleanup` (Drop) missed `SYNC_END`.
+- [x] **Fix**: Added `SYNC_END` emission to `TerminalSession::cleanup` to prevent terminal freeze.
+- [x] **Identify Logic Issue**: `TextInput` word movement incorrectly consumed punctuation with words.
+- [x] **Fix**: Updated `move_cursor_word_left/right` to treat punctuation as a distinct class.
+- [x] **Identify Bug**: `Scrollbar` hit region incorrectly used width 1 for wide symbols.
+- [x] **Fix**: Updated `Scrollbar::render` to use `symbol_width` for hit regions.
+- [x] **Identify Issue**: `InputParser` ignored states swallowed potentially valid input if not terminated.
+- [x] **Fix**: Hardened `InputParser` to abort ignore states on control characters.
+- [x] **Documentation**: Updated `FIXES_SUMMARY.md` and `SESSION_TODO.md`.

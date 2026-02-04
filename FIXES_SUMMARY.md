@@ -164,3 +164,104 @@ All tasks are complete. The codebase has been extensively refactored for Unicode
 **Fix:**
     - Added `requires_measurement` check to skip width calculation if no `FitContent`/`FitMin` constraints are present.
     - Optimized `header()` to merge header widths into existing intrinsic widths incrementally, avoiding O(N) re-scan.
+
+## 84. Table Style Composition and Allocation Fix
+**File:** `crates/ftui-widgets/src/table.rs`
+**Issue:** `render_row` used `unwrap_or` for style composition, causing span-level styles to completely overwrite the base style (e.g., selection highlight background) instead of merging with it. This led to "holes" in the selection highlight where text had custom colors. Additionally, `render_row` inefficiently cloned and modified the entire `Text` object for every cell every frame to apply base styling.
+**Fix:**
+    - Optimized `render_row` to iterate `cell_text.lines()` directly, removing the `styled_text` allocation/clone.
+    - Fixed style logic to explicitly merge `span.style` over the base `style` using `Style::merge`, preserving inherited attributes (like selection background) correctly.
+
+## 85. Presenter SGR Delta Cost Optimization
+**File:** `crates/ftui-render/src/presenter.rs`
+**Issue:** `emit_style_delta` overestimated the cost of resetting a color to default (transparent) as 19 bytes (full RGB sequence), whereas the actual emitted sequence (`\x1b[39m` or `\x1b[49m`) is only 5 bytes. This estimation error caused the presenter to frequently fall back to a full style reset (`\x1b[0m...`) instead of a cheaper delta update, producing unnecessarily verbose output for simple color changes.
+**Fix:**
+    - Updated `delta_est` calculation to check if the new color is transparent (alpha=0).
+    - Uses 5 bytes for transparent color transitions and 19 bytes for opaque color transitions, ensuring the SGR delta engine correctly identifies the optimal emission strategy.
+
+## 86. Terminal Sync Freeze Safety
+**File:** `crates/ftui-core/src/terminal_session.rs`
+**Issue:** `TerminalSession::cleanup` (used by `Drop`) did not emit `SYNC_END` (`\x1b[?2026l`). If an application exited (normally or via panic) while the terminal was in synchronized output mode (e.g., mid-render due to a crash), the terminal would remain frozen, requiring a manual `reset`. The best-effort panic hook had this safety measure, but the RAII destructor did not.
+**Fix:**
+    - Added `stdout.write_all(SYNC_END)` to `TerminalSession::cleanup`. This guarantees that dropping the session always unfreezes the terminal, regardless of the exit path.
+
+## 87. TextInput Word Movement Logic
+**File:** `crates/ftui-widgets/src/input.rs`
+**Issue:** `move_cursor_word_left` and `move_cursor_word_right` incorrectly grouped punctuation (Class 2) with whitespace (Class 0) when skipping characters. This caused word-deletion operations (like Ctrl+Backspace) to consume both the word and its preceding/following punctuation in a single action (e.g., deleting "hello, " instead of just "hello"), which is contrary to standard text editing behavior.
+**Fix:**
+    - Refactored `move_cursor_word_left` to strictly skip trailing whitespace, then identify the target class (alphanumeric vs punctuation) of the preceding character, and finally skip only contiguous characters of that specific class.
+    - Refactored `move_cursor_word_right` to similarly identify the current character's class, skip its contiguous block, and then skip trailing whitespace.
+    - This ensures punctuation is treated as a distinct word unit, enabling precise navigation and deletion.
+
+## 88. Scrollbar Hit Region for Wide Symbols
+**File:** `crates/ftui-widgets/src/scrollbar.rs`
+**Issue:** Hit regions were registered with a hardcoded width of 1, ignoring the actual width of the scrollbar symbol (e.g., wide emoji thumbs like "🔴" or "👍"). This made the right half of wide symbols unclickable.
+**Fix:**
+    - Updated `Scrollbar::render` to calculate `hit_w = symbol_width.max(1)` and register the hit rectangle with the correct width.
+
+## 89. Input Parser Sticky DoS Protection
+**File:** `crates/ftui-core/src/input_parser.rs`
+**Issue:** The ignore states (`CsiIgnore`, `OscIgnore`) used for DoS protection were too sticky: they would continue ignoring input until a valid terminator byte appeared. If a malicious or malformed sequence (e.g. `ESC [ ... 1GB of zeros ...`) didn't terminate, it could swallow subsequent valid input (like newlines or normal text) indefinitely.
+**Fix:**
+    - Updated `process_csi_ignore`, `process_osc_content`, and `process_osc_ignore` to abort on invalid control characters (bytes < 0x20).
+    - This ensures that if a sequence is corrupted or malicious (e.g. `cat binary`), the parser resets to ground state immediately upon hitting a control char (like `\n`), preserving the responsiveness of the terminal.
+
+## 90. Dashboard Code Samples & UX
+**File:** `crates/ftui-demo-showcase/src/screens/dashboard.rs`
+**Issue:** Code samples were generic, and key cycling required specific panel focus. Markdown streaming was too slow.
+**Fix:**
+    - Expanded `CODE_SAMPLES` with Elixir, Haskell, and Zig implementations.
+    - Updated `update` method to make `c`, `e`, `m`, `g` keys work globally (ignoring focus) for better UX.
+    - Increased markdown streaming speed from 54 to 80 chars/tick.
+
+## 91. Markdown Screen Fixes & Content
+**File:** `crates/ftui-demo-showcase/src/screens/markdown_rich_text.rs`
+**Issue:** "Unicode Showcase" table was missing from the view (causing layout "misalignment"), ASCII diagram sample was misaligned, and streaming content was short.
+**Fix:**
+    - Added `render_unicode_table` to the right column layout in `view`.
+    - Replaced `STREAMING_MARKDOWN` with a comprehensive "FrankenTUI Architecture" document.
+    - Manually aligned the ASCII diagram in `SAMPLE_MARKDOWN`.
+
+## 92. Shakespeare Search Highlights
+**File:** `crates/ftui-demo-showcase/src/screens/shakespeare.rs`
+**Issue:** "Animated highlights" requirement for search matches was only partially met (only current match was animated).
+**Fix:**
+    - Updated `render_text_panel` to apply a subtle `Pulse` effect to *all* visible search matches (`is_any_match`), ensuring "animated highlights" (plural) are present while keeping the current match distinct.
+
+## 93. Visual FX Spiral Overflow Fix
+**File:** `crates/ftui-demo-showcase/src/screens/visual_effects.rs`
+**Issue:** The Spiral effect (15th) used `exp()` on potentially large values `(tightness * angle)`, which could lead to floating point overflow/infinity, causing rendering artifacts or hangs on some platforms.
+**Fix:**
+    - Clamped the exponent input to `50.0` in `SpiralState::render` to prevent overflow while preserving visual fidelity. This addresses the "crash/hang (14th/15th effect)" todo item.
+
+## 94. Widget Gallery Navigation
+**File:** `crates/ftui-demo-showcase/src/screens/widget_gallery.rs`
+**Issue:** "Advanced" section widgets (specifically `VirtualizedList`) were static; arrow keys always switched sections instead of navigating content.
+**Fix:**
+    - Updated `update` loop to intercept `Up`/`Down` keys when in the "Advanced" section (index 7).
+    - Implemented logic to modify `virtualized_state.selected` index, enabling interactive navigation of the list demo.
+    - Preserved section switching via `Left`/`Right` and `j`/`k`.
+
+## 95. File Browser Column Alignment
+**File:** `crates/ftui-demo-showcase/src/screens/file_browser.rs`
+**Issue:** File list columns ("Perms", "Size") were misaligned due to variable-width icon and size fields, and the header used hardcoded spacing that didn't match the rows.
+**Fix:**
+    - Standardized column widths (Icon: 2, Perms: 10, Size: 10).
+    - Updated `format_entry_line` and `format_entry_header` to use the same fixed-width calculations and padding strategies (right-align for size, left for others).
+    - Ensures crisp vertical alignment of all columns regardless of file name length or size string.
+
+## 96. Macro Recorder UX Improvements
+**File:** `crates/ftui-demo-showcase/src/screens/macro_recorder.rs`
+**Issue:** `Ctrl+Arrow` navigation was non-intuitive (cycling linearly instead of spatially), and the panel layout gave too much space to the static Scenarios list vs the dynamic Event Detail.
+**Fix:**
+    - Implemented spatial navigation logic for `Ctrl+Arrow` in `handle_controls`, mapping directions to visual panel positions (e.g. Down from Controls -> Timeline).
+    - Adjusted `view` layout constraints to give `Event Detail` 65% of the right column (was 45%), improving readability of event data.
+    - Updated `handle_controls` to correctly handle `modifiers.contains(Modifiers::ALT)` for consistency with other screens.
+
+## 97. Code Explorer Match Radar Scrolling
+**File:** `crates/ftui-demo-showcase/src/screens/code_explorer.rs`
+**Issue:** The Match Radar list scrolling logic was off-by-one, causing the currently selected match to be hidden at the bottom of the list or excluded entirely from the visible range.
+**Fix:**
+    - Updated `render_match_radar` to center the selected match in the list view.
+    - Added clamping logic to ensure the view stays within bounds and keeps the window full when near the end of the list.
+    - Applied similar centering and clamping logic to `render_hotspot_panel` for consistent behavior.

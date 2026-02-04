@@ -280,7 +280,7 @@ program.run()?;
 Example event line:
 
 ```json
-{"event":"diff_decision","strategy":"DirtyRows","cost_full":1.230000,"cost_dirty":0.410000,"dirty_rows":4,"total_rows":40,"total_cells":3200}
+{"event":"diff_decision","run_id":"diff-4242","event_idx":12,"strategy":"DirtyRows","cost_full":1.230000,"cost_dirty":0.410000,"cost_redraw":0.000000,"posterior_mean":0.036000,"posterior_variance":0.000340,"alpha":3.500000,"beta":92.500000,"dirty_rows":4,"total_rows":40,"total_cells":3200,"span_count":2,"span_coverage_pct":6.250000,"max_span_len":12,"fallback_reason":"none","scan_cost_estimate":200,"bayesian_enabled":true,"dirty_rows_enabled":true}
 ```
 
 ---
@@ -462,6 +462,43 @@ Decision: argmin { E[Cost_full], E[Cost_dirty], E[Cost_redraw] }
 ```
 
 **Conservative mode:** Uses 95th percentile of p (not mean) when posterior variance is high—the system knows when it's uncertain.
+
+### Dirty-Span Interval Union (Sparse Diff Scans)
+
+For sparse updates, each row tracks **dirty spans** and the diff scans only the union of those spans:
+
+```
+Row y spans:
+    S_y = union_k [x0_k, x1_k)
+
+Scan cost:
+    sum_y |S_y|
+```
+
+**Result:** scan work scales with the *actual changed area*, not full row width.
+
+### Summed-Area Table (Tile-Skip Diff)
+
+To skip empty tiles on large screens, a **summed-area table** (2D prefix sum) allows O(1) tile density checks:
+
+```
+SAT(x,y) = A(x,y)
+         + SAT(x-1,y) + SAT(x,y-1) - SAT(x-1,y-1)
+```
+
+Tile sum queries over any rectangle become constant time, so empty tiles are skipped deterministically.
+
+### Fenwick Tree (Prefix Sums for Virtualized Lists)
+
+Variable-height virtualized lists use a **Fenwick tree** (Binary Indexed Tree) for fast prefix sums:
+
+```
+sum(i) = sum_{k=1..i} a_k
+update(i, Δ): for (j=i; j<=n; j+=j&-j) tree[j]+=Δ
+query(i):     for (j=i; j>0; j-=j&-j)  sum+=tree[j]
+```
+
+**Result:** O(log n) height lookup and scroll positioning without scanning all rows.
 
 ### BOCPD: Online Change-Point Detection
 
@@ -895,7 +932,10 @@ These aren’t academic decorations—they’re directly tied to throughput, lat
 |----------|------------------|-------------------------------|--------------------|
 | **Bayes Factors** | Command palette scoring | $\frac{P(R\mid E)}{P(\neg R\mid E)}=\frac{P(R)}{P(\neg R)}\prod_i BF_i$ | Better ranking with fewer re‑sorts |
 | **Evidence Ledger** | Explanations for probabilistic decisions | $\log\frac{P(R\mid E)}{P(\neg R\mid E)}=\log\frac{P(R)}{P(\neg R)}+\sum_i\log BF_i$ | Debuggable, auditable scoring |
-| **Beta Posterior** | Diff strategy selection | $p\sim\mathrm{Beta}(\alpha,\beta)$ | Avoids slow strategies as workload shifts |
+| **Beta-Binomial** | Diff strategy selection | $p\sim\mathrm{Beta}(\alpha,\beta)$ with binomial updates | Avoids slow strategies as workload shifts |
+| **Interval Union** | Dirty-span diff scan | $S_y=\bigcup_k [x_{0k},x_{1k})$ | Scan proportional to changed segments |
+| **Summed-Area Table** | Tile-skip diff | $SAT(x,y)=A(x,y)+SAT(x-1,y)+SAT(x,y-1)-SAT(x-1,y-1)$ | Skip empty tiles on large screens |
+| **Fenwick Tree** | Virtualized lists | Prefix sums with $i\pm (i\&-i)$ | O(log n) scroll + height queries |
 | **BOCPD** | Resize coalescing | Run‑length posterior + hazard $H(r)$ | Fewer redundant renders during drags |
 | **Run‑Length Posterior** | BOCPD core | $P(r_t=r\mid x_{1:t})$ recursion | Fast regime switches without thresholds |
 | **E‑Process** | Budget alerts, throttle | $W_t=W_{t-1}(1+\lambda_t(X_t-\mu_0))$ | Safe early exits under continuous monitoring |
