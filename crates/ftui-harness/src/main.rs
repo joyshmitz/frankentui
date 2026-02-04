@@ -47,7 +47,7 @@ use ftui_extras::theme;
 use ftui_harness::flicker_detection;
 use ftui_layout::{Constraint, Flex, Grid, GridArea};
 use ftui_render::cell::Cell;
-use ftui_render::frame::{Frame, HitId, HitRegion};
+use ftui_render::frame::{Frame, HitId, HitRegion, WidgetSignal};
 #[cfg(feature = "telemetry")]
 use ftui_runtime::TelemetryConfig;
 use ftui_runtime::locale::{Locale, LocaleContext, detect_system_locale, set_locale};
@@ -69,7 +69,7 @@ use ftui_widgets::spinner::{DOTS, Spinner, SpinnerState};
 use ftui_widgets::status_line::{StatusItem, StatusLine};
 use ftui_widgets::table::{Row, Table, TableState};
 use ftui_widgets::tree::{Tree, TreeNode};
-use ftui_widgets::{StatefulWidget, Widget};
+use ftui_widgets::{Budgeted, StatefulWidget, Widget};
 
 /// Application state for the agent harness.
 struct AgentHarness {
@@ -174,7 +174,48 @@ enum HarnessView {
     WidgetList,
     WidgetInput,
     WidgetInspector,
+    WidgetBudget,
     LocaleContext,
+}
+
+struct BudgetCardSpec {
+    widget_id: u64,
+    title: &'static str,
+    body: &'static str,
+    essential: bool,
+    priority: f32,
+    staleness_ms: u64,
+    cost_us: f32,
+    focus_boost: f32,
+    interaction_boost: f32,
+}
+
+struct BudgetCard {
+    title: &'static str,
+    body: &'static str,
+    essential: bool,
+}
+
+impl Widget for BudgetCard {
+    fn render(&self, area: Rect, frame: &mut Frame) {
+        let block = Block::new()
+            .title(self.title)
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .style(Style::new().bg(theme::alpha::SURFACE))
+            .border_style(Style::new().fg(theme::fg::MUTED));
+        let inner = block.inner(area);
+        block.render(area, frame);
+
+        let paragraph = Paragraph::new(self.body)
+            .alignment(Alignment::Center)
+            .wrap(WrapMode::Word);
+        paragraph.render(inner, frame);
+    }
+
+    fn is_essential(&self) -> bool {
+        self.essential
+    }
 }
 
 impl AgentHarness {
@@ -744,6 +785,7 @@ impl Model for AgentHarness {
             HarnessView::WidgetList => self.view_widget_list(frame),
             HarnessView::WidgetInput => self.view_widget_input(frame),
             HarnessView::WidgetInspector => self.view_widget_inspector(frame),
+            HarnessView::WidgetBudget => self.view_widget_budget(frame),
             HarnessView::LocaleContext => self.view_locale_context(frame),
         }
     }
@@ -1019,6 +1061,113 @@ impl AgentHarness {
         let mut state = ListState::default();
         state.select(Some(2));
         StatefulWidget::render(&list, area, frame, &mut state);
+    }
+
+    fn view_widget_budget(&self, frame: &mut Frame) {
+        let area = Rect::from_size(frame.buffer.width(), frame.buffer.height());
+        let rows = Flex::vertical()
+            .constraints([
+                Constraint::Percentage(33.4),
+                Constraint::Percentage(33.3),
+                Constraint::Percentage(33.3),
+            ])
+            .split(area);
+
+        let specs = [
+            BudgetCardSpec {
+                widget_id: 1,
+                title: " Essential ",
+                body: "Core status",
+                essential: true,
+                priority: 1.0,
+                staleness_ms: 0,
+                cost_us: 1_500.0,
+                focus_boost: 0.0,
+                interaction_boost: 0.0,
+            },
+            BudgetCardSpec {
+                widget_id: 2,
+                title: " Search ",
+                body: "Hot path",
+                essential: false,
+                priority: 1.2,
+                staleness_ms: 200,
+                cost_us: 2_000.0,
+                focus_boost: 0.0,
+                interaction_boost: 0.0,
+            },
+            BudgetCardSpec {
+                widget_id: 3,
+                title: " Starved ",
+                body: "Needs refresh",
+                essential: false,
+                priority: 0.5,
+                staleness_ms: 4_000,
+                cost_us: 1_200.0,
+                focus_boost: 0.0,
+                interaction_boost: 0.0,
+            },
+            BudgetCardSpec {
+                widget_id: 4,
+                title: " Charts ",
+                body: "Analytics",
+                essential: false,
+                priority: 0.9,
+                staleness_ms: 600,
+                cost_us: 2_500.0,
+                focus_boost: 0.0,
+                interaction_boost: 0.0,
+            },
+            BudgetCardSpec {
+                widget_id: 5,
+                title: " Logs ",
+                body: "Low pri",
+                essential: false,
+                priority: 0.2,
+                staleness_ms: 500,
+                cost_us: 500.0,
+                focus_boost: 0.0,
+                interaction_boost: 0.0,
+            },
+            BudgetCardSpec {
+                widget_id: 6,
+                title: " Preview ",
+                body: "Inline view",
+                essential: false,
+                priority: 0.7,
+                staleness_ms: 900,
+                cost_us: 1_800.0,
+                focus_boost: 0.0,
+                interaction_boost: 0.0,
+            },
+        ];
+
+        let mut idx = 0usize;
+        for row in rows {
+            let cols = Flex::horizontal()
+                .constraints([Constraint::Percentage(50.0), Constraint::Percentage(50.0)])
+                .split(row);
+            for col in cols {
+                if let Some(spec) = specs.get(idx) {
+                    let card = BudgetCard {
+                        title: spec.title,
+                        body: spec.body,
+                        essential: spec.essential,
+                    };
+                    let mut signal = WidgetSignal::new(spec.widget_id);
+                    signal.priority = spec.priority;
+                    signal.staleness_ms = spec.staleness_ms;
+                    signal.cost_estimate_us = spec.cost_us;
+                    signal.focus_boost = spec.focus_boost;
+                    signal.interaction_boost = spec.interaction_boost;
+
+                    Budgeted::new(spec.widget_id, card)
+                        .with_signal(signal)
+                        .render(col, frame);
+                }
+                idx = idx.saturating_add(1);
+            }
+        }
     }
 
     fn view_widget_input(&self, frame: &mut Frame) {
@@ -1339,6 +1488,12 @@ fn env_flag(name: &str) -> Option<bool> {
     Some(enabled)
 }
 
+fn env_u64(name: &str) -> Option<u64> {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+}
+
 fn main() -> std::io::Result<()> {
     if std::env::var("FTUI_HARNESS_FLICKER_ANALYZE").is_ok() {
         let input_path = std::env::var("FTUI_HARNESS_FLICKER_INPUT").map_err(|_| {
@@ -1432,6 +1587,7 @@ fn main() -> std::io::Result<()> {
         "widget-list" | "widget_list" | "list" => HarnessView::WidgetList,
         "widget-input" | "widget_input" | "input" => HarnessView::WidgetInput,
         "widget-inspector" | "widget_inspector" | "inspector" => HarnessView::WidgetInspector,
+        "widget-budget" | "widget_budget" | "budget" => HarnessView::WidgetBudget,
         "locale-context" | "locale_context" | "locale" => HarnessView::LocaleContext,
         _ => HarnessView::Default,
     };
@@ -1483,6 +1639,18 @@ fn main() -> std::io::Result<()> {
             config = config.with_conformal_config(ConformalConfig::default());
         } else {
             config = config.without_conformal();
+        }
+    }
+    if let Some(total_us) = env_u64("FTUI_HARNESS_FRAME_BUDGET_US") {
+        config.budget.total = Duration::from_micros(total_us);
+    }
+    if let Some(render_us) = env_u64("FTUI_HARNESS_RENDER_BUDGET_US") {
+        config.budget.phase_budgets.render = Duration::from_micros(render_us);
+        let phase_total = config.budget.phase_budgets.diff
+            + config.budget.phase_budgets.present
+            + config.budget.phase_budgets.render;
+        if phase_total > config.budget.total {
+            config.budget.total = phase_total;
         }
     }
     if let Ok(path) = std::env::var("FTUI_HARNESS_EVIDENCE_JSONL") {
