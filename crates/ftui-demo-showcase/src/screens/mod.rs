@@ -45,6 +45,8 @@ pub mod voi_overlay;
 pub mod widget_builder;
 pub mod widget_gallery;
 
+use std::sync::OnceLock;
+
 use ftui_core::event::Event;
 use ftui_core::geometry::Rect;
 use ftui_render::frame::Frame;
@@ -478,6 +480,12 @@ pub fn screen_registry() -> &'static [ScreenMeta] {
     SCREEN_REGISTRY
 }
 
+/// Lazily computed ordered screen IDs (derived from the registry).
+pub fn screen_ids() -> &'static [ScreenId] {
+    static IDS: OnceLock<Vec<ScreenId>> = OnceLock::new();
+    IDS.get_or_init(|| SCREEN_REGISTRY.iter().map(|meta| meta.id).collect())
+}
+
 /// Lookup a screen by ID in the registry.
 pub fn screen_meta(id: ScreenId) -> &'static ScreenMeta {
     SCREEN_REGISTRY
@@ -621,6 +629,7 @@ mod tests {
     #[test]
     fn registry_matches_screen_list() {
         assert_eq!(SCREEN_REGISTRY.len(), ScreenId::ALL.len());
+        assert_eq!(screen_ids().len(), SCREEN_REGISTRY.len());
         for &id in ScreenId::ALL {
             assert!(
                 SCREEN_REGISTRY.iter().any(|meta| meta.id == id),

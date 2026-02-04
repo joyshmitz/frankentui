@@ -23,7 +23,7 @@ use ftui_widgets::input::TextInput;
 use ftui_widgets::paragraph::Paragraph;
 use ftui_widgets::scrollbar::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 
-use super::{HelpEntry, Screen};
+use super::{HelpEntry, Screen, line_contains_ignore_case};
 use crate::app::ScreenId;
 use crate::chrome;
 use crate::theme;
@@ -411,34 +411,6 @@ fn is_title_line(s: &str) -> bool {
     let upper_count = s.chars().filter(|c| c.is_uppercase()).count();
     // At least 80% uppercase letters
     upper_count * 100 / alpha_count.max(1) >= 80
-}
-
-/// Check if a line contains a query string (case-insensitive) without allocation.
-fn line_contains_ignore_case(line: &str, query_lower: &str) -> bool {
-    if query_lower.is_empty() {
-        return true;
-    }
-    let line_bytes = line.as_bytes();
-    let query_bytes = query_lower.as_bytes();
-
-    if query_bytes.len() > line_bytes.len() {
-        return false;
-    }
-
-    // Naive search window
-    for i in 0..=line_bytes.len() - query_bytes.len() {
-        let mut match_found = true;
-        for j in 0..query_bytes.len() {
-            if line_bytes[i + j].to_ascii_lowercase() != query_bytes[j] {
-                match_found = false;
-                break;
-            }
-        }
-        if match_found {
-            return true;
-        }
-    }
-    false
 }
 
 impl Screen for Shakespeare {
