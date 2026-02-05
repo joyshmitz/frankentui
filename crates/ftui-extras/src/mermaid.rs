@@ -4767,17 +4767,29 @@ impl<'a> Lexer<'a> {
         if is_digit(b) {
             return self.lex_number(start);
         }
-        if is_arrow_char(b as char) {
-            return self.lex_arrow_or_punct(start);
-        }
-        if is_ident_start(b as char) {
-            return self.lex_identifier(start);
-        }
-
-        self.advance_byte();
-        Token {
-            kind: TokenKind::Punct(b as char),
-            span: Span::new(start, self.position()),
+        if b.is_ascii() {
+            if is_arrow_char(b as char) {
+                return self.lex_arrow_or_punct(start);
+            }
+            if is_ident_start(b as char) {
+                return self.lex_identifier(start);
+            }
+            self.advance_byte();
+            Token {
+                kind: TokenKind::Punct(b as char),
+                span: Span::new(start, self.position()),
+            }
+        } else {
+            // Non-ASCII byte: decode full UTF-8 character.
+            let c = self.decode_current_char().unwrap_or('\u{FFFD}');
+            if is_ident_start(c) {
+                return self.lex_identifier(start);
+            }
+            self.advance_char(c);
+            Token {
+                kind: TokenKind::Punct(c),
+                span: Span::new(start, self.position()),
+            }
         }
     }
 
@@ -4871,16 +4883,40 @@ impl<'a> Lexer<'a> {
 
     fn lex_identifier(&mut self, start: Position) -> Token<'a> {
         let start_idx = self.idx;
-        self.advance_byte();
+        // Advance past the first character (may be multi-byte).
+        if let Some(first) = self.decode_current_char() {
+            if first.is_ascii() {
+                self.advance_byte();
+            } else {
+                self.advance_char(first);
+            }
+        } else {
+            self.advance_byte();
+        }
         while self.idx < self.bytes.len() {
-            let c = self.bytes[self.idx] as char;
+            let b = self.bytes[self.idx];
+            let c = if b.is_ascii() {
+                b as char
+            } else if let Some(decoded) = self.decode_current_char() {
+                decoded
+            } else {
+                break;
+            };
             if !is_ident_continue(c) {
                 break;
             }
-            if c == '-' && self.peek_byte().is_some_and(|b| is_arrow_char(b as char)) {
+            if c == '-'
+                && self
+                    .peek_byte()
+                    .is_some_and(|nb| nb.is_ascii() && is_arrow_char(nb as char))
+            {
                 break;
             }
-            self.advance_byte();
+            if c.is_ascii() {
+                self.advance_byte();
+            } else {
+                self.advance_char(c);
+            }
         }
         let text = &self.input[start_idx..self.idx];
         let kind = match keyword_from(text) {
@@ -4897,8 +4933,9 @@ impl<'a> Lexer<'a> {
         let start_idx = self.idx;
         let mut count = 0usize;
         while self.idx < self.bytes.len() {
-            let c = self.bytes[self.idx] as char;
-            if !is_arrow_char(c) {
+            let b = self.bytes[self.idx];
+            // Arrow chars are always ASCII; non-ASCII bytes can't be arrow chars.
+            if !b.is_ascii() || !is_arrow_char(b as char) {
                 break;
             }
             count += 1;
@@ -4943,6 +4980,18 @@ impl<'a> Lexer<'a> {
         } else {
             self.col += 1;
         }
+    }
+
+    /// Decode the current UTF-8 character from the input at `self.idx`.
+    fn decode_current_char(&self) -> Option<char> {
+        self.input.get(self.idx..)?.chars().next()
+    }
+
+    /// Advance past a full UTF-8 character (1-4 bytes), incrementing col by 1.
+    fn advance_char(&mut self, c: char) {
+        let len = c.len_utf8();
+        self.idx += len;
+        self.col += 1;
     }
 
     fn position(&self) -> Position {
@@ -6772,11 +6821,13 @@ fn is_digit(b: u8) -> bool {
 }
 
 fn is_ident_start(c: char) -> bool {
-    c.is_ascii_alphabetic() || c == '_' || c == '$'
+    c.is_ascii_alphabetic() || c == '_' || c == '$' || (!c.is_ascii() && c.is_alphabetic())
 }
 
 fn is_ident_continue(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '$')
+    c.is_ascii_alphanumeric()
+        || matches!(c, '_' | '-' | '.' | '/' | '$')
+        || (!c.is_ascii() && (c.is_alphanumeric() || c.is_alphabetic()))
 }
 
 fn is_arrow_char(c: char) -> bool {
@@ -6840,6 +6891,35 @@ mod tests {
             tokens
                 .iter()
                 .any(|t| matches!(t.kind, TokenKind::Arrow("-->")))
+        );
+    }
+
+    #[test]
+    fn tokenize_non_ascii_identifiers() {
+        // CJK characters should be lexed as identifiers, not invalid byte casts
+        let tokens = tokenize("graph TD\n漢字-->テスト\n");
+        let idents: Vec<&str> = tokens
+            .iter()
+            .filter_map(|t| match t.kind {
+                TokenKind::Identifier(s) => Some(s),
+                _ => None,
+            })
+            .collect();
+        // Should contain the CJK identifiers
+        assert!(
+            idents.contains(&"漢字"),
+            "Expected CJK identifier '漢字', got: {idents:?}"
+        );
+        assert!(
+            idents.contains(&"テスト"),
+            "Expected CJK identifier 'テスト', got: {idents:?}"
+        );
+        // The arrow should still be parsed correctly
+        assert!(
+            tokens
+                .iter()
+                .any(|t| matches!(t.kind, TokenKind::Arrow("-->"))),
+            "Arrow should still be parsed correctly"
         );
     }
 
