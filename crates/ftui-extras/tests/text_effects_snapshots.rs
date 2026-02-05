@@ -31,7 +31,7 @@ use ftui_extras::text_effects::{
 };
 
 #[cfg(feature = "text-effects")]
-fn buffer_to_ansi(buf: &Buffer) -> String {
+fn buffer_to_ansi(buf: &Buffer, pool: &GraphemePool) -> String {
     let capacity = (buf.width() as usize + 32) * buf.height() as usize;
     let mut out = String::with_capacity(capacity);
 
@@ -120,6 +120,12 @@ fn buffer_to_ansi(buf: &Buffer) -> String {
 
             if let Some(ch) = cell.content.as_char() {
                 out.push(ch);
+            } else if let Some(id) = cell.content.grapheme_id() {
+                if let Some(text) = pool.get(id) {
+                    out.push_str(text);
+                } else {
+                    out.push('?');
+                }
             } else {
                 out.push('?');
             }
@@ -176,13 +182,13 @@ fn is_bless() -> bool {
 }
 
 #[cfg(feature = "text-effects")]
-fn assert_buffer_snapshot_ansi(name: &str, buf: &Buffer) {
+fn assert_buffer_snapshot_ansi(name: &str, frame: &Frame) {
     let base = Path::new(env!("CARGO_MANIFEST_DIR"));
     let path = base
         .join("tests")
         .join("snapshots")
         .join(format!("{name}.ansi.snap"));
-    let actual = buffer_to_ansi(buf);
+    let actual = buffer_to_ansi(&frame.buffer, frame.pool);
 
     if is_bless() {
         if let Some(parent) = path.parent() {
@@ -216,8 +222,8 @@ fn assert_buffer_snapshot_ansi(name: &str, buf: &Buffer) {
 
 #[cfg(feature = "text-effects")]
 macro_rules! assert_snapshot_ansi {
-    ($name:expr, $buf:expr) => {
-        assert_buffer_snapshot_ansi($name, $buf)
+    ($name:expr, $frame:expr) => {
+        assert_buffer_snapshot_ansi($name, $frame)
     };
 }
 
@@ -236,7 +242,7 @@ fn snapshot_rainbow_gradient() {
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(30, 1, &mut pool);
     text.render(area, &mut frame);
-    assert_snapshot_ansi!("text_effects_rainbow_gradient", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_rainbow_gradient", &frame);
 }
 
 #[test]
@@ -251,7 +257,7 @@ fn snapshot_horizontal_gradient() {
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(20, 1, &mut pool);
     text.render(area, &mut frame);
-    assert_snapshot_ansi!("text_effects_horizontal_gradient", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_horizontal_gradient", &frame);
 }
 
 #[test]
@@ -269,7 +275,7 @@ fn snapshot_animated_gradient_frame_0() {
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(15, 1, &mut pool);
     text.render(area, &mut frame);
-    assert_snapshot_ansi!("text_effects_animated_gradient_f0", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_animated_gradient_f0", &frame);
 }
 
 #[test]
@@ -287,7 +293,7 @@ fn snapshot_animated_gradient_frame_50() {
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(15, 1, &mut pool);
     text.render(area, &mut frame);
-    assert_snapshot_ansi!("text_effects_animated_gradient_f50", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_animated_gradient_f50", &frame);
 }
 
 // =============================================================================
@@ -310,7 +316,7 @@ fn snapshot_wave_frame_0() {
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(15, 3, &mut pool);
     text.render(area, &mut frame);
-    assert_snapshot_ansi!("text_effects_wave_f0", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_wave_f0", &frame);
 }
 
 #[test]
@@ -329,7 +335,7 @@ fn snapshot_wave_frame_25() {
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(15, 3, &mut pool);
     text.render(area, &mut frame);
-    assert_snapshot_ansi!("text_effects_wave_f25", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_wave_f25", &frame);
 }
 
 // =============================================================================
@@ -351,7 +357,7 @@ fn snapshot_glow_static() {
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(10, 1, &mut pool);
     text.render(area, &mut frame);
-    assert_snapshot_ansi!("text_effects_glow_static", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_glow_static", &frame);
 }
 
 #[test]
@@ -368,7 +374,7 @@ fn snapshot_pulsing_glow() {
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(10, 1, &mut pool);
     text.render(area, &mut frame);
-    assert_snapshot_ansi!("text_effects_pulsing_glow", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_pulsing_glow", &frame);
 }
 
 // =============================================================================
@@ -399,7 +405,7 @@ fn snapshot_ascii_art_block() {
         }
     }
 
-    assert_snapshot_ansi!("text_effects_ascii_art_block", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_ascii_art_block", &frame);
 }
 
 #[test]
@@ -424,7 +430,7 @@ fn snapshot_ascii_art_banner() {
         }
     }
 
-    assert_snapshot_ansi!("text_effects_ascii_art_banner", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_ascii_art_banner", &frame);
 }
 
 // =============================================================================
@@ -443,7 +449,7 @@ fn snapshot_fade_in_0() {
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(10, 1, &mut pool);
     text.render(area, &mut frame);
-    assert_snapshot_ansi!("text_effects_fade_in_0", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_fade_in_0", &frame);
 }
 
 #[test]
@@ -458,7 +464,7 @@ fn snapshot_fade_in_50() {
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(10, 1, &mut pool);
     text.render(area, &mut frame);
-    assert_snapshot_ansi!("text_effects_fade_in_50", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_fade_in_50", &frame);
 }
 
 #[test]
@@ -473,7 +479,7 @@ fn snapshot_fade_in_100() {
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(10, 1, &mut pool);
     text.render(area, &mut frame);
-    assert_snapshot_ansi!("text_effects_fade_in_100", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_fade_in_100", &frame);
 }
 
 // =============================================================================
@@ -495,7 +501,7 @@ fn snapshot_pulse_min() {
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(10, 1, &mut pool);
     text.render(area, &mut frame);
-    assert_snapshot_ansi!("text_effects_pulse_min", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_pulse_min", &frame);
 }
 
 #[test]
@@ -513,7 +519,7 @@ fn snapshot_pulse_max() {
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(10, 1, &mut pool);
     text.render(area, &mut frame);
-    assert_snapshot_ansi!("text_effects_pulse_max", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_pulse_max", &frame);
 }
 
 // =============================================================================
@@ -531,7 +537,7 @@ fn snapshot_typewriter_partial() {
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(15, 1, &mut pool);
     text.render(area, &mut frame);
-    assert_snapshot_ansi!("text_effects_typewriter_partial", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_typewriter_partial", &frame);
 }
 
 #[test]
@@ -547,7 +553,7 @@ fn snapshot_typewriter_complete() {
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(15, 1, &mut pool);
     text.render(area, &mut frame);
-    assert_snapshot_ansi!("text_effects_typewriter_complete", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_typewriter_complete", &frame);
 }
 
 // =============================================================================
@@ -569,7 +575,7 @@ fn snapshot_effect_chain() {
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(12, 1, &mut pool);
     text.render(area, &mut frame);
-    assert_snapshot_ansi!("text_effects_chain", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_chain", &frame);
 }
 
 // =============================================================================
@@ -588,7 +594,7 @@ fn snapshot_scramble_start() {
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(12, 1, &mut pool);
     text.render(area, &mut frame);
-    assert_snapshot_ansi!("text_effects_scramble_start", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_scramble_start", &frame);
 }
 
 #[test]
@@ -603,7 +609,7 @@ fn snapshot_scramble_end() {
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(12, 1, &mut pool);
     text.render(area, &mut frame);
-    assert_snapshot_ansi!("text_effects_scramble_end", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_scramble_end", &frame);
 }
 
 // =============================================================================
@@ -626,7 +632,7 @@ fn snapshot_color_wave() {
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(15, 1, &mut pool);
     text.render(area, &mut frame);
-    assert_snapshot_ansi!("text_effects_color_wave", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_color_wave", &frame);
 }
 
 // =============================================================================
@@ -645,7 +651,7 @@ fn snapshot_glitch_low() {
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(10, 1, &mut pool);
     text.render(area, &mut frame);
-    assert_snapshot_ansi!("text_effects_glitch_low", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_glitch_low", &frame);
 }
 
 #[test]
@@ -660,7 +666,7 @@ fn snapshot_glitch_high() {
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(10, 1, &mut pool);
     text.render(area, &mut frame);
-    assert_snapshot_ansi!("text_effects_glitch_high", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_glitch_high", &frame);
 }
 
 // =============================================================================
@@ -680,7 +686,7 @@ fn snapshot_preset_fire() {
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(18, 1, &mut pool);
     text.render(area, &mut frame);
-    assert_snapshot_ansi!("text_effects_preset_fire", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_preset_fire", &frame);
 }
 
 #[test]
@@ -696,7 +702,7 @@ fn snapshot_preset_ocean() {
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(18, 1, &mut pool);
     text.render(area, &mut frame);
-    assert_snapshot_ansi!("text_effects_preset_ocean", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_preset_ocean", &frame);
 }
 
 #[test]
@@ -712,5 +718,5 @@ fn snapshot_preset_matrix() {
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(20, 1, &mut pool);
     text.render(area, &mut frame);
-    assert_snapshot_ansi!("text_effects_preset_matrix", &frame.buffer);
+    assert_snapshot_ansi!("text_effects_preset_matrix", &frame);
 }

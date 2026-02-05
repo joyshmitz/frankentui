@@ -2050,6 +2050,7 @@ mod widget_tests {
             kind: KeyEventKind::Press,
         });
         let _ = palette.handle_event(&enter);
+        palette.close();
 
         let events = events.lock().expect("lock telemetry events");
         let open_idx = events

@@ -2506,6 +2506,18 @@ mod perf_tests {
     const INCREMENTAL_7KEY_100_BUDGET_US: u64 = 2_000; // 2ms for 7 keystrokes on 100 items
     const INCREMENTAL_7KEY_1000_BUDGET_US: u64 = 15_000; // 15ms for 7 keystrokes on 1000 items
 
+    fn is_coverage_run() -> bool {
+        std::env::var("LLVM_PROFILE_FILE").is_ok() || std::env::var("CARGO_LLVM_COV").is_ok()
+    }
+
+    fn coverage_budget_us(base: u64) -> u64 {
+        if is_coverage_run() {
+            base.saturating_mul(2)
+        } else {
+            base
+        }
+    }
+
     /// Generate a command corpus of the specified size with realistic variety.
     fn make_corpus(size: usize) -> Vec<String> {
         let base = [
@@ -2595,11 +2607,12 @@ mod perf_tests {
             stats.mean_us,
             stats.variance_us
         );
+        let budget = coverage_budget_us(SINGLE_SCORE_BUDGET_US);
         assert!(
-            stats.p50_us <= SINGLE_SCORE_BUDGET_US,
+            stats.p50_us <= budget,
             "Single score p50 = {}µs exceeds budget {}µs",
             stats.p50_us,
-            SINGLE_SCORE_BUDGET_US,
+            budget,
         );
     }
 
@@ -2625,11 +2638,12 @@ mod perf_tests {
             stats.mean_us,
             stats.variance_us
         );
+        let budget = coverage_budget_us(CORPUS_100_BUDGET_US);
         assert!(
-            stats.p95_us <= CORPUS_100_BUDGET_US,
+            stats.p95_us <= budget,
             "100-item corpus p95 = {}µs exceeds budget {}µs",
             stats.p95_us,
-            CORPUS_100_BUDGET_US,
+            budget,
         );
     }
 
@@ -2655,11 +2669,12 @@ mod perf_tests {
             stats.mean_us,
             stats.variance_us
         );
+        let budget = coverage_budget_us(CORPUS_1000_BUDGET_US);
         assert!(
-            stats.p95_us <= CORPUS_1000_BUDGET_US,
+            stats.p95_us <= budget,
             "1000-item corpus p95 = {}µs exceeds budget {}µs",
             stats.p95_us,
-            CORPUS_1000_BUDGET_US,
+            budget,
         );
     }
 
@@ -2685,11 +2700,12 @@ mod perf_tests {
             stats.mean_us,
             stats.variance_us
         );
+        let budget = coverage_budget_us(CORPUS_5000_BUDGET_US);
         assert!(
-            stats.p95_us <= CORPUS_5000_BUDGET_US,
+            stats.p95_us <= budget,
             "5000-item corpus p95 = {}µs exceeds budget {}µs",
             stats.p95_us,
-            CORPUS_5000_BUDGET_US,
+            budget,
         );
     }
 
@@ -2715,11 +2731,12 @@ mod perf_tests {
             stats.mean_us,
             stats.variance_us
         );
+        let budget = coverage_budget_us(INCREMENTAL_7KEY_100_BUDGET_US);
         assert!(
-            stats.p95_us <= INCREMENTAL_7KEY_100_BUDGET_US,
+            stats.p95_us <= budget,
             "Incremental 7-key 100-item p95 = {}µs exceeds budget {}µs",
             stats.p95_us,
-            INCREMENTAL_7KEY_100_BUDGET_US,
+            budget,
         );
     }
 
@@ -2745,11 +2762,12 @@ mod perf_tests {
             stats.mean_us,
             stats.variance_us
         );
+        let budget = coverage_budget_us(INCREMENTAL_7KEY_1000_BUDGET_US);
         assert!(
-            stats.p95_us <= INCREMENTAL_7KEY_1000_BUDGET_US,
+            stats.p95_us <= budget,
             "Incremental 7-key 1000-item p95 = {}µs exceeds budget {}µs",
             stats.p95_us,
-            INCREMENTAL_7KEY_1000_BUDGET_US,
+            budget,
         );
     }
 

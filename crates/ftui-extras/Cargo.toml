@@ -81,7 +81,13 @@ stopwatch = []
 timer = []
 diagram = ["dep:unicode-segmentation", "dep:unicode-display-width", "dep:serde_json"]
 theme = ["dep:ftui-render", "dep:ftui-style"]
-text-effects = ["dep:ftui-core", "dep:ftui-render", "dep:ftui-style", "dep:ftui-widgets"]
+text-effects = [
+  "dep:ftui-core",
+  "dep:ftui-render",
+  "dep:ftui-style",
+  "dep:ftui-text",
+  "dep:ftui-widgets",
+]
 visual-fx = ["dep:ftui-core", "dep:ftui-render", "dep:ftui-style", "dep:ftui-widgets"]
 visual-fx-metaballs = ["visual-fx"]
 visual-fx-plasma = ["visual-fx"]

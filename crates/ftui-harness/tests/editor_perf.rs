@@ -91,9 +91,22 @@ fn log_perf(case: &str, lines: usize, op: &str, duration_us: u128, result: &str)
     }
 }
 
+fn is_coverage_run() -> bool {
+    std::env::var("LLVM_PROFILE_FILE").is_ok() || std::env::var("CARGO_LLVM_COV").is_ok()
+}
+
+fn coverage_budget_us(base: u128) -> u128 {
+    if is_coverage_run() {
+        base.saturating_mul(2)
+    } else {
+        base
+    }
+}
+
 /// Assert operation completes within time budget.
 fn assert_within_budget(duration: Duration, budget_us: u128, case: &str, lines: usize, op: &str) {
     let duration_us = duration.as_micros();
+    let budget_us = coverage_budget_us(budget_us);
     let result = if duration_us <= budget_us {
         "pass"
     } else {

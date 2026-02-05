@@ -2198,3 +2198,446 @@ fn explainability_cockpit_populated_120x40() {
     screen.view(&mut frame, area);
     assert_snapshot!("explainability_cockpit_populated_120x40", &frame.buffer);
 }
+
+// ============================================================================
+// Kanban Board
+// ============================================================================
+
+#[test]
+fn kanban_board_initial_80x24() {
+    let screen = ftui_demo_showcase::screens::kanban_board::KanbanBoard::default();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("kanban_board_initial_80x24", &frame.buffer);
+}
+
+#[test]
+fn kanban_board_initial_120x40() {
+    let screen = ftui_demo_showcase::screens::kanban_board::KanbanBoard::default();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(120, 40, &mut pool);
+    let area = Rect::new(0, 0, 120, 40);
+    screen.view(&mut frame, area);
+    assert_snapshot!("kanban_board_initial_120x40", &frame.buffer);
+}
+
+#[test]
+fn kanban_board_after_move_80x24() {
+    let mut screen = ftui_demo_showcase::screens::kanban_board::KanbanBoard::default();
+    // Move first card from Todo to In Progress (press L to move right)
+    screen.update(&press(KeyCode::Char('L')));
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("kanban_board_after_move_80x24", &frame.buffer);
+}
+
+#[test]
+fn kanban_board_zero_area() {
+    let screen = ftui_demo_showcase::screens::kanban_board::KanbanBoard::default();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(1, 1, &mut pool);
+    let area = Rect::new(0, 0, 0, 0);
+    screen.view(&mut frame, area);
+    // No panic = success
+}
+
+#[test]
+fn kanban_board_title() {
+    let screen = ftui_demo_showcase::screens::kanban_board::KanbanBoard::default();
+    assert_eq!(screen.title(), "Kanban Board");
+    assert_eq!(screen.tab_label(), "Kanban");
+}
+
+// ============================================================================
+// Accessibility Panel
+// ============================================================================
+
+#[test]
+fn accessibility_panel_initial_80x24() {
+    let screen = ftui_demo_showcase::screens::accessibility_panel::AccessibilityPanel::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("accessibility_panel_initial_80x24", &frame.buffer);
+}
+
+#[test]
+fn accessibility_panel_zero_area() {
+    let screen = ftui_demo_showcase::screens::accessibility_panel::AccessibilityPanel::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(1, 1, &mut pool);
+    let area = Rect::new(0, 0, 0, 0);
+    screen.view(&mut frame, area);
+}
+
+#[test]
+fn accessibility_panel_title() {
+    let screen = ftui_demo_showcase::screens::accessibility_panel::AccessibilityPanel::new();
+    assert_eq!(screen.title(), "Accessibility");
+    assert_eq!(screen.tab_label(), "A11y");
+}
+
+// ============================================================================
+// Advanced Text Editor
+// ============================================================================
+
+#[test]
+fn advanced_text_editor_initial_80x24() {
+    let screen = ftui_demo_showcase::screens::advanced_text_editor::AdvancedTextEditor::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("advanced_text_editor_initial_80x24", &frame.buffer);
+}
+
+#[test]
+fn advanced_text_editor_zero_area() {
+    let screen = ftui_demo_showcase::screens::advanced_text_editor::AdvancedTextEditor::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(1, 1, &mut pool);
+    let area = Rect::new(0, 0, 0, 0);
+    screen.view(&mut frame, area);
+}
+
+#[test]
+fn advanced_text_editor_title() {
+    let screen = ftui_demo_showcase::screens::advanced_text_editor::AdvancedTextEditor::new();
+    assert_eq!(screen.title(), "Advanced Text Editor");
+    assert_eq!(screen.tab_label(), "Editor");
+}
+
+// ============================================================================
+// Async Tasks
+// ============================================================================
+
+#[test]
+fn async_tasks_initial_80x24() {
+    let screen = ftui_demo_showcase::screens::async_tasks::AsyncTaskManager::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("async_tasks_initial_80x24", &frame.buffer);
+}
+
+#[test]
+fn async_tasks_zero_area() {
+    let screen = ftui_demo_showcase::screens::async_tasks::AsyncTaskManager::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(1, 1, &mut pool);
+    let area = Rect::new(0, 0, 0, 0);
+    screen.view(&mut frame, area);
+}
+
+#[test]
+fn async_tasks_title() {
+    let screen = ftui_demo_showcase::screens::async_tasks::AsyncTaskManager::new();
+    assert_eq!(screen.title(), "Async Tasks");
+    assert_eq!(screen.tab_label(), "Tasks");
+}
+
+// ============================================================================
+// Command Palette Lab
+// ============================================================================
+
+#[test]
+fn command_palette_lab_initial_80x24() {
+    let screen = ftui_demo_showcase::screens::command_palette_lab::CommandPaletteEvidenceLab::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("command_palette_lab_initial_80x24", &frame.buffer);
+}
+
+#[test]
+fn command_palette_lab_zero_area() {
+    let screen = ftui_demo_showcase::screens::command_palette_lab::CommandPaletteEvidenceLab::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(1, 1, &mut pool);
+    let area = Rect::new(0, 0, 0, 0);
+    screen.view(&mut frame, area);
+}
+
+#[test]
+fn command_palette_lab_title() {
+    let screen = ftui_demo_showcase::screens::command_palette_lab::CommandPaletteEvidenceLab::new();
+    assert_eq!(screen.title(), "Command Palette Evidence Lab");
+    assert_eq!(screen.tab_label(), "Palette");
+}
+
+// ============================================================================
+// I18n Demo
+// ============================================================================
+
+#[test]
+fn i18n_demo_initial_80x24() {
+    let screen = ftui_demo_showcase::screens::i18n_demo::I18nDemo::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("i18n_demo_initial_80x24", &frame.buffer);
+}
+
+#[test]
+fn i18n_demo_zero_area() {
+    let screen = ftui_demo_showcase::screens::i18n_demo::I18nDemo::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(1, 1, &mut pool);
+    let area = Rect::new(0, 0, 0, 0);
+    screen.view(&mut frame, area);
+}
+
+#[test]
+fn i18n_demo_title() {
+    let screen = ftui_demo_showcase::screens::i18n_demo::I18nDemo::new();
+    assert_eq!(screen.title(), "i18n Stress Lab");
+    assert_eq!(screen.tab_label(), "i18n");
+}
+
+// ============================================================================
+// Intrinsic Sizing
+// ============================================================================
+
+#[test]
+fn intrinsic_sizing_initial_80x24() {
+    let screen = ftui_demo_showcase::screens::intrinsic_sizing::IntrinsicSizingDemo::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("intrinsic_sizing_initial_80x24", &frame.buffer);
+}
+
+#[test]
+fn intrinsic_sizing_zero_area() {
+    let screen = ftui_demo_showcase::screens::intrinsic_sizing::IntrinsicSizingDemo::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(1, 1, &mut pool);
+    let area = Rect::new(0, 0, 0, 0);
+    screen.view(&mut frame, area);
+}
+
+#[test]
+fn intrinsic_sizing_title() {
+    let screen = ftui_demo_showcase::screens::intrinsic_sizing::IntrinsicSizingDemo::new();
+    assert_eq!(screen.title(), "Intrinsic Sizing");
+    assert_eq!(screen.tab_label(), "Sizing");
+}
+
+// ============================================================================
+// Log Search
+// ============================================================================
+
+#[test]
+fn log_search_initial_80x24() {
+    let screen = ftui_demo_showcase::screens::log_search::LogSearch::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("log_search_initial_80x24", &frame.buffer);
+}
+
+#[test]
+fn log_search_zero_area() {
+    let screen = ftui_demo_showcase::screens::log_search::LogSearch::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(1, 1, &mut pool);
+    let area = Rect::new(0, 0, 0, 0);
+    screen.view(&mut frame, area);
+}
+
+#[test]
+fn log_search_title() {
+    let screen = ftui_demo_showcase::screens::log_search::LogSearch::new();
+    assert_eq!(screen.title(), "Log Search");
+    assert_eq!(screen.tab_label(), "Logs");
+}
+
+// ============================================================================
+// Mouse Playground
+// ============================================================================
+
+#[test]
+fn mouse_playground_initial_80x24() {
+    let screen = ftui_demo_showcase::screens::mouse_playground::MousePlayground::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("mouse_playground_initial_80x24", &frame.buffer);
+}
+
+#[test]
+fn mouse_playground_zero_area() {
+    let screen = ftui_demo_showcase::screens::mouse_playground::MousePlayground::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(1, 1, &mut pool);
+    let area = Rect::new(0, 0, 0, 0);
+    screen.view(&mut frame, area);
+}
+
+#[test]
+fn mouse_playground_title() {
+    let screen = ftui_demo_showcase::screens::mouse_playground::MousePlayground::new();
+    assert_eq!(screen.title(), "Mouse Playground");
+    assert_eq!(screen.tab_label(), "Mouse");
+}
+
+// ============================================================================
+// Notifications
+// ============================================================================
+
+#[test]
+fn notifications_initial_80x24() {
+    let screen = ftui_demo_showcase::screens::notifications::Notifications::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("notifications_initial_80x24", &frame.buffer);
+}
+
+#[test]
+fn notifications_zero_area() {
+    let screen = ftui_demo_showcase::screens::notifications::Notifications::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(1, 1, &mut pool);
+    let area = Rect::new(0, 0, 0, 0);
+    screen.view(&mut frame, area);
+}
+
+#[test]
+fn notifications_title() {
+    let screen = ftui_demo_showcase::screens::notifications::Notifications::new();
+    assert_eq!(screen.title(), "Notifications");
+    assert_eq!(screen.tab_label(), "Notify");
+}
+
+// ============================================================================
+// Performance HUD
+// ============================================================================
+
+#[test]
+fn performance_hud_initial_80x24() {
+    let screen = ftui_demo_showcase::screens::performance_hud::PerformanceHud::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("performance_hud_initial_80x24", &frame.buffer);
+}
+
+#[test]
+fn performance_hud_zero_area() {
+    let screen = ftui_demo_showcase::screens::performance_hud::PerformanceHud::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(1, 1, &mut pool);
+    let area = Rect::new(0, 0, 0, 0);
+    screen.view(&mut frame, area);
+}
+
+#[test]
+fn performance_hud_title() {
+    let screen = ftui_demo_showcase::screens::performance_hud::PerformanceHud::new();
+    assert_eq!(screen.title(), "Performance Challenge");
+    assert_eq!(screen.tab_label(), "PerfChal");
+}
+
+// ============================================================================
+// Virtualized Search
+// ============================================================================
+
+#[test]
+fn virtualized_search_initial_80x24() {
+    let screen = ftui_demo_showcase::screens::virtualized_search::VirtualizedSearch::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("virtualized_search_initial_80x24", &frame.buffer);
+}
+
+#[test]
+fn virtualized_search_zero_area() {
+    let screen = ftui_demo_showcase::screens::virtualized_search::VirtualizedSearch::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(1, 1, &mut pool);
+    let area = Rect::new(0, 0, 0, 0);
+    screen.view(&mut frame, area);
+}
+
+#[test]
+fn virtualized_search_title() {
+    let screen = ftui_demo_showcase::screens::virtualized_search::VirtualizedSearch::new();
+    assert_eq!(screen.title(), "Virtualized Search");
+    assert_eq!(screen.tab_label(), "VirtSearch");
+}
+
+// ============================================================================
+// Visual Effects
+// ============================================================================
+
+#[test]
+fn visual_effects_initial_80x24() {
+    let screen = ftui_demo_showcase::screens::visual_effects::VisualEffectsScreen::default();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("visual_effects_initial_80x24", &frame.buffer);
+}
+
+#[test]
+fn visual_effects_zero_area() {
+    let screen = ftui_demo_showcase::screens::visual_effects::VisualEffectsScreen::default();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(1, 1, &mut pool);
+    let area = Rect::new(0, 0, 0, 0);
+    screen.view(&mut frame, area);
+}
+
+#[test]
+fn visual_effects_title() {
+    let screen = ftui_demo_showcase::screens::visual_effects::VisualEffectsScreen::default();
+    assert_eq!(screen.title(), "Visual Effects");
+    assert_eq!(screen.tab_label(), "VFX");
+}
+
+// ============================================================================
+// VOI Overlay
+// ============================================================================
+
+#[test]
+fn voi_overlay_initial_80x24() {
+    let screen = ftui_demo_showcase::screens::voi_overlay::VoiOverlayScreen::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("voi_overlay_initial_80x24", &frame.buffer);
+}
+
+#[test]
+fn voi_overlay_zero_area() {
+    let screen = ftui_demo_showcase::screens::voi_overlay::VoiOverlayScreen::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(1, 1, &mut pool);
+    let area = Rect::new(0, 0, 0, 0);
+    screen.view(&mut frame, area);
+}
+
+#[test]
+fn voi_overlay_title() {
+    let screen = ftui_demo_showcase::screens::voi_overlay::VoiOverlayScreen::new();
+    assert_eq!(screen.title(), "VOI Overlay");
+    assert_eq!(screen.tab_label(), "VOI");
+}

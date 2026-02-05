@@ -9,15 +9,21 @@
 - [x] Reply to CyanForge intro
 - [x] Send intro to active agents (OrangePond, GrayDune, CyanBeacon, GrayBrook, CoralHarbor, BlueAnchor, GoldWaterfall, SageElk, OliveCat, MistyForge, SunnyBeaver, AzureCove)
 - [x] Spawn code investigation explorer agent
-- [ ] Capture explorer summary + record architecture notes once it returns
+- [x] Capture explorer summary + record architecture notes
 - [x] Identify failing test: `command_palette::widget_tests::telemetry_emits_in_order`
 - [x] Patch EventVisitor debug normalization in `crates/ftui-widgets/src/command_palette/mod.rs`
-- [x] Run targeted test with tracing feature: `cargo test -p ftui-widgets --features tracing telemetry_emits_in_order`
-- [ ] Run required quality gates after patch:
-- [ ] `cargo fmt --check`
-- [ ] `cargo check --all-targets`
-- [ ] `cargo clippy --all-targets -- -D warnings`
-- [ ] Re-run full test suite: `cargo test`
+- [x] Fix Kanban drag borrow + hit-test caching in `crates/ftui-demo-showcase/src/screens/kanban_board.rs`
+- [x] Add `dep:ftui-text` to `text-effects` feature in `crates/ftui-extras/Cargo.toml`
+- [x] Mermaid layout fixes: label placement leader-line metadata + metrics helpers + clippy cleanups
+- [x] Update `screen_snapshots` for new screen count + Terminal Capabilities profile (BLESS)
+- [x] Update `a11y_snapshots` (BLESS)
+- [x] Update `perf_hud_e2e` snapshots (BLESS)
+- [x] Update `text_effects_snapshots` (BLESS with `--features text-effects`)
+- [x] Run required quality gates:
+- [x] `cargo fmt --check`
+- [x] `cargo check --all-targets`
+- [x] `cargo clippy --all-targets -- -D warnings`
+- [x] Full tests: `cargo test` (clean run using `CARGO_TARGET_DIR=/data/tmp/cargo-target-fresh` to avoid doctest E0460)
 - [ ] Update `UPGRADE_LOG.md` summary/notes if needed
 - [ ] Update `claude-upgrade-progress.json` if needed
 - [ ] Run UBS on changed files (pre-commit)

@@ -1,6 +1,6 @@
-Tasks: 3 total | Queued: 3 | Running: 0 | Done: 0 | Failed: 0 | Policy: FIFO    
+Q:3 R:0 D:0 F:0 | FIFO[First-In-First-Out] | Aging:✓                            
 ╭──────────────────Task Queue──────────────────╮╭─────────Task Details─────────╮
-│> Queued   [M] Initial Setup                  ││ID: 1                         │
+│▶ Queued   [M] Initial Setup                  ││ID: 1                         │
 │  Queued   [L] Data Sync                      ││Name: Initial Setup           │
 │  Queued   [H] Cache Warm                     ││State: Queued                 │
 │                                              ││Priority: 2                   │
@@ -21,4 +21,4 @@ Tasks: 3 total | Queued: 3 | Running: 0 | Done: 0 | Failed: 0 | Policy: FIFO
 │                                              ││                              │
 │                                              ││                              │
 ╰──────────────────────────────────────────────╯╰──────────────────────────────╯
-n:spawn  c:cancel  s:scheduler  r:retry  j/k:nav  q:quit                        
+n:spawn  c:cancel  s:scheduler  a:aging  r:retry  j/k:nav                       

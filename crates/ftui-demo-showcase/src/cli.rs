@@ -79,6 +79,7 @@ SCREENS:
    37  Palette Evidence   Command palette evidence lab
    38  Determinism Lab    Checksum equivalence + determinism proofs
    39  Links              OSC-8 hyperlink playground + hit regions
+   40  Kanban Board       Interactive Kanban board with drag-drop
 
 KEYBINDINGS:
     1-9, 0          Switch to screens 1-10 by number
@@ -761,7 +762,16 @@ mod tests {
                 ..
             })
         ) {
-            panic!("args={args:?} expected InvalidValue for --ui-height, got {err:?}");
+            assert!(
+                matches!(
+                    err,
+                    Err(ParseError::InvalidValue {
+                        flag: "--ui-height",
+                        ..
+                    })
+                ),
+                "args={args:?} expected InvalidValue for --ui-height, got {err:?}"
+            );
         }
     }
 
@@ -770,7 +780,10 @@ mod tests {
         let args = ["--mystery-flag"];
         let err = parse_with_env(args, &[]);
         if !matches!(err, Err(ParseError::UnknownArg(ref arg)) if arg == "--mystery-flag") {
-            panic!("args={args:?} expected UnknownArg for --mystery-flag, got {err:?}");
+            assert!(
+                matches!(err, Err(ParseError::UnknownArg(ref arg)) if arg == "--mystery-flag"),
+                "args={args:?} expected UnknownArg for --mystery-flag, got {err:?}"
+            );
         }
     }
 }

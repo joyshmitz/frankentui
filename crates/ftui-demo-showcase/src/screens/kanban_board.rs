@@ -3,15 +3,20 @@
 //! Kanban Board screen — drag-and-drop task management (bd-iuvb.12).
 //!
 //! Demonstrates a minimal Kanban board with three columns (Todo, In Progress,
-//! Done). Cards can be moved between columns using keyboard shortcuts.
-//! Keeps a deterministic data set for stable snapshots.
+//! Done). Cards can be moved between columns using keyboard shortcuts or
+//! mouse drag-and-drop. Keeps a deterministic data set for stable snapshots.
 
-use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind};
+use std::cell::Cell;
+
+use ftui_core::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind,
+};
 use ftui_core::geometry::Rect;
 use ftui_layout::{Constraint, Flex};
 use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
 use ftui_style::Style;
+use ftui_text::display_width;
 use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
 use ftui_widgets::borders::{BorderType, Borders};
@@ -66,6 +71,23 @@ pub struct Card {
     pub tag: &'static str,
 }
 
+/// State of an active mouse drag operation.
+#[derive(Debug, Clone)]
+pub struct MouseDragState {
+    /// Source column index the card is being dragged from.
+    pub source_col: usize,
+    /// Source row index the card is being dragged from.
+    pub source_row: usize,
+    /// Card ID being dragged.
+    pub card_id: u32,
+    /// Current mouse x position.
+    pub current_x: u16,
+    /// Current mouse y position.
+    pub current_y: u16,
+    /// Column index the mouse is currently hovering over (drop target).
+    pub hover_col: Option<usize>,
+}
+
 /// Kanban Board screen state.
 pub struct KanbanBoard {
     /// Cards in each column: [Todo, InProgress, Done].
@@ -80,6 +102,11 @@ pub struct KanbanBoard {
     redo_stack: Vec<(u32, usize, usize, usize, usize)>,
     /// Tick counter.
     tick_count: u64,
+    /// Active mouse drag state (None when no drag in progress).
+    mouse_drag: Option<MouseDragState>,
+    /// Cached column rectangles from the last render (for hit-testing).
+    /// Uses `Cell` because `view()` takes `&self`.
+    last_col_rects: [Cell<Rect>; 3],
 }
 
 impl Default for KanbanBoard {
@@ -138,6 +165,12 @@ impl KanbanBoard {
             history: Vec::new(),
             redo_stack: Vec::new(),
             tick_count: 0,
+            mouse_drag: None,
+            last_col_rects: [
+                Cell::new(Rect::new(0, 0, 0, 0)),
+                Cell::new(Rect::new(0, 0, 0, 0)),
+                Cell::new(Rect::new(0, 0, 0, 0)),
+            ],
         }
     }
 
@@ -225,6 +258,127 @@ impl KanbanBoard {
         self.focus_row = to_row;
     }
 
+    /// Move a card from one column to another (used by both keyboard and mouse).
+    fn move_card(&mut self, from_col: usize, from_row: usize, to_col: usize) {
+        if from_col == to_col {
+            return;
+        }
+        if from_col > 2 || to_col > 2 {
+            return;
+        }
+        if from_row >= self.columns[from_col].len() {
+            return;
+        }
+        let card = self.columns[from_col].remove(from_row);
+        let card_id = card.id;
+        let to_row = self.columns[to_col].len();
+        self.columns[to_col].push(card);
+        self.history
+            .push((card_id, from_col, to_col, from_row, to_row));
+        self.redo_stack.clear();
+        self.focus_col = to_col;
+        self.focus_row = to_row;
+    }
+
+    /// Determine which column a screen-space x,y coordinate falls in.
+    fn hit_test_column(&self, x: u16, y: u16) -> Option<usize> {
+        for (i, cell) in self.last_col_rects.iter().enumerate() {
+            let rect = cell.get();
+            if !rect.is_empty()
+                && x >= rect.x
+                && x < rect.x + rect.width
+                && y >= rect.y
+                && y < rect.y + rect.height
+            {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Determine which card within a column a screen-space y falls on.
+    fn hit_test_card(&self, col_idx: usize, y: u16) -> Option<usize> {
+        let rect = self.last_col_rects[col_idx].get();
+        if rect.is_empty() {
+            return None;
+        }
+        // Inner area (1-cell border on each side)
+        let inner_y = rect.y + 1;
+        if y < inner_y {
+            return None;
+        }
+        let card_height: u16 = 3;
+        let offset = y - inner_y;
+        let card_idx = (offset / card_height) as usize;
+        if card_idx < self.columns[col_idx].len() {
+            Some(card_idx)
+        } else {
+            None
+        }
+    }
+
+    /// Handle a mouse event, returning true if the event was consumed.
+    fn handle_mouse(&mut self, mouse: &MouseEvent) -> bool {
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                // Start drag if clicking on a card
+                if let Some(col_idx) = self.hit_test_column(mouse.x, mouse.y) {
+                    if let Some(card_idx) = self.hit_test_card(col_idx, mouse.y) {
+                        let card_id = self.columns[col_idx][card_idx].id;
+                        self.mouse_drag = Some(MouseDragState {
+                            source_col: col_idx,
+                            source_row: card_idx,
+                            card_id,
+                            current_x: mouse.x,
+                            current_y: mouse.y,
+                            hover_col: Some(col_idx),
+                        });
+                        // Also set keyboard focus to match
+                        self.focus_col = col_idx;
+                        self.focus_row = card_idx;
+                        return true;
+                    }
+                    // Clicked on column but not a card — set focus to column
+                    self.focus_col = col_idx;
+                    self.clamp_row();
+                    return true;
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                let hover_col = self.hit_test_column(mouse.x, mouse.y);
+                if let Some(ref mut drag) = self.mouse_drag {
+                    drag.current_x = mouse.x;
+                    drag.current_y = mouse.y;
+                    drag.hover_col = hover_col;
+                    return true;
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                if let Some(drag) = self.mouse_drag.take() {
+                    // Complete the drop
+                    if let Some(target_col) = drag.hover_col
+                        && target_col != drag.source_col
+                    {
+                        self.move_card(drag.source_col, drag.source_row, target_col);
+                    }
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        false
+    }
+
+    /// Returns true if a mouse drag is currently active.
+    pub fn is_dragging(&self) -> bool {
+        self.mouse_drag.is_some()
+    }
+
+    /// Returns the current drag state, if any.
+    pub fn drag_state(&self) -> Option<&MouseDragState> {
+        self.mouse_drag.as_ref()
+    }
+
     /// Render a single column.
     fn render_column(&self, frame: &mut Frame, area: Rect, col_idx: usize) {
         if area.is_empty() {
@@ -234,7 +388,15 @@ impl KanbanBoard {
         let col = Column::from_index(col_idx);
         let is_focused_col = col_idx == self.focus_col;
 
-        let border_style = if is_focused_col {
+        // Determine if this column is the drag hover target
+        let is_drop_target = self
+            .mouse_drag
+            .as_ref()
+            .is_some_and(|d| d.hover_col == Some(col_idx) && d.source_col != col_idx);
+
+        let border_style = if is_drop_target {
+            Style::new().fg(theme::accent::SUCCESS)
+        } else if is_focused_col {
             Style::new().fg(theme::accent::INFO)
         } else {
             Style::new().fg(theme::fg::MUTED)
@@ -242,7 +404,9 @@ impl KanbanBoard {
 
         let block = Block::new()
             .borders(Borders::ALL)
-            .border_type(if is_focused_col {
+            .border_type(if is_drop_target {
+                BorderType::Double
+            } else if is_focused_col {
                 BorderType::Heavy
             } else {
                 BorderType::Rounded
@@ -275,10 +439,36 @@ impl KanbanBoard {
                 break;
             }
 
-            let is_selected = is_focused_col && i == self.focus_row;
-            let card_area = Rect::new(inner.x, inner.y + y_offset, inner.width, card_height.min(inner.height - y_offset));
+            // Dim the source card during drag
+            let is_drag_source = self
+                .mouse_drag
+                .as_ref()
+                .is_some_and(|d| d.source_col == col_idx && d.source_row == i);
 
-            self.render_card(frame, card_area, card, is_selected);
+            let is_selected = is_focused_col && i == self.focus_row && !is_drag_source;
+            let card_area = Rect::new(
+                inner.x,
+                inner.y + y_offset,
+                inner.width,
+                card_height.min(inner.height - y_offset),
+            );
+
+            if is_drag_source {
+                self.render_card_dimmed(frame, card_area, card);
+            } else {
+                self.render_card(frame, card_area, card, is_selected);
+            }
+        }
+
+        // Show drop preview hint when hovering with a card
+        if is_drop_target {
+            let drop_y = inner.y + cards.len() as u16 * card_height;
+            if drop_y < inner.y + inner.height {
+                let hint_area = Rect::new(inner.x, drop_y, inner.width, 1);
+                Paragraph::new("  + drop here")
+                    .style(Style::new().fg(theme::accent::SUCCESS))
+                    .render(hint_area, frame);
+            }
         }
     }
 
@@ -294,9 +484,7 @@ impl KanbanBoard {
                     .fg(theme::bg::DEEP)
                     .bg(theme::accent::INFO)
                     .bold(),
-                Style::new()
-                    .fg(theme::bg::DEEP)
-                    .bg(theme::accent::INFO),
+                Style::new().fg(theme::bg::DEEP).bg(theme::accent::INFO),
             )
         } else {
             (
@@ -305,13 +493,12 @@ impl KanbanBoard {
             )
         };
 
-        // Title row
-        let title_text = if area.width as usize > card.title.len() + 2 {
-            if selected {
-                format!("> {}", card.title)
-            } else {
-                format!("  {}", card.title)
-            }
+        // Title row (use display width, not byte length).
+        let prefix = if selected { "> " } else { "  " };
+        let title_width = display_width(card.title.as_str());
+        let prefix_width = display_width(prefix);
+        let title_text = if area.width as usize >= title_width + prefix_width {
+            format!("{prefix}{}", card.title)
         } else {
             card.title.clone()
         };
@@ -328,6 +515,24 @@ impl KanbanBoard {
         }
     }
 
+    /// Render a dimmed card (drag source ghost).
+    fn render_card_dimmed(&self, frame: &mut Frame, area: Rect, card: &Card) {
+        if area.is_empty() {
+            return;
+        }
+        let dim_style = Style::new().fg(theme::fg::MUTED);
+        let title_text = format!("  {}", card.title);
+        Paragraph::new(title_text.as_str())
+            .style(dim_style)
+            .render(Rect::new(area.x, area.y, area.width, 1), frame);
+        if area.height > 1 {
+            let tag_text = format!("  [{}]", card.tag);
+            Paragraph::new(tag_text.as_str())
+                .style(dim_style)
+                .render(Rect::new(area.x, area.y + 1, area.width, 1), frame);
+        }
+    }
+
     /// Render the instruction footer.
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
         if area.is_empty() {
@@ -335,10 +540,15 @@ impl KanbanBoard {
         }
 
         let move_count = self.history.len();
-        let info = format!(
-            " h/l: column | j/k: card | H/L: move card | u: undo | r: redo | moves: {}",
-            move_count,
-        );
+        let info = if self.mouse_drag.is_some() {
+            " Dragging... release over a column to drop | Moves: ".to_string()
+                + &move_count.to_string()
+        } else {
+            format!(
+                " h/l: column | j/k: card | H/L: move | u/r: undo/redo | mouse: drag | moves: {}",
+                move_count,
+            )
+        };
 
         Paragraph::new(info.as_str())
             .style(Style::new().fg(theme::fg::MUTED).bg(theme::bg::DEEP))
@@ -350,6 +560,12 @@ impl Screen for KanbanBoard {
     type Message = Event;
 
     fn update(&mut self, event: &Event) -> Cmd<Self::Message> {
+        // Handle mouse events first
+        if let Event::Mouse(mouse) = event {
+            self.handle_mouse(mouse);
+            return Cmd::None;
+        }
+
         if let Event::Key(KeyEvent {
             code,
             kind: KeyEventKind::Press,
@@ -403,7 +619,9 @@ impl Screen for KanbanBoard {
             ])
             .split(board_area);
 
+        // Cache column rects for mouse hit-testing
         for (i, _col) in Column::all().iter().enumerate() {
+            self.last_col_rects[i].set(col_chunks[i]);
             self.render_column(frame, col_chunks[i], i);
         }
 
@@ -432,6 +650,10 @@ impl Screen for KanbanBoard {
                 key: "r",
                 action: "Redo last undo",
             },
+            HelpEntry {
+                key: "mouse",
+                action: "Drag card between columns",
+            },
         ]
     }
 
@@ -451,7 +673,7 @@ impl Screen for KanbanBoard {
                 let insert_at = from_row.min(self.columns[from_col].len());
                 self.columns[from_col].insert(insert_at, card);
                 self.redo_stack
-                    .push((card_id, to_col, from_col, pos, insert_at));
+                    .push((card_id, from_col, to_col, insert_at, pos));
                 self.focus_col = from_col;
                 self.focus_row = insert_at;
                 return true;
@@ -461,17 +683,17 @@ impl Screen for KanbanBoard {
     }
 
     fn redo(&mut self) -> bool {
-        if let Some((card_id, from_col, to_col, _from_row, _to_row)) = self.redo_stack.pop() {
-            if let Some(pos) = self.columns[from_col].iter().position(|c| c.id == card_id) {
-                let card = self.columns[from_col].remove(pos);
-                let insert_at = self.columns[to_col].len();
-                self.columns[to_col].push(card);
-                self.history
-                    .push((card_id, from_col, to_col, pos, insert_at));
-                self.focus_col = to_col;
-                self.focus_row = insert_at;
-                return true;
-            }
+        if let Some((card_id, from_col, to_col, _from_row, _to_row)) = self.redo_stack.pop()
+            && let Some(pos) = self.columns[from_col].iter().position(|c| c.id == card_id)
+        {
+            let card = self.columns[from_col].remove(pos);
+            let insert_at = self.columns[to_col].len();
+            self.columns[to_col].push(card);
+            self.history
+                .push((card_id, from_col, to_col, pos, insert_at));
+            self.focus_col = to_col;
+            self.focus_row = insert_at;
+            return true;
         }
         false
     }
@@ -716,7 +938,7 @@ mod tests {
         use super::Screen;
         let board = KanbanBoard::new();
         let bindings = board.keybindings();
-        assert_eq!(bindings.len(), 5);
+        assert_eq!(bindings.len(), 6);
     }
 
     #[test]
@@ -753,5 +975,329 @@ mod tests {
         board.focus_right();
         assert_eq!(board.focus_col, 1);
         assert_eq!(board.focus_row, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Mouse drag-and-drop tests
+    // -----------------------------------------------------------------------
+
+    /// Helper: set up column rects as if the board was rendered at 90x24.
+    fn setup_col_rects(board: &mut KanbanBoard) {
+        // Simulate 3 equal columns in an 90-wide, 23-tall board area
+        board.last_col_rects[0].set(Rect::new(0, 0, 30, 23));
+        board.last_col_rects[1].set(Rect::new(30, 0, 30, 23));
+        board.last_col_rects[2].set(Rect::new(60, 0, 30, 23));
+    }
+
+    #[test]
+    fn move_card_between_columns() {
+        let mut board = KanbanBoard::new();
+        let card_id = board.columns[0][1].id; // "Add input validation"
+
+        board.move_card(0, 1, 2);
+
+        assert_eq!(board.columns[0].len(), 3);
+        assert_eq!(board.columns[2].len(), 2);
+        assert_eq!(board.columns[2].last().unwrap().id, card_id);
+        assert!(board.can_undo());
+    }
+
+    #[test]
+    fn move_card_same_column_is_noop() {
+        let mut board = KanbanBoard::new();
+        board.move_card(0, 0, 0);
+        assert_eq!(board.columns[0].len(), 4);
+        assert!(!board.can_undo());
+    }
+
+    #[test]
+    fn move_card_invalid_source_row_is_noop() {
+        let mut board = KanbanBoard::new();
+        board.move_card(0, 99, 1);
+        assert_eq!(board.columns[0].len(), 4);
+        assert_eq!(board.columns[1].len(), 2);
+    }
+
+    #[test]
+    fn hit_test_column_identifies_columns() {
+        let mut board = KanbanBoard::new();
+        setup_col_rects(&mut board);
+
+        assert_eq!(board.hit_test_column(5, 5), Some(0));
+        assert_eq!(board.hit_test_column(35, 5), Some(1));
+        assert_eq!(board.hit_test_column(65, 5), Some(2));
+    }
+
+    #[test]
+    fn hit_test_column_returns_none_outside() {
+        let mut board = KanbanBoard::new();
+        setup_col_rects(&mut board);
+
+        // y=23 is outside the 0..23 range
+        assert_eq!(board.hit_test_column(5, 23), None);
+    }
+
+    #[test]
+    fn hit_test_column_no_rects_returns_none() {
+        let board = KanbanBoard::new();
+        // All rects are empty by default
+        assert_eq!(board.hit_test_column(5, 5), None);
+    }
+
+    #[test]
+    fn hit_test_card_identifies_cards() {
+        let mut board = KanbanBoard::new();
+        setup_col_rects(&mut board);
+
+        // Column 0 inner starts at y=1 (border), card_height=3
+        // Card 0: y=1..4, Card 1: y=4..7, Card 2: y=7..10, Card 3: y=10..13
+        assert_eq!(board.hit_test_card(0, 1), Some(0));
+        assert_eq!(board.hit_test_card(0, 3), Some(0));
+        assert_eq!(board.hit_test_card(0, 4), Some(1));
+        assert_eq!(board.hit_test_card(0, 7), Some(2));
+        assert_eq!(board.hit_test_card(0, 10), Some(3));
+    }
+
+    #[test]
+    fn hit_test_card_returns_none_past_last_card() {
+        let mut board = KanbanBoard::new();
+        setup_col_rects(&mut board);
+
+        // Column 0 has 4 cards (indices 0-3), card_height=3
+        // y=13 and beyond: card index 4+ which doesn't exist
+        assert_eq!(board.hit_test_card(0, 13), None);
+    }
+
+    #[test]
+    fn hit_test_card_returns_none_in_border() {
+        let mut board = KanbanBoard::new();
+        setup_col_rects(&mut board);
+
+        // y=0 is the top border of the column
+        assert_eq!(board.hit_test_card(0, 0), None);
+    }
+
+    #[test]
+    fn mouse_down_starts_drag() {
+        let mut board = KanbanBoard::new();
+        setup_col_rects(&mut board);
+
+        // Click on card 0 in column 0 (inner y=1)
+        let mouse = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 5, 1);
+        assert!(board.handle_mouse(&mouse));
+        assert!(board.is_dragging());
+
+        let drag = board.drag_state().unwrap();
+        assert_eq!(drag.source_col, 0);
+        assert_eq!(drag.source_row, 0);
+        assert_eq!(drag.card_id, 1);
+    }
+
+    #[test]
+    fn mouse_down_on_empty_area_no_drag() {
+        let mut board = KanbanBoard::new();
+        setup_col_rects(&mut board);
+
+        // Click on column 2, past the single card (y > 1+3=4)
+        let mouse = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 65, 20);
+        board.handle_mouse(&mouse);
+        assert!(!board.is_dragging());
+    }
+
+    #[test]
+    fn mouse_drag_updates_hover_col() {
+        let mut board = KanbanBoard::new();
+        setup_col_rects(&mut board);
+
+        // Start drag on card 0, column 0
+        let down = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 5, 1);
+        board.handle_mouse(&down);
+        assert!(board.is_dragging());
+
+        // Drag to column 1
+        let drag = MouseEvent::new(MouseEventKind::Drag(MouseButton::Left), 35, 5);
+        assert!(board.handle_mouse(&drag));
+
+        let state = board.drag_state().unwrap();
+        assert_eq!(state.hover_col, Some(1));
+        assert_eq!(state.current_x, 35);
+        assert_eq!(state.current_y, 5);
+    }
+
+    #[test]
+    fn mouse_up_completes_drop() {
+        let mut board = KanbanBoard::new();
+        setup_col_rects(&mut board);
+
+        let card_id = board.columns[0][0].id;
+
+        // Start drag
+        let down = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 5, 1);
+        board.handle_mouse(&down);
+
+        // Drag to column 2
+        let drag = MouseEvent::new(MouseEventKind::Drag(MouseButton::Left), 65, 5);
+        board.handle_mouse(&drag);
+
+        // Release
+        let up = MouseEvent::new(MouseEventKind::Up(MouseButton::Left), 65, 5);
+        board.handle_mouse(&up);
+
+        assert!(!board.is_dragging());
+        assert_eq!(board.columns[0].len(), 3);
+        assert_eq!(board.columns[2].len(), 2);
+        assert_eq!(board.columns[2].last().unwrap().id, card_id);
+        // Focus follows the card
+        assert_eq!(board.focus_col, 2);
+    }
+
+    #[test]
+    fn mouse_up_same_column_no_move() {
+        let mut board = KanbanBoard::new();
+        setup_col_rects(&mut board);
+
+        // Start drag on column 0, card 0
+        let down = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 5, 1);
+        board.handle_mouse(&down);
+
+        // Release on same column
+        let up = MouseEvent::new(MouseEventKind::Up(MouseButton::Left), 5, 10);
+        board.handle_mouse(&up);
+
+        assert!(!board.is_dragging());
+        // No move happened
+        assert_eq!(board.columns[0].len(), 4);
+        assert!(!board.can_undo());
+    }
+
+    #[test]
+    fn mouse_drag_is_undoable() {
+        let mut board = KanbanBoard::new();
+        setup_col_rects(&mut board);
+
+        // Drag card from column 0 to column 1
+        let down = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 5, 1);
+        board.handle_mouse(&down);
+        let drag = MouseEvent::new(MouseEventKind::Drag(MouseButton::Left), 35, 5);
+        board.handle_mouse(&drag);
+        let up = MouseEvent::new(MouseEventKind::Up(MouseButton::Left), 35, 5);
+        board.handle_mouse(&up);
+
+        assert!(board.can_undo());
+        board.undo();
+        assert_eq!(board.columns[0].len(), 4);
+        assert_eq!(board.columns[1].len(), 2);
+    }
+
+    #[test]
+    fn mouse_drag_no_drag_active_ignored() {
+        let mut board = KanbanBoard::new();
+        setup_col_rects(&mut board);
+
+        // Drag event without prior mousedown
+        let drag = MouseEvent::new(MouseEventKind::Drag(MouseButton::Left), 35, 5);
+        assert!(!board.handle_mouse(&drag));
+    }
+
+    #[test]
+    fn mouse_up_no_drag_active_ignored() {
+        let mut board = KanbanBoard::new();
+        setup_col_rects(&mut board);
+
+        let up = MouseEvent::new(MouseEventKind::Up(MouseButton::Left), 35, 5);
+        assert!(!board.handle_mouse(&up));
+    }
+
+    #[test]
+    fn render_during_drag_does_not_panic() {
+        use super::Screen;
+        let mut board = KanbanBoard::new();
+        // Simulate an active drag
+        board.mouse_drag = Some(MouseDragState {
+            source_col: 0,
+            source_row: 0,
+            card_id: 1,
+            current_x: 40,
+            current_y: 5,
+            hover_col: Some(1),
+        });
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+        let area = Rect::new(0, 0, 80, 24);
+        board.view(&mut frame, area);
+    }
+
+    #[test]
+    fn view_caches_col_rects() {
+        use super::Screen;
+        let board = KanbanBoard::new();
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(90, 24, &mut pool);
+        let area = Rect::new(0, 0, 90, 24);
+        board.view(&mut frame, area);
+
+        // After render, column rects should be non-empty
+        let r0 = board.last_col_rects[0].get();
+        let r1 = board.last_col_rects[1].get();
+        let r2 = board.last_col_rects[2].get();
+        assert!(!r0.is_empty(), "col 0 rect should not be empty");
+        assert!(!r1.is_empty(), "col 1 rect should not be empty");
+        assert!(!r2.is_empty(), "col 2 rect should not be empty");
+        // Columns should be side by side
+        assert_eq!(r0.x + r0.width, r1.x);
+        assert_eq!(r1.x + r1.width, r2.x);
+    }
+
+    #[test]
+    fn full_mouse_drag_lifecycle_via_events() {
+        use super::Screen;
+        let mut board = KanbanBoard::new();
+
+        // First render to populate col_rects
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(90, 24, &mut pool);
+        board.view(&mut frame, Rect::new(0, 0, 90, 24));
+
+        let card_id = board.columns[0][0].id;
+        let col0 = board.last_col_rects[0].get();
+        let col2 = board.last_col_rects[2].get();
+
+        // Click on first card in column 0
+        let click_x = col0.x + 2;
+        let click_y = col0.y + 2; // inner y (past border + first card)
+        let down = Event::Mouse(MouseEvent::new(
+            MouseEventKind::Down(MouseButton::Left),
+            click_x,
+            click_y,
+        ));
+        board.update(&down);
+        assert!(board.is_dragging());
+
+        // Drag to column 2
+        let drag_x = col2.x + 5;
+        let drag_y = col2.y + 5;
+        let drag = Event::Mouse(MouseEvent::new(
+            MouseEventKind::Drag(MouseButton::Left),
+            drag_x,
+            drag_y,
+        ));
+        board.update(&drag);
+        assert_eq!(board.drag_state().unwrap().hover_col, Some(2));
+
+        // Release
+        let up = Event::Mouse(MouseEvent::new(
+            MouseEventKind::Up(MouseButton::Left),
+            drag_x,
+            drag_y,
+        ));
+        board.update(&up);
+        assert!(!board.is_dragging());
+
+        // Card should have moved
+        assert_eq!(board.columns[0].len(), 3);
+        assert_eq!(board.columns[2].len(), 2);
+        assert_eq!(board.columns[2].last().unwrap().id, card_id);
     }
 }

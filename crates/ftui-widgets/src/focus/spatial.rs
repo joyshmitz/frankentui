@@ -173,6 +173,18 @@ mod tests {
         FocusNode::new(id, rect(x, y, w, h))
     }
 
+    fn is_coverage_run() -> bool {
+        std::env::var("LLVM_PROFILE_FILE").is_ok() || std::env::var("CARGO_LLVM_COV").is_ok()
+    }
+
+    fn coverage_budget_us(base: u128) -> u128 {
+        if is_coverage_run() {
+            base.saturating_mul(2)
+        } else {
+            base
+        }
+    }
+
     /// Layout:
     /// ```text
     ///   [1]  [2]  [3]
@@ -436,10 +448,12 @@ mod tests {
         }
         let elapsed = start.elapsed();
         // 400 spatial navigations across 100 nodes.
+        let budget_us = coverage_budget_us(15_000);
         assert!(
-            elapsed.as_micros() < 15_000,
-            "400 spatial navigations took {}μs (budget: 15000μs)",
-            elapsed.as_micros()
+            elapsed.as_micros() < budget_us,
+            "400 spatial navigations took {}μs (budget: {}μs)",
+            elapsed.as_micros(),
+            budget_us
         );
     }
 
@@ -456,10 +470,12 @@ mod tests {
         let start = std::time::Instant::now();
         build_spatial_edges(&mut g);
         let elapsed = start.elapsed();
+        let budget_us = coverage_budget_us(50_000);
         assert!(
-            elapsed.as_micros() < 50_000,
-            "build_spatial_edges(100 nodes) took {}μs (budget: 50000μs)",
-            elapsed.as_micros()
+            elapsed.as_micros() < budget_us,
+            "build_spatial_edges(100 nodes) took {}μs (budget: {}μs)",
+            elapsed.as_micros(),
+            budget_us
         );
     }
 }

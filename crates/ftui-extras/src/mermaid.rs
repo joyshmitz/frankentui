@@ -882,7 +882,7 @@ impl MermaidWarning {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MermaidComplexity {
     pub nodes: usize,
     pub edges: usize,
@@ -919,9 +919,10 @@ impl MermaidComplexity {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MermaidFidelity {
     Rich,
+    #[default]
     Normal,
     Compact,
     Outline,
@@ -964,7 +965,7 @@ impl MermaidFidelity {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MermaidDegradationPlan {
     pub target_fidelity: MermaidFidelity,
     pub hide_labels: bool,
@@ -974,7 +975,7 @@ pub struct MermaidDegradationPlan {
     pub force_glyph_mode: Option<MermaidGlyphMode>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MermaidGuardReport {
     pub complexity: MermaidComplexity,
     pub label_chars_over: usize,
@@ -1138,6 +1139,12 @@ impl MermaidInitParse {
             warnings: Vec::new(),
             errors: Vec::new(),
         }
+    }
+}
+
+impl Default for MermaidInitParse {
+    fn default() -> Self {
+        Self::empty()
     }
 }
 
@@ -3740,7 +3747,7 @@ fn emit_guard_jsonl(config: &MermaidConfig, meta: &MermaidDiagramMeta) {
     let _ = append_jsonl_line(path, &line);
 }
 
-fn append_jsonl_line(path: &str, line: &str) -> std::io::Result<()> {
+pub(crate) fn append_jsonl_line(path: &str, line: &str) -> std::io::Result<()> {
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     let mut buf = String::with_capacity(line.len().saturating_add(1));
     buf.push_str(line);
@@ -3874,12 +3881,12 @@ fn parse_subgraph_line(line: &str, span: Span) -> Option<Statement> {
 
 fn parse_direction_line(line: &str, span: Span) -> Option<Result<Statement, MermaidError>> {
     let rest = strip_keyword(line, "direction")?;
-    let dir_token = rest.split_whitespace().next().unwrap_or("");
-    if dir_token.is_empty() {
+    let dir_word = rest.split_whitespace().next().unwrap_or_default();
+    if dir_word.is_empty() {
         return Some(Err(MermaidError::new("direction missing", span)
             .with_expected(vec!["TB", "TD", "LR", "RL", "BT"])));
     }
-    let direction = match dir_token.to_ascii_lowercase().as_str() {
+    let direction = match dir_word.to_ascii_lowercase().as_str() {
         "tb" => Some(GraphDirection::TB),
         "td" => Some(GraphDirection::TD),
         "lr" => Some(GraphDirection::LR),
