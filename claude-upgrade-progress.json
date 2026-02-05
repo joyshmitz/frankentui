@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0",
   "started": "2026-02-05T04:18:05Z",
-  "last_updated": "2026-02-05T05:17:05Z",
+  "last_updated": "2026-02-05T06:28:41Z",
   "project": "FrankenTUI",
   "language": "Rust",
   "manifest": "Cargo.toml",
-  "status": "in_progress",
+  "status": "complete",
   "config": {
     "skip_alpha_beta": true,
     "preserve_pinned": true,
@@ -515,7 +515,13 @@
       "error_log": []
     }
   ],
-  "completed": [],
+  "completed": [
+    "cargo fmt --check",
+    "cargo check --all-targets",
+    "cargo clippy --all-targets -- -D warnings",
+    "CARGO_TARGET_DIR=/data/tmp/cargo-target-fresh cargo test",
+    "UBS_MAX_DIR_SIZE_MB=0 ubs --diff --only=rust,toml"
+  ],
   "failed": [],
   "requires_refactor": [],
   "circuit_breaker": {

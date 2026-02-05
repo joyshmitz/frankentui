@@ -15,6 +15,7 @@
 - [x] Fix Kanban drag borrow + hit-test caching in `crates/ftui-demo-showcase/src/screens/kanban_board.rs`
 - [x] Add `dep:ftui-text` to `text-effects` feature in `crates/ftui-extras/Cargo.toml`
 - [x] Mermaid layout fixes: label placement leader-line metadata + metrics helpers + clippy cleanups
+- [x] Fix Mermaid layout rank spacing for LR/RL (use node width on rank axis)
 - [x] Update `screen_snapshots` for new screen count + Terminal Capabilities profile (BLESS)
 - [x] Update `a11y_snapshots` (BLESS)
 - [x] Update `perf_hud_e2e` snapshots (BLESS)
@@ -24,12 +25,12 @@
 - [x] `cargo check --all-targets`
 - [x] `cargo clippy --all-targets -- -D warnings`
 - [x] Full tests: `cargo test` (clean run using `CARGO_TARGET_DIR=/data/tmp/cargo-target-fresh` to avoid doctest E0460)
-- [ ] Update `UPGRADE_LOG.md` summary/notes if needed
-- [ ] Update `claude-upgrade-progress.json` if needed
-- [ ] Run UBS on changed files (pre-commit)
-- [ ] Beads: confirm `bd-yhp9` still in progress (update if needed)
-- [ ] Beads: close `bd-yhp9` when complete
-- [ ] Agent Mail: post progress/completion update in thread `bd-yhp9`
+- [x] Update `UPGRADE_LOG.md` summary/notes
+- [x] Update `claude-upgrade-progress.json`
+- [x] Run UBS on changed files (pre-commit)
+- [x] Beads: confirm `bd-yhp9` still in progress (update if needed)
+- [x] Beads: close `bd-yhp9` when complete
+- [x] Agent Mail: post progress/completion update in thread `bd-yhp9`
 - [ ] Git: stage changes (`git add .`)
 - [ ] Git: commit with `bd-yhp9` in message
 - [ ] Git: `git pull --rebase`
@@ -63,18 +64,18 @@
   - [x] `cargo check --all-targets`
   - [x] `cargo clippy --all-targets -- -D warnings`
   - [x] `cargo fmt --check`
-- [ ] Run full test suite: `cargo test`
-- [ ] Run UBS on changed files (pre-commit)
-- [ ] Update `UPGRADE_LOG.md` summary + notes if tests reveal issues
-- [ ] Update `claude-upgrade-progress.json` if any new adjustments are needed
-- [ ] Beads: close `bd-yhp9` with completion reason
-- [ ] Beads: `br sync --flush-only`
+- [x] Run full test suite: `cargo test`
+- [x] Run UBS on changed files (pre-commit)
+- [x] Update `UPGRADE_LOG.md` summary + notes if tests reveal issues
+- [x] Update `claude-upgrade-progress.json` if any new adjustments are needed
+- [x] Beads: close `bd-yhp9` with completion reason
+- [x] Beads: `br sync --flush-only`
 - [ ] Stage all changes (`git add ...`)
 - [ ] Commit changes with `bd-yhp9` in message
 - [ ] `git pull --rebase`
 - [ ] `git push`
 - [ ] Verify `git status` is clean + up to date
-- [ ] Post Agent Mail completion summary in thread `bd-yhp9`
+- [x] Post Agent Mail completion summary in thread `bd-yhp9`
 
 ## Current Session (CalmPeak/opus-4.5) — Fix race condition bd-3ul6j (2026-02-05)
 - [x] **Agent Mail bootstrap** for `/data/projects/frankentui` — registered as CalmPeak

@@ -73,9 +73,9 @@ identical IR.
 ### IR Core (Diagram-Agnostic)
 
 - `DiagramIr { diagram_type, direction, nodes, edges, clusters, labels, ports, style_refs, meta }`
-- `DiagramMeta { init: MermaidInitParse, warnings, source_spans, diagram_flags }`
-- `IrNode { id, label, classes, style, span_primary, span_all }`
-- `IrEdge { from: Endpoint, to: Endpoint, arrow, label, classes, style, span }`
+- `DiagramMeta { diagram_type, direction, support_level, init, theme_overrides, guard }`
+- `IrNode { id, label, classes, style_ref, span_primary, span_all, implicit }`
+- `IrEdge { from: Endpoint, to: Endpoint, arrow, label, style_ref, span }`
 - `Endpoint = Node(NodeId) | Port(PortId)`
 - `IrPort { node, name, side_hint, span }`
 - `IrCluster { id, title, members, span }`
@@ -92,8 +92,8 @@ as optional, diagram-specific payloads.
 5. Parse endpoint ports (`node:port`) into `IrPort`, and attach a default `side_hint`
    based on direction (TB → top/bottom, LR → left/right).
 6. Build `IrCluster` membership from `subgraph` blocks with stable ordering.
-7. Preserve class/style/link directives as raw references; resolution and palette mapping
-   occur later (see styling tasks).
+7. Preserve class/style/link directives as raw references; resolve via `resolve_styles`
+   with deterministic precedence and warnings (see below).
 8. Validate malformed ids/edges/ports and emit deterministic warnings with spans.
 
 ## Validation Rules
@@ -101,6 +101,39 @@ as optional, diagram-specific payloads.
 - `max_nodes`, `max_edges`, `route_budget`, `layout_iteration_budget`,
   `max_label_chars`, and `max_label_lines` must be >= 1.
 - If `enable_links=false`, `link_mode` must be `off`.
+
+## Style Resolution (Implemented)
+
+Style directives (`classDef`, `class`, `style`, `linkStyle`) are parsed into
+structured properties and resolved deterministically:
+
+**Supported properties**
+- `fill`, `background`, `background-color`
+- `stroke`, `border-color`
+- `stroke-width`, `border-width` (px allowed)
+- `stroke-dasharray`
+- `color`, `font-color`
+- `font-weight`
+
+Unsupported keys are recorded as `mermaid/unsupported/style` warnings with spans.
+
+**Precedence (last wins)**
+1. `themeVariables` defaults (if present)
+2. `classDef` styles (merged in class list order)
+3. Node-specific `style`
+
+`linkStyle default` applies to all edges; `linkStyle <idx>` applies by edge
+index in **source order** (edges preserve statement order to keep indices stable).
+
+**Theme variables mapped**
+- `primaryColor` → `fill`
+- `primaryTextColor` → `color`
+- `primaryBorderColor` → `stroke`
+
+**Contrast clamp**
+If both `fill` and `color` are set, a minimum contrast ratio is enforced
+via `clamp_contrast` (currently 3.0). When clamped, the source list records
+`contrast-clamp`.
 
 ## Init Directives (Supported Subset)
 

@@ -171,8 +171,8 @@ _None yet._
 
 ## Post-Upgrade Checklist
 
-- [ ] All tests passing
-- [ ] No deprecation warnings
+- [x] All tests passing
+- [x] No deprecation warnings
 - [ ] Manual smoke test performed (if needed)
 - [ ] Documentation updated (if needed)
 - [ ] Changes committed
@@ -190,6 +190,10 @@ cargo update -p rustc-hash@2.1.1 -p ropey -p unicode-bidi -p unicode-normalizati
 cargo check --all-targets
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
+CARGO_TARGET_DIR=/data/tmp/cargo-target-fresh cargo test
+
+# UBS
+UBS_MAX_DIR_SIZE_MB=0 ubs --diff --only=rust,toml
 
 # Audit commands
 ```
@@ -197,5 +201,8 @@ cargo fmt --check
 ---
 
 ## Notes
+
+- Fixed Mermaid layout LR/RL rank spacing to use `node_width` for rank axis and `node_height` for order axis (prevents adjacent-rank overlaps).
+- Updated snapshots after screen list changes and new Kanban screen.
 
 Initial log created. Updates will be appended per dependency.

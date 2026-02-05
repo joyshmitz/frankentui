@@ -2053,26 +2053,8 @@ pub fn normalize_ast_to_ir(
         }
     }
 
-    edge_drafts.sort_by(|a, b| {
-        (
-            a.from.as_str(),
-            a.from_port.as_deref().unwrap_or(""),
-            a.to.as_str(),
-            a.to_port.as_deref().unwrap_or(""),
-            a.span.start.line,
-            a.span.start.col,
-            a.insertion_idx,
-        )
-            .cmp(&(
-                b.from.as_str(),
-                b.from_port.as_deref().unwrap_or(""),
-                b.to.as_str(),
-                b.to_port.as_deref().unwrap_or(""),
-                b.span.start.line,
-                b.span.start.col,
-                b.insertion_idx,
-            ))
-    });
+    // Preserve source edge order so linkStyle indices remain stable.
+    edge_drafts.sort_by_key(|draft| draft.insertion_idx);
 
     let mut ports = Vec::new();
     let mut port_map = std::collections::HashMap::new();
@@ -5365,6 +5347,39 @@ mod tests {
                 Some(MermaidColor::Rgb(255, 0, 0))
             );
         }
+    }
+
+    #[test]
+    fn resolve_styles_linkstyle_respects_edge_order() {
+        let input = "graph TD\nB-->C\nA-->D\nlinkStyle 0 stroke:red\n";
+        let ast = parse(input).expect("parse");
+        let ir_parse = normalize_ast_to_ir(
+            &ast,
+            &MermaidConfig::default(),
+            &MermaidCompatibilityMatrix::default(),
+            &MermaidFallbackPolicy::default(),
+        );
+        let resolved = resolve_styles(&ir_parse.ir);
+        let bc_idx = ir_parse
+            .ir
+            .edges
+            .iter()
+            .position(|edge| {
+                let from = match edge.from {
+                    IrEndpoint::Node(id) => ir_parse.ir.nodes[id.0].id.as_str(),
+                    IrEndpoint::Port(_) => "",
+                };
+                let to = match edge.to {
+                    IrEndpoint::Node(id) => ir_parse.ir.nodes[id.0].id.as_str(),
+                    IrEndpoint::Port(_) => "",
+                };
+                from == "B" && to == "C"
+            })
+            .expect("edge B->C");
+        assert_eq!(
+            resolved.edge_styles[bc_idx].properties.stroke,
+            Some(MermaidColor::Rgb(255, 0, 0))
+        );
     }
 
     #[test]
