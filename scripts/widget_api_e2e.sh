@@ -36,10 +36,6 @@ PASS_COUNT=0
 FAIL_COUNT=0
 SKIP_COUNT=0
 
-# Seed for deterministic runs
-SEED="${FTUI_HARNESS_SEED:-0}"
-export FTUI_HARNESS_SEED="$SEED"
-
 # Optional shared E2E helpers (PTY runner)
 if [[ -f "$E2E_LIB_DIR/common.sh" ]]; then
     # shellcheck source=/dev/null
@@ -96,6 +92,41 @@ for arg in "$@"; do
     esac
 done
 
+# ----------------------------------------------------------------------------
+# Deterministic fixtures + JSONL logging
+# ----------------------------------------------------------------------------
+
+e2e_fixture_init "widget_api"
+LOG_DIR="${LOG_DIR:-/tmp/widget_api_e2e_${E2E_RUN_ID}_${TIMESTAMP}}"
+E2E_LOG_DIR="$LOG_DIR"
+E2E_RESULTS_DIR="${E2E_RESULTS_DIR:-$LOG_DIR/results}"
+E2E_JSONL_FILE="${E2E_JSONL_FILE:-$LOG_DIR/widget_api_e2e.jsonl}"
+E2E_RUN_CMD="${E2E_RUN_CMD:-$0 $*}"
+E2E_RUN_START_MS="${E2E_RUN_START_MS:-$(e2e_run_start_ms)}"
+export E2E_LOG_DIR E2E_RESULTS_DIR E2E_JSONL_FILE E2E_RUN_CMD E2E_RUN_START_MS
+mkdir -p "$E2E_LOG_DIR" "$E2E_RESULTS_DIR"
+jsonl_init
+jsonl_assert "artifact_log_dir" "pass" "log_dir=$E2E_LOG_DIR"
+jsonl_set_context "host" "${COLUMNS:-}" "${LINES:-}" "${E2E_SEED:-0}"
+
+# Seed for deterministic runs
+SEED="${E2E_SEED:-${FTUI_HARNESS_SEED:-0}}"
+export FTUI_HARNESS_SEED="${FTUI_HARNESS_SEED:-$SEED}"
+
+RUN_END_SENT=0
+on_exit() {
+    local code="$1"
+    if [[ "$RUN_END_SENT" == "1" ]]; then
+        return 0
+    fi
+    local status="success"
+    if [[ "$code" -ne 0 || "$FAIL_COUNT" -ne 0 ]]; then
+        status="failed"
+    fi
+    jsonl_run_end "$status" "$(( $(e2e_now_ms) - ${E2E_RUN_START_MS:-$(e2e_now_ms)} ))" "${FAIL_COUNT:-0}"
+}
+trap 'on_exit $?' EXIT
+
 # ============================================================================
 # Logging Functions
 # ============================================================================
@@ -134,33 +165,34 @@ run_step() {
 
     log_step "$step_name"
 
-    local start_time
-    start_time=$(date +%s.%N)
+    local start_ms
+    start_ms="$(e2e_now_ms)"
+    jsonl_step_start "$step_name"
 
     if $VERBOSE; then
         if "${cmd[@]}" 2>&1 | tee "$log_file"; then
-            local end_time
-            end_time=$(date +%s.%N)
-            local duration
-            duration=$(echo "$end_time - $start_time" | bc)
-            log_pass "$step_name completed in ${duration}s"
+            local duration_ms=$(( $(e2e_now_ms) - start_ms ))
+            jsonl_step_end "$step_name" "success" "$duration_ms"
+            log_pass "$step_name completed in ${duration_ms}ms"
             PASS_COUNT=$((PASS_COUNT + 1))
             return 0
         else
+            local duration_ms=$(( $(e2e_now_ms) - start_ms ))
+            jsonl_step_end "$step_name" "failed" "$duration_ms"
             log_fail "$step_name failed. See: $log_file"
             FAIL_COUNT=$((FAIL_COUNT + 1))
             return 1
         fi
     else
         if "${cmd[@]}" > "$log_file" 2>&1; then
-            local end_time
-            end_time=$(date +%s.%N)
-            local duration
-            duration=$(echo "$end_time - $start_time" | bc)
-            log_pass "$step_name completed in ${duration}s"
+            local duration_ms=$(( $(e2e_now_ms) - start_ms ))
+            jsonl_step_end "$step_name" "success" "$duration_ms"
+            log_pass "$step_name completed in ${duration_ms}ms"
             PASS_COUNT=$((PASS_COUNT + 1))
             return 0
         else
+            local duration_ms=$(( $(e2e_now_ms) - start_ms ))
+            jsonl_step_end "$step_name" "failed" "$duration_ms"
             log_fail "$step_name failed. See: $log_file"
             FAIL_COUNT=$((FAIL_COUNT + 1))
             return 1
@@ -173,6 +205,8 @@ skip_step() {
     log_step "$step_name"
     log_skip "Skipped (--quick mode)"
     SKIP_COUNT=$((SKIP_COUNT + 1))
+    jsonl_step_start "$step_name"
+    jsonl_step_end "$step_name" "skipped" 0
 }
 
 # ============================================================================
@@ -229,12 +263,16 @@ write_case_meta() {
     local run_log="${11}"
     local pty_out="${12}"
     local caps_file="${13}"
+    local trace_jsonl="${14}"
+    local trace_replay_log="${15}"
+    local run_id="${16}"
 
     if command -v jq >/dev/null 2>&1; then
         jq -nc \
             --arg case "$case_name" \
             --arg timestamp "$(e2e_timestamp)" \
             --arg seed "$SEED" \
+            --arg run_id "$run_id" \
             --arg screen_mode "$screen_mode" \
             --argjson cols "$cols" \
             --argjson rows "$rows" \
@@ -246,16 +284,19 @@ write_case_meta() {
             --arg run_log "$run_log" \
             --arg pty_output "$pty_out" \
             --arg caps_file "$caps_file" \
+            --arg trace_jsonl "$trace_jsonl" \
+            --arg trace_replay_log "$trace_replay_log" \
             --arg term "${TERM:-}" \
             --arg colorterm "${COLORTERM:-}" \
             --arg no_color "${NO_COLOR:-}" \
-            '{case:$case,timestamp:$timestamp,seed:$seed,screen_mode:$screen_mode,cols:$cols,rows:$rows,ui_height:$ui_height,diff_bayesian:$diff_bayes,bocpd:$bocpd,conformal:$conformal,evidence_jsonl:$evidence_jsonl,run_log:$run_log,pty_output:$pty_output,caps_file:$caps_file,term:$term,colorterm:$colorterm,no_color:$no_color}' \
+            '{case:$case,timestamp:$timestamp,seed:$seed,run_id:$run_id,screen_mode:$screen_mode,cols:$cols,rows:$rows,ui_height:$ui_height,diff_bayesian:$diff_bayes,bocpd:$bocpd,conformal:$conformal,evidence_jsonl:$evidence_jsonl,run_log:$run_log,pty_output:$pty_output,caps_file:$caps_file,trace_jsonl:$trace_jsonl,trace_replay_log:$trace_replay_log,term:$term,colorterm:$colorterm,no_color:$no_color}' \
             > "$meta_file"
     else
-        printf '{"case":"%s","timestamp":"%s","seed":"%s","screen_mode":"%s","cols":%s,"rows":%s,"ui_height":%s,"diff_bayesian":%s,"bocpd":%s,"conformal":%s,"evidence_jsonl":"%s","run_log":"%s","pty_output":"%s","caps_file":"%s","term":"%s","colorterm":"%s","no_color":"%s"}\n' \
+        printf '{"case":"%s","timestamp":"%s","seed":"%s","run_id":"%s","screen_mode":"%s","cols":%s,"rows":%s,"ui_height":%s,"diff_bayesian":%s,"bocpd":%s,"conformal":%s,"evidence_jsonl":"%s","run_log":"%s","pty_output":"%s","caps_file":"%s","trace_jsonl":"%s","trace_replay_log":"%s","term":"%s","colorterm":"%s","no_color":"%s"}\n' \
             "$(escape_json "$case_name")" \
             "$(e2e_timestamp)" \
             "$(escape_json "$SEED")" \
+            "$(escape_json "$run_id")" \
             "$(escape_json "$screen_mode")" \
             "$cols" "$rows" "$ui_height" \
             "$(bool_json "$diff_bayes")" \
@@ -265,6 +306,8 @@ write_case_meta() {
             "$(escape_json "$run_log")" \
             "$(escape_json "$pty_out")" \
             "$(escape_json "$caps_file")" \
+            "$(escape_json "$trace_jsonl")" \
+            "$(escape_json "$trace_replay_log")" \
             "$(escape_json "${TERM:-}")" \
             "$(escape_json "${COLORTERM:-}")" \
             "$(escape_json "${NO_COLOR:-}")" \
@@ -290,10 +333,13 @@ run_policy_case() {
     local pty_out="$case_dir/pty_output.pty"
     local caps_file="$case_dir/terminal_caps.txt"
     local meta_file="$case_dir/meta.json"
+    local trace_jsonl="$case_dir/render_trace.jsonl"
+    local trace_replay_log="$case_dir/trace_replay.log"
+    local run_id="${E2E_RUN_ID:-$TIMESTAMP}"
 
     mkdir -p "$case_dir"
     record_terminal_caps "$caps_file"
-    write_case_meta "$meta_file" "$case_name" "$screen_mode" "$cols" "$rows" "$ui_height" "$diff_bayes" "$bocpd" "$conformal" "$evidence_jsonl" "$run_log" "$pty_out" "$caps_file"
+    write_case_meta "$meta_file" "$case_name" "$screen_mode" "$cols" "$rows" "$ui_height" "$diff_bayes" "$bocpd" "$conformal" "$evidence_jsonl" "$run_log" "$pty_out" "$caps_file" "$trace_jsonl" "$trace_replay_log" "$run_id"
 
     export FTUI_HARNESS_SCREEN_MODE="$screen_mode"
     export FTUI_HARNESS_UI_HEIGHT="$ui_height"
@@ -304,6 +350,10 @@ run_policy_case() {
     export FTUI_HARNESS_BOCPD="$bocpd"
     export FTUI_HARNESS_CONFORMAL="$conformal"
     export FTUI_HARNESS_EVIDENCE_JSONL="$evidence_jsonl"
+    export FTUI_HARNESS_RENDER_TRACE_JSONL="$trace_jsonl"
+    export FTUI_HARNESS_RENDER_TRACE_RUN_ID="${run_id}_${case_name}"
+    export FTUI_HARNESS_RENDER_TRACE_SEED="$SEED"
+    export FTUI_HARNESS_RENDER_TRACE_MODULE="$case_name"
 
     local start_ms
     start_ms=$(date +%s%3N)
@@ -333,6 +383,16 @@ run_policy_case() {
     if [[ ! -s "$evidence_jsonl" ]]; then
         status="fail"
         exit_code=1
+    fi
+    if [[ ! -s "$trace_jsonl" ]]; then
+        status="fail"
+        exit_code=1
+    fi
+    if [[ "$status" == "pass" ]]; then
+        if ! FTUI_HARNESS_REPLAY_TRACE="$trace_jsonl" "$harness_bin" > "$trace_replay_log" 2>&1; then
+            status="fail"
+            exit_code=1
+        fi
     fi
 
     if command -v jq >/dev/null 2>&1; then
@@ -407,6 +467,8 @@ cd "$PROJECT_ROOT"
     git log -1 --oneline 2>/dev/null || echo "N/A"
     echo ""
     echo "Harness seed: $SEED"
+    echo "E2E run id: ${E2E_RUN_ID:-}"
+    echo "Deterministic: ${E2E_DETERMINISTIC:-1}"
     echo "E2E_PYTHON: ${E2E_PYTHON:-}"
 } > "$LOG_DIR/00_environment.log"
 
@@ -424,6 +486,8 @@ run_step "Running clippy" "$LOG_DIR/03_clippy.log" \
 
 # Step 4: Feature Combinations
 log_step "Testing feature combinations"
+feature_start_ms="$(e2e_now_ms)"
+jsonl_step_start "feature_combinations"
 {
     echo "Feature combination tests - $(e2e_timestamp)"
     echo ""
@@ -509,13 +573,17 @@ log_step "Testing feature combinations"
 } > "$LOG_DIR/04_features.log" 2>&1 && {
     log_pass "Feature combinations passed"
     PASS_COUNT=$((PASS_COUNT + 1))
+    jsonl_step_end "feature_combinations" "success" "$(( $(e2e_now_ms) - feature_start_ms ))"
 } || {
     log_fail "Feature combinations failed. See: $LOG_DIR/04_features.log"
     FAIL_COUNT=$((FAIL_COUNT + 1))
+    jsonl_step_end "feature_combinations" "failed" "$(( $(e2e_now_ms) - feature_start_ms ))"
 }
 
 # Step 5: Widget Signature Verification
 log_step "Verifying Widget signatures"
+sig_start_ms="$(e2e_now_ms)"
+jsonl_step_start "widget_signatures"
 {
     echo "Widget signature verification - $(e2e_timestamp)"
     echo ""
@@ -553,9 +621,11 @@ log_step "Verifying Widget signatures"
 } > "$LOG_DIR/05_signatures.log" 2>&1 && {
     log_pass "Widget signatures verified (Frame-based API)"
     PASS_COUNT=$((PASS_COUNT + 1))
+    jsonl_step_end "widget_signatures" "success" "$(( $(e2e_now_ms) - sig_start_ms ))"
 } || {
     log_fail "Widget signature check failed. See: $LOG_DIR/05_signatures.log"
     FAIL_COUNT=$((FAIL_COUNT + 1))
+    jsonl_step_end "widget_signatures" "failed" "$(( $(e2e_now_ms) - sig_start_ms ))"
 }
 
 # Step 6: Documentation Build (skip in quick mode)
@@ -571,22 +641,29 @@ if $QUICK; then
     skip_step "Running snapshot tests (skipped)"
 else
     log_step "Running snapshot tests"
+    snap_start_ms="$(e2e_now_ms)"
+    jsonl_step_start "snapshot_tests"
     if [ -f "$PROJECT_ROOT/crates/ftui-harness/tests/widget_snapshots.rs" ]; then
         if cargo test -p ftui-harness --test widget_snapshots > "$LOG_DIR/07_snapshots.log" 2>&1; then
             log_pass "Snapshot tests passed"
             PASS_COUNT=$((PASS_COUNT + 1))
+            jsonl_step_end "snapshot_tests" "success" "$(( $(e2e_now_ms) - snap_start_ms ))"
         else
             log_fail "Snapshot tests failed. See: $LOG_DIR/07_snapshots.log"
             FAIL_COUNT=$((FAIL_COUNT + 1))
+            jsonl_step_end "snapshot_tests" "failed" "$(( $(e2e_now_ms) - snap_start_ms ))"
         fi
     else
         log_skip "Snapshot tests not found"
         SKIP_COUNT=$((SKIP_COUNT + 1))
+        jsonl_step_end "snapshot_tests" "skipped" 0
     fi
 fi
 
 # Step 8: Policy Toggle Matrix (diff/BOCPD/conformal)
 log_step "Policy toggle matrix (diff/BOCPD/conformal)"
+policy_start_ms="$(e2e_now_ms)"
+jsonl_step_start "policy_toggle_matrix"
 policy_log="$LOG_DIR/08_policy.log"
 {
     echo "Policy Toggle Matrix - $(e2e_timestamp)"
@@ -654,9 +731,11 @@ policy_log="$LOG_DIR/08_policy.log"
 } > "$policy_log" 2>&1 && {
     log_pass "Policy toggle matrix completed"
     PASS_COUNT=$((PASS_COUNT + 1))
+    jsonl_step_end "policy_toggle_matrix" "success" "$(( $(e2e_now_ms) - policy_start_ms ))"
 } || {
     log_fail "Policy toggle matrix failed. See: $policy_log"
     FAIL_COUNT=$((FAIL_COUNT + 1))
+    jsonl_step_end "policy_toggle_matrix" "failed" "$(( $(e2e_now_ms) - policy_start_ms ))"
 }
 
 # ============================================================================
@@ -697,8 +776,12 @@ echo ""
 
 if [ $FAIL_COUNT -eq 0 ]; then
     echo -e "\033[1;32mAll tests passed!\033[0m"
+    jsonl_run_end "success" "$(( $(e2e_now_ms) - ${E2E_RUN_START_MS:-$(e2e_now_ms)} ))" "$FAIL_COUNT"
+    RUN_END_SENT=1
     exit 0
 else
     echo -e "\033[1;31m$FAIL_COUNT test(s) failed!\033[0m"
+    jsonl_run_end "failed" "$(( $(e2e_now_ms) - ${E2E_RUN_START_MS:-$(e2e_now_ms)} ))" "$FAIL_COUNT"
+    RUN_END_SENT=1
     exit 1
 fi

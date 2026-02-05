@@ -7,18 +7,20 @@
 - [x] Verify `ftui-render` tests/bench now self-contained (no `ftui-harness` deps)
 - [x] Verify `ftui-harness` contains moved render tests (`render_flicker_integration.rs`, `render_no_flicker_proof.rs`, `render_resize_storm_regression.rs`)
 - [x] Fix `ftui-harness` dev-deps: add `proptest` (dedupe entries)
-- [ ] Confirm `ftui-render` publishes cleanly: `cargo publish -p ftui-render --dry-run`
-- [ ] If dry-run passes: publish `ftui-render`
+- [x] Confirm `ftui-render` publishes cleanly: `cargo publish -p ftui-render --dry-run --allow-dirty`
+- [x] README: add crates.io availability note (published crates + queue)
+- [ ] Publish `ftui-render` (blocked by crates.io 429 until 2026-02-04 22:13:06 GMT)
 - [ ] Continue publish order for remaining crates (ftui-style, ftui-text, ftui-runtime, ftui-widgets, ftui-extras, ftui-harness, ftui-pty, ftui-demo-showcase, ftui-simd, ftui)
-- [ ] Update bead `bd-3abcg` notes with cycle fix + publish status
-- [ ] Update bead `bd-17unx` (remaining publish steps)
+- [x] Update bead `bd-3lul4` notes (README/crates.io status)
+- [x] Update bead `bd-17unx` notes (publish queue + rate limit)
 - [ ] Multi-pass bug hunt (bd-k57as):
-- [ ] Run `UBS_MAX_DIR_SIZE_MB=0 ubs --only=rust,toml crates/` and triage criticals
+- [x] Run `UBS_MAX_DIR_SIZE_MB=0 ubs --only=rust,toml crates/` and capture report
+- [ ] Triage UBS criticals: isolate production-risk panics vs test-only assertions
 - [ ] Classify findings: production vs tests; fix high-risk runtime paths first
 - [ ] Re-run UBS on touched files
-- [ ] Quality gates after edits: `cargo fmt --check`, `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`
+- [x] Quality gates after edits: `cargo fmt --check`, `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`
 - [ ] Git + beads: `br sync --flush-only`, commit, `git pull --rebase`, push, `git status`
-- [ ] Agent Mail: register/notify (blocked if MCP Agent Mail unavailable)
+- [ ] Agent Mail: register/notify (currently unavailable; MCP resources empty)
 
 ## Current Session (RedSpring) — bd-3isi7 Determinism Fixtures + Deep Review + Optimization (2026-02-04)
 - [x] Re-read `AGENTS.md` + `README.md` end-to-end (fresh constraints + architecture)

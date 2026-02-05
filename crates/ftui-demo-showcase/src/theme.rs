@@ -21,6 +21,7 @@
 //! - `SECTION_GAP` (LG): Between major sections
 //! - `MAJOR_GAP` (XL): Top-level layout separation
 
+use ftui_core::glyph_policy::GlyphPolicy;
 use ftui_extras::theme as core_theme;
 use ftui_style::{Style, StyleFlags};
 
@@ -505,41 +506,7 @@ pub mod icons {
 /// };
 /// ```
 pub fn supports_emoji_icons() -> bool {
-    // Check for modern terminal indicators
-    if std::env::var("COLORTERM")
-        .map(|v| v.contains("truecolor") || v.contains("24bit"))
-        .unwrap_or(false)
-    {
-        return true;
-    }
-
-    // Check for known modern terminals
-    if std::env::var("KITTY_WINDOW_ID").is_ok()
-        || std::env::var("WEZTERM_PANE").is_ok()
-        || std::env::var("GHOSTTY_RESOURCES_DIR").is_ok()
-    {
-        return true;
-    }
-
-    // Check TERM for known emoji-capable terminals
-    if let Ok(term) = std::env::var("TERM") {
-        let term_lower = term.to_lowercase();
-        if term_lower.contains("kitty")
-            || term_lower.contains("wezterm")
-            || term_lower.contains("alacritty")
-            || term_lower.contains("iterm")
-            || term_lower.contains("256color")
-            || term_lower.contains("xterm")
-        {
-            return true;
-        }
-    }
-
-    // Default to true - most modern terminals support emoji
-    // Users on limited terminals can set an override env var
-    !std::env::var("FTUI_NO_EMOJI")
-        .map(|v| v == "1" || v.to_lowercase() == "true")
-        .unwrap_or(false)
+    GlyphPolicy::detect().emoji
 }
 
 /// Get a status icon with appropriate fallback.

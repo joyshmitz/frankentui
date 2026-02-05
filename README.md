@@ -216,6 +216,16 @@ cargo build --release
 ftui = { path = "../frankentui/crates/ftui" }
 ```
 
+### Crates.io (Published So Far)
+
+Currently available on crates.io:
+- `ftui-core`
+- `ftui-layout`
+- `ftui-i18n`
+
+The remaining crates are in the publish queue (render/runtime/widgets/etc.).
+Until those land, prefer workspace path dependencies for the full stack.
+
 ---
 
 ## Quick Start

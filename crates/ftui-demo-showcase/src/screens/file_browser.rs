@@ -680,32 +680,65 @@ fn tree_file_label(name: &str) -> String {
 
 mod icons {
     use super::{FileEntry, FileKind};
+    use std::sync::OnceLock;
+
+    use crate::theme;
+
+    #[inline]
+    fn use_emoji() -> bool {
+        static USE_EMOJI: OnceLock<bool> = OnceLock::new();
+        *USE_EMOJI.get_or_init(theme::supports_emoji_icons)
+    }
 
     pub fn directory_icon() -> &'static str {
-        "DR"
+        if use_emoji() {
+            theme::icons::FOLDER_CLOSED
+        } else {
+            "DR"
+        }
     }
 
     pub fn symlink_icon() -> &'static str {
-        "SY"
+        if use_emoji() {
+            theme::icons::ACTION_LINKED
+        } else {
+            "SY"
+        }
     }
 
     pub fn file_icon(name: &str) -> &'static str {
         let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
-        match ext.as_str() {
-            "rs" => "RS",
-            "py" => "PY",
-            "js" => "JS",
-            "ts" => "TS",
-            "md" => "MD",
-            "json" => "JS",
-            "toml" => "TM",
-            "yaml" | "yml" => "YM",
-            "env" | "gitignore" => "CF",
-            "png" | "jpg" | "jpeg" | "gif" | "svg" => "IM",
-            "mp3" | "wav" | "flac" => "AU",
-            "mp4" | "mov" | "mkv" => "VI",
-            "sh" | "bash" => "SH",
-            _ => "FI",
+        if use_emoji() {
+            match ext.as_str() {
+                "rs" => "🦀",
+                "py" => "🐍",
+                "js" => "📜",
+                "ts" => "📝",
+                "md" => theme::icons::TYPE_DOCS,
+                "json" | "toml" | "yaml" | "yml" | "env" | "gitignore" => "⚙️",
+                "png" | "jpg" | "jpeg" | "gif" | "svg" => "🖼️",
+                "mp3" | "wav" | "flac" => "🎵",
+                "mp4" | "mov" | "mkv" => "🎬",
+                "sh" | "bash" => "⚡️",
+                _ => theme::icons::FILE,
+            }
+        } else {
+            match ext.as_str() {
+                "rs" => "RS",
+                "py" => "PY",
+                "js" => "JS",
+                "ts" => "TS",
+                "md" => "MD",
+                "json" => "JS",
+                "toml" => "TM",
+                "yaml" | "yml" => "YM",
+                "env" | "gitignore" => "CF",
+                "png" | "jpg" | "jpeg" | "gif" | "svg" => "IM",
+                "mp3" | "wav" | "flac" => "AU",
+                "mp4" | "mov" | "mkv" => "VI",
+                "sh" | "bash" => "SH",
+                _ => "FI",
+            }
         }
     }
 

@@ -238,6 +238,20 @@ mod tests {
     }
 
     #[test]
+    fn negative_bytes_are_unscaled() {
+        let fmt = SizeFormat::binary();
+        assert_eq!(format_size(-500, fmt), "-500 B");
+        let fmt_long = SizeFormat::decimal().long();
+        assert_eq!(format_size(-12, fmt_long), "-12 bytes");
+    }
+
+    #[test]
+    fn negative_binary_units() {
+        let fmt = SizeFormat::binary();
+        assert_eq!(format_size(-1_024, fmt), "-1.0 KiB");
+    }
+
+    #[test]
     fn large_sizes() {
         assert_eq!(decimal(1_000_000_000_000_000), "1.0 PB");
         assert_eq!(binary(1_125_899_906_842_624), "1.0 PiB");
@@ -312,5 +326,20 @@ mod tests {
         assert_eq!(fmt.unit, SizeUnit::Decimal);
         assert_eq!(fmt.style, UnitStyle::Long);
         assert_eq!(fmt.precision, 3);
+    }
+
+    #[test]
+    fn clamp_to_i64_max() {
+        let max = i64::MAX as u64;
+        assert_eq!(decimal(u64::MAX), decimal(max));
+        assert_eq!(binary(u64::MAX), binary(max));
+        assert_eq!(
+            decimal_with_precision(u64::MAX, 2),
+            decimal_with_precision(max, 2)
+        );
+        assert_eq!(
+            binary_with_precision(u64::MAX, 2),
+            binary_with_precision(max, 2)
+        );
     }
 }

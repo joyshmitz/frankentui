@@ -189,6 +189,18 @@ def example_events(schema_version: str) -> Dict[str, Dict[str, Any]]:
             "rows": 24,
             "exit_code": 0,
         },
+        "artifact": {
+            "schema_version": schema_version,
+            "type": "artifact",
+            "timestamp": "T000004",
+            "run_id": "run_123",
+            "seed": 0,
+            "artifact_type": "log_dir",
+            "path": "/tmp/ftui_e2e",
+            "status": "present",
+            "sha256": "",
+            "bytes": 0,
+        },
         "large_screen_case": {
             "schema_version": schema_version,
             "type": "large_screen_case",

@@ -14,6 +14,9 @@
 # 9. Resize test (SIGWINCH handling)
 # 10. VisualEffects backdrop test (bd-l8x9.8.2)
 # 11. Layout inspector scenarios (bd-iuvb.7)
+# 11b. Core navigation + dashboard screens (bd-1av4o.14.1)
+# 11c. Editors + markdown + log search (bd-1av4o.14.2)
+# 11d. Data viz + tables + charts (bd-1av4o.14.4)
 # 12. Terminal capabilities report export (bd-iuvb.6)
 # 13. i18n stress lab report export (bd-iuvb.9)
 # 14. Widget builder export (bd-iuvb.10)
@@ -37,23 +40,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LIB_DIR="$PROJECT_ROOT/tests/e2e/lib"
 # shellcheck source=/dev/null
-if [[ -f "$LIB_DIR/logging.sh" ]]; then
-    source "$LIB_DIR/logging.sh"
-fi
+source "$LIB_DIR/common.sh"
+# shellcheck source=/dev/null
+source "$LIB_DIR/logging.sh"
 if ! declare -f e2e_timestamp >/dev/null 2>&1; then
     e2e_timestamp() { date -Iseconds; }
 fi
 if ! declare -f e2e_log_stamp >/dev/null 2>&1; then
     e2e_log_stamp() { date +%Y%m%d_%H%M%S; }
 fi
-
-export E2E_DETERMINISTIC="${E2E_DETERMINISTIC:-1}"
-export E2E_SEED="${E2E_SEED:-0}"
-export E2E_TIME_STEP_MS="${E2E_TIME_STEP_MS:-100}"
-e2e_seed >/dev/null 2>&1 || true
-
-TIMESTAMP="$(e2e_log_stamp)"
-LOG_DIR="${LOG_DIR:-/tmp/ftui-demo-e2e-${TIMESTAMP}}"
 PKG="ftui-demo-showcase"
 
 VERBOSE=false
@@ -90,6 +85,20 @@ for arg in "$@"; do
             ;;
     esac
 done
+
+e2e_fixture_init "demo_showcase"
+TIMESTAMP="$(e2e_log_stamp)"
+RUN_ID="${E2E_RUN_ID:-$TIMESTAMP}"
+LOG_DIR="${LOG_DIR:-/tmp/ftui-demo-e2e-${E2E_RUN_ID}-${TIMESTAMP}}"
+E2E_LOG_DIR="$LOG_DIR"
+E2E_RESULTS_DIR="${E2E_RESULTS_DIR:-$LOG_DIR/results}"
+E2E_JSONL_FILE="${E2E_JSONL_FILE:-$LOG_DIR/demo_showcase_e2e.jsonl}"
+E2E_RUN_CMD="${E2E_RUN_CMD:-$0 $*}"
+E2E_RUN_START_MS="${E2E_RUN_START_MS:-$(e2e_run_start_ms)}"
+export E2E_LOG_DIR E2E_RESULTS_DIR E2E_JSONL_FILE E2E_RUN_CMD E2E_RUN_START_MS
+mkdir -p "$E2E_LOG_DIR" "$E2E_RESULTS_DIR"
+jsonl_init
+jsonl_assert "artifact_log_dir" "pass" "log_dir=$LOG_DIR"
 
 # ============================================================================
 # Logging Functions
@@ -130,8 +139,9 @@ run_step() {
     log_step "$step_name"
     log_info "Running: ${cmd[*]}"
 
-    local start_time
-    start_time=$(date +%s%N)
+    local start_ms
+    start_ms="$(e2e_now_ms)"
+    jsonl_step_start "$step_name"
 
     local exit_code=0
     if $VERBOSE; then
@@ -148,9 +158,7 @@ run_step() {
         fi
     fi
 
-    local end_time
-    end_time=$(date +%s%N)
-    local duration_ms=$(( (end_time - start_time) / 1000000 ))
+    local duration_ms=$(( $(e2e_now_ms) - start_ms ))
     local duration_s
     duration_s=$(echo "scale=2; $duration_ms / 1000" | bc 2>/dev/null || echo "${duration_ms}ms")
 
@@ -164,11 +172,13 @@ run_step() {
         log_pass "$step_name completed in ${duration_s}s (output: ${stdout_size} bytes)"
         PASS_COUNT=$((PASS_COUNT + 1))
         STEP_STATUSES+=("PASS")
+        jsonl_step_end "$step_name" "success" "$duration_ms"
         return 0
     else
         log_fail "$step_name failed (exit=$exit_code). See: $log_file"
         FAIL_COUNT=$((FAIL_COUNT + 1))
         STEP_STATUSES+=("FAIL")
+        jsonl_step_end "$step_name" "failed" "$duration_ms"
         return 1
     fi
 }
@@ -182,6 +192,8 @@ skip_step() {
     STEP_NAMES+=("$step_name")
     STEP_STATUSES+=("SKIP")
     STEP_DURATIONS+=("-")
+    jsonl_step_start "$step_name"
+    jsonl_step_end "$step_name" "skipped" 0
 }
 
 # Run a smoke-test step. Captures exit code and records result.
@@ -195,8 +207,9 @@ run_smoke_step() {
     log_info "Running: $*"
     STEP_NAMES+=("$step_name")
 
-    local start_time
-    start_time=$(date +%s%N)
+    local start_ms
+    start_ms="$(e2e_now_ms)"
+    jsonl_step_start "$step_name"
 
     local exit_code=0
     if eval "$@" > "$log_file" 2>&1; then
@@ -205,9 +218,7 @@ run_smoke_step() {
         exit_code=$?
     fi
 
-    local end_time
-    end_time=$(date +%s%N)
-    local duration_ms=$(( (end_time - start_time) / 1000000 ))
+    local duration_ms=$(( $(e2e_now_ms) - start_ms ))
     local duration_s
     duration_s=$(echo "scale=2; $duration_ms / 1000" | bc 2>/dev/null || echo "${duration_ms}ms")
     STEP_DURATIONS+=("${duration_s}s")
@@ -217,11 +228,13 @@ run_smoke_step() {
         log_pass "$step_name passed (exit=$exit_code) in ${duration_s}s"
         PASS_COUNT=$((PASS_COUNT + 1))
         STEP_STATUSES+=("PASS")
+        jsonl_step_end "$step_name" "success" "$duration_ms"
         return 0
     else
         log_fail "$step_name failed (exit=$exit_code). See: $log_file"
         FAIL_COUNT=$((FAIL_COUNT + 1))
         STEP_STATUSES+=("FAIL")
+        jsonl_step_end "$step_name" "failed" "$duration_ms"
         return 1
     fi
 }
@@ -262,7 +275,7 @@ run_in_pty() {
 if $QUICK; then
     TOTAL_STEPS=3
 else
-    TOTAL_STEPS=17  # Updated: added Layout Inspector + Terminal Caps + i18n + Widget Builder + Determinism Lab + Hyperlink Playground + Command Palette
+    TOTAL_STEPS=20  # Updated: added data viz + tables + charts coverage
 fi
 
 echo "=============================================="
@@ -298,6 +311,7 @@ cd "$PROJECT_ROOT"
     echo "Git commit:"
     git log -1 --oneline 2>/dev/null || echo "N/A"
 } > "$LOG_DIR/00_environment.log"
+jsonl_assert "artifact_env_log" "pass" "env_log=$LOG_DIR/00_environment.log"
 
 # ────────────────────────────────────────────────────────────────────────────
 # Step 1: Compilation (debug + release)
@@ -387,7 +401,8 @@ if $CAN_SMOKE; then
     NAV_LOG="$LOG_DIR/07_navigation.log"
     STEP_NAMES+=("Screen navigation (all 36)")
 
-    nav_start=$(date +%s%N)
+    jsonl_step_start "Screen navigation (all 36)"
+    nav_start_ms="$(e2e_now_ms)"
     {
         NAV_FAILURES=0
         for screen_num in $(seq 1 36); do
@@ -410,8 +425,7 @@ if $CAN_SMOKE; then
         [ "$NAV_FAILURES" -eq 0 ]
     } > "$NAV_LOG" 2>&1
     nav_exit=$?
-    nav_end=$(date +%s%N)
-    nav_dur_ms=$(( (nav_end - nav_start) / 1000000 ))
+    nav_dur_ms=$(( $(e2e_now_ms) - nav_start_ms ))
     nav_dur_s=$(echo "scale=2; $nav_dur_ms / 1000" | bc 2>/dev/null || echo "${nav_dur_ms}ms")
     STEP_DURATIONS+=("${nav_dur_s}s")
 
@@ -419,10 +433,12 @@ if $CAN_SMOKE; then
         log_pass "Screen navigation passed in ${nav_dur_s}s"
         PASS_COUNT=$((PASS_COUNT + 1))
         STEP_STATUSES+=("PASS")
+        jsonl_step_end "Screen navigation (all 36)" "success" "$nav_dur_ms"
     else
         log_fail "Screen navigation failed. See: $NAV_LOG"
         FAIL_COUNT=$((FAIL_COUNT + 1))
         STEP_STATUSES+=("FAIL")
+        jsonl_step_end "Screen navigation (all 36)" "failed" "$nav_dur_ms"
     fi
 
     # ────────────────────────────────────────────────────────────────────────
@@ -447,7 +463,8 @@ if $CAN_SMOKE; then
     RESIZE_LOG="$LOG_DIR/09_resize.log"
     STEP_NAMES+=("Resize test (multi-size)")
 
-    resize_start=$(date +%s%N)
+    jsonl_step_start "Resize test (multi-size)"
+    resize_start_ms="$(e2e_now_ms)"
     {
         echo "=== Testing at 80x24 ==="
         run_in_pty "stty rows 24 cols 80 2>/dev/null; FTUI_DEMO_EXIT_AFTER_MS=1500 timeout 8 $DEMO_BIN" 2>&1
@@ -474,8 +491,7 @@ if $CAN_SMOKE; then
         $all_ok
     } > "$RESIZE_LOG" 2>&1
     resize_exit=$?
-    resize_end=$(date +%s%N)
-    resize_dur_ms=$(( (resize_end - resize_start) / 1000000 ))
+    resize_dur_ms=$(( $(e2e_now_ms) - resize_start_ms ))
     resize_dur_s=$(echo "scale=2; $resize_dur_ms / 1000" | bc 2>/dev/null || echo "${resize_dur_ms}ms")
     STEP_DURATIONS+=("${resize_dur_s}s")
 
@@ -483,10 +499,12 @@ if $CAN_SMOKE; then
         log_pass "Resize test passed in ${resize_dur_s}s"
         PASS_COUNT=$((PASS_COUNT + 1))
         STEP_STATUSES+=("PASS")
+        jsonl_step_end "Resize test (multi-size)" "success" "$resize_dur_ms"
     else
         log_fail "Resize test failed. See: $RESIZE_LOG"
         FAIL_COUNT=$((FAIL_COUNT + 1))
         STEP_STATUSES+=("FAIL")
+        jsonl_step_end "Resize test (multi-size)" "failed" "$resize_dur_ms"
     fi
 
     # ────────────────────────────────────────────────────────────────────────
@@ -500,9 +518,13 @@ if $CAN_SMOKE; then
     log_step "VisualEffects backdrop test (bd-l8x9.8)"
     log_info "Testing VisualEffects screen at multiple sizes..."
     VFX_LOG="$LOG_DIR/10_visual_effects.log"
+    VFX_JSONL="$LOG_DIR/10_visual_effects.jsonl"
     STEP_NAMES+=("VisualEffects backdrop")
 
-    vfx_start=$(date +%s%N)
+    : > "$VFX_JSONL"
+    jsonl_assert "artifact_vfx_jsonl" "pass" "vfx_jsonl=$VFX_JSONL"
+    jsonl_step_start "VisualEffects backdrop"
+    vfx_start_ms="$(e2e_now_ms)"
     {
         echo "=== VisualEffects (Screen 14) Backdrop Blending Tests ==="
         echo "Bead: bd-l8x9.8.2 - Targeted runs for metaballs/plasma/backdrop paths"
@@ -524,25 +546,42 @@ if $CAN_SMOKE; then
             local outcome="$3"
             local exit_code="$4"
             local duration_ms="$5"
-            local seed="${E2E_CONTEXT_SEED:-${E2E_SEED:-}}"
-            local seed_json="null"
-            if [[ -n "$seed" ]]; then seed_json="$seed"; fi
-            printf '{'
-            printf '"run_id":"%s",' "${E2E_RUN_ID:-$TIMESTAMP}"
-            printf '"step":"visual_effects_backdrop",'
-            printf '"effect":"%s",' "$effect"
-            printf '"size":"%s",' "$size"
-            printf '"screen":14,'
-            printf '"exit_code":%s,' "$exit_code"
-            printf '"duration_ms":%s,' "$duration_ms"
-            printf '"seed":%s,' "$seed_json"
-            printf '"outcome":"%s",' "$outcome"
-            printf '"env":{'
-            printf '"term":"%s","colorterm":"%s","tmux":%s,"zellij":%s,"kitty":%s,"wt":%s' \
-                "${TERM:-}" "${COLORTERM:-}" "$tmux_present" "$zellij_present" "$kitty_present" "$wt_present"
-            printf '},'
-            printf '"capabilities":{"markdown_overlay":true}'
-            printf '}\n'
+            local rows="$6"
+            local cols="$7"
+            local ts
+            ts="$(e2e_timestamp)"
+            local run_id="${RUN_ID}"
+            local seed_val="${E2E_CONTEXT_SEED:-${E2E_SEED:-0}}"
+            local mode="${E2E_CONTEXT_MODE:-alt}"
+            local cols_json="${cols:-0}"
+            local rows_json="${rows:-0}"
+            local hash_key
+            hash_key="$(e2e_hash_key "$mode" "$cols_json" "$rows_json" "$seed_val")"
+            local payload
+            payload="{\"schema_version\":\"$(json_escape "${E2E_JSONL_SCHEMA_VERSION:-e2e-jsonl-v1}")\","
+            payload="${payload}\"type\":\"visual_effects_case\","
+            payload="${payload}\"timestamp\":\"$(json_escape "$ts")\","
+            payload="${payload}\"run_id\":\"$(json_escape "$run_id")\","
+            payload="${payload}\"seed\":${seed_val},"
+            payload="${payload}\"step\":\"visual_effects_backdrop\","
+            payload="${payload}\"effect\":\"$(json_escape "$effect")\","
+            payload="${payload}\"size\":\"$(json_escape "$size")\","
+            payload="${payload}\"mode\":\"$(json_escape "$mode")\","
+            payload="${payload}\"hash_key\":\"$(json_escape "$hash_key")\","
+            payload="${payload}\"cols\":${cols_json},"
+            payload="${payload}\"rows\":${rows_json},"
+            payload="${payload}\"screen\":14,"
+            payload="${payload}\"exit_code\":${exit_code},"
+            payload="${payload}\"duration_ms\":${duration_ms},"
+            payload="${payload}\"outcome\":\"$(json_escape "$outcome")\","
+            payload="${payload}\"term\":\"$(json_escape "${TERM:-}")\","
+            payload="${payload}\"colorterm\":\"$(json_escape "${COLORTERM:-}")\","
+            payload="${payload}\"tmux\":${tmux_present},"
+            payload="${payload}\"zellij\":${zellij_present},"
+            payload="${payload}\"kitty\":${kitty_present},"
+            payload="${payload}\"wt\":${wt_present}}"
+            echo "$payload" >> "$VFX_JSONL"
+            jsonl_emit "$payload"
         }
 
         run_vfx_case() {
@@ -552,10 +591,10 @@ if $CAN_SMOKE; then
             local cols="$4"
             local size="${cols}x${rows}"
             local cmd="stty rows ${rows} cols ${cols} 2>/dev/null; FTUI_DEMO_EXIT_AFTER_MS=2500 ${effect_env} timeout 10 $DEMO_BIN --screen=14"
-            local start_ns end_ns dur_ms outcome exit_code
+            local start_ms dur_ms outcome exit_code
 
             echo "--- ${effect} (${size}) ---"
-            start_ns=$(date +%s%N)
+            start_ms=$(e2e_now_ms)
             if run_in_pty "$cmd" 2>&1; then
                 outcome="pass"
                 exit_code=0
@@ -568,9 +607,8 @@ if $CAN_SMOKE; then
                     VFX_FAILURES=$((VFX_FAILURES + 1))
                 fi
             fi
-            end_ns=$(date +%s%N)
-            dur_ms=$(( (end_ns - start_ns) / 1000000 ))
-            vfx_jsonl "$effect" "$size" "$outcome" "$exit_code" "$dur_ms"
+            dur_ms=$(( $(e2e_now_ms) - start_ms ))
+            vfx_jsonl "$effect" "$size" "$outcome" "$exit_code" "$dur_ms" "$rows" "$cols"
         }
 
         # Metaballs (default effect) — full size matrix
@@ -594,8 +632,7 @@ if $CAN_SMOKE; then
         [ "$VFX_FAILURES" -eq 0 ]
     } > "$VFX_LOG" 2>&1
     vfx_exit=$?
-    vfx_end=$(date +%s%N)
-    vfx_dur_ms=$(( (vfx_end - vfx_start) / 1000000 ))
+    vfx_dur_ms=$(( $(e2e_now_ms) - vfx_start_ms ))
     vfx_dur_s=$(echo "scale=2; $vfx_dur_ms / 1000" | bc 2>/dev/null || echo "${vfx_dur_ms}ms")
     STEP_DURATIONS+=("${vfx_dur_s}s")
 
@@ -603,10 +640,12 @@ if $CAN_SMOKE; then
         log_pass "VisualEffects backdrop test passed in ${vfx_dur_s}s"
         PASS_COUNT=$((PASS_COUNT + 1))
         STEP_STATUSES+=("PASS")
+        jsonl_step_end "VisualEffects backdrop" "success" "$vfx_dur_ms"
     else
         log_fail "VisualEffects backdrop test failed. See: $VFX_LOG"
         FAIL_COUNT=$((FAIL_COUNT + 1))
         STEP_STATUSES+=("FAIL")
+        jsonl_step_end "VisualEffects backdrop" "failed" "$vfx_dur_ms"
     fi
 
     # ────────────────────────────────────────────────────────────────────────
@@ -621,7 +660,11 @@ if $CAN_SMOKE; then
     INSPECT_JSONL="$LOG_DIR/11_layout_inspector.jsonl"
     STEP_NAMES+=("Layout Inspector")
 
-    inspect_start=$(date +%s%N)
+    : > "$INSPECT_JSONL"
+    jsonl_assert "artifact_layout_inspector_jsonl" "pass" "layout_inspector_jsonl=$INSPECT_JSONL"
+    jsonl_set_context "alt" 80 24 "${E2E_SEED:-}" 2>/dev/null || true
+    jsonl_step_start "Layout Inspector"
+    inspect_start_ms="$(e2e_now_ms)"
     {
         echo "=== Layout Inspector (Screen 20) ==="
         echo "Bead: bd-iuvb.7"
@@ -634,17 +677,16 @@ if $CAN_SMOKE; then
             local keys="$3"
             local log_file="$LOG_DIR/11_layout_inspector_${scenario}_${step}.log"
             local cmd="stty rows 24 cols 80 2>/dev/null; (sleep 0.6; printf \"$keys\" > /dev/tty) & FTUI_DEMO_EXIT_AFTER_MS=2200 FTUI_DEMO_SCREEN=20 timeout 8 $DEMO_BIN"
-            local start_ns end_ns dur_ms outcome exit_code rects_hash
+            local start_ms dur_ms outcome exit_code rects_hash
 
             echo "--- Scenario ${scenario} / Step ${step} (keys='${keys}') ---"
-            start_ns=$(date +%s%N)
+            start_ms=$(e2e_now_ms)
             if run_in_pty "$cmd" > "$log_file" 2>&1; then
                 exit_code=0
             else
                 exit_code=$?
             fi
-            end_ns=$(date +%s%N)
-            dur_ms=$(( (end_ns - start_ns) / 1000000 ))
+            dur_ms=$(( $(e2e_now_ms) - start_ms ))
 
             if [ "$exit_code" -eq 124 ]; then
                 outcome="timeout"
@@ -656,16 +698,35 @@ if $CAN_SMOKE; then
 
             rects_hash=$(sha256sum "$log_file" | awk '{print $1}')
 
-            printf '{'
-            printf '"run_id":"%s",' "${E2E_RUN_ID:-$TIMESTAMP}"
-            printf '"screen":20,'
-            printf '"scenario_id":%s,' "$scenario"
-            printf '"step_idx":%s,' "$step"
-            printf '"rects_hash":"%s",' "$rects_hash"
-            printf '"duration_ms":%s,' "$dur_ms"
-            printf '"exit_code":%s,' "$exit_code"
-            printf '"outcome":"%s"' "$outcome"
-            printf '}\n'
+            local ts
+            ts="$(e2e_timestamp)"
+            local run_id="${RUN_ID}"
+            local seed_val="${E2E_CONTEXT_SEED:-${E2E_SEED:-0}}"
+            local mode="${E2E_CONTEXT_MODE:-alt}"
+            local cols_json="${E2E_CONTEXT_COLS:-80}"
+            local rows_json="${E2E_CONTEXT_ROWS:-24}"
+            local hash_key
+            hash_key="$(e2e_hash_key "$mode" "$cols_json" "$rows_json" "$seed_val")"
+            local payload
+            payload="{\"schema_version\":\"$(json_escape "${E2E_JSONL_SCHEMA_VERSION:-e2e-jsonl-v1}")\","
+            payload="${payload}\"type\":\"layout_inspector_case\","
+            payload="${payload}\"timestamp\":\"$(json_escape "$ts")\","
+            payload="${payload}\"run_id\":\"$(json_escape "$run_id")\","
+            payload="${payload}\"seed\":${seed_val},"
+            payload="${payload}\"mode\":\"$(json_escape "$mode")\","
+            payload="${payload}\"hash_key\":\"$(json_escape "$hash_key")\","
+            payload="${payload}\"cols\":${cols_json},"
+            payload="${payload}\"rows\":${rows_json},"
+            payload="${payload}\"screen\":20,"
+            payload="${payload}\"scenario_id\":${scenario},"
+            payload="${payload}\"step_idx\":${step},"
+            payload="${payload}\"keys\":\"$(json_escape "$keys")\","
+            payload="${payload}\"rects_hash\":\"$(json_escape "$rects_hash")\","
+            payload="${payload}\"duration_ms\":${dur_ms},"
+            payload="${payload}\"exit_code\":${exit_code},"
+            payload="${payload}\"outcome\":\"$(json_escape "$outcome")\"}"
+            echo "$payload" >> "$INSPECT_JSONL"
+            jsonl_emit "$payload"
         }
 
         inspect_run 0 0 ""
@@ -673,8 +734,7 @@ if $CAN_SMOKE; then
         inspect_run 2 2 "nn]]"
     } > "$INSPECT_LOG" 2>&1
     inspect_exit=$?
-    inspect_end=$(date +%s%N)
-    inspect_dur_ms=$(( (inspect_end - inspect_start) / 1000000 ))
+    inspect_dur_ms=$(( $(e2e_now_ms) - inspect_start_ms ))
     inspect_dur_s=$(echo "scale=2; $inspect_dur_ms / 1000" | bc 2>/dev/null || echo "${inspect_dur_ms}ms")
     STEP_DURATIONS+=("${inspect_dur_s}s")
 
@@ -682,10 +742,270 @@ if $CAN_SMOKE; then
         log_pass "Layout Inspector passed in ${inspect_dur_s}s"
         PASS_COUNT=$((PASS_COUNT + 1))
         STEP_STATUSES+=("PASS")
+        jsonl_step_end "Layout Inspector" "success" "$inspect_dur_ms"
     else
         log_fail "Layout Inspector failed. See: $INSPECT_LOG"
         FAIL_COUNT=$((FAIL_COUNT + 1))
         STEP_STATUSES+=("FAIL")
+        jsonl_step_end "Layout Inspector" "failed" "$inspect_dur_ms"
+    fi
+
+    # ────────────────────────────────────────────────────────────────────────
+    # Step 11b: Core Navigation + Dashboard Screens (bd-1av4o.14.1)
+    #
+    # Exercise core demo screens with deterministic key inputs and record
+    # per-case hashes via schema-compliant JSONL assert events.
+    # ────────────────────────────────────────────────────────────────────────
+    log_step "Core navigation + dashboard screens"
+    log_info "Running dashboard/core screens with key inputs..."
+    CORE_LOG="$LOG_DIR/11b_core_nav.log"
+    STEP_NAMES+=("Core navigation + dashboard")
+
+    jsonl_set_context "alt" 80 24 "${E2E_SEED:-}" 2>/dev/null || true
+    jsonl_step_start "Core navigation + dashboard"
+    core_start_ms="$(e2e_now_ms)"
+    {
+        echo "=== Core Navigation + Dashboard Screens ==="
+        echo "Bead: bd-1av4o.14.1"
+        echo ""
+
+        core_failures=0
+
+        run_core_case() {
+            local label="$1"
+            local screen_num="$2"
+            local keys="$3"
+            local cols="${4:-80}"
+            local rows="${5:-24}"
+            local log_file="$LOG_DIR/11b_core_${label}.log"
+            local keys_display
+            keys_display="$(printf '%q' "$keys")"
+            local cmd="stty rows ${rows} cols ${cols} 2>/dev/null; (sleep 0.6; printf \"$keys\" > /dev/tty) & FTUI_DEMO_EXIT_AFTER_MS=2200 FTUI_DEMO_SCREEN=${screen_num} timeout 8 $DEMO_BIN"
+            local start_ms dur_ms exit_code outcome status hash
+
+            echo "--- ${label} (screen ${screen_num}, keys=${keys_display}) ---"
+            start_ms=$(e2e_now_ms)
+            if run_in_pty "$cmd" > "$log_file" 2>&1; then
+                exit_code=0
+            else
+                exit_code=$?
+            fi
+            dur_ms=$(( $(e2e_now_ms) - start_ms ))
+
+            if [ "$exit_code" -eq 124 ] || [ "$exit_code" -eq 0 ]; then
+                outcome="pass"
+                status="pass"
+            else
+                outcome="fail"
+                status="fail"
+                core_failures=$((core_failures + 1))
+            fi
+
+            hash=$(sha256sum "$log_file" | awk '{print $1}')
+            local seed_val="${E2E_CONTEXT_SEED:-${E2E_SEED:-0}}"
+            local mode="${E2E_CONTEXT_MODE:-alt}"
+            local hash_key
+            hash_key="$(e2e_hash_key "$mode" "$cols" "$rows" "$seed_val")"
+            jsonl_assert "core_screen_${label}" "$status" \
+                "screen=${label} screen_num=${screen_num} keys=${keys_display} mode=${mode} cols=${cols} rows=${rows} seed=${seed_val} hash_key=${hash_key} hash=${hash} duration_ms=${dur_ms} exit=${exit_code} outcome=${outcome}"
+        }
+
+        run_core_case "dashboard" 2 "cemg" 80 24
+        run_core_case "layout_lab" 6 "2d+" 80 24
+        run_core_case "performance_hud" 30 "pm" 80 24
+        run_core_case "notifications" 19 "s" 80 24
+        run_core_case "nav_cycle" 2 $'\t\033[Z' 80 24
+
+        echo ""
+        echo "Core screen failures: $core_failures"
+        [ "$core_failures" -eq 0 ]
+    } > "$CORE_LOG" 2>&1
+    core_exit=$?
+    core_dur_ms=$(( $(e2e_now_ms) - core_start_ms ))
+    core_dur_s=$(echo "scale=2; $core_dur_ms / 1000" | bc 2>/dev/null || echo "${core_dur_ms}ms")
+    STEP_DURATIONS+=("${core_dur_s}s")
+
+    if [ $core_exit -eq 0 ]; then
+        log_pass "Core navigation + dashboard screens passed in ${core_dur_s}s"
+        PASS_COUNT=$((PASS_COUNT + 1))
+        STEP_STATUSES+=("PASS")
+        jsonl_step_end "Core navigation + dashboard" "success" "$core_dur_ms"
+    else
+        log_fail "Core navigation + dashboard screens failed. See: $CORE_LOG"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        STEP_STATUSES+=("FAIL")
+        jsonl_step_end "Core navigation + dashboard" "failed" "$core_dur_ms"
+    fi
+
+    # ────────────────────────────────────────────────────────────────────────
+    # Step 11c: Editors + Markdown + Log Search (bd-1av4o.14.2)
+    #
+    # Exercise text-heavy screens with deterministic key inputs and record
+    # per-case hashes via schema-compliant JSONL assert events.
+    # ────────────────────────────────────────────────────────────────────────
+    log_step "Editors + Markdown + Log Search"
+    log_info "Running editor/markdown/log search screens with key inputs..."
+    EDIT_LOG="$LOG_DIR/11c_editors_markdown.log"
+    STEP_NAMES+=("Editors + Markdown + Log Search")
+
+    jsonl_set_context "alt" 80 24 "${E2E_SEED:-}" 2>/dev/null || true
+    jsonl_step_start "Editors + Markdown + Log Search"
+    edit_start_ms="$(e2e_now_ms)"
+    {
+        echo "=== Editors + Markdown + Log Search ==="
+        echo "Bead: bd-1av4o.14.2"
+        echo ""
+
+        edit_failures=0
+
+        run_editor_case() {
+            local label="$1"
+            local screen_num="$2"
+            local keys="$3"
+            local cols="${4:-80}"
+            local rows="${5:-24}"
+            local log_file="$LOG_DIR/11c_${label}.log"
+            local keys_display
+            keys_display="$(printf '%q' "$keys")"
+            local cmd="stty rows ${rows} cols ${cols} 2>/dev/null; (sleep 0.6; printf \"$keys\" > /dev/tty) & FTUI_DEMO_EXIT_AFTER_MS=2400 FTUI_DEMO_SCREEN=${screen_num} timeout 10 $DEMO_BIN"
+            local start_ms dur_ms exit_code outcome status hash
+
+            echo "--- ${label} (screen ${screen_num}, keys=${keys_display}) ---"
+            start_ms=$(e2e_now_ms)
+            if run_in_pty "$cmd" > "$log_file" 2>&1; then
+                exit_code=0
+            else
+                exit_code=$?
+            fi
+            dur_ms=$(( $(e2e_now_ms) - start_ms ))
+
+            if [ "$exit_code" -eq 124 ] || [ "$exit_code" -eq 0 ]; then
+                outcome="pass"
+                status="pass"
+            else
+                outcome="fail"
+                status="fail"
+                edit_failures=$((edit_failures + 1))
+            fi
+
+            hash=$(sha256sum "$log_file" | awk '{print $1}')
+            local seed_val="${E2E_CONTEXT_SEED:-${E2E_SEED:-0}}"
+            local mode="${E2E_CONTEXT_MODE:-alt}"
+            local hash_key
+            hash_key="$(e2e_hash_key "$mode" "$cols" "$rows" "$seed_val")"
+            jsonl_assert "editor_screen_${label}" "$status" \
+                "screen=${label} screen_num=${screen_num} keys=${keys_display} mode=${mode} cols=${cols} rows=${rows} seed=${seed_val} hash_key=${hash_key} hash=${hash} duration_ms=${dur_ms} exit=${exit_code} outcome=${outcome}"
+        }
+
+        run_editor_case "advanced_text_editor" 23 $'\x1b[B\x1b[B' 80 24
+        run_editor_case "markdown_rich_text" 15 $'\x1b[B\x1b[B' 80 24
+        run_editor_case "log_search" 18 $'/err\rn' 80 24
+        run_editor_case "command_palette_lab" 36 "m2" 80 24
+
+        echo ""
+        echo "Editor/markdown failures: $edit_failures"
+        [ "$edit_failures" -eq 0 ]
+    } > "$EDIT_LOG" 2>&1
+    edit_exit=$?
+    edit_dur_ms=$(( $(e2e_now_ms) - edit_start_ms ))
+    edit_dur_s=$(echo "scale=2; $edit_dur_ms / 1000" | bc 2>/dev/null || echo "${edit_dur_ms}ms")
+    STEP_DURATIONS+=("${edit_dur_s}s")
+
+    if [ $edit_exit -eq 0 ]; then
+        log_pass "Editors + Markdown + Log Search passed in ${edit_dur_s}s"
+        PASS_COUNT=$((PASS_COUNT + 1))
+        STEP_STATUSES+=("PASS")
+        jsonl_step_end "Editors + Markdown + Log Search" "success" "$edit_dur_ms"
+    else
+        log_fail "Editors + Markdown + Log Search failed. See: $EDIT_LOG"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        STEP_STATUSES+=("FAIL")
+        jsonl_step_end "Editors + Markdown + Log Search" "failed" "$edit_dur_ms"
+    fi
+
+    # ────────────────────────────────────────────────────────────────────────
+    # Step 11d: Data Viz + Tables + Charts (bd-1av4o.14.4)
+    #
+    # Exercise data-heavy screens with deterministic key inputs and record
+    # per-case hashes via schema-compliant JSONL assert events.
+    # ────────────────────────────────────────────────────────────────────────
+    log_step "Data viz + tables + charts"
+    log_info "Running data viz/table/chart screens with key inputs..."
+    DATA_LOG="$LOG_DIR/11d_data_viz_tables.log"
+    STEP_NAMES+=("Data viz + tables + charts")
+
+    jsonl_set_context "alt" 80 24 "${E2E_SEED:-}" 2>/dev/null || true
+    jsonl_step_start "Data viz + tables + charts"
+    data_start_ms="$(e2e_now_ms)"
+    {
+        echo "=== Data Viz + Tables + Charts ==="
+        echo "Bead: bd-1av4o.14.4"
+        echo ""
+
+        data_failures=0
+
+        run_data_case() {
+            local label="$1"
+            local screen_num="$2"
+            local keys="$3"
+            local cols="${4:-80}"
+            local rows="${5:-24}"
+            local log_file="$LOG_DIR/11d_${label}.log"
+            local keys_display
+            keys_display="$(printf '%q' "$keys")"
+            local cmd="stty rows ${rows} cols ${cols} 2>/dev/null; (sleep 0.6; printf \"$keys\" > /dev/tty) & FTUI_DEMO_EXIT_AFTER_MS=2200 FTUI_DEMO_SCREEN=${screen_num} timeout 8 $DEMO_BIN"
+            local start_ms dur_ms exit_code outcome status hash
+
+            echo "--- ${label} (screen ${screen_num}, keys=${keys_display}) ---"
+            start_ms=$(e2e_now_ms)
+            if run_in_pty "$cmd" > "$log_file" 2>&1; then
+                exit_code=0
+            else
+                exit_code=$?
+            fi
+            dur_ms=$(( $(e2e_now_ms) - start_ms ))
+
+            if [ "$exit_code" -eq 124 ] || [ "$exit_code" -eq 0 ]; then
+                outcome="pass"
+                status="pass"
+            else
+                outcome="fail"
+                status="fail"
+                data_failures=$((data_failures + 1))
+            fi
+
+            hash=$(sha256sum "$log_file" | awk '{print $1}')
+            local seed_val="${E2E_CONTEXT_SEED:-${E2E_SEED:-0}}"
+            local mode="${E2E_CONTEXT_MODE:-alt}"
+            local hash_key
+            hash_key="$(e2e_hash_key "$mode" "$cols" "$rows" "$seed_val")"
+            jsonl_assert "data_screen_${label}" "$status" \
+                "screen=${label} screen_num=${screen_num} keys=${keys_display} mode=${mode} cols=${cols} rows=${rows} seed=${seed_val} hash_key=${hash_key} hash=${hash} duration_ms=${dur_ms} exit=${exit_code} outcome=${outcome}"
+        }
+
+        run_data_case "data_viz" 8 $'\x1b[C\x1b[D' 80 24
+        run_data_case "table_theme_gallery" 11 "v" 80 24
+        run_data_case "widget_gallery" 5 "j" 80 24
+
+        echo ""
+        echo "Data viz/table failures: $data_failures"
+        [ "$data_failures" -eq 0 ]
+    } > "$DATA_LOG" 2>&1
+    data_exit=$?
+    data_dur_ms=$(( $(e2e_now_ms) - data_start_ms ))
+    data_dur_s=$(echo "scale=2; $data_dur_ms / 1000" | bc 2>/dev/null || echo "${data_dur_ms}ms")
+    STEP_DURATIONS+=("${data_dur_s}s")
+
+    if [ $data_exit -eq 0 ]; then
+        log_pass "Data viz + tables + charts passed in ${data_dur_s}s"
+        PASS_COUNT=$((PASS_COUNT + 1))
+        STEP_STATUSES+=("PASS")
+        jsonl_step_end "Data viz + tables + charts" "success" "$data_dur_ms"
+    else
+        log_fail "Data viz + tables + charts failed. See: $DATA_LOG"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        STEP_STATUSES+=("FAIL")
+        jsonl_step_end "Data viz + tables + charts" "failed" "$data_dur_ms"
     fi
 
     # ────────────────────────────────────────────────────────────────────────
@@ -701,7 +1021,8 @@ if $CAN_SMOKE; then
     CAPS_JSONL="$LOG_DIR/12_terminal_caps_summary.jsonl"
     STEP_NAMES+=("Terminal caps report")
 
-    caps_start=$(date +%s%N)
+    jsonl_step_start "Terminal caps report"
+    caps_start_ms="$(e2e_now_ms)"
     {
         echo "=== Terminal Capabilities (Screen 11) Report Export ==="
         echo "Bead: bd-iuvb.6"
@@ -734,11 +1055,11 @@ if $CAN_SMOKE; then
 
         caps_parse_ok=false
         if $caps_report_ok; then
-            if python3 - "$CAPS_REPORT" "$CAPS_JSONL" "$TIMESTAMP" "$caps_outcome" "$caps_exit" <<'PY'
+            if python3 - "$CAPS_REPORT" "$CAPS_JSONL" "$RUN_ID" "${E2E_SEED:-0}" "$(e2e_timestamp)" "${E2E_JSONL_SCHEMA_VERSION:-e2e-jsonl-v1}" "$caps_outcome" "$caps_exit" <<'PY'
 import json
 import sys
 
-report_path, summary_path, run_id, outcome, exit_code = sys.argv[1:6]
+report_path, summary_path, run_id, seed, timestamp, schema_version, outcome, exit_code = sys.argv[1:9]
 
 with open(report_path, "r", encoding="utf-8") as handle:
     lines = [line for line in handle if line.strip()]
@@ -751,8 +1072,16 @@ enabled = [row.get("capability") for row in caps if row.get("effective") is True
 disabled = [row.get("capability") for row in caps if row.get("effective") is False]
 
 profile = report.get("simulated_profile") or report.get("detected_profile")
+try:
+    seed_val = int(seed)
+except ValueError:
+    seed_val = None
 payload = {
+    "schema_version": schema_version,
+    "type": "terminal_caps_summary",
+    "timestamp": timestamp,
     "run_id": run_id,
+    "seed": seed_val,
     "profile": profile,
     "enabled_features": enabled,
     "disabled_features": disabled,
@@ -787,8 +1116,7 @@ PY
         $caps_success
     } > "$CAPS_LOG" 2>&1
     caps_exit=$?
-    caps_end=$(date +%s%N)
-    caps_dur_ms=$(( (caps_end - caps_start) / 1000000 ))
+    caps_dur_ms=$(( $(e2e_now_ms) - caps_start_ms ))
     caps_dur_s=$(echo "scale=2; $caps_dur_ms / 1000" | bc 2>/dev/null || echo "${caps_dur_ms}ms")
     STEP_DURATIONS+=("${caps_dur_s}s")
 
@@ -796,10 +1124,12 @@ PY
         log_pass "Terminal caps report passed in ${caps_dur_s}s"
         PASS_COUNT=$((PASS_COUNT + 1))
         STEP_STATUSES+=("PASS")
+        jsonl_step_end "Terminal caps report" "success" "$caps_dur_ms"
     else
         log_fail "Terminal caps report failed. See: $CAPS_LOG"
         FAIL_COUNT=$((FAIL_COUNT + 1))
         STEP_STATUSES+=("FAIL")
+        jsonl_step_end "Terminal caps report" "failed" "$caps_dur_ms"
     fi
 
     # ────────────────────────────────────────────────────────────────────────
@@ -815,7 +1145,8 @@ PY
     I18N_JSONL="$LOG_DIR/13_i18n_summary.jsonl"
     STEP_NAMES+=("i18n stress report")
 
-    i18n_start=$(date +%s%N)
+    jsonl_step_start "i18n stress report"
+    i18n_start_ms="$(e2e_now_ms)"
     {
         echo "=== i18n Stress Lab (Screen 29) Report Export ==="
         echo "Bead: bd-iuvb.9"
@@ -848,11 +1179,11 @@ PY
 
         i18n_parse_ok=false
         if $i18n_report_ok; then
-            if python3 - "$I18N_REPORT" "$I18N_JSONL" "$TIMESTAMP" "$i18n_outcome" "$i18n_exit" <<'PY'
+            if python3 - "$I18N_REPORT" "$I18N_JSONL" "$RUN_ID" "${E2E_SEED:-0}" "$(e2e_timestamp)" "${E2E_JSONL_SCHEMA_VERSION:-e2e-jsonl-v1}" "$i18n_outcome" "$i18n_exit" <<'PY'
 import json
 import sys
 
-report_path, summary_path, run_id, outcome, exit_code = sys.argv[1:6]
+report_path, summary_path, run_id, seed, timestamp, schema_version, outcome, exit_code = sys.argv[1:9]
 
 with open(report_path, "r", encoding="utf-8") as handle:
     lines = [line for line in handle if line.strip()]
@@ -860,8 +1191,16 @@ if not lines:
     raise SystemExit("Report JSONL is empty")
 
 report = json.loads(lines[-1])
+try:
+    seed_val = int(seed)
+except ValueError:
+    seed_val = None
 payload = {
+    "schema_version": schema_version,
+    "type": "i18n_stress_summary",
+    "timestamp": timestamp,
     "run_id": run_id,
+    "seed": seed_val,
     "sample_id": report.get("sample_id"),
     "width_metrics": report.get("width_metrics", {}),
     "truncation_state": report.get("truncation_state", {}),
@@ -896,8 +1235,7 @@ PY
         $i18n_success
     } > "$I18N_LOG" 2>&1
     i18n_exit=$?
-    i18n_end=$(date +%s%N)
-    i18n_dur_ms=$(( (i18n_end - i18n_start) / 1000000 ))
+    i18n_dur_ms=$(( $(e2e_now_ms) - i18n_start_ms ))
     i18n_dur_s=$(echo "scale=2; $i18n_dur_ms / 1000" | bc 2>/dev/null || echo "${i18n_dur_ms}ms")
     STEP_DURATIONS+=("${i18n_dur_s}s")
 
@@ -905,10 +1243,12 @@ PY
         log_pass "i18n stress report passed in ${i18n_dur_s}s"
         PASS_COUNT=$((PASS_COUNT + 1))
         STEP_STATUSES+=("PASS")
+        jsonl_step_end "i18n stress report" "success" "$i18n_dur_ms"
     else
         log_fail "i18n stress report failed. See: $I18N_LOG"
         FAIL_COUNT=$((FAIL_COUNT + 1))
         STEP_STATUSES+=("FAIL")
+        jsonl_step_end "i18n stress report" "failed" "$i18n_dur_ms"
     fi
 
     # ────────────────────────────────────────────────────────────────────────
@@ -923,14 +1263,15 @@ PY
     WIDGET_JSONL="$LOG_DIR/14_widget_builder_summary.jsonl"
     STEP_NAMES+=("widget builder export")
 
-    widget_start=$(date +%s%N)
+    jsonl_step_start "widget builder export"
+    widget_start_ms="$(e2e_now_ms)"
     {
         echo "=== Widget Builder (Screen 33) Export ==="
         echo "Bead: bd-iuvb.10"
         echo "Report path: $WIDGET_REPORT"
         echo ""
 
-        widget_cmd="stty rows 24 cols 80 2>/dev/null; (sleep 0.5; printf 'x' > /dev/tty) & FTUI_WIDGET_BUILDER_EXPORT_PATH=\"$WIDGET_REPORT\" FTUI_WIDGET_BUILDER_RUN_ID=\"$TIMESTAMP\" FTUI_DEMO_EXIT_AFTER_MS=2200 FTUI_DEMO_SCREEN=33 timeout 8 $DEMO_BIN"
+        widget_cmd="stty rows 24 cols 80 2>/dev/null; (sleep 0.5; printf 'x' > /dev/tty) & FTUI_WIDGET_BUILDER_EXPORT_PATH=\"$WIDGET_REPORT\" FTUI_WIDGET_BUILDER_RUN_ID=\"$RUN_ID\" FTUI_DEMO_EXIT_AFTER_MS=2200 FTUI_DEMO_SCREEN=33 timeout 8 $DEMO_BIN"
 
         if run_in_pty "$widget_cmd" 2>&1; then
             widget_exit=0
@@ -956,11 +1297,11 @@ PY
 
         widget_parse_ok=false
         if $widget_report_ok; then
-            if python3 - "$WIDGET_REPORT" "$WIDGET_JSONL" "$TIMESTAMP" "$widget_outcome" "$widget_exit" <<'PY'
+            if python3 - "$WIDGET_REPORT" "$WIDGET_JSONL" "$RUN_ID" "${E2E_SEED:-0}" "$(e2e_timestamp)" "${E2E_JSONL_SCHEMA_VERSION:-e2e-jsonl-v1}" "$widget_outcome" "$widget_exit" <<'PY'
 import json
 import sys
 
-report_path, summary_path, run_id, outcome, exit_code = sys.argv[1:6]
+report_path, summary_path, run_id, seed, timestamp, schema_version, outcome, exit_code = sys.argv[1:9]
 
 with open(report_path, "r", encoding="utf-8") as handle:
     lines = [line for line in handle if line.strip()]
@@ -968,8 +1309,16 @@ if not lines:
     raise SystemExit("Report JSONL is empty")
 
 report = json.loads(lines[-1])
+try:
+    seed_val = int(seed)
+except ValueError:
+    seed_val = None
 payload = {
+    "schema_version": schema_version,
+    "type": "widget_builder_summary",
+    "timestamp": timestamp,
     "run_id": report.get("run_id", run_id),
+    "seed": seed_val,
     "preset_id": report.get("preset_id"),
     "widget_count": report.get("widget_count"),
     "props_hash": report.get("props_hash"),
@@ -1004,8 +1353,7 @@ PY
         $widget_success
     } > "$WIDGET_LOG" 2>&1
     widget_exit=$?
-    widget_end=$(date +%s%N)
-    widget_dur_ms=$(( (widget_end - widget_start) / 1000000 ))
+    widget_dur_ms=$(( $(e2e_now_ms) - widget_start_ms ))
     widget_dur_s=$(echo "scale=2; $widget_dur_ms / 1000" | bc 2>/dev/null || echo "${widget_dur_ms}ms")
     STEP_DURATIONS+=("${widget_dur_s}s")
 
@@ -1013,10 +1361,12 @@ PY
         log_pass "Widget builder export passed in ${widget_dur_s}s"
         PASS_COUNT=$((PASS_COUNT + 1))
         STEP_STATUSES+=("PASS")
+        jsonl_step_end "widget builder export" "success" "$widget_dur_ms"
     else
         log_fail "Widget builder export failed. See: $WIDGET_LOG"
         FAIL_COUNT=$((FAIL_COUNT + 1))
         STEP_STATUSES+=("FAIL")
+        jsonl_step_end "widget builder export" "failed" "$widget_dur_ms"
     fi
 
     # ────────────────────────────────────────────────────────────────────────
@@ -1031,7 +1381,8 @@ PY
     DET_JSONL="$LOG_DIR/15_determinism_summary.jsonl"
     STEP_NAMES+=("determinism lab report")
 
-    det_start=$(date +%s%N)
+    jsonl_step_start "determinism lab report"
+    det_start_ms="$(e2e_now_ms)"
     {
         echo "=== Determinism Lab (Screen 35) ==="
         echo "Bead: bd-iuvb.2"
@@ -1064,11 +1415,11 @@ PY
 
         det_parse_ok=false
         if $det_report_ok; then
-            if python3 - "$DET_REPORT" "$DET_JSONL" "$TIMESTAMP" "$det_outcome" "$det_run_exit" <<'PY'
+            if python3 - "$DET_REPORT" "$DET_JSONL" "$RUN_ID" "${E2E_SEED:-0}" "$(e2e_timestamp)" "${E2E_JSONL_SCHEMA_VERSION:-e2e-jsonl-v1}" "$det_outcome" "$det_run_exit" <<'PY'
 import json
 import sys
 
-report_path, summary_path, run_id, outcome, exit_code = sys.argv[1:6]
+report_path, summary_path, run_id, seed, timestamp, schema_version, outcome, exit_code = sys.argv[1:9]
 
 lines = []
 with open(report_path, "r", encoding="utf-8") as handle:
@@ -1110,9 +1461,16 @@ for entry in lines:
 
 ok = len(strategies) >= 3 and missing == 0 and env_seen >= 1 and env_missing == 0 and len(lines) >= 3
 
+try:
+    seed_val = int(seed)
+except ValueError:
+    seed_val = None
 summary = {
-    "event": "determinism_summary",
+    "schema_version": schema_version,
+    "type": "determinism_summary",
+    "timestamp": timestamp,
     "run_id": run_id,
+    "seed": seed_val,
     "outcome": outcome,
     "exit_code": int(exit_code),
     "line_count": len(lines),
@@ -1152,8 +1510,7 @@ PY
         $det_success
     } > "$DET_LOG" 2>&1
     det_exit=$?
-    det_end=$(date +%s%N)
-    det_dur_ms=$(( (det_end - det_start) / 1000000 ))
+    det_dur_ms=$(( $(e2e_now_ms) - det_start_ms ))
     det_dur_s=$(echo "scale=2; $det_dur_ms / 1000" | bc 2>/dev/null || echo "${det_dur_ms}ms")
     STEP_DURATIONS+=("${det_dur_s}s")
 
@@ -1161,10 +1518,12 @@ PY
         log_pass "Determinism lab report passed in ${det_dur_s}s"
         PASS_COUNT=$((PASS_COUNT + 1))
         STEP_STATUSES+=("PASS")
+        jsonl_step_end "determinism lab report" "success" "$det_dur_ms"
     else
         log_fail "Determinism lab report failed. See: $DET_LOG"
         FAIL_COUNT=$((FAIL_COUNT + 1))
         STEP_STATUSES+=("FAIL")
+        jsonl_step_end "determinism lab report" "failed" "$det_dur_ms"
     fi
 
     # ────────────────────────────────────────────────────────────────────────
@@ -1179,14 +1538,15 @@ PY
     LINK_JSONL="$LOG_DIR/16_hyperlink_summary.jsonl"
     STEP_NAMES+=("hyperlink playground")
 
-    link_start=$(date +%s%N)
+    jsonl_step_start "hyperlink playground"
+    link_start_ms="$(e2e_now_ms)"
     {
         echo "=== Hyperlink Playground (Screen 36) ==="
         echo "Bead: bd-iuvb.14"
         echo "Report path: $LINK_REPORT"
         echo ""
 
-        link_cmd="stty rows 24 cols 80 2>/dev/null; (sleep 0.5; printf '\\t\\r' > /dev/tty) & FTUI_LINK_REPORT_PATH=\"$LINK_REPORT\" FTUI_LINK_RUN_ID=\"$TIMESTAMP\" FTUI_DEMO_EXIT_AFTER_MS=2200 FTUI_DEMO_SCREEN=36 timeout 8 $DEMO_BIN"
+        link_cmd="stty rows 24 cols 80 2>/dev/null; (sleep 0.5; printf '\\t\\r' > /dev/tty) & FTUI_LINK_REPORT_PATH=\"$LINK_REPORT\" FTUI_LINK_RUN_ID=\"$RUN_ID\" FTUI_DEMO_EXIT_AFTER_MS=2200 FTUI_DEMO_SCREEN=36 timeout 8 $DEMO_BIN"
 
         if run_in_pty "$link_cmd" 2>&1; then
             link_exit=0
@@ -1212,11 +1572,11 @@ PY
 
         link_parse_ok=false
         if $link_report_ok; then
-            if python3 - "$LINK_REPORT" "$LINK_JSONL" "$TIMESTAMP" "$link_outcome" "$link_exit" <<'PY'
+            if python3 - "$LINK_REPORT" "$LINK_JSONL" "$RUN_ID" "${E2E_SEED:-0}" "$(e2e_timestamp)" "${E2E_JSONL_SCHEMA_VERSION:-e2e-jsonl-v1}" "$link_outcome" "$link_exit" <<'PY'
 import json
 import sys
 
-report_path, summary_path, run_id, outcome, exit_code = sys.argv[1:6]
+report_path, summary_path, run_id, seed, timestamp, schema_version, outcome, exit_code = sys.argv[1:9]
 
 with open(report_path, "r", encoding="utf-8") as handle:
     lines = [line for line in handle if line.strip()]
@@ -1231,8 +1591,16 @@ for line in lines:
             raise SystemExit(f"Missing key: {key}")
     events.append(data)
 
+try:
+    seed_val = int(seed)
+except ValueError:
+    seed_val = None
 payload = {
+    "schema_version": schema_version,
+    "type": "hyperlink_summary",
+    "timestamp": timestamp,
     "run_id": run_id,
+    "seed": seed_val,
     "event_count": len(events),
     "actions": sorted({evt["action"] for evt in events}),
     "outcome": outcome,
@@ -1266,8 +1634,7 @@ PY
         $link_success
     } > "$LINK_LOG" 2>&1
     link_exit=$?
-    link_end=$(date +%s%N)
-    link_dur_ms=$(( (link_end - link_start) / 1000000 ))
+    link_dur_ms=$(( $(e2e_now_ms) - link_start_ms ))
     link_dur_s=$(echo "scale=2; $link_dur_ms / 1000" | bc 2>/dev/null || echo "${link_dur_ms}ms")
     STEP_DURATIONS+=("${link_dur_s}s")
 
@@ -1275,10 +1642,12 @@ PY
         log_pass "Hyperlink playground passed in ${link_dur_s}s"
         PASS_COUNT=$((PASS_COUNT + 1))
         STEP_STATUSES+=("PASS")
+        jsonl_step_end "hyperlink playground" "success" "$link_dur_ms"
     else
         log_fail "Hyperlink playground failed. See: $LINK_LOG"
         FAIL_COUNT=$((FAIL_COUNT + 1))
         STEP_STATUSES+=("FAIL")
+        jsonl_step_end "hyperlink playground" "failed" "$link_dur_ms"
     fi
 
     # ────────────────────────────────────────────────────────────────────────
@@ -1294,13 +1663,14 @@ PY
     PAL_JSONL="$LOG_DIR/17_palette_summary.jsonl"
     STEP_NAMES+=("command palette")
 
-    pal_start=$(date +%s%N)
+    jsonl_step_start "command palette"
+    pal_start_ms="$(e2e_now_ms)"
     {
         echo "=== Command Palette (bd-iuvb.16) ==="
         echo "Report path: $PAL_REPORT"
         echo ""
 
-        pal_cmd="stty rows 24 cols 80 2>/dev/null; (sleep 0.5; printf '\\x0b' > /dev/tty; sleep 0.2; printf 'dash' > /dev/tty; sleep 0.2; printf '\\r' > /dev/tty; sleep 0.3; printf '\\x0b' > /dev/tty; sleep 0.2; printf '\\x06' > /dev/tty; sleep 0.2; printf '\\x1b' > /dev/tty) & FTUI_PALETTE_REPORT_PATH=\"$PAL_REPORT\" FTUI_PALETTE_RUN_ID=\"$TIMESTAMP\" FTUI_DEMO_EXIT_AFTER_MS=2400 FTUI_DEMO_SCREEN=1 timeout 8 $DEMO_BIN"
+        pal_cmd="stty rows 24 cols 80 2>/dev/null; (sleep 0.5; printf '\\x0b' > /dev/tty; sleep 0.2; printf 'dash' > /dev/tty; sleep 0.2; printf '\\r' > /dev/tty; sleep 0.3; printf '\\x0b' > /dev/tty; sleep 0.2; printf '\\x06' > /dev/tty; sleep 0.2; printf '\\x1b' > /dev/tty) & FTUI_PALETTE_REPORT_PATH=\"$PAL_REPORT\" FTUI_PALETTE_RUN_ID=\"$RUN_ID\" FTUI_DEMO_EXIT_AFTER_MS=2400 FTUI_DEMO_SCREEN=1 timeout 8 $DEMO_BIN"
 
         if run_in_pty "$pal_cmd" 2>&1; then
             pal_exit=0
@@ -1326,11 +1696,11 @@ PY
 
         pal_parse_ok=false
         if $pal_report_ok; then
-            if python3 - "$PAL_REPORT" "$PAL_JSONL" "$TIMESTAMP" "$pal_outcome" "$pal_exit" <<'PY'
+            if python3 - "$PAL_REPORT" "$PAL_JSONL" "$RUN_ID" "${E2E_SEED:-0}" "$(e2e_timestamp)" "${E2E_JSONL_SCHEMA_VERSION:-e2e-jsonl-v1}" "$pal_outcome" "$pal_exit" <<'PY'
 import json
 import sys
 
-report_path, summary_path, run_id, outcome, exit_code = sys.argv[1:6]
+report_path, summary_path, run_id, seed, timestamp, schema_version, outcome, exit_code = sys.argv[1:9]
 
 with open(report_path, "r", encoding="utf-8") as handle:
     lines = [line for line in handle if line.strip()]
@@ -1348,8 +1718,16 @@ for line in lines:
 
 ok = len(lines) >= 2 and missing_required == 0 and ("execute" in actions)
 
+try:
+    seed_val = int(seed)
+except ValueError:
+    seed_val = None
 summary = {
+    "schema_version": schema_version,
+    "type": "command_palette_summary",
+    "timestamp": timestamp,
     "run_id": run_id,
+    "seed": seed_val,
     "outcome": outcome,
     "exit_code": int(exit_code),
     "line_count": len(lines),
@@ -1386,8 +1764,7 @@ PY
         $pal_success
     } > "$PAL_LOG" 2>&1
     pal_exit=$?
-    pal_end=$(date +%s%N)
-    pal_dur_ms=$(( (pal_end - pal_start) / 1000000 ))
+    pal_dur_ms=$(( $(e2e_now_ms) - pal_start_ms ))
     pal_dur_s=$(echo "scale=2; $pal_dur_ms / 1000" | bc 2>/dev/null || echo "${pal_dur_ms}ms")
     STEP_DURATIONS+=("${pal_dur_s}s")
 
@@ -1395,10 +1772,12 @@ PY
         log_pass "Command palette flow passed in ${pal_dur_s}s"
         PASS_COUNT=$((PASS_COUNT + 1))
         STEP_STATUSES+=("PASS")
+        jsonl_step_end "command palette" "success" "$pal_dur_ms"
     else
         log_fail "Command palette flow failed. See: $PAL_LOG"
         FAIL_COUNT=$((FAIL_COUNT + 1))
         STEP_STATUSES+=("FAIL")
+        jsonl_step_end "command palette" "failed" "$pal_dur_ms"
     fi
 
 else
@@ -1466,6 +1845,14 @@ echo ""
     echo ""
     echo "Exit code: $( [ $FAIL_COUNT -eq 0 ] && echo 0 || echo 1 )"
 } > "$LOG_DIR/SUMMARY.txt"
+
+jsonl_assert "artifact_summary_txt" "pass" "summary_txt=$LOG_DIR/SUMMARY.txt"
+run_duration_ms=$(( $(e2e_now_ms) - E2E_RUN_START_MS ))
+if [ $FAIL_COUNT -eq 0 ]; then
+    jsonl_run_end "complete" "$run_duration_ms" "$FAIL_COUNT"
+else
+    jsonl_run_end "failed" "$run_duration_ms" "$FAIL_COUNT"
+fi
 
 if [ $FAIL_COUNT -eq 0 ]; then
     echo -e "\033[1;32mAll tests passed!\033[0m"

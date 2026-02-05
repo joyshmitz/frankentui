@@ -700,6 +700,7 @@ mod tests {
             PlasmaPalette::Fire,
             PlasmaPalette::Neon,
             PlasmaPalette::Cyberpunk,
+            PlasmaPalette::Galaxy,
         ] {
             let mut fx = PlasmaFx::new(palette);
             fx.render(ctx, &mut out);
@@ -720,6 +721,7 @@ mod tests {
             PlasmaPalette::Fire,
             PlasmaPalette::Neon,
             PlasmaPalette::Cyberpunk,
+            PlasmaPalette::Galaxy,
         ] {
             let count = palette.stop_count();
             assert!(
@@ -747,6 +749,7 @@ mod tests {
             PlasmaPalette::Fire,
             PlasmaPalette::Neon,
             PlasmaPalette::Cyberpunk,
+            PlasmaPalette::Galaxy,
         ] {
             // Test at multiple t values across the gradient
             for t_int in 0..=10 {
@@ -805,6 +808,7 @@ mod tests {
             PlasmaPalette::Ember,
             PlasmaPalette::Subtle,
             PlasmaPalette::Monochrome,
+            PlasmaPalette::Galaxy,
         ] {
             for t_int in 0..=10 {
                 let t = t_int as f64 / 10.0;
@@ -937,6 +941,24 @@ mod tests {
 
         // They should differ (different wave functions)
         assert_ne!(out_full, out_min);
+    }
+
+    #[test]
+    fn palette_setter_roundtrip() {
+        let mut fx = PlasmaFx::default();
+        assert_eq!(fx.palette(), PlasmaPalette::ThemeAccents);
+        fx.set_palette(PlasmaPalette::Galaxy);
+        assert_eq!(fx.palette(), PlasmaPalette::Galaxy);
+    }
+
+    #[test]
+    fn palette_color_clamps() {
+        let theme = ThemeInputs::default_dark();
+        let palette = PlasmaPalette::Ocean;
+        let low = palette.color_at(-1.0, &theme);
+        let high = palette.color_at(2.0, &theme);
+        assert_eq!(low, palette.color_at(0.0, &theme));
+        assert_eq!(high, palette.color_at(1.0, &theme));
     }
 
     // =========================================================================

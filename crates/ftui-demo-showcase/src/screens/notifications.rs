@@ -260,6 +260,19 @@ mod tests {
     use super::*;
     use ftui_render::grapheme_pool::GraphemePool;
 
+    fn area_has_content(frame: &Frame, area: Rect) -> bool {
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                if let Some(cell) = frame.buffer.get(x, y)
+                    && !cell.content.is_empty()
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     #[test]
     fn notifications_screen_default() {
         let screen = Notifications::new();
@@ -366,6 +379,47 @@ mod tests {
         let mut frame = Frame::new(80, 24, &mut pool);
         let area = Rect::new(0, 0, 80, 24);
         screen.view(&mut frame, area);
+    }
+
+    #[test]
+    fn render_populates_instructions_panel() {
+        use super::Screen;
+        let screen = Notifications::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+        let area = Rect::new(0, 0, 80, 24);
+        screen.view(&mut frame, area);
+
+        let chunks = Flex::horizontal()
+            .constraints([Constraint::Percentage(40.0), Constraint::Min(1)])
+            .split(area);
+        assert!(
+            area_has_content(&frame, chunks[0]),
+            "instructions panel rendered empty"
+        );
+    }
+
+    #[test]
+    fn render_populates_notifications_panel() {
+        use super::Screen;
+        let mut screen = Notifications::new();
+        screen.push_success();
+        screen.push_error();
+        screen.push_warning();
+        screen.tick(1);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+        let area = Rect::new(0, 0, 80, 24);
+        screen.view(&mut frame, area);
+
+        let chunks = Flex::horizontal()
+            .constraints([Constraint::Percentage(40.0), Constraint::Min(1)])
+            .split(area);
+        assert!(
+            area_has_content(&frame, chunks[1]),
+            "notifications panel rendered empty"
+        );
     }
 
     #[test]

@@ -556,6 +556,43 @@ mod tests {
     }
 
     #[test]
+    fn render_vertical_only_borders_use_vertical_glyphs() {
+        let block = Block::new()
+            .borders(Borders::LEFT | Borders::RIGHT)
+            .border_type(BorderType::Double);
+        let area = Rect::new(0, 0, 4, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(4, 3, &mut pool);
+        block.render(area, &mut frame);
+
+        let buf = &frame.buffer;
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('║'));
+        assert_eq!(buf.get(3, 0).unwrap().content.as_char(), Some('║'));
+        assert!(
+            buf.get(1, 0).unwrap().is_empty()
+                || buf.get(1, 0).unwrap().content.as_char() == Some(' ')
+        );
+    }
+
+    #[test]
+    fn render_missing_left_keeps_horizontal_corner_logic() {
+        let block = Block::new()
+            .borders(Borders::TOP | Borders::RIGHT | Borders::BOTTOM)
+            .border_type(BorderType::Square);
+        let area = Rect::new(0, 0, 4, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(4, 3, &mut pool);
+        block.render(area, &mut frame);
+
+        let buf = &frame.buffer;
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('─'));
+        assert_eq!(buf.get(3, 0).unwrap().content.as_char(), Some('┐'));
+        assert_eq!(buf.get(0, 2).unwrap().content.as_char(), Some('─'));
+        assert_eq!(buf.get(3, 2).unwrap().content.as_char(), Some('┘'));
+        assert_eq!(buf.get(3, 1).unwrap().content.as_char(), Some('│'));
+    }
+
+    #[test]
     fn render_title_left_aligned() {
         let block = Block::new()
             .borders(Borders::ALL)
@@ -627,6 +664,24 @@ mod tests {
     }
 
     #[test]
+    fn render_multi_title_alignment_uses_last_title_and_alignment() {
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .title("Left")
+            .title_alignment(Alignment::Left)
+            .title("Right")
+            .title_alignment(Alignment::Right);
+        let area = Rect::new(0, 0, 12, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(12, 3, &mut pool);
+        block.render(area, &mut frame);
+
+        let buf = &frame.buffer;
+        assert_eq!(buf.get(6, 0).unwrap().content.as_char(), Some('R'));
+        assert_ne!(buf.get(1, 0).unwrap().content.as_char(), Some('L'));
+    }
+
+    #[test]
     fn title_not_rendered_without_top_border() {
         let block = Block::new()
             .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
@@ -694,6 +749,27 @@ mod tests {
         assert_eq!(buf.get(4, 0).unwrap().content.as_char(), Some('+'));
         assert_eq!(buf.get(2, 0).unwrap().content.as_char(), Some('-'));
         assert_eq!(buf.get(0, 1).unwrap().content.as_char(), Some('|'));
+    }
+
+    #[test]
+    fn degradation_simple_borders_partial_edges_use_ascii_corners() {
+        use ftui_render::budget::DegradationLevel;
+
+        let block = Block::new()
+            .borders(Borders::TOP | Borders::RIGHT | Borders::BOTTOM)
+            .border_type(BorderType::Double);
+        let area = Rect::new(0, 0, 4, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(4, 3, &mut pool);
+        frame.set_degradation(DegradationLevel::SimpleBorders);
+        block.render(area, &mut frame);
+
+        let buf = &frame.buffer;
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('-'));
+        assert_eq!(buf.get(3, 0).unwrap().content.as_char(), Some('+'));
+        assert_eq!(buf.get(0, 2).unwrap().content.as_char(), Some('-'));
+        assert_eq!(buf.get(3, 2).unwrap().content.as_char(), Some('+'));
+        assert_eq!(buf.get(3, 1).unwrap().content.as_char(), Some('|'));
     }
 
     #[test]

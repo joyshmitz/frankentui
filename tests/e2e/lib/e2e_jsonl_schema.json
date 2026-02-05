@@ -146,6 +146,24 @@
         "details": "string"
       }
     },
+    "artifact": {
+      "required": [
+        "artifact_type",
+        "path",
+        "status"
+      ],
+      "optional": [
+        "sha256",
+        "bytes"
+      ],
+      "types": {
+        "artifact_type": "string",
+        "path": "string",
+        "status": "string",
+        "sha256": "string",
+        "bytes": "number"
+      }
+    },
     "large_screen_env": {
       "required": [
         "term",

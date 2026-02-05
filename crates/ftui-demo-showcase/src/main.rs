@@ -6,7 +6,7 @@ use ftui_demo_showcase::app::{AppModel, ScreenId, VfxHarnessConfig, VfxHarnessMo
 use ftui_demo_showcase::cli;
 use ftui_demo_showcase::screens;
 use ftui_render::budget::{FrameBudgetConfig, PhaseBudgets};
-use ftui_runtime::{Program, ProgramConfig, ScreenMode};
+use ftui_runtime::{FrameTimingConfig, Program, ProgramConfig, ScreenMode};
 use std::time::Duration;
 
 fn main() {
@@ -46,6 +46,7 @@ fn main() {
             cols: opts.vfx_cols,
             rows: opts.vfx_rows,
             seed: opts.vfx_seed,
+            perf_enabled: opts.vfx_perf,
         };
         let model = match VfxHarnessModel::new(harness_config) {
             Ok(model) => model,
@@ -54,10 +55,12 @@ fn main() {
                 std::process::exit(1);
             }
         };
+        let frame_timing = model.perf_logger().map(FrameTimingConfig::new);
         let config = ProgramConfig {
             screen_mode,
             mouse: opts.mouse,
             budget,
+            frame_timing,
             forced_size: Some((opts.vfx_cols.max(1), opts.vfx_rows.max(1))),
             ..ProgramConfig::default()
         };

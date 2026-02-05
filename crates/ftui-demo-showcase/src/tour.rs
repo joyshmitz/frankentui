@@ -374,6 +374,23 @@ fn scale_duration(delta: Duration, speed: f64) -> Duration {
 mod tests {
     use super::*;
 
+    fn test_step(
+        screen: ScreenId,
+        title: &'static str,
+        duration_ms: u64,
+        highlight: Option<TourHighlight>,
+    ) -> TourStep {
+        TourStep {
+            id: format!("step:{title}"),
+            screen,
+            title,
+            blurb: "blurb",
+            hint: None,
+            duration: Duration::from_millis(duration_ms),
+            highlight,
+        }
+    }
+
     #[test]
     fn tour_advances_and_finishes() {
         let mut tour = GuidedTourState::new();
@@ -408,5 +425,119 @@ mod tests {
         assert_eq!(tour.active_screen(), first);
         let _ = tour.next_step(TourAdvanceReason::ManualNext);
         assert_ne!(tour.active_screen(), first);
+    }
+
+    #[test]
+    fn tour_start_clamps_speed_and_index() {
+        let mut tour = GuidedTourState::new();
+        let count = tour.step_count();
+        assert!(count > 0);
+
+        tour.start(ScreenId::Dashboard, usize::MAX, SPEED_MAX * 2.0);
+        assert_eq!(tour.step_index(), count - 1);
+        assert!((tour.speed() - SPEED_MAX).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn tour_stop_returns_resume_or_last() {
+        let mut tour = GuidedTourState::new();
+        tour.start(ScreenId::Dashboard, 0, 1.0);
+        let _ = tour.next_step(TourAdvanceReason::ManualNext);
+        let last = tour.active_screen();
+        let screen = tour.stop(true);
+        assert_eq!(screen, last);
+
+        tour.start(ScreenId::MarkdownRichText, 0, 1.0);
+        let screen = tour.stop(false);
+        assert_eq!(screen, ScreenId::MarkdownRichText);
+    }
+
+    #[test]
+    fn tour_jump_to_same_index_noop() {
+        let mut tour = GuidedTourState::new();
+        tour.start(ScreenId::Dashboard, 0, 1.0);
+        assert!(tour.jump_to(0).is_none());
+    }
+
+    #[test]
+    fn tour_jump_to_emits_event() {
+        let mut tour = GuidedTourState::new();
+        tour.start(ScreenId::Dashboard, 0, 1.0);
+        if tour.step_count() < 2 {
+            return;
+        }
+        let from = tour.active_screen();
+        let event = tour.jump_to(1).expect("jump to next step");
+        match event {
+            TourEvent::StepChanged {
+                from: seen_from,
+                reason,
+                ..
+            } => {
+                assert_eq!(seen_from, from);
+                assert_eq!(reason, TourAdvanceReason::Jump);
+            }
+            _ => panic!("expected step change"),
+        }
+    }
+
+    #[test]
+    fn overlay_state_window_and_highlight() {
+        let mut tour = GuidedTourState::new();
+        tour.active = true;
+        tour.paused = false;
+        tour.speed = 1.0;
+        tour.step_index = 1;
+        tour.step_elapsed = Duration::from_millis(900);
+        tour.steps = vec![
+            test_step(ScreenId::Dashboard, "First", 3000, None),
+            test_step(
+                ScreenId::MarkdownRichText,
+                "Second",
+                2000,
+                Some(TourHighlight::new_pct(0.8, 0.8, 0.6, 0.6)),
+            ),
+            test_step(ScreenId::VisualEffects, "Third", 1000, None),
+        ];
+
+        let area = Rect::new(3, 4, 20, 10);
+        let overlay = tour.overlay_state(area, 3).expect("overlay state");
+        assert_eq!(overlay.step_index, 1);
+        assert_eq!(overlay.steps.len(), 3);
+        assert!(overlay.steps.iter().any(|step| step.is_current));
+        assert_eq!(overlay.remaining, Duration::from_millis(1100));
+        let highlight = overlay.highlight.expect("highlight rect");
+        assert!(highlight.x >= area.x);
+        assert!(highlight.y >= area.y);
+        assert!(highlight.right() <= area.right());
+        assert!(highlight.bottom() <= area.bottom());
+    }
+
+    #[test]
+    fn highlight_resolves_within_bounds() {
+        let highlight = TourHighlight::new_pct(0.95, 0.95, 0.8, 0.8);
+        let area = Rect::new(4, 2, 16, 8);
+        let rect = highlight.resolve(area);
+        assert!(rect.x >= area.x);
+        assert!(rect.y >= area.y);
+        assert!(rect.width >= 1);
+        assert!(rect.height >= 1);
+        assert!(rect.right() <= area.right());
+        assert!(rect.bottom() <= area.bottom());
+    }
+
+    #[test]
+    fn normalize_speed_handles_bounds() {
+        assert!((normalize_speed(0.1) - SPEED_MIN).abs() < f64::EPSILON);
+        assert!((normalize_speed(10.0) - SPEED_MAX).abs() < f64::EPSILON);
+        assert_eq!(normalize_speed(-1.0), 1.0);
+        assert_eq!(normalize_speed(f64::NAN), 1.0);
+    }
+
+    #[test]
+    fn scale_duration_rounds_and_clamps() {
+        let delta = Duration::from_micros(1500);
+        assert_eq!(scale_duration(delta, 2.0), Duration::from_micros(3000));
+        assert_eq!(scale_duration(delta, 0.0), Duration::ZERO);
     }
 }

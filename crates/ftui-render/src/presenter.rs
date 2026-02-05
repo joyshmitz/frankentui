@@ -1094,6 +1094,30 @@ mod tests {
     }
 
     #[test]
+    fn reset_reapplies_style_after_clear() {
+        let mut presenter = test_presenter();
+        let mut buffer = Buffer::new(1, 1);
+        let styled = Cell::from_char('A').with_fg(PackedRgba::rgb(10, 20, 30));
+        buffer.set_raw(0, 0, styled);
+
+        let old = Buffer::new(1, 1);
+        let diff = BufferDiff::compute(&old, &buffer);
+
+        presenter.present(&buffer, &diff).unwrap();
+        presenter.reset();
+        presenter.present(&buffer, &diff).unwrap();
+
+        let output = get_output(presenter);
+        let output_str = String::from_utf8_lossy(&output);
+        let sgr_count = output_str.matches("\x1b[38;2").count();
+
+        assert_eq!(
+            sgr_count, 2,
+            "Expected style to be re-applied after reset, got {sgr_count} sequences"
+        );
+    }
+
+    #[test]
     fn cursor_position_optimized() {
         let mut presenter = test_presenter();
         let mut buffer = Buffer::new(10, 5);

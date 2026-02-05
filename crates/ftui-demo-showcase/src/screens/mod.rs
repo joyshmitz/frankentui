@@ -716,6 +716,87 @@ mod tests {
     use super::*;
 
     #[test]
+    fn registry_order_matches_ids() {
+        let ids = screen_ids();
+        let expected: Vec<ScreenId> = SCREEN_REGISTRY.iter().map(|meta| meta.id).collect();
+        assert_eq!(
+            ids,
+            expected.as_slice(),
+            "screen id order mismatch: expected {expected:?}, got {ids:?}"
+        );
+    }
+
+    #[test]
+    fn screen_meta_roundtrip_matches_registry() {
+        for meta in SCREEN_REGISTRY {
+            let resolved = screen_meta(meta.id);
+            assert_eq!(
+                resolved.id, meta.id,
+                "screen_meta id mismatch for {:?}",
+                meta.id
+            );
+            assert_eq!(
+                resolved.category, meta.category,
+                "screen_meta category mismatch for {:?}",
+                meta.id
+            );
+            assert_eq!(
+                resolved.title, meta.title,
+                "screen_meta title mismatch for {:?}",
+                meta.id
+            );
+        }
+    }
+
+    #[test]
+    fn screen_index_matches_registry_position() {
+        for (idx, meta) in SCREEN_REGISTRY.iter().enumerate() {
+            let actual = screen_index(meta.id);
+            assert_eq!(
+                actual, idx,
+                "screen_index mismatch for {:?}: expected {idx}, got {actual}",
+                meta.id
+            );
+        }
+    }
+
+    #[test]
+    fn category_counts_match_iter() {
+        for category in ScreenCategory::ALL {
+            let expected = screens_in_category(*category).count();
+            let actual = screen_count_in_category(*category);
+            assert_eq!(
+                actual, expected,
+                "category count mismatch for {category:?}: expected {expected}, got {actual}"
+            );
+        }
+    }
+
+    #[test]
+    fn first_in_category_matches_registry() {
+        for category in ScreenCategory::ALL {
+            let expected = SCREEN_REGISTRY
+                .iter()
+                .find(|meta| meta.category == *category)
+                .map(|meta| meta.id);
+            let actual = first_in_category(*category);
+            assert_eq!(
+                actual, expected,
+                "first_in_category mismatch for {category:?}: expected {expected:?}, got {actual:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn line_contains_ignore_case_matches() {
+        assert!(line_contains_ignore_case("HelloWorld", "world"));
+        assert!(line_contains_ignore_case("HelloWorld", "HEL"));
+        assert!(line_contains_ignore_case("HelloWorld", ""));
+        assert!(!line_contains_ignore_case("HelloWorld", "nope"));
+        assert!(!line_contains_ignore_case("Hi", "longer"));
+    }
+
+    #[test]
     fn registry_matches_screen_list() {
         assert_eq!(SCREEN_REGISTRY.len(), screen_ids().len());
         assert_eq!(screen_ids().len(), SCREEN_REGISTRY.len());

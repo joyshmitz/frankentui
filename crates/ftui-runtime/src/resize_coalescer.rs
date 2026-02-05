@@ -62,7 +62,8 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crate::bocpd::{BocpdConfig, BocpdDetector, BocpdRegime};
-use crate::evidence_sink::EvidenceSink;
+use crate::evidence_sink::{EVIDENCE_SCHEMA_VERSION, EvidenceSink};
+use crate::terminal_writer::ScreenMode;
 
 /// FNV-1a 64-bit offset basis.
 const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
@@ -73,6 +74,18 @@ fn fnv_hash_bytes(hash: &mut u64, bytes: &[u8]) {
     for byte in bytes {
         *hash ^= *byte as u64;
         *hash = hash.wrapping_mul(FNV_PRIME);
+    }
+}
+
+fn default_resize_run_id() -> String {
+    format!("resize-{}", std::process::id())
+}
+
+fn screen_mode_str(mode: ScreenMode) -> &'static str {
+    match mode {
+        ScreenMode::Inline { .. } => "inline",
+        ScreenMode::InlineAuto { .. } => "inline_auto",
+        ScreenMode::AltScreen => "altscreen",
     }
 }
 
@@ -94,6 +107,24 @@ fn json_escape(value: &str) -> String {
         }
     }
     out
+}
+
+fn evidence_prefix(
+    run_id: &str,
+    screen_mode: ScreenMode,
+    cols: u16,
+    rows: u16,
+    event_idx: u64,
+) -> String {
+    format!(
+        r#""schema_version":"{}","run_id":"{}","event_idx":{},"screen_mode":"{}","cols":{},"rows":{}"#,
+        EVIDENCE_SCHEMA_VERSION,
+        json_escape(run_id),
+        event_idx,
+        screen_mode_str(screen_mode),
+        cols,
+        rows,
+    )
 }
 
 /// Configuration for the resize coalescer.
@@ -186,9 +217,17 @@ impl CoalescerConfig {
 
     /// Serialize configuration to JSONL format.
     #[must_use]
-    pub fn to_jsonl(&self) -> String {
+    pub fn to_jsonl(
+        &self,
+        run_id: &str,
+        screen_mode: ScreenMode,
+        cols: u16,
+        rows: u16,
+        event_idx: u64,
+    ) -> String {
+        let prefix = evidence_prefix(run_id, screen_mode, cols, rows, event_idx);
         format!(
-            r#"{{"event":"config","steady_delay_ms":{},"burst_delay_ms":{},"hard_deadline_ms":{},"burst_enter_rate":{:.3},"burst_exit_rate":{:.3},"cooldown_frames":{},"rate_window_size":{},"logging_enabled":{}}}"#,
+            r#"{{{prefix},"event":"config","steady_delay_ms":{},"burst_delay_ms":{},"hard_deadline_ms":{},"burst_enter_rate":{:.3},"burst_exit_rate":{:.3},"cooldown_frames":{},"rate_window_size":{},"logging_enabled":{}}}"#,
             self.steady_delay_ms,
             self.burst_delay_ms,
             self.hard_deadline_ms,
@@ -372,14 +411,22 @@ impl DecisionEvidence {
 
     /// Serialize to JSONL format.
     #[must_use]
-    pub fn to_jsonl(&self) -> String {
+    pub fn to_jsonl(
+        &self,
+        run_id: &str,
+        screen_mode: ScreenMode,
+        cols: u16,
+        rows: u16,
+        event_idx: u64,
+    ) -> String {
         let lbf_str = if self.log_bayes_factor.is_infinite() {
             "\"inf\"".to_string()
         } else {
             format!("{:.3}", self.log_bayes_factor)
         };
+        let prefix = evidence_prefix(run_id, screen_mode, cols, rows, event_idx);
         format!(
-            r#"{{"event":"decision_evidence","log_bayes_factor":{},"regime_contribution":{:.3},"timing_contribution":{:.3},"rate_contribution":{:.3},"explanation":"{}"}}"#,
+            r#"{{{prefix},"event":"decision_evidence","log_bayes_factor":{},"regime_contribution":{:.3},"timing_contribution":{:.3},"rate_contribution":{:.3},"explanation":"{}"}}"#,
             lbf_str,
             self.regime_contribution,
             self.timing_contribution,
@@ -433,7 +480,7 @@ pub struct DecisionLog {
 impl DecisionLog {
     /// Serialize decision log to JSONL format.
     #[must_use]
-    pub fn to_jsonl(&self) -> String {
+    pub fn to_jsonl(&self, run_id: &str, screen_mode: ScreenMode, cols: u16, rows: u16) -> String {
         let (pending_w, pending_h) = match self.pending_size {
             Some((w, h)) => (w.to_string(), h.to_string()),
             None => ("null".to_string(), "null".to_string()),
@@ -446,9 +493,10 @@ impl DecisionLog {
             Some(ms) => format!("{:.3}", ms),
             None => "null".to_string(),
         };
+        let prefix = evidence_prefix(run_id, screen_mode, cols, rows, self.event_idx);
 
         format!(
-            r#"{{"event":"decision","idx":{},"elapsed_ms":{:.3},"dt_ms":{:.3},"event_rate":{:.3},"regime":"{}","action":"{}","pending_w":{},"pending_h":{},"applied_w":{},"applied_h":{},"time_since_render_ms":{:.3},"coalesce_ms":{},"forced":{}}}"#,
+            r#"{{{prefix},"event":"decision","idx":{},"elapsed_ms":{:.3},"dt_ms":{:.3},"event_rate":{:.3},"regime":"{}","action":"{}","pending_w":{},"pending_h":{},"applied_w":{},"applied_h":{},"time_since_render_ms":{:.3},"coalesce_ms":{},"forced":{}}}"#,
             self.event_idx,
             self.elapsed_ms,
             self.dt_ms,
@@ -509,6 +557,10 @@ pub struct ResizeCoalescer {
     evidence_sink: Option<EvidenceSink>,
     /// Whether config has been logged to the evidence sink.
     config_logged: bool,
+    /// Run identifier for evidence logs.
+    evidence_run_id: String,
+    /// Screen mode label for evidence logs.
+    evidence_screen_mode: ScreenMode,
 
     // --- Telemetry integration (bd-1rz0.7) ---
     /// Telemetry hooks for external observability.
@@ -581,6 +633,8 @@ impl ResizeCoalescer {
             logs: Vec::new(),
             evidence_sink: None,
             config_logged: false,
+            evidence_run_id: default_resize_run_id(),
+            evidence_screen_mode: ScreenMode::AltScreen,
             telemetry_hooks: None,
             regime_transitions: 0,
             events_in_window: 0,
@@ -601,6 +655,20 @@ impl ResizeCoalescer {
     pub fn with_evidence_sink(mut self, sink: EvidenceSink) -> Self {
         self.evidence_sink = Some(sink);
         self.config_logged = false;
+        self
+    }
+
+    /// Set the run identifier used in evidence logs.
+    #[must_use]
+    pub fn with_evidence_run_id(mut self, run_id: impl Into<String>) -> Self {
+        self.evidence_run_id = run_id.into();
+        self
+    }
+
+    /// Set the screen mode label used in evidence logs.
+    #[must_use]
+    pub fn with_screen_mode(mut self, screen_mode: ScreenMode) -> Self {
+        self.evidence_screen_mode = screen_mode;
         self
     }
 
@@ -890,9 +958,12 @@ impl ResizeCoalescer {
     /// Export decision logs as JSONL (one entry per line).
     #[must_use]
     pub fn decision_logs_jsonl(&self) -> String {
+        let (cols, rows) = self.last_applied;
+        let run_id = self.evidence_run_id.as_str();
+        let screen_mode = self.evidence_screen_mode;
         self.logs
             .iter()
-            .map(|entry| entry.to_jsonl())
+            .map(|entry| entry.to_jsonl(run_id, screen_mode, cols, rows))
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -978,9 +1049,23 @@ impl ResizeCoalescer {
     #[must_use]
     pub fn evidence_to_jsonl(&self) -> String {
         let mut lines = Vec::with_capacity(self.logs.len() + 2);
-        lines.push(self.config.to_jsonl());
-        lines.extend(self.logs.iter().map(DecisionLog::to_jsonl));
-        lines.push(self.decision_summary().to_jsonl());
+        let (cols, rows) = self.last_applied;
+        let run_id = self.evidence_run_id.as_str();
+        let screen_mode = self.evidence_screen_mode;
+        let summary_event_idx = self.logs.last().map(|entry| entry.event_idx).unwrap_or(0);
+        lines.push(self.config.to_jsonl(run_id, screen_mode, cols, rows, 0));
+        lines.extend(
+            self.logs
+                .iter()
+                .map(|entry| entry.to_jsonl(run_id, screen_mode, cols, rows)),
+        );
+        lines.push(self.decision_summary().to_jsonl(
+            run_id,
+            screen_mode,
+            cols,
+            rows,
+            summary_event_idx,
+        ));
         lines.join("\n")
     }
 
@@ -1161,12 +1246,15 @@ impl ResizeCoalescer {
         });
 
         if let Some(ref sink) = self.evidence_sink {
+            let (cols, rows) = self.last_applied;
+            let run_id = self.evidence_run_id.as_str();
+            let screen_mode = self.evidence_screen_mode;
             if !self.config_logged {
-                let _ = sink.write_jsonl(&self.config.to_jsonl());
+                let _ = sink.write_jsonl(&self.config.to_jsonl(run_id, screen_mode, cols, rows, 0));
                 self.config_logged = true;
             }
             if let Some(entry) = self.logs.last() {
-                let _ = sink.write_jsonl(&entry.to_jsonl());
+                let _ = sink.write_jsonl(&entry.to_jsonl(run_id, screen_mode, cols, rows));
             }
             if let Some(ref bocpd) = self.bocpd
                 && let Some(jsonl) = bocpd.decision_log_jsonl(
@@ -1226,9 +1314,17 @@ impl DecisionSummary {
 
     /// Serialize summary to JSONL format.
     #[must_use]
-    pub fn to_jsonl(&self) -> String {
+    pub fn to_jsonl(
+        &self,
+        run_id: &str,
+        screen_mode: ScreenMode,
+        cols: u16,
+        rows: u16,
+        event_idx: u64,
+    ) -> String {
+        let prefix = evidence_prefix(run_id, screen_mode, cols, rows, event_idx);
         format!(
-            r#"{{"event":"summary","decisions":{},"applies":{},"forced_applies":{},"coalesces":{},"skips":{},"regime":"{}","last_w":{},"last_h":{},"checksum":"{}"}}"#,
+            r#"{{{prefix},"event":"summary","decisions":{},"applies":{},"forced_applies":{},"coalesces":{},"skips":{},"regime":"{}","last_w":{},"last_h":{},"checksum":"{}"}}"#,
             self.decision_count,
             self.apply_count,
             self.forced_apply_count,
@@ -1852,7 +1948,8 @@ mod tests {
         let mut c = ResizeCoalescer::new(config, (80, 24));
 
         c.handle_resize(100, 40);
-        let jsonl = c.logs()[0].to_jsonl();
+        let (cols, rows) = c.last_applied();
+        let jsonl = c.logs()[0].to_jsonl("resize-test", ScreenMode::AltScreen, cols, rows);
 
         assert!(jsonl.contains("\"event\":\"decision\""));
         assert!(jsonl.contains("\"action\":\"coalesce\""));
@@ -1915,7 +2012,10 @@ mod tests {
         let mut config = test_config();
         config.enable_logging = true;
         let base = Instant::now();
-        let mut c = ResizeCoalescer::new(config, (80, 24)).with_last_render(base);
+        let mut c = ResizeCoalescer::new(config, (80, 24))
+            .with_last_render(base)
+            .with_evidence_run_id("resize-test")
+            .with_screen_mode(ScreenMode::AltScreen);
 
         c.handle_resize_at(90, 30, base);
         c.handle_resize_at(100, 40, base + Duration::from_millis(10));
@@ -1932,6 +2032,15 @@ mod tests {
                 .get("event")
                 .and_then(Value::as_str)
                 .expect("event field");
+            assert_eq!(value["schema_version"], EVIDENCE_SCHEMA_VERSION);
+            assert_eq!(value["run_id"], "resize-test");
+            assert!(
+                value["event_idx"].is_number(),
+                "event_idx should be numeric"
+            );
+            assert_eq!(value["screen_mode"], "altscreen");
+            assert!(value["cols"].is_number(), "cols should be numeric");
+            assert!(value["rows"].is_number(), "rows should be numeric");
             match event {
                 "config" => {
                     for key in [
@@ -1991,6 +2100,28 @@ mod tests {
         assert!(saw_config, "config evidence missing");
         assert!(saw_decision, "decision evidence missing");
         assert!(saw_summary, "summary evidence missing");
+    }
+
+    #[test]
+    fn evidence_jsonl_is_deterministic_for_fixed_schedule() {
+        let mut config = test_config();
+        config.enable_logging = true;
+        let base = Instant::now();
+
+        let run = || {
+            let mut c = ResizeCoalescer::new(config.clone(), (80, 24))
+                .with_last_render(base)
+                .with_evidence_run_id("resize-test")
+                .with_screen_mode(ScreenMode::AltScreen);
+            c.handle_resize_at(90, 30, base);
+            c.handle_resize_at(100, 40, base + Duration::from_millis(10));
+            let _ = c.tick_at(base + Duration::from_millis(120));
+            c.evidence_to_jsonl()
+        };
+
+        let first = run();
+        let second = run();
+        assert_eq!(first, second);
     }
 
     #[test]

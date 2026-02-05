@@ -74,6 +74,7 @@ use ftui_render::frame::{Frame, WidgetBudget, WidgetSignal};
 use ftui_render::sanitize::sanitize;
 use std::collections::HashMap;
 use std::io::{self, Stdout, Write};
+use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -166,6 +167,43 @@ impl TaskSpec {
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
         self
+    }
+}
+
+/// Per-frame timing data for profiling.
+#[derive(Debug, Clone, Copy)]
+pub struct FrameTiming {
+    pub frame_idx: u64,
+    pub update_us: u64,
+    pub render_us: u64,
+    pub diff_us: u64,
+    pub present_us: u64,
+    pub total_us: u64,
+}
+
+/// Sink for frame timing events.
+pub trait FrameTimingSink: Send + Sync {
+    fn record_frame(&self, timing: &FrameTiming);
+}
+
+/// Configuration for frame timing capture.
+#[derive(Clone)]
+pub struct FrameTimingConfig {
+    pub sink: Arc<dyn FrameTimingSink>,
+}
+
+impl FrameTimingConfig {
+    #[must_use]
+    pub fn new(sink: Arc<dyn FrameTimingSink>) -> Self {
+        Self { sink }
+    }
+}
+
+impl std::fmt::Debug for FrameTimingConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FrameTimingConfig")
+            .field("sink", &"<dyn FrameTimingSink>")
+            .finish()
     }
 }
 
@@ -576,6 +614,8 @@ pub struct ProgramConfig {
     pub evidence_sink: EvidenceSinkConfig,
     /// Render-trace recorder configuration.
     pub render_trace: RenderTraceConfig,
+    /// Optional frame timing sink.
+    pub frame_timing: Option<FrameTimingConfig>,
     /// Conformal predictor configuration for frame-time risk gating.
     pub conformal_config: Option<ConformalConfig>,
     /// Locale context used for rendering.
@@ -615,6 +655,7 @@ impl Default for ProgramConfig {
             diff_config: RuntimeDiffConfig::default(),
             evidence_sink: EvidenceSinkConfig::default(),
             render_trace: RenderTraceConfig::default(),
+            frame_timing: None,
             conformal_config: None,
             locale_context: LocaleContext::global(),
             poll_timeout: Duration::from_millis(100),
@@ -689,6 +730,12 @@ impl ProgramConfig {
     /// Set the render-trace recorder configuration.
     pub fn with_render_trace(mut self, config: RenderTraceConfig) -> Self {
         self.render_trace = config;
+        self
+    }
+
+    /// Set a frame timing sink for per-frame profiling.
+    pub fn with_frame_timing(mut self, config: FrameTimingConfig) -> Self {
+        self.frame_timing = Some(config);
         self
     }
 
@@ -1504,6 +1551,10 @@ pub struct Program<M: Model, W: Write + Send = Stdout> {
     conformal_predictor: Option<ConformalPredictor>,
     /// Last observed frame time (microseconds), used as a baseline predictor.
     last_frame_time_us: Option<f64>,
+    /// Last observed update duration (microseconds).
+    last_update_us: Option<u64>,
+    /// Optional frame timing sink for profiling.
+    frame_timing: Option<FrameTimingConfig>,
     /// Locale context used for rendering.
     locale_context: LocaleContext,
     /// Last observed locale version.
@@ -1571,6 +1622,9 @@ impl<M: Model> Program<M, Stdout> {
             config.diff_config.clone(),
         );
 
+        let frame_timing = config.frame_timing.clone();
+        writer.set_timing_enabled(frame_timing.is_some());
+
         let evidence_sink = EvidenceSink::from_config(&config.evidence_sink)?;
         if let Some(ref sink) = evidence_sink {
             writer = writer.with_evidence_sink(sink.clone());
@@ -1602,7 +1656,8 @@ impl<M: Model> Program<M, Stdout> {
         let locale_context = config.locale_context.clone();
         let locale_version = locale_context.version();
         let mut resize_coalescer =
-            ResizeCoalescer::new(config.resize_coalescer.clone(), (width, height));
+            ResizeCoalescer::new(config.resize_coalescer.clone(), (width, height))
+                .with_screen_mode(config.screen_mode);
         if let Some(ref sink) = evidence_sink {
             resize_coalescer = resize_coalescer.with_evidence_sink(sink.clone());
         }
@@ -1641,6 +1696,8 @@ impl<M: Model> Program<M, Stdout> {
             budget,
             conformal_predictor,
             last_frame_time_us: None,
+            last_update_us: None,
+            frame_timing,
             locale_context,
             locale_version,
             resize_coalescer,
@@ -1919,7 +1976,9 @@ impl<M: Model, W: Write + Send> Program<M, W> {
             .entered();
             let start = Instant::now();
             let cmd = self.model.update(msg);
-            tracing::Span::current().record("duration_us", start.elapsed().as_micros() as u64);
+            let elapsed_us = start.elapsed().as_micros() as u64;
+            self.last_update_us = Some(elapsed_us);
+            tracing::Span::current().record("duration_us", elapsed_us);
             tracing::Span::current()
                 .record("cmd_type", format!("{:?}", std::mem::discriminant(&cmd)));
             cmd
@@ -2001,7 +2060,9 @@ impl<M: Model, W: Write + Send> Program<M, W> {
                 .entered();
                 let start = Instant::now();
                 let cmd = self.model.update(msg);
-                tracing::Span::current().record("duration_us", start.elapsed().as_micros() as u64);
+                let elapsed_us = start.elapsed().as_micros() as u64;
+                self.last_update_us = Some(elapsed_us);
+                tracing::Span::current().record("duration_us", elapsed_us);
                 tracing::Span::current()
                     .record("cmd_type", format!("{:?}", std::mem::discriminant(&cmd)));
                 cmd
@@ -2028,7 +2089,9 @@ impl<M: Model, W: Write + Send> Program<M, W> {
                 .entered();
                 let start = Instant::now();
                 let cmd = self.model.update(msg);
-                tracing::Span::current().record("duration_us", start.elapsed().as_micros() as u64);
+                let elapsed_us = start.elapsed().as_micros() as u64;
+                self.last_update_us = Some(elapsed_us);
+                tracing::Span::current().record("duration_us", elapsed_us);
                 tracing::Span::current()
                     .record("cmd_type", format!("{:?}", std::mem::discriminant(&cmd)));
                 cmd
@@ -2048,7 +2111,10 @@ impl<M: Model, W: Write + Send> Program<M, W> {
             Cmd::None => {}
             Cmd::Quit => self.running = false,
             Cmd::Msg(m) => {
+                let start = Instant::now();
                 let cmd = self.model.update(m);
+                let elapsed_us = start.elapsed().as_micros() as u64;
+                self.last_update_us = Some(elapsed_us);
                 self.mark_dirty();
                 self.execute_cmd(cmd)?;
             }
@@ -2241,6 +2307,7 @@ impl<M: Model, W: Write + Send> Program<M, W> {
         self.update_widget_refresh_plan(frame_idx);
         let render_elapsed = render_start.elapsed();
         let mut present_elapsed = Duration::ZERO;
+        let mut presented = false;
 
         // Check if render phase overspent its budget
         let render_budget = self.budget.phase_budgets().render;
@@ -2264,6 +2331,7 @@ impl<M: Model, W: Write + Send> Program<M, W> {
                 self.writer
                     .present_ui_owned(buffer, cursor, cursor_visible)?;
             }
+            presented = true;
             present_elapsed = present_start.elapsed();
 
             let present_budget = self.budget.phase_budgets().present;
@@ -2280,6 +2348,33 @@ impl<M: Model, W: Write + Send> Program<M, W> {
                 elapsed_ms = self.budget.elapsed().as_millis() as u32,
                 "frame present skipped: budget exhausted after render"
             );
+        }
+
+        if let Some(ref frame_timing) = self.frame_timing {
+            let update_us = self.last_update_us.unwrap_or(0);
+            let render_us = render_elapsed.as_micros() as u64;
+            let present_us = present_elapsed.as_micros() as u64;
+            let diff_us = if presented {
+                self.writer
+                    .take_last_present_timings()
+                    .map(|timings| timings.diff_us)
+                    .unwrap_or(0)
+            } else {
+                let _ = self.writer.take_last_present_timings();
+                0
+            };
+            let total_us = update_us
+                .saturating_add(render_us)
+                .saturating_add(present_us);
+            let timing = FrameTiming {
+                frame_idx,
+                update_us,
+                render_us,
+                diff_us,
+                present_us,
+                total_us,
+            };
+            frame_timing.sink.record_frame(&timing);
         }
 
         let frame_time = render_elapsed.saturating_add(present_elapsed);
@@ -2547,7 +2642,10 @@ impl<M: Model, W: Write + Send> Program<M, W> {
         );
 
         let msg = M::Message::from(Event::Resize { width, height });
+        let start = Instant::now();
         let cmd = self.model.update(msg);
+        let elapsed_us = start.elapsed().as_micros() as u64;
+        self.last_update_us = Some(elapsed_us);
         self.mark_dirty();
         self.execute_cmd(cmd)
     }
@@ -3502,6 +3600,54 @@ mod tests {
         let msg = String::from("dynamic message");
         let cmd: Cmd<TestMsg> = Cmd::log(msg);
         assert!(matches!(cmd, Cmd::Log(s) if s == "dynamic message"));
+    }
+
+    #[test]
+    fn program_simulator_logs_jsonl_with_seed_and_run_id() {
+        // Ensure ProgramSimulator captures JSONL log lines with run_id/seed.
+        use crate::simulator::ProgramSimulator;
+
+        struct LogModel {
+            run_id: &'static str,
+            seed: u64,
+        }
+
+        #[derive(Debug)]
+        enum LogMsg {
+            Emit,
+        }
+
+        impl From<Event> for LogMsg {
+            fn from(_: Event) -> Self {
+                LogMsg::Emit
+            }
+        }
+
+        impl Model for LogModel {
+            type Message = LogMsg;
+
+            fn update(&mut self, _msg: Self::Message) -> Cmd<Self::Message> {
+                let line = format!(
+                    r#"{{"event":"test","run_id":"{}","seed":{}}}"#,
+                    self.run_id, self.seed
+                );
+                Cmd::log(line)
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let mut sim = ProgramSimulator::new(LogModel {
+            run_id: "test-run-001",
+            seed: 4242,
+        });
+        sim.init();
+        sim.send(LogMsg::Emit);
+
+        let logs = sim.logs();
+        assert_eq!(logs.len(), 1);
+        assert!(logs[0].contains(r#""run_id":"test-run-001""#));
+        assert!(logs[0].contains(r#""seed":4242"#));
     }
 
     #[test]
@@ -4773,6 +4919,8 @@ mod tests {
             capabilities,
             config.diff_config.clone(),
         );
+        let frame_timing = config.frame_timing.clone();
+        writer.set_timing_enabled(frame_timing.is_some());
 
         let (width, height) = config.forced_size.unwrap_or((80, 24));
         let width = width.max(1);
@@ -4820,6 +4968,8 @@ mod tests {
             budget,
             conformal_predictor,
             last_frame_time_us: None,
+            last_update_us: None,
+            frame_timing,
             locale_context,
             locale_version,
             resize_coalescer,
@@ -4958,6 +5108,22 @@ mod tests {
     }
 
     #[test]
+    fn headless_effective_timeout_respects_resize_coalescer() {
+        let mut config = ProgramConfig::default().with_resize_behavior(ResizeBehavior::Throttled);
+        config.resize_coalescer.steady_delay_ms = 0;
+        config.resize_coalescer.burst_delay_ms = 0;
+
+        let mut program = headless_program_with_config(TestModel { value: 0 }, config);
+        program.tick_rate = Some(Duration::from_millis(50));
+
+        program.resize_coalescer.handle_resize(120, 40);
+        assert!(program.resize_coalescer.has_pending());
+
+        let timeout = program.effective_timeout();
+        assert_eq!(timeout, Duration::ZERO);
+    }
+
+    #[test]
     fn headless_ui_height_remeasure_clears_auto_height() {
         let mut config = ProgramConfig::inline_auto(2, 6);
         config.inline_auto_remeasure = Some(InlineAutoRemeasureConfig::default());
@@ -5041,6 +5207,47 @@ mod tests {
     }
 
     #[test]
+    fn headless_render_frame_emits_budget_evidence_with_controller() {
+        use ftui_render::budget::BudgetControllerConfig;
+
+        struct RenderModel;
+
+        #[derive(Debug)]
+        enum RenderMsg {
+            Noop,
+        }
+
+        impl From<Event> for RenderMsg {
+            fn from(_: Event) -> Self {
+                RenderMsg::Noop
+            }
+        }
+
+        impl Model for RenderModel {
+            type Message = RenderMsg;
+
+            fn update(&mut self, _msg: Self::Message) -> Cmd<Self::Message> {
+                Cmd::none()
+            }
+
+            fn view(&self, frame: &mut Frame) {
+                frame.buffer.set_raw(0, 0, Cell::from_char('E'));
+            }
+        }
+
+        let config =
+            ProgramConfig::default().with_evidence_sink(EvidenceSinkConfig::enabled_stdout());
+        let mut program = headless_program_with_config(RenderModel, config);
+        program.budget = program
+            .budget
+            .with_controller(BudgetControllerConfig::default());
+
+        program.render_frame().expect("render frame");
+        assert!(program.budget.telemetry().is_some());
+        assert_eq!(program.frame_idx, 1);
+    }
+
+    #[test]
     fn headless_handle_event_updates_model() {
         struct EventModel {
             events: usize,
@@ -5104,6 +5311,55 @@ mod tests {
     }
 
     #[test]
+    fn headless_handle_resize_ignored_when_forced_size() {
+        struct ResizeModel {
+            resized: bool,
+        }
+
+        #[derive(Debug)]
+        enum ResizeMsg {
+            Resize,
+            Other,
+        }
+
+        impl From<Event> for ResizeMsg {
+            fn from(event: Event) -> Self {
+                match event {
+                    Event::Resize { .. } => ResizeMsg::Resize,
+                    _ => ResizeMsg::Other,
+                }
+            }
+        }
+
+        impl Model for ResizeModel {
+            type Message = ResizeMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                if matches!(msg, ResizeMsg::Resize) {
+                    self.resized = true;
+                }
+                Cmd::none()
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let config = ProgramConfig::default().with_forced_size(80, 24);
+        let mut program = headless_program_with_config(ResizeModel { resized: false }, config);
+
+        program
+            .handle_event(Event::Resize {
+                width: 120,
+                height: 40,
+            })
+            .expect("handle resize");
+
+        assert_eq!(program.width, 80);
+        assert_eq!(program.height, 24);
+        assert!(!program.model().resized);
+    }
+
+    #[test]
     fn headless_execute_cmd_batch_sequence_and_quit() {
         struct BatchModel {
             count: usize,
@@ -5151,6 +5407,76 @@ mod tests {
 
         assert_eq!(program.model().count, 2);
         assert!(!program.running);
+    }
+
+    #[test]
+    fn headless_process_subscription_messages_updates_model() {
+        use crate::subscription::{StopSignal, SubId, Subscription};
+
+        struct SubModel {
+            pings: usize,
+            ready_tx: mpsc::Sender<()>,
+        }
+
+        #[derive(Debug)]
+        enum SubMsg {
+            Ping,
+            Other,
+        }
+
+        impl From<Event> for SubMsg {
+            fn from(_: Event) -> Self {
+                SubMsg::Other
+            }
+        }
+
+        impl Model for SubModel {
+            type Message = SubMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                if let SubMsg::Ping = msg {
+                    self.pings += 1;
+                }
+                Cmd::none()
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+
+            fn subscriptions(&self) -> Vec<Box<dyn Subscription<Self::Message>>> {
+                vec![Box::new(TestSubscription {
+                    ready_tx: self.ready_tx.clone(),
+                })]
+            }
+        }
+
+        struct TestSubscription {
+            ready_tx: mpsc::Sender<()>,
+        }
+
+        impl Subscription<SubMsg> for TestSubscription {
+            fn id(&self) -> SubId {
+                1
+            }
+
+            fn run(&self, sender: mpsc::Sender<SubMsg>, _stop: StopSignal) {
+                let _ = sender.send(SubMsg::Ping);
+                let _ = self.ready_tx.send(());
+            }
+        }
+
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let mut program =
+            headless_program_with_config(SubModel { pings: 0, ready_tx }, ProgramConfig::default());
+
+        program.reconcile_subscriptions();
+        ready_rx
+            .recv_timeout(Duration::from_millis(200))
+            .expect("subscription started");
+        program
+            .process_subscription_messages()
+            .expect("process subscriptions");
+
+        assert_eq!(program.model().pings, 1);
     }
 
     #[test]
@@ -5224,6 +5550,179 @@ mod tests {
         let loaded = program.trigger_load().expect("trigger load");
         assert!(!saved);
         assert_eq!(loaded, 0);
+    }
+
+    #[test]
+    fn headless_process_resize_coalescer_applies_pending_resize() {
+        struct ResizeModel {
+            last_size: Option<(u16, u16)>,
+        }
+
+        #[derive(Debug)]
+        enum ResizeMsg {
+            Resize(u16, u16),
+            Other,
+        }
+
+        impl From<Event> for ResizeMsg {
+            fn from(event: Event) -> Self {
+                match event {
+                    Event::Resize { width, height } => ResizeMsg::Resize(width, height),
+                    _ => ResizeMsg::Other,
+                }
+            }
+        }
+
+        impl Model for ResizeModel {
+            type Message = ResizeMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                if let ResizeMsg::Resize(w, h) = msg {
+                    self.last_size = Some((w, h));
+                }
+                Cmd::none()
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let mut config = ProgramConfig::default().with_resize_behavior(ResizeBehavior::Throttled);
+        config.resize_coalescer.steady_delay_ms = 0;
+        config.resize_coalescer.burst_delay_ms = 0;
+        config.resize_coalescer.hard_deadline_ms = 1_000;
+        config.evidence_sink = EvidenceSinkConfig::enabled_stdout();
+
+        let mut program = headless_program_with_config(ResizeModel { last_size: None }, config);
+
+        program.resize_coalescer.handle_resize(120, 40);
+        assert!(program.resize_coalescer.has_pending());
+
+        program
+            .process_resize_coalescer()
+            .expect("process resize coalescer");
+
+        assert_eq!(program.width, 120);
+        assert_eq!(program.height, 40);
+        assert_eq!(program.model().last_size, Some((120, 40)));
+    }
+
+    #[test]
+    fn headless_process_resize_coalescer_yields_to_input() {
+        struct ResizeModel {
+            last_size: Option<(u16, u16)>,
+        }
+
+        #[derive(Debug)]
+        enum ResizeMsg {
+            Resize(u16, u16),
+            Other,
+        }
+
+        impl From<Event> for ResizeMsg {
+            fn from(event: Event) -> Self {
+                match event {
+                    Event::Resize { width, height } => ResizeMsg::Resize(width, height),
+                    _ => ResizeMsg::Other,
+                }
+            }
+        }
+
+        impl Model for ResizeModel {
+            type Message = ResizeMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                if let ResizeMsg::Resize(w, h) = msg {
+                    self.last_size = Some((w, h));
+                }
+                Cmd::none()
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let mut config = ProgramConfig::default().with_resize_behavior(ResizeBehavior::Throttled);
+        config.resize_coalescer.steady_delay_ms = 0;
+        config.resize_coalescer.burst_delay_ms = 0;
+
+        let mut program = headless_program_with_config(ResizeModel { last_size: None }, config);
+
+        program.fairness_guard = InputFairnessGuard::with_config(
+            crate::input_fairness::FairnessConfig::default().with_max_latency(Duration::ZERO),
+        );
+        program
+            .fairness_guard
+            .input_arrived(Instant::now() - Duration::from_millis(1));
+
+        program.resize_coalescer.handle_resize(120, 40);
+        assert!(program.resize_coalescer.has_pending());
+
+        program
+            .process_resize_coalescer()
+            .expect("process resize coalescer");
+
+        assert_eq!(program.width, 80);
+        assert_eq!(program.height, 24);
+        assert_eq!(program.model().last_size, None);
+        assert!(program.resize_coalescer.has_pending());
+    }
+
+    #[test]
+    fn headless_execute_cmd_task_with_effect_queue() {
+        struct TaskModel {
+            done: bool,
+        }
+
+        #[derive(Debug)]
+        enum TaskMsg {
+            Done,
+        }
+
+        impl From<Event> for TaskMsg {
+            fn from(_: Event) -> Self {
+                TaskMsg::Done
+            }
+        }
+
+        impl Model for TaskModel {
+            type Message = TaskMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    TaskMsg::Done => {
+                        self.done = true;
+                        Cmd::none()
+                    }
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let effect_queue = EffectQueueConfig {
+            enabled: true,
+            scheduler: SchedulerConfig {
+                max_queue_size: 0,
+                ..Default::default()
+            },
+        };
+        let config = ProgramConfig::default().with_effect_queue(effect_queue);
+        let mut program = headless_program_with_config(TaskModel { done: false }, config);
+
+        program
+            .execute_cmd(Cmd::task(|| TaskMsg::Done))
+            .expect("task cmd");
+
+        let deadline = Instant::now() + Duration::from_millis(200);
+        while !program.model().done {
+            program
+                .process_task_results()
+                .expect("process task results");
+            if Instant::now() > deadline {
+                panic!("effect queue task result did not arrive in time");
+            }
+        }
+
+        assert!(program.model().done);
     }
 
     // =========================================================================

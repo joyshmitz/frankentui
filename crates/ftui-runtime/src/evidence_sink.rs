@@ -12,6 +12,9 @@ use std::io::{self, BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+/// Schema version for JSONL evidence lines.
+pub const EVIDENCE_SCHEMA_VERSION: &str = "ftui-evidence-v1";
+
 /// Destination for evidence JSONL output.
 #[derive(Debug, Clone)]
 pub enum EvidenceSinkDestination {

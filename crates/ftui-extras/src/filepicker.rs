@@ -438,6 +438,65 @@ fn apply_style(cell: &mut Cell, style: Style) {
 mod tests {
     use super::*;
     use ftui_render::grapheme_pool::GraphemePool;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn fixture_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("filepicker_fixture")
+    }
+
+    fn create_file_if_missing(path: &Path, contents: &str) {
+        if path.exists() {
+            return;
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create fixture parent");
+        }
+        fs::write(path, contents).expect("write fixture file");
+    }
+
+    fn ensure_fixture_dir() -> PathBuf {
+        let root = fixture_root();
+        fs::create_dir_all(&root).expect("create fixture root");
+
+        let src_dir = root.join("src");
+        fs::create_dir_all(&src_dir).expect("create src dir");
+
+        create_file_if_missing(&root.join("README.md"), "# readme\n");
+        create_file_if_missing(&root.join("notes.txt"), "notes\n");
+        create_file_if_missing(&root.join(".hidden"), "hidden\n");
+        create_file_if_missing(&src_dir.join("main.rs"), "fn main() {}\n");
+
+        root
+    }
+
+    fn load_entries_sorted(dir: &Path) -> Vec<FileEntry> {
+        let mut entries: Vec<FileEntry> = fs::read_dir(dir)
+            .expect("read_dir")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| {
+                let name = entry.file_name().to_string_lossy().to_string();
+                let file_type = entry.file_type().expect("file_type");
+                let kind = if file_type.is_dir() {
+                    FileKind::Directory
+                } else if file_type.is_symlink() {
+                    FileKind::Symlink
+                } else {
+                    FileKind::File
+                };
+                let size = if file_type.is_file() {
+                    entry.metadata().ok().map(|m| m.len())
+                } else {
+                    None
+                };
+                FileEntry { name, kind, size }
+            })
+            .collect();
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        entries
+    }
 
     fn sample_entries() -> Vec<FileEntry> {
         vec![
@@ -562,6 +621,46 @@ mod tests {
             picker.entries[idx].name == ".gitignore"
         });
         assert!(has_hidden);
+    }
+
+    #[test]
+    fn filter_real_fs_extensions_and_hidden() {
+        let root = ensure_fixture_dir();
+        let entries = load_entries_sorted(&root);
+        let mut picker = FilePicker::new(entries);
+        picker.set_filter(FilePickerFilter {
+            allowed_extensions: vec!["md".into()],
+            show_hidden: false,
+        });
+        let names: Vec<String> = (0..picker.filtered_count())
+            .map(|i| {
+                let idx = picker.filtered_indices[i];
+                picker.entries[idx].name.clone()
+            })
+            .collect();
+
+        assert!(names.contains(&"README.md".to_string()));
+        assert!(!names.contains(&"notes.txt".to_string()));
+        assert!(!names.contains(&".hidden".to_string()));
+        assert!(names.contains(&"src".to_string()));
+    }
+
+    #[test]
+    fn filter_real_fs_show_hidden() {
+        let root = ensure_fixture_dir();
+        let entries = load_entries_sorted(&root);
+        let mut picker = FilePicker::new(entries);
+        picker.set_filter(FilePickerFilter {
+            allowed_extensions: vec![],
+            show_hidden: true,
+        });
+        let names: Vec<String> = (0..picker.filtered_count())
+            .map(|i| {
+                let idx = picker.filtered_indices[i];
+                picker.entries[idx].name.clone()
+            })
+            .collect();
+        assert!(names.contains(&".hidden".to_string()));
     }
 
     #[test]

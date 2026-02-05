@@ -332,6 +332,44 @@ impl ChartData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn data_path(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("data")
+            .join(name)
+    }
+
+    fn read_fixture(name: &str) -> (String, PathBuf) {
+        let path = data_path(name);
+        let text = fs::read_to_string(&path).unwrap_or_else(|err| {
+            panic!("failed to read fixture {name} at {}: {err}", path.display())
+        });
+        (text, path)
+    }
+
+    #[test]
+    fn det_float_in_unit_range() {
+        for seed in 0..200 {
+            let value = det_float(seed);
+            assert!(
+                (0.0..1.0).contains(&value),
+                "det_float out of range for seed {seed}: {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn det_range_within_bounds() {
+        for seed in 0..200 {
+            let value = det_range(seed, -5.0, 3.5);
+            assert!(
+                (-5.0..3.5).contains(&value),
+                "det_range out of bounds for seed {seed}: {value}"
+            );
+        }
+    }
 
     #[test]
     fn simulated_data_deterministic() {
@@ -452,5 +490,83 @@ mod tests {
         assert!(chart.sine_series.len() <= CHART_HISTORY_CAP);
         assert!(chart.cosine_series.len() <= CHART_HISTORY_CAP);
         assert!(chart.random_series.len() <= CHART_HISTORY_CAP);
+    }
+
+    #[test]
+    fn shakespeare_fixture_invariants() {
+        let (text, path) = read_fixture("shakespeare.txt");
+        let line_count = text.lines().count();
+        assert!(
+            line_count > 100_000,
+            "shakespeare fixture too small: path={}, lines={line_count}",
+            path.display()
+        );
+        assert!(
+            text.contains("THE TRAGEDY OF HAMLET"),
+            "shakespeare fixture missing Hamlet header: path={}",
+            path.display()
+        );
+        assert!(
+            text.contains("ROMEO AND JULIET"),
+            "shakespeare fixture missing Romeo and Juliet header: path={}",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn sqlite_fixture_invariants() {
+        let (text, path) = read_fixture("sqlite3.c");
+        let line_count = text.lines().count();
+        assert!(
+            line_count > 100_000,
+            "sqlite3.c fixture too small: path={}, lines={line_count}",
+            path.display()
+        );
+        assert!(
+            text.contains("sqlite3_open"),
+            "sqlite3.c fixture missing sqlite3_open: path={}",
+            path.display()
+        );
+        assert!(
+            text.contains("SQLite"),
+            "sqlite3.c fixture missing SQLite header text: path={}",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn sqlite_header_fixture_invariants() {
+        let (text, path) = read_fixture("sqlite3.h");
+        let line_count = text.lines().count();
+        assert!(
+            line_count > 5_000,
+            "sqlite3.h fixture too small: path={}, lines={line_count}",
+            path.display()
+        );
+        assert!(
+            text.contains("SQLITE_VERSION"),
+            "sqlite3.h fixture missing SQLITE_VERSION: path={}",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn notice_fixture_mentions_assets() {
+        let (text, path) = read_fixture("NOTICE");
+        assert!(
+            text.contains("shakespeare.txt"),
+            "NOTICE missing shakespeare.txt entry: path={}",
+            path.display()
+        );
+        assert!(
+            text.contains("sqlite3.c"),
+            "NOTICE missing sqlite3.c entry: path={}",
+            path.display()
+        );
+        assert!(
+            text.contains("sqlite3.h"),
+            "NOTICE missing sqlite3.h entry: path={}",
+            path.display()
+        );
     }
 }

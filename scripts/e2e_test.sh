@@ -65,13 +65,10 @@ if $QUICK; then
     RUN_TILE=false
 fi
 
-export E2E_DETERMINISTIC="${E2E_DETERMINISTIC:-1}"
-export E2E_SEED="${E2E_SEED:-0}"
-export E2E_TIME_STEP_MS="${E2E_TIME_STEP_MS:-100}"
-e2e_seed >/dev/null 2>&1 || true
+e2e_fixture_init "e2e"
 
 TIMESTAMP="$(e2e_log_stamp)"
-E2E_LOG_DIR="${E2E_LOG_DIR:-/tmp/ftui_e2e_${TIMESTAMP}}"
+E2E_LOG_DIR="${E2E_LOG_DIR:-/tmp/ftui_e2e_${E2E_RUN_ID}_${TIMESTAMP}}"
 if [[ -e "$E2E_LOG_DIR" ]]; then
     base="$E2E_LOG_DIR"
     suffix=1
@@ -89,6 +86,7 @@ export E2E_JSONL_FILE="${E2E_JSONL_FILE:-$E2E_LOG_DIR/e2e.jsonl}"
 
 mkdir -p "$E2E_LOG_DIR" "$E2E_RESULTS_DIR"
 jsonl_init
+jsonl_assert "artifact_log_dir" "pass" "log_dir=$E2E_LOG_DIR"
 
 log_info "FrankenTUI E2E launcher"
 log_info "Project root: $PROJECT_ROOT"
@@ -96,8 +94,16 @@ log_info "Log directory: $E2E_LOG_DIR"
 log_info "Mode: $([ "$QUICK" = true ] && echo quick || echo normal)"
 
 set +e
+run_all_start_ms="$(e2e_now_ms)"
+jsonl_step_start "run_all"
 "$PROJECT_ROOT/tests/e2e/scripts/run_all.sh" "${ARGS[@]}"
 RUN_ALL_STATUS=$?
+run_all_duration_ms=$(( $(e2e_now_ms) - run_all_start_ms ))
+if [ "$RUN_ALL_STATUS" -eq 0 ]; then
+    jsonl_step_end "run_all" "success" "$run_all_duration_ms"
+else
+    jsonl_step_end "run_all" "failed" "$run_all_duration_ms"
+fi
 set -e
 
 escape_json() {
@@ -1142,6 +1148,27 @@ if $RUN_BUDGETED; then
             RUN_ALL_STATUS=1
         fi
     fi
+fi
+
+SUMMARY_JSON="$E2E_RESULTS_DIR/summary.json"
+finalize_summary "$SUMMARY_JSON"
+jsonl_assert "artifact_summary_json" "pass" "summary_json=$SUMMARY_JSON"
+
+run_duration_ms=$(( $(e2e_now_ms) - ${E2E_RUN_START_MS:-0} ))
+failed_count=0
+if command -v jq >/dev/null 2>&1; then
+    failed_count="$(jq -r '.failed // 0' "$SUMMARY_JSON" 2>/dev/null || echo 0)"
+else
+    if command -v rg >/dev/null 2>&1; then
+        failed_count="$(rg -o '\"failed\":[0-9]+' "$SUMMARY_JSON" | head -1 | awk -F: '{print $2}' || echo 0)"
+    else
+        failed_count="$(grep -Eo '\"failed\":[0-9]+' "$SUMMARY_JSON" | head -1 | awk -F: '{print $2}' || echo 0)"
+    fi
+fi
+if [ "$RUN_ALL_STATUS" -eq 0 ]; then
+    jsonl_run_end "complete" "$run_duration_ms" "$failed_count"
+else
+    jsonl_run_end "failed" "$run_duration_ms" "$failed_count"
 fi
 
 exit "$RUN_ALL_STATUS"

@@ -705,6 +705,44 @@ mod tests {
     }
 
     #[test]
+    fn thresholds_enforce_gap_and_order() {
+        let params = MetaballsParams {
+            threshold: 0.05,
+            glow_threshold: 0.1,
+            ..Default::default()
+        };
+        let (glow, threshold) = params.thresholds();
+        assert!(glow <= threshold);
+        assert!(threshold > glow, "threshold should exceed glow");
+    }
+
+    #[test]
+    fn ordered_pair_sorts_values() {
+        assert_eq!(ordered_pair(1.0, 2.0), (1.0, 2.0));
+        assert_eq!(ordered_pair(2.0, 1.0), (1.0, 2.0));
+    }
+
+    #[test]
+    fn ping_pong_stays_within_bounds() {
+        let min = 0.1;
+        let max = 0.9;
+        for value in [-1.0, 0.1, 0.5, 0.9, 2.0] {
+            let v = ping_pong(value, min, max);
+            assert!(v >= min && v <= max, "value {v} out of bounds");
+        }
+    }
+
+    #[test]
+    fn palette_color_clamps_intensity() {
+        let theme = ThemeInputs::default_dark();
+        let palette = MetaballsPalette::ThemeAccents;
+        let low = palette.color_at(0.3, -1.0, &theme);
+        let high = palette.color_at(0.3, 2.0, &theme);
+        assert_eq!(low, palette.color_at(0.3, 0.0, &theme));
+        assert_eq!(high, palette.color_at(0.3, 1.0, &theme));
+    }
+
+    #[test]
     fn quality_off_leaves_buffer_unchanged() {
         let theme = ThemeInputs::default_dark();
         let mut fx = MetaballsFx::default();

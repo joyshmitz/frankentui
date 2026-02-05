@@ -73,8 +73,9 @@ pub use locale::{
 };
 pub use log_sink::LogSink;
 pub use program::{
-    App, AppBuilder, BatchController, Cmd, EffectQueueConfig, InlineAutoRemeasureConfig, Model,
-    PersistenceConfig, Program, ProgramConfig, ResizeBehavior, TaskSpec, WidgetRefreshConfig,
+    App, AppBuilder, BatchController, Cmd, EffectQueueConfig, FrameTiming, FrameTimingConfig,
+    FrameTimingSink, InlineAutoRemeasureConfig, Model, PersistenceConfig, Program, ProgramConfig,
+    ResizeBehavior, TaskSpec, WidgetRefreshConfig,
 };
 pub use render_trace::{
     RenderTraceConfig, RenderTraceContext, RenderTraceFrame, RenderTraceRecorder,

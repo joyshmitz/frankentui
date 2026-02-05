@@ -321,6 +321,7 @@ impl Screen for Performance {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_render::grapheme_pool::GraphemePool;
 
     fn press(code: KeyCode) -> Event {
         Event::Key(KeyEvent {
@@ -328,6 +329,19 @@ mod tests {
             modifiers: ftui_core::event::Modifiers::empty(),
             kind: KeyEventKind::Press,
         })
+    }
+
+    fn area_has_content(frame: &Frame, area: Rect) -> bool {
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                if let Some(cell) = frame.buffer.get(x, y)
+                    && !cell.is_empty()
+                {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     #[test]
@@ -395,5 +409,61 @@ mod tests {
         assert_eq!(screen.selected, TOTAL_ITEMS - 1);
         screen.update(&press(KeyCode::Char('g')));
         assert_eq!(screen.selected, 0);
+    }
+
+    #[test]
+    fn ensure_visible_adjusts_scroll_offset() {
+        let mut screen = Performance::new();
+        screen.viewport_height = 5;
+        screen.selected = 10;
+        screen.scroll_offset = 0;
+        screen.ensure_visible();
+        assert_eq!(screen.scroll_offset, 6);
+
+        screen.scroll_offset = 10;
+        screen.selected = 2;
+        screen.ensure_visible();
+        assert_eq!(screen.scroll_offset, 2);
+    }
+
+    #[test]
+    fn render_populates_list_and_stats() {
+        let screen = Performance::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(120, 40, &mut pool);
+        let area = Rect::new(0, 0, 120, 40);
+        screen.view(&mut frame, area);
+
+        let main = Flex::vertical()
+            .constraints([Constraint::Min(1), Constraint::Fixed(1)])
+            .split(area);
+        let cols = Flex::horizontal()
+            .constraints([Constraint::Min(40), Constraint::Fixed(35)])
+            .split(main[0]);
+
+        assert!(area_has_content(&frame, cols[0]), "list panel empty");
+        assert!(area_has_content(&frame, cols[1]), "stats panel empty");
+    }
+
+    #[test]
+    fn render_handles_small_and_large_areas() {
+        let screen = Performance::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(30, 8, &mut pool);
+        screen.view(&mut frame, Rect::new(0, 0, 30, 8));
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(200, 60, &mut pool);
+        screen.view(&mut frame, Rect::new(0, 0, 200, 60));
+    }
+
+    #[test]
+    fn render_stats_handles_empty_items() {
+        let mut screen = Performance::new();
+        screen.items.clear();
+        screen.selected = 0;
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(40, 15, &mut pool);
+        screen.render_stats_panel(&mut frame, Rect::new(0, 0, 40, 15));
     }
 }

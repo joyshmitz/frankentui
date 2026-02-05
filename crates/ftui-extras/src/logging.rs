@@ -326,7 +326,39 @@ where
 mod tests {
     use super::*;
     use crate::console::ConsoleSink;
+    use std::io;
+    use std::sync::{Arc, Mutex};
     use tracing_subscriber::prelude::*;
+
+    #[derive(Clone, Default)]
+    struct SharedWriter {
+        inner: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl SharedWriter {
+        fn new() -> Self {
+            Self {
+                inner: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn snapshot(&self) -> String {
+            let bytes = self.inner.lock().expect("writer lock").clone();
+            String::from_utf8(bytes).unwrap_or_default()
+        }
+    }
+
+    impl io::Write for SharedWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let mut inner = self.inner.lock().expect("writer lock");
+            inner.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 
     fn make_layer(config: TracingConfig) -> TracingConsoleLayer {
         let sink = ConsoleSink::capture();
@@ -439,6 +471,68 @@ mod tests {
         // We can't easily extract the output after set_default returns the
         // guard, but we verify no panic occurred. For deeper inspection, use
         // the into_console pattern below.
+    }
+
+    #[test]
+    fn formats_message_with_fields_and_target() {
+        let writer = SharedWriter::new();
+        let console = Console::new(120, ConsoleSink::writer(writer.clone()));
+        let layer = TracingConsoleLayer::with_config(
+            console,
+            TracingConfig {
+                show_time: false,
+                show_level: true,
+                show_target: true,
+                show_fields: true,
+                show_source: false,
+            },
+        );
+
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let dispatch = tracing::Dispatch::new(subscriber);
+
+        tracing::dispatcher::with_default(&dispatch, || {
+            tracing::info!(key = "value", count = 3, "hello world");
+        });
+
+        let output = writer.snapshot();
+        assert!(output.contains("INFO"), "output: {output}");
+        assert!(output.contains("hello world"), "output: {output}");
+        assert!(output.contains("key=value"), "output: {output}");
+        assert!(output.contains("count=3"), "output: {output}");
+        assert!(
+            output.contains("ftui_extras"),
+            "expected target in output: {output}"
+        );
+    }
+
+    #[test]
+    fn respects_level_filter() {
+        let writer = SharedWriter::new();
+        let console = Console::new(120, ConsoleSink::writer(writer.clone()));
+        let layer = TracingConsoleLayer::with_config(
+            console,
+            TracingConfig {
+                show_time: false,
+                show_level: true,
+                show_target: false,
+                show_fields: false,
+                show_source: false,
+            },
+        );
+
+        let filter = tracing_subscriber::filter::LevelFilter::INFO;
+        let subscriber = tracing_subscriber::registry().with(layer).with(filter);
+        let dispatch = tracing::Dispatch::new(subscriber);
+
+        tracing::dispatcher::with_default(&dispatch, || {
+            tracing::debug!("debug drop");
+            tracing::info!("info keep");
+        });
+
+        let output = writer.snapshot();
+        assert!(!output.contains("debug drop"), "output: {output}");
+        assert!(output.contains("info keep"), "output: {output}");
     }
 
     #[test]

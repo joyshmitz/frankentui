@@ -379,6 +379,15 @@ impl std::error::Error for ImageError {}
 mod tests {
     use super::*;
 
+    const PNG_1X1_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+    const GIF_1X1_BASE64: &str = "R0lGODdhAQABAIEAAP8AAAAAAAAAAAAAACwAAAAAAQABAAAIBAABBAQAOw==";
+
+    fn decode_fixture_bytes(label: &str, data_b64: &str) -> Vec<u8> {
+        STANDARD
+            .decode(data_b64)
+            .unwrap_or_else(|err| panic!("fixture {label} base64 decode failed: {err}"))
+    }
+
     fn encode_bytes(format: ImageFormat, width: u32, height: u32) -> Vec<u8> {
         let image = DynamicImage::new_rgba8(width, height);
         let mut out = Cursor::new(Vec::new());
@@ -415,6 +424,14 @@ mod tests {
     }
 
     #[test]
+    fn kitty_empty_payload_emits_single_chunk() {
+        let encoded = encode_kitty_png(&[]);
+        assert_eq!(encoded.len(), 1, "empty payload should emit a single chunk");
+        assert!(encoded[0].contains("a=T,f=100"), "metadata must be present");
+        assert!(encoded[0].contains("m=0;"), "final chunk marker required");
+    }
+
+    #[test]
     fn iterm2_encodes_inline_sequence() {
         let payload = vec![1u8; 4];
         let seq = encode_iterm2_png(&payload, &Iterm2Options::default());
@@ -432,6 +449,24 @@ mod tests {
     }
 
     #[test]
+    fn ascii_fallback_contain_preserves_aspect_ratio() {
+        let image = DynamicImage::new_rgb8(4, 2);
+        let lines = render_ascii(&image, 4, 4, ImageFit::Contain);
+        assert_eq!(
+            lines.len(),
+            2,
+            "contain fit should preserve aspect ratio height"
+        );
+        assert_eq!(lines[0].len(), 4, "contain fit should keep width");
+    }
+
+    #[test]
+    fn scale_to_fit_handles_zero_dimensions() {
+        let (w, h) = scale_to_fit(0, 0, 0, 0, false);
+        assert_eq!((w, h), (1, 1), "zero sizes clamp to 1x1");
+    }
+
+    #[test]
     fn decode_png_roundtrip_preserves_dimensions() {
         let bytes = encode_bytes(ImageFormat::Png, 3, 2);
         let image = Image::from_bytes(&bytes).expect("decode png");
@@ -443,16 +478,36 @@ mod tests {
     }
 
     #[test]
-    fn decode_gif_and_jpeg_formats() {
-        for format in [ImageFormat::Gif, ImageFormat::Jpeg] {
-            let bytes = encode_bytes(format, 2, 2);
-            let image = Image::from_bytes(&bytes).expect("decode format");
-            let out = image
-                .to_png_bytes(None, None, ImageFit::None)
-                .expect("encode png");
-            let decoded = image::load_from_memory(&out).expect("decode roundtrip");
-            assert_eq!(decoded.dimensions(), (2, 2));
-        }
+    fn decode_png_fixture_resize_stretch() {
+        let bytes = decode_fixture_bytes("png_1x1", PNG_1X1_BASE64);
+        let image = Image::from_bytes(&bytes).expect("decode png fixture");
+        let out = image
+            .to_png_bytes(Some(3), Some(2), ImageFit::Stretch)
+            .expect("resize stretch");
+        let decoded = image::load_from_memory(&out).expect("decode resized png");
+        assert_eq!(decoded.dimensions(), (3, 2), "stretch should hit bounds");
+    }
+
+    #[test]
+    fn decode_gif_fixture_resize_contain() {
+        let bytes = decode_fixture_bytes("gif_1x1", GIF_1X1_BASE64);
+        let image = Image::from_bytes(&bytes).expect("decode gif fixture");
+        let out = image
+            .to_png_bytes(Some(2), Some(2), ImageFit::Contain)
+            .expect("encode png");
+        let decoded = image::load_from_memory(&out).expect("decode roundtrip");
+        assert_eq!(decoded.dimensions(), (2, 2), "contain should scale up");
+    }
+
+    #[test]
+    fn decode_jpeg_format_roundtrip() {
+        let bytes = encode_bytes(ImageFormat::Jpeg, 2, 2);
+        let image = Image::from_bytes(&bytes).expect("decode jpeg");
+        let out = image
+            .to_png_bytes(None, None, ImageFit::None)
+            .expect("encode png");
+        let decoded = image::load_from_memory(&out).expect("decode roundtrip");
+        assert_eq!(decoded.dimensions(), (2, 2));
     }
 
     #[test]

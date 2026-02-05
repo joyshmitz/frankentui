@@ -121,8 +121,11 @@ Common optional fields (depending on event type) include `mode`, `cols`,
 | `frame` | Render frame | `frame_idx`, `frame_hash`, `hash_algo`, `render_ms`, `present_ms` |
 | `pty_capture` | PTY metadata | `output_file`, `output_sha256`, `output_bytes` |
 | `assert` | Assertion result | `assertion`, `status`, `details` |
-| `artifact` | Artifact reference | `path`, `artifact_type`, `sha256` |
+| `artifact` | Artifact reference | `path`, `artifact_type`, `status`, `sha256`, `bytes` |
 | `error` | Error detail | `message`, `exit_code`, `stack` |
+
+`artifact` events use `status` = `present` or `missing`. In CI strict mode,
+missing required artifacts fail the run with a clear error.
 
 ### Hashing Requirements
 

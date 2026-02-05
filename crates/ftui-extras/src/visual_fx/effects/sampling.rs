@@ -636,6 +636,21 @@ mod tests {
     }
 
     #[test]
+    fn test_coord_cache_out_of_range_defaults() {
+        let cache = CoordCache::new(4, 3);
+        assert!((cache.x(99) - 0.5).abs() < 1e-10);
+        assert!((cache.y(99) - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_coord_cache_does_not_shrink() {
+        let mut cache = CoordCache::new(8, 6);
+        cache.ensure_size(4, 3);
+        assert!(cache.x_coords().len() >= 8);
+        assert!(cache.y_coords().len() >= 6);
+    }
+
+    #[test]
     fn test_plasma_sampler_bounded() {
         let sampler = PlasmaSampler;
 
@@ -745,6 +760,82 @@ mod tests {
 
         assert_eq!(sampler.name(), "test");
         assert!((sampler.sample(0.3, 0.2, 0.0, FxQuality::Full) - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_fn_sampler_aspect_correction_flag() {
+        let sampler = FnSampler::new(|x, y, _t, _q| x + y, "aspect").with_aspect_correction();
+        assert!(sampler.applies_aspect_correction());
+    }
+
+    #[test]
+    fn test_metaball_field_zero_distance() {
+        let sampler = MetaballFieldSampler::new(vec![BallState {
+            x: 0.5,
+            y: 0.5,
+            r2: 0.01,
+            hue: 0.75,
+        }]);
+
+        let (field, hue) = sampler.sample_field(0.5, 0.5, FxQuality::Full);
+        assert!(field > 1.0, "field should be boosted at zero distance");
+        assert!((hue - 0.75).abs() < 1e-6, "hue should track the ball hue");
+    }
+
+    #[test]
+    fn test_metaball_field_quality_step_reduces_contribs() {
+        let balls = vec![
+            BallState {
+                x: 0.2,
+                y: 0.2,
+                r2: 1.0,
+                hue: 0.1,
+            },
+            BallState {
+                x: 0.4,
+                y: 0.4,
+                r2: 100.0,
+                hue: 0.2,
+            },
+            BallState {
+                x: 0.6,
+                y: 0.6,
+                r2: 100.0,
+                hue: 0.3,
+            },
+            BallState {
+                x: 0.8,
+                y: 0.8,
+                r2: 100.0,
+                hue: 0.4,
+            },
+            BallState {
+                x: 0.9,
+                y: 0.1,
+                r2: 1.0,
+                hue: 0.5,
+            },
+        ];
+
+        let full =
+            MetaballFieldSampler::sample_field_from_slice(&balls, 0.1, 0.9, FxQuality::Full).0;
+        let reduced =
+            MetaballFieldSampler::sample_field_from_slice(&balls, 0.1, 0.9, FxQuality::Reduced).0;
+
+        assert!(reduced < full, "reduced quality should drop contributions");
+    }
+
+    #[test]
+    fn test_metaball_set_and_balls_roundtrip() {
+        let mut sampler = MetaballFieldSampler::new(Vec::new());
+        let balls = vec![BallState {
+            x: 0.1,
+            y: 0.2,
+            r2: 0.03,
+            hue: 0.9,
+        }];
+        sampler.set_balls(balls);
+        assert_eq!(sampler.balls().len(), 1);
     }
 
     // Regression test: fixed sample points should produce stable hashes

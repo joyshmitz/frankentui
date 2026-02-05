@@ -293,6 +293,16 @@ mod tests {
     }
 
     #[test]
+    fn tick_once_interval_overshoot_finishes() {
+        let mut t = Timer::with_interval(Duration::from_secs(1), Duration::from_secs(5));
+        t.start();
+        let finished = t.tick_once();
+        assert!(finished);
+        assert!(t.finished());
+        assert_eq!(t.remaining(), Duration::ZERO);
+    }
+
+    #[test]
     fn tick_once_when_stopped() {
         let mut t = Timer::new(Duration::from_secs(10));
         let finished = t.tick_once();
@@ -432,6 +442,22 @@ mod tests {
     #[test]
     fn compact_millis() {
         assert_eq!(format_compact(Duration::from_millis(500)), "500ms");
+    }
+
+    #[test]
+    fn compact_millis_with_fraction() {
+        assert_eq!(format_compact(Duration::from_micros(1500)), "1.5ms");
+        assert_eq!(format_compact(Duration::from_micros(1001)), "1.001ms");
+    }
+
+    #[test]
+    fn compact_micros_with_fraction_and_nanos() {
+        assert_eq!(format_compact(Duration::from_micros(250)), "250\u{00B5}s");
+        assert_eq!(
+            format_compact(Duration::from_nanos(250_400)),
+            "250.4\u{00B5}s"
+        );
+        assert_eq!(format_compact(Duration::from_nanos(42)), "42ns");
     }
 
     #[test]

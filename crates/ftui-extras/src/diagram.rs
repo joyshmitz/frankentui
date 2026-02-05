@@ -579,6 +579,30 @@ mod tests {
     }
 
     #[test]
+    fn test_ascii_display_width_controls() {
+        assert_eq!(ascii_display_width("a\tb\nc\rd"), 7);
+    }
+
+    #[test]
+    fn test_char_width_zero_width_codepoints() {
+        assert_eq!(char_width('\n'), 1);
+        assert_eq!(char_width('\u{0301}'), 0); // combining acute accent
+        assert_eq!(char_width('好'), 2);
+    }
+
+    #[test]
+    fn test_grapheme_width_zero_width_cluster() {
+        assert_eq!(grapheme_width("\u{0301}"), 0);
+        assert_eq!(grapheme_width("a"), 1);
+    }
+
+    #[test]
+    fn test_visual_width_ascii_controls() {
+        assert_eq!(visual_width("a\tb"), 3);
+        assert_eq!(visual_width("a\nb"), 3);
+    }
+
+    #[test]
     fn test_classify_line() {
         assert_eq!(classify_line(""), LineKind::Blank);
         assert_eq!(classify_line("   "), LineKind::Blank);
@@ -614,6 +638,49 @@ mod tests {
         // All border positions should be equal
         let first = border_positions[0];
         assert!(border_positions.iter().all(|&p| p == first));
+    }
+
+    #[test]
+    fn test_detect_suffix_border() {
+        let line = "| hi |  ";
+        assert_eq!(detect_suffix_border(line), Some((5, '|')));
+        assert_eq!(detect_suffix_border("no border"), None);
+    }
+
+    #[test]
+    fn test_detect_vertical_border_prefers_most_common() {
+        let lines = vec!["| a |", "| b |", "│ c │"];
+        assert_eq!(detect_vertical_border(&lines), '|');
+    }
+
+    #[test]
+    fn test_correct_diagram_adds_missing_right_border() {
+        let input = "+----+\n| Hi\n| Hello |\n+----+";
+        let output = correct_diagram(input);
+
+        let lines: Vec<&str> = output.lines().collect();
+        let borders: Vec<usize> = lines
+            .iter()
+            .filter_map(|l| detect_suffix_border(l).map(|(col, _)| col))
+            .collect();
+        assert!(!borders.is_empty());
+        let first = borders[0];
+        assert!(borders.iter().all(|&p| p == first));
+        assert!(lines[1].trim_end().ends_with('|'));
+    }
+
+    #[test]
+    fn test_correct_diagram_skips_low_confidence() {
+        let input = "+--+\n|x|\n+--+";
+        let output = correct_diagram_with_options(input, 5, 1.0);
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    fn test_correct_diagram_skips_few_box_chars() {
+        let input = "+-+";
+        let output = correct_diagram_with_options(input, 5, 0.0);
+        assert_eq!(output, input);
     }
 
     #[test]

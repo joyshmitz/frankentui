@@ -9,6 +9,7 @@
 //! - AST for common diagram elements
 
 use core::{fmt, mem};
+use std::env;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Position {
@@ -79,6 +80,631 @@ impl fmt::Display for MermaidError {
     }
 }
 
+/// Mermaid glyph rendering mode (Unicode or ASCII fallback).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MermaidGlyphMode {
+    Unicode,
+    Ascii,
+}
+
+impl MermaidGlyphMode {
+    fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "unicode" | "uni" | "u" => Some(Self::Unicode),
+            "ascii" | "ansi" | "a" => Some(Self::Ascii),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unicode => "unicode",
+            Self::Ascii => "ascii",
+        }
+    }
+}
+
+impl fmt::Display for MermaidGlyphMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Fidelity tier override for Mermaid rendering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MermaidTier {
+    Compact,
+    Normal,
+    Rich,
+    Auto,
+}
+
+impl MermaidTier {
+    fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "compact" | "small" => Some(Self::Compact),
+            "normal" | "default" => Some(Self::Normal),
+            "rich" | "full" => Some(Self::Rich),
+            "auto" => Some(Self::Auto),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Compact => "compact",
+            Self::Normal => "normal",
+            Self::Rich => "rich",
+            Self::Auto => "auto",
+        }
+    }
+}
+
+impl fmt::Display for MermaidTier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Mermaid label wrapping strategy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MermaidWrapMode {
+    None,
+    Word,
+    Char,
+    WordChar,
+}
+
+impl MermaidWrapMode {
+    fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "none" | "off" => Some(Self::None),
+            "word" => Some(Self::Word),
+            "char" | "grapheme" => Some(Self::Char),
+            "wordchar" | "word-char" | "word_char" => Some(Self::WordChar),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Word => "word",
+            Self::Char => "char",
+            Self::WordChar => "wordchar",
+        }
+    }
+}
+
+impl fmt::Display for MermaidWrapMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Mermaid link rendering strategy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MermaidLinkMode {
+    Inline,
+    Footnote,
+    Off,
+}
+
+impl MermaidLinkMode {
+    fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "inline" => Some(Self::Inline),
+            "footnote" | "footnotes" => Some(Self::Footnote),
+            "off" | "none" => Some(Self::Off),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Inline => "inline",
+            Self::Footnote => "footnote",
+            Self::Off => "off",
+        }
+    }
+}
+
+impl fmt::Display for MermaidLinkMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Sanitization strictness for Mermaid inputs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MermaidSanitizeMode {
+    Strict,
+    Lenient,
+}
+
+impl MermaidSanitizeMode {
+    fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "strict" => Some(Self::Strict),
+            "lenient" | "relaxed" => Some(Self::Lenient),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Strict => "strict",
+            Self::Lenient => "lenient",
+        }
+    }
+}
+
+impl fmt::Display for MermaidSanitizeMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Error rendering mode for Mermaid failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MermaidErrorMode {
+    Panel,
+    Raw,
+    Both,
+}
+
+impl MermaidErrorMode {
+    fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "panel" => Some(Self::Panel),
+            "raw" => Some(Self::Raw),
+            "both" => Some(Self::Both),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Panel => "panel",
+            Self::Raw => "raw",
+            Self::Both => "both",
+        }
+    }
+}
+
+impl fmt::Display for MermaidErrorMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+const ENV_MERMAID_ENABLE: &str = "FTUI_MERMAID_ENABLE";
+const ENV_MERMAID_GLYPH_MODE: &str = "FTUI_MERMAID_GLYPH_MODE";
+const ENV_MERMAID_TIER: &str = "FTUI_MERMAID_TIER";
+const ENV_MERMAID_MAX_NODES: &str = "FTUI_MERMAID_MAX_NODES";
+const ENV_MERMAID_MAX_EDGES: &str = "FTUI_MERMAID_MAX_EDGES";
+const ENV_MERMAID_ROUTE_BUDGET: &str = "FTUI_MERMAID_ROUTE_BUDGET";
+const ENV_MERMAID_LAYOUT_ITER_BUDGET: &str = "FTUI_MERMAID_LAYOUT_ITER_BUDGET";
+const ENV_MERMAID_MAX_LABEL_CHARS: &str = "FTUI_MERMAID_MAX_LABEL_CHARS";
+const ENV_MERMAID_MAX_LABEL_LINES: &str = "FTUI_MERMAID_MAX_LABEL_LINES";
+const ENV_MERMAID_WRAP_MODE: &str = "FTUI_MERMAID_WRAP_MODE";
+const ENV_MERMAID_ENABLE_STYLES: &str = "FTUI_MERMAID_ENABLE_STYLES";
+const ENV_MERMAID_ENABLE_INIT_DIRECTIVES: &str = "FTUI_MERMAID_ENABLE_INIT_DIRECTIVES";
+const ENV_MERMAID_ENABLE_LINKS: &str = "FTUI_MERMAID_ENABLE_LINKS";
+const ENV_MERMAID_LINK_MODE: &str = "FTUI_MERMAID_LINK_MODE";
+const ENV_MERMAID_SANITIZE_MODE: &str = "FTUI_MERMAID_SANITIZE_MODE";
+const ENV_MERMAID_ERROR_MODE: &str = "FTUI_MERMAID_ERROR_MODE";
+const ENV_MERMAID_LOG_PATH: &str = "FTUI_MERMAID_LOG_PATH";
+const ENV_MERMAID_CACHE_ENABLED: &str = "FTUI_MERMAID_CACHE_ENABLED";
+const ENV_MERMAID_CAPS_PROFILE: &str = "FTUI_MERMAID_CAPS_PROFILE";
+const ENV_MERMAID_CAPABILITY_PROFILE: &str = "FTUI_MERMAID_CAPABILITY_PROFILE";
+
+/// Mermaid engine configuration (deterministic, env-overridable).
+///
+/// # Environment Variables
+/// - `FTUI_MERMAID_ENABLE` (bool)
+/// - `FTUI_MERMAID_GLYPH_MODE` = unicode|ascii
+/// - `FTUI_MERMAID_TIER` = compact|normal|rich|auto
+/// - `FTUI_MERMAID_MAX_NODES` (usize)
+/// - `FTUI_MERMAID_MAX_EDGES` (usize)
+/// - `FTUI_MERMAID_ROUTE_BUDGET` (usize)
+/// - `FTUI_MERMAID_LAYOUT_ITER_BUDGET` (usize)
+/// - `FTUI_MERMAID_MAX_LABEL_CHARS` (usize)
+/// - `FTUI_MERMAID_MAX_LABEL_LINES` (usize)
+/// - `FTUI_MERMAID_WRAP_MODE` = none|word|char|wordchar
+/// - `FTUI_MERMAID_ENABLE_STYLES` (bool)
+/// - `FTUI_MERMAID_ENABLE_INIT_DIRECTIVES` (bool)
+/// - `FTUI_MERMAID_ENABLE_LINKS` (bool)
+/// - `FTUI_MERMAID_LINK_MODE` = inline|footnote|off
+/// - `FTUI_MERMAID_SANITIZE_MODE` = strict|lenient
+/// - `FTUI_MERMAID_ERROR_MODE` = panel|raw|both
+/// - `FTUI_MERMAID_LOG_PATH` (string path)
+/// - `FTUI_MERMAID_CACHE_ENABLED` (bool)
+/// - `FTUI_MERMAID_CAPS_PROFILE` / `FTUI_MERMAID_CAPABILITY_PROFILE` (string)
+#[derive(Debug, Clone)]
+pub struct MermaidConfig {
+    pub enabled: bool,
+    pub glyph_mode: MermaidGlyphMode,
+    pub tier_override: MermaidTier,
+    pub max_nodes: usize,
+    pub max_edges: usize,
+    pub route_budget: usize,
+    pub layout_iteration_budget: usize,
+    pub max_label_chars: usize,
+    pub max_label_lines: usize,
+    pub wrap_mode: MermaidWrapMode,
+    pub enable_styles: bool,
+    pub enable_init_directives: bool,
+    pub enable_links: bool,
+    pub link_mode: MermaidLinkMode,
+    pub sanitize_mode: MermaidSanitizeMode,
+    pub error_mode: MermaidErrorMode,
+    pub log_path: Option<String>,
+    pub cache_enabled: bool,
+    pub capability_profile: Option<String>,
+}
+
+impl Default for MermaidConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            glyph_mode: MermaidGlyphMode::Unicode,
+            tier_override: MermaidTier::Auto,
+            max_nodes: 200,
+            max_edges: 400,
+            route_budget: 4_000,
+            layout_iteration_budget: 200,
+            max_label_chars: 48,
+            max_label_lines: 3,
+            wrap_mode: MermaidWrapMode::WordChar,
+            enable_styles: true,
+            enable_init_directives: false,
+            enable_links: false,
+            link_mode: MermaidLinkMode::Off,
+            sanitize_mode: MermaidSanitizeMode::Strict,
+            error_mode: MermaidErrorMode::Panel,
+            log_path: None,
+            cache_enabled: true,
+            capability_profile: None,
+        }
+    }
+}
+
+/// Configuration parse diagnostics (env + validation).
+#[derive(Debug, Clone)]
+pub struct MermaidConfigParse {
+    pub config: MermaidConfig,
+    pub errors: Vec<MermaidConfigError>,
+}
+
+/// Configuration error with field context.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MermaidConfigError {
+    pub field: &'static str,
+    pub value: String,
+    pub message: String,
+}
+
+impl MermaidConfigError {
+    fn new(field: &'static str, value: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            field,
+            value: value.into(),
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for MermaidConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}={} ({})", self.field, self.value, self.message)
+    }
+}
+
+impl std::error::Error for MermaidConfigError {}
+
+impl MermaidConfig {
+    /// Parse config from environment variables.
+    #[must_use]
+    pub fn from_env() -> MermaidConfig {
+        Self::from_env_with_diagnostics().config
+    }
+
+    /// Parse config from environment variables and return diagnostics.
+    #[must_use]
+    pub fn from_env_with_diagnostics() -> MermaidConfigParse {
+        from_env_with(|key| env::var(key).ok())
+    }
+
+    /// Validate config constraints and return all violations.
+    pub fn validate(&self) -> Result<(), Vec<MermaidConfigError>> {
+        let mut errors = Vec::new();
+        validate_positive("max_nodes", self.max_nodes, &mut errors);
+        validate_positive("max_edges", self.max_edges, &mut errors);
+        validate_positive("route_budget", self.route_budget, &mut errors);
+        validate_positive(
+            "layout_iteration_budget",
+            self.layout_iteration_budget,
+            &mut errors,
+        );
+        validate_positive("max_label_chars", self.max_label_chars, &mut errors);
+        validate_positive("max_label_lines", self.max_label_lines, &mut errors);
+        if !self.enable_links && self.link_mode != MermaidLinkMode::Off {
+            errors.push(MermaidConfigError::new(
+                "link_mode",
+                format!("{:?}", self.link_mode),
+                "link_mode requires enable_links=true or must be off",
+            ));
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    /// Short human-readable summary for debug overlays.
+    #[must_use]
+    pub fn summary_short(&self) -> String {
+        let enabled = if self.enabled { "on" } else { "off" };
+        format!(
+            "Mermaid: {enabled} · {} · {}",
+            self.glyph_mode, self.tier_override
+        )
+    }
+}
+
+fn from_env_with<F>(mut get: F) -> MermaidConfigParse
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    let mut config = MermaidConfig::default();
+    let mut errors = Vec::new();
+
+    if let Some(value) = get(ENV_MERMAID_ENABLE) {
+        match parse_bool(&value) {
+            Some(parsed) => config.enabled = parsed,
+            None => errors.push(MermaidConfigError::new(
+                "enable",
+                value,
+                "expected bool (1/0/true/false)",
+            )),
+        }
+    }
+
+    if let Some(value) = get(ENV_MERMAID_GLYPH_MODE) {
+        match MermaidGlyphMode::parse(&value) {
+            Some(parsed) => config.glyph_mode = parsed,
+            None => errors.push(MermaidConfigError::new(
+                "glyph_mode",
+                value,
+                "expected unicode|ascii",
+            )),
+        }
+    }
+
+    if let Some(value) = get(ENV_MERMAID_TIER) {
+        match MermaidTier::parse(&value) {
+            Some(parsed) => config.tier_override = parsed,
+            None => errors.push(MermaidConfigError::new(
+                "tier_override",
+                value,
+                "expected compact|normal|rich|auto",
+            )),
+        }
+    }
+
+    if let Some(value) = get(ENV_MERMAID_MAX_NODES) {
+        match parse_usize(&value) {
+            Some(parsed) => config.max_nodes = parsed,
+            None => errors.push(MermaidConfigError::new(
+                "max_nodes",
+                value,
+                "expected positive integer",
+            )),
+        }
+    }
+
+    if let Some(value) = get(ENV_MERMAID_MAX_EDGES) {
+        match parse_usize(&value) {
+            Some(parsed) => config.max_edges = parsed,
+            None => errors.push(MermaidConfigError::new(
+                "max_edges",
+                value,
+                "expected positive integer",
+            )),
+        }
+    }
+
+    if let Some(value) = get(ENV_MERMAID_ROUTE_BUDGET) {
+        match parse_usize(&value) {
+            Some(parsed) => config.route_budget = parsed,
+            None => errors.push(MermaidConfigError::new(
+                "route_budget",
+                value,
+                "expected positive integer",
+            )),
+        }
+    }
+
+    if let Some(value) = get(ENV_MERMAID_LAYOUT_ITER_BUDGET) {
+        match parse_usize(&value) {
+            Some(parsed) => config.layout_iteration_budget = parsed,
+            None => errors.push(MermaidConfigError::new(
+                "layout_iteration_budget",
+                value,
+                "expected positive integer",
+            )),
+        }
+    }
+
+    if let Some(value) = get(ENV_MERMAID_MAX_LABEL_CHARS) {
+        match parse_usize(&value) {
+            Some(parsed) => config.max_label_chars = parsed,
+            None => errors.push(MermaidConfigError::new(
+                "max_label_chars",
+                value,
+                "expected positive integer",
+            )),
+        }
+    }
+
+    if let Some(value) = get(ENV_MERMAID_MAX_LABEL_LINES) {
+        match parse_usize(&value) {
+            Some(parsed) => config.max_label_lines = parsed,
+            None => errors.push(MermaidConfigError::new(
+                "max_label_lines",
+                value,
+                "expected positive integer",
+            )),
+        }
+    }
+
+    if let Some(value) = get(ENV_MERMAID_WRAP_MODE) {
+        match MermaidWrapMode::parse(&value) {
+            Some(parsed) => config.wrap_mode = parsed,
+            None => errors.push(MermaidConfigError::new(
+                "wrap_mode",
+                value,
+                "expected none|word|char|wordchar",
+            )),
+        }
+    }
+
+    if let Some(value) = get(ENV_MERMAID_ENABLE_STYLES) {
+        match parse_bool(&value) {
+            Some(parsed) => config.enable_styles = parsed,
+            None => errors.push(MermaidConfigError::new(
+                "enable_styles",
+                value,
+                "expected bool (1/0/true/false)",
+            )),
+        }
+    }
+
+    if let Some(value) = get(ENV_MERMAID_ENABLE_INIT_DIRECTIVES) {
+        match parse_bool(&value) {
+            Some(parsed) => config.enable_init_directives = parsed,
+            None => errors.push(MermaidConfigError::new(
+                "enable_init_directives",
+                value,
+                "expected bool (1/0/true/false)",
+            )),
+        }
+    }
+
+    if let Some(value) = get(ENV_MERMAID_ENABLE_LINKS) {
+        match parse_bool(&value) {
+            Some(parsed) => config.enable_links = parsed,
+            None => errors.push(MermaidConfigError::new(
+                "enable_links",
+                value,
+                "expected bool (1/0/true/false)",
+            )),
+        }
+    }
+
+    if let Some(value) = get(ENV_MERMAID_LINK_MODE) {
+        match MermaidLinkMode::parse(&value) {
+            Some(parsed) => config.link_mode = parsed,
+            None => errors.push(MermaidConfigError::new(
+                "link_mode",
+                value,
+                "expected inline|footnote|off",
+            )),
+        }
+    }
+
+    if let Some(value) = get(ENV_MERMAID_SANITIZE_MODE) {
+        match MermaidSanitizeMode::parse(&value) {
+            Some(parsed) => config.sanitize_mode = parsed,
+            None => errors.push(MermaidConfigError::new(
+                "sanitize_mode",
+                value,
+                "expected strict|lenient",
+            )),
+        }
+    }
+
+    if let Some(value) = get(ENV_MERMAID_ERROR_MODE) {
+        match MermaidErrorMode::parse(&value) {
+            Some(parsed) => config.error_mode = parsed,
+            None => errors.push(MermaidConfigError::new(
+                "error_mode",
+                value,
+                "expected panel|raw|both",
+            )),
+        }
+    }
+
+    if let Some(value) = get(ENV_MERMAID_LOG_PATH) {
+        let trimmed = value.trim();
+        config.log_path = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        };
+    }
+
+    if let Some(value) = get(ENV_MERMAID_CACHE_ENABLED) {
+        match parse_bool(&value) {
+            Some(parsed) => config.cache_enabled = parsed,
+            None => errors.push(MermaidConfigError::new(
+                "cache_enabled",
+                value,
+                "expected bool (1/0/true/false)",
+            )),
+        }
+    }
+
+    if let Some(value) =
+        get(ENV_MERMAID_CAPS_PROFILE).or_else(|| get(ENV_MERMAID_CAPABILITY_PROFILE))
+    {
+        let trimmed = value.trim();
+        config.capability_profile = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        };
+    }
+
+    if let Err(mut validation) = config.validate() {
+        errors.append(&mut validation);
+    }
+
+    MermaidConfigParse { config, errors }
+}
+
+#[inline]
+fn parse_bool(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+#[inline]
+fn parse_usize(value: &str) -> Option<usize> {
+    value.trim().parse::<usize>().ok()
+}
+
+fn validate_positive(field: &'static str, value: usize, errors: &mut Vec<MermaidConfigError>) {
+    if value == 0 {
+        errors.push(MermaidConfigError::new(
+            field,
+            value.to_string(),
+            "must be >= 1",
+        ));
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagramType {
     Graph,
@@ -90,6 +716,95 @@ pub enum DiagramType {
     Mindmap,
     Pie,
     Unknown,
+}
+
+/// Compatibility level for a Mermaid feature or diagram type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MermaidSupportLevel {
+    Supported,
+    Partial,
+    Unsupported,
+}
+
+impl MermaidSupportLevel {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Supported => "supported",
+            Self::Partial => "partial",
+            Self::Unsupported => "unsupported",
+        }
+    }
+}
+
+/// Warning taxonomy for Mermaid compatibility and fallback handling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MermaidWarningCode {
+    UnsupportedDiagram,
+    UnsupportedDirective,
+    UnsupportedStyle,
+    UnsupportedLink,
+    UnsupportedFeature,
+    SanitizedInput,
+}
+
+impl MermaidWarningCode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::UnsupportedDiagram => "mermaid/unsupported/diagram",
+            Self::UnsupportedDirective => "mermaid/unsupported/directive",
+            Self::UnsupportedStyle => "mermaid/unsupported/style",
+            Self::UnsupportedLink => "mermaid/unsupported/link",
+            Self::UnsupportedFeature => "mermaid/unsupported/feature",
+            Self::SanitizedInput => "mermaid/sanitized/input",
+        }
+    }
+}
+
+/// Compatibility matrix across Mermaid diagram types.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MermaidCompatibilityMatrix {
+    pub graph: MermaidSupportLevel,
+    pub sequence: MermaidSupportLevel,
+    pub state: MermaidSupportLevel,
+    pub gantt: MermaidSupportLevel,
+    pub class: MermaidSupportLevel,
+    pub er: MermaidSupportLevel,
+    pub mindmap: MermaidSupportLevel,
+    pub pie: MermaidSupportLevel,
+}
+
+impl MermaidCompatibilityMatrix {
+    /// Parser-only compatibility profile (renderer pending).
+    #[must_use]
+    pub const fn parser_only() -> Self {
+        Self {
+            graph: MermaidSupportLevel::Partial,
+            sequence: MermaidSupportLevel::Partial,
+            state: MermaidSupportLevel::Partial,
+            gantt: MermaidSupportLevel::Partial,
+            class: MermaidSupportLevel::Partial,
+            er: MermaidSupportLevel::Partial,
+            mindmap: MermaidSupportLevel::Partial,
+            pie: MermaidSupportLevel::Partial,
+        }
+    }
+
+    #[must_use]
+    pub const fn support_for(&self, diagram_type: DiagramType) -> MermaidSupportLevel {
+        match diagram_type {
+            DiagramType::Graph => self.graph,
+            DiagramType::Sequence => self.sequence,
+            DiagramType::State => self.state,
+            DiagramType::Gantt => self.gantt,
+            DiagramType::Class => self.class,
+            DiagramType::Er => self.er,
+            DiagramType::Mindmap => self.mindmap,
+            DiagramType::Pie => self.pie,
+            DiagramType::Unknown => MermaidSupportLevel::Unsupported,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1352,6 +2067,7 @@ fn is_arrow_char(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn tokenize_graph_header() {
@@ -1606,5 +2322,93 @@ mod tests {
             let _ = tokenize(&s);
             let _ = parse_with_diagnostics(&s);
         }
+    }
+
+    #[test]
+    fn mermaid_config_env_parsing() {
+        let mut env = HashMap::new();
+        env.insert(ENV_MERMAID_ENABLE, "0");
+        env.insert(ENV_MERMAID_GLYPH_MODE, "ascii");
+        env.insert(ENV_MERMAID_TIER, "rich");
+        env.insert(ENV_MERMAID_WRAP_MODE, "wordchar");
+        env.insert(ENV_MERMAID_ENABLE_LINKS, "1");
+        env.insert(ENV_MERMAID_LINK_MODE, "footnote");
+        env.insert(ENV_MERMAID_SANITIZE_MODE, "lenient");
+        env.insert(ENV_MERMAID_ERROR_MODE, "both");
+        env.insert(ENV_MERMAID_MAX_NODES, "123");
+        env.insert(ENV_MERMAID_MAX_EDGES, "456");
+
+        let parsed = from_env_with(|key| env.get(key).map(|value| value.to_string()));
+        let config = parsed.config;
+
+        assert!(!config.enabled);
+        assert_eq!(config.glyph_mode, MermaidGlyphMode::Ascii);
+        assert_eq!(config.tier_override, MermaidTier::Rich);
+        assert_eq!(config.wrap_mode, MermaidWrapMode::WordChar);
+        assert!(config.enable_links);
+        assert_eq!(config.link_mode, MermaidLinkMode::Footnote);
+        assert_eq!(config.sanitize_mode, MermaidSanitizeMode::Lenient);
+        assert_eq!(config.error_mode, MermaidErrorMode::Both);
+        assert_eq!(config.max_nodes, 123);
+        assert_eq!(config.max_edges, 456);
+    }
+
+    #[test]
+    fn mermaid_config_validation_errors() {
+        let mut env = HashMap::new();
+        env.insert(ENV_MERMAID_MAX_NODES, "0");
+        env.insert(ENV_MERMAID_MAX_EDGES, "0");
+        env.insert(ENV_MERMAID_LINK_MODE, "inline");
+        env.insert(ENV_MERMAID_ENABLE_LINKS, "0");
+
+        let parsed = from_env_with(|key| env.get(key).map(|value| value.to_string()));
+        assert!(!parsed.errors.is_empty());
+    }
+
+    #[test]
+    fn mermaid_config_invalid_values_reported() {
+        let mut env = HashMap::new();
+        env.insert(ENV_MERMAID_GLYPH_MODE, "nope");
+        env.insert(ENV_MERMAID_TIER, "mega");
+
+        let parsed = from_env_with(|key| env.get(key).map(|value| value.to_string()));
+        assert!(parsed.errors.iter().any(|err| err.field == "glyph_mode"));
+        assert!(parsed.errors.iter().any(|err| err.field == "tier_override"));
+    }
+
+    #[test]
+    fn mermaid_compat_matrix_parser_only() {
+        let matrix = MermaidCompatibilityMatrix::parser_only();
+        assert_eq!(
+            matrix.support_for(DiagramType::Graph),
+            MermaidSupportLevel::Partial
+        );
+        assert_eq!(
+            matrix.support_for(DiagramType::Sequence),
+            MermaidSupportLevel::Partial
+        );
+        assert_eq!(
+            matrix.support_for(DiagramType::Unknown),
+            MermaidSupportLevel::Unsupported
+        );
+    }
+
+    #[test]
+    fn mermaid_warning_codes_are_stable() {
+        let codes = [
+            MermaidWarningCode::UnsupportedDiagram,
+            MermaidWarningCode::UnsupportedDirective,
+            MermaidWarningCode::UnsupportedStyle,
+            MermaidWarningCode::UnsupportedLink,
+            MermaidWarningCode::UnsupportedFeature,
+            MermaidWarningCode::SanitizedInput,
+        ];
+        for code in codes {
+            assert!(code.as_str().starts_with("mermaid/"));
+        }
+        assert_eq!(
+            MermaidWarningCode::UnsupportedDiagram.as_str(),
+            "mermaid/unsupported/diagram"
+        );
     }
 }

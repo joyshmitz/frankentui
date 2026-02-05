@@ -3099,6 +3099,42 @@ mod tests {
         assert_eq!(buf.dirty_span_overflows, 1);
     }
 
+    #[test]
+    fn dirty_span_stats_counts_full_rows_and_spans() {
+        let mut buf = Buffer::new(6, 2);
+        buf.clear_dirty();
+        buf.set_dirty_span_config(DirtySpanConfig::default().with_merge_gap(0));
+        buf.set(1, 0, Cell::from_char('a'));
+        buf.set(4, 0, Cell::from_char('b'));
+        buf.mark_dirty_row_full(1);
+
+        let stats = buf.dirty_span_stats();
+        assert_eq!(stats.rows_full_dirty, 1);
+        assert_eq!(stats.rows_with_spans, 1);
+        assert_eq!(stats.total_spans, 2);
+        assert_eq!(stats.max_span_len, 6);
+        assert_eq!(stats.span_coverage_cells, 8);
+    }
+
+    #[test]
+    fn dirty_span_stats_reports_overflow_and_full_row() {
+        let mut buf = Buffer::new(8, 1);
+        buf.clear_dirty();
+        buf.set_dirty_span_config(
+            DirtySpanConfig::default()
+                .with_max_spans_per_row(1)
+                .with_merge_gap(0),
+        );
+        buf.set(0, 0, Cell::from_char('x'));
+        buf.set(3, 0, Cell::from_char('y'));
+
+        let stats = buf.dirty_span_stats();
+        assert_eq!(stats.overflows, 1);
+        assert_eq!(stats.rows_full_dirty, 1);
+        assert_eq!(stats.total_spans, 0);
+        assert_eq!(stats.span_coverage_cells, 8);
+    }
+
     // =====================================================================
     // DoubleBuffer tests (bd-1rz0.4.4)
     // =====================================================================

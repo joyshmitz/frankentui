@@ -634,6 +634,34 @@ mod tests {
         assert_eq!(layout.row_height(1), 20);
     }
 
+    #[test]
+    fn fixed_constraints_exceed_available_clamped() {
+        let grid = Grid::new()
+            .rows([Constraint::Fixed(10), Constraint::Fixed(10)])
+            .columns([Constraint::Fixed(7), Constraint::Fixed(7)]);
+
+        let layout = grid.split(Rect::new(0, 0, 10, 15));
+
+        assert_eq!(layout.row_height(0), 10);
+        assert_eq!(layout.row_height(1), 5);
+        assert_eq!(layout.col_width(0), 7);
+        assert_eq!(layout.col_width(1), 3);
+    }
+
+    #[test]
+    fn ratio_constraints_rounding_sums_to_available() {
+        let grid = Grid::new()
+            .rows([Constraint::Fixed(1)])
+            .columns([Constraint::Ratio(1, 3), Constraint::Ratio(2, 3)]);
+
+        let layout = grid.split(Rect::new(0, 0, 5, 1));
+
+        let total = layout.col_width(0) + layout.col_width(1);
+        assert_eq!(total, 5);
+        assert_eq!(layout.col_width(0), 1);
+        assert_eq!(layout.col_width(1), 4);
+    }
+
     // --- Additional Grid tests ---
 
     #[test]

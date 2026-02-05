@@ -23,6 +23,9 @@ test-helpers = []
 [dependencies]
 bitflags = "2.10.0"
 crossterm = "0.29.0"
+unicode-display-width = "0.3.0"
+unicode-segmentation = "1.12.0"
+unicode-width = "0.2.2"
 
 # Unix-only signal handling for cleanup on SIGINT/SIGTERM.
 [target.'cfg(unix)'.dependencies]

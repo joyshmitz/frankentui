@@ -15,20 +15,22 @@ use std::io::{BufWriter, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ftui_core::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ftui_core::geometry::Rect;
+use ftui_extras::mermaid::MermaidConfig;
 use ftui_layout::{Constraint, Flex};
 use ftui_render::cell::Cell as RenderCell;
 use ftui_render::frame::{Frame, HitGrid};
 use ftui_runtime::render_trace::checksum_buffer;
 use ftui_runtime::undo::HistoryManager;
 use ftui_runtime::{
-    Cmd, Every, InlineAutoRemeasureConfig, Model, Subscription, VoiLogEntry, VoiSampler,
-    VoiSamplerSnapshot, inline_auto_voi_snapshot,
+    Cmd, Every, FrameTiming, FrameTimingSink, InlineAutoRemeasureConfig, Model, Subscription,
+    VoiLogEntry, VoiSampler, VoiSamplerSnapshot, inline_auto_voi_snapshot,
 };
 use ftui_style::Style;
 use ftui_text::{Line, Span, Text, WrapMode};
@@ -1012,6 +1014,7 @@ pub struct VfxHarnessConfig {
     pub cols: u16,
     pub rows: u16,
     pub seed: Option<u64>,
+    pub perf_enabled: bool,
 }
 
 pub enum VfxHarnessMsg {
@@ -1025,7 +1028,58 @@ impl From<Event> for VfxHarnessMsg {
     }
 }
 
-struct VfxHarnessLogger {
+struct VfxPerfStats {
+    update_us: Vec<u64>,
+    render_us: Vec<u64>,
+    diff_us: Vec<u64>,
+    present_us: Vec<u64>,
+    total_us: Vec<u64>,
+}
+
+impl VfxPerfStats {
+    fn new() -> Self {
+        Self {
+            update_us: Vec::new(),
+            render_us: Vec::new(),
+            diff_us: Vec::new(),
+            present_us: Vec::new(),
+            total_us: Vec::new(),
+        }
+    }
+
+    fn record(&mut self, timing: &FrameTiming) {
+        self.update_us.push(timing.update_us);
+        self.render_us.push(timing.render_us);
+        self.diff_us.push(timing.diff_us);
+        self.present_us.push(timing.present_us);
+        self.total_us.push(timing.total_us);
+    }
+
+    fn percentiles(values: &[u64]) -> (u64, u64, u64) {
+        if values.is_empty() {
+            return (0, 0, 0);
+        }
+        let mut sorted = values.to_vec();
+        sorted.sort_unstable();
+        (
+            percentile_nearest_rank(&sorted, 0.50),
+            percentile_nearest_rank(&sorted, 0.95),
+            percentile_nearest_rank(&sorted, 0.99),
+        )
+    }
+}
+
+fn percentile_nearest_rank(sorted: &[u64], p: f64) -> u64 {
+    if sorted.is_empty() {
+        return 0;
+    }
+    let n = sorted.len();
+    let rank = (p * n as f64).ceil() as usize;
+    let idx = rank.saturating_sub(1).min(n.saturating_sub(1));
+    sorted[idx]
+}
+
+struct VfxHarnessLoggerState {
     writer: Box<dyn Write + Send>,
     run_id: String,
     effect: String,
@@ -1033,9 +1087,16 @@ struct VfxHarnessLogger {
     rows: u16,
     tick_ms: u64,
     seed: u64,
+    perf: Option<VfxPerfStats>,
+}
+
+struct VfxHarnessLogger {
+    inner: Mutex<VfxHarnessLoggerState>,
+    perf_enabled: bool,
 }
 
 impl VfxHarnessLogger {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         path: &str,
         run_id: String,
@@ -1044,66 +1105,185 @@ impl VfxHarnessLogger {
         rows: u16,
         tick_ms: u64,
         seed: u64,
+        perf_enabled: bool,
     ) -> std::io::Result<Self> {
         let writer = open_vfx_writer(path)?;
-        let mut logger = Self {
-            writer,
-            run_id,
-            effect,
-            cols,
-            rows,
-            tick_ms,
-            seed,
+        let logger = Self {
+            inner: Mutex::new(VfxHarnessLoggerState {
+                writer,
+                run_id,
+                effect,
+                cols,
+                rows,
+                tick_ms,
+                seed,
+                perf: perf_enabled.then(VfxPerfStats::new),
+            }),
+            perf_enabled,
         };
         logger.write_header()?;
         Ok(logger)
     }
 
-    fn write_header(&mut self) -> std::io::Result<()> {
-        let run_id = escape_json(&self.run_id);
-        let effect = escape_json(&self.effect);
+    fn write_header(&self) -> std::io::Result<()> {
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| std::io::Error::other("logger lock poisoned"))?;
+        let run_id = escape_json(&guard.run_id);
+        let effect = escape_json(&guard.effect);
         let hash_key = determinism::hash_key(
             &determinism::demo_screen_mode(),
-            self.cols,
-            self.rows,
-            self.seed,
+            guard.cols,
+            guard.rows,
+            guard.seed,
         );
         let timestamp = determinism::chrono_like_timestamp();
         let env_json = determinism::demo_env_json();
+        let perf_enabled = guard.perf.is_some();
         let line = format!(
-            "{{\"event\":\"vfx_harness_start\",\"timestamp\":\"{timestamp}\",\"run_id\":\"{run_id}\",\"hash_key\":\"{}\",\"effect\":\"{effect}\",\"cols\":{},\"rows\":{},\"tick_ms\":{},\"seed\":{},\"env\":{}}}",
+            "{{\"event\":\"vfx_harness_start\",\"timestamp\":\"{timestamp}\",\"run_id\":\"{run_id}\",\"hash_key\":\"{}\",\"effect\":\"{effect}\",\"cols\":{},\"rows\":{},\"tick_ms\":{},\"seed\":{},\"perf\":{},\"env\":{}}}",
             escape_json(&hash_key),
-            self.cols,
-            self.rows,
-            self.tick_ms,
-            self.seed,
+            guard.cols,
+            guard.rows,
+            guard.tick_ms,
+            guard.seed,
+            perf_enabled,
             env_json
         );
-        writeln!(self.writer, "{line}")?;
-        self.writer.flush()
+        writeln!(guard.writer, "{line}")?;
+        guard.writer.flush()
     }
 
-    fn write_frame(&mut self, frame_idx: u64, hash: u64, sim_time: f64) -> std::io::Result<()> {
-        let run_id = escape_json(&self.run_id);
-        let effect = escape_json(&self.effect);
+    fn write_frame(&self, frame_idx: u64, hash: u64, sim_time: f64) -> std::io::Result<()> {
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| std::io::Error::other("logger lock poisoned"))?;
+        let run_id = escape_json(&guard.run_id);
+        let effect = escape_json(&guard.effect);
         let hash_key = determinism::hash_key(
             &determinism::demo_screen_mode(),
-            self.cols,
-            self.rows,
-            self.seed,
+            guard.cols,
+            guard.rows,
+            guard.seed,
         );
         let timestamp = determinism::chrono_like_timestamp();
         let line = format!(
             "{{\"event\":\"vfx_frame\",\"timestamp\":\"{timestamp}\",\"run_id\":\"{run_id}\",\"hash_key\":\"{}\",\"effect\":\"{effect}\",\"frame_idx\":{frame_idx},\"hash\":{hash},\"time\":{:.2},\"cols\":{},\"rows\":{},\"tick_ms\":{},\"seed\":{}}}",
             escape_json(&hash_key),
             sim_time,
-            self.cols,
-            self.rows,
-            self.tick_ms,
-            self.seed
+            guard.cols,
+            guard.rows,
+            guard.tick_ms,
+            guard.seed
         );
-        writeln!(self.writer, "{line}")?;
-        self.writer.flush()
+        writeln!(guard.writer, "{line}")?;
+        guard.writer.flush()
+    }
+
+    fn write_perf_frame(&self, timing: &FrameTiming) {
+        let Ok(mut guard) = self.inner.lock() else {
+            return;
+        };
+        let Some(perf) = guard.perf.as_mut() else {
+            return;
+        };
+        perf.record(timing);
+        let run_id = escape_json(&guard.run_id);
+        let effect = escape_json(&guard.effect);
+        let timestamp = determinism::chrono_like_timestamp();
+        let update_ms = timing.update_us as f64 / 1000.0;
+        let render_ms = timing.render_us as f64 / 1000.0;
+        let diff_ms = timing.diff_us as f64 / 1000.0;
+        let present_ms = timing.present_us as f64 / 1000.0;
+        let total_ms = timing.total_us as f64 / 1000.0;
+        let line = format!(
+            "{{\"event\":\"vfx_perf_frame\",\"timestamp\":\"{timestamp}\",\"run_id\":\"{run_id}\",\"effect\":\"{effect}\",\"frame_idx\":{},\"update_ms\":{:.3},\"render_ms\":{:.3},\"diff_ms\":{:.3},\"present_ms\":{:.3},\"total_ms\":{:.3},\"cols\":{},\"rows\":{},\"tick_ms\":{},\"seed\":{}}}",
+            timing.frame_idx,
+            update_ms,
+            render_ms,
+            diff_ms,
+            present_ms,
+            total_ms,
+            guard.cols,
+            guard.rows,
+            guard.tick_ms,
+            guard.seed
+        );
+        let _ = writeln!(guard.writer, "{line}");
+        let _ = guard.writer.flush();
+    }
+
+    fn write_perf_summary(&self) {
+        let Ok(mut guard) = self.inner.lock() else {
+            return;
+        };
+        let Some(perf) = guard.perf.as_ref() else {
+            return;
+        };
+        let count = perf.total_us.len();
+        let (total_p50, total_p95, total_p99) = VfxPerfStats::percentiles(&perf.total_us);
+        let (update_p50, update_p95, update_p99) = VfxPerfStats::percentiles(&perf.update_us);
+        let (render_p50, render_p95, render_p99) = VfxPerfStats::percentiles(&perf.render_us);
+        let (diff_p50, diff_p95, diff_p99) = VfxPerfStats::percentiles(&perf.diff_us);
+        let (present_p50, present_p95, present_p99) = VfxPerfStats::percentiles(&perf.present_us);
+
+        let phases = [
+            ("update", update_p95, update_p99),
+            ("render", render_p95, render_p99),
+            ("diff", diff_p95, diff_p99),
+            ("present", present_p95, present_p99),
+        ];
+        let (top_phase, top_p95, top_p99) = phases
+            .iter()
+            .max_by_key(|(_, p95, _)| *p95)
+            .copied()
+            .unwrap_or(("none", 0, 0));
+
+        let run_id = escape_json(&guard.run_id);
+        let effect = escape_json(&guard.effect);
+        let timestamp = determinism::chrono_like_timestamp();
+        let line = format!(
+            "{{\"event\":\"vfx_perf_summary\",\"timestamp\":\"{timestamp}\",\"run_id\":\"{run_id}\",\"effect\":\"{effect}\",\"count\":{count},\"cols\":{},\"rows\":{},\"tick_ms\":{},\"seed\":{},\"total_ms_p50\":{:.3},\"total_ms_p95\":{:.3},\"total_ms_p99\":{:.3},\"update_ms_p50\":{:.3},\"update_ms_p95\":{:.3},\"update_ms_p99\":{:.3},\"render_ms_p50\":{:.3},\"render_ms_p95\":{:.3},\"render_ms_p99\":{:.3},\"diff_ms_p50\":{:.3},\"diff_ms_p95\":{:.3},\"diff_ms_p99\":{:.3},\"present_ms_p50\":{:.3},\"present_ms_p95\":{:.3},\"present_ms_p99\":{:.3},\"top_phase\":\"{top_phase}\",\"top_phase_p95_ms\":{:.3},\"top_phase_p99_ms\":{:.3}}}",
+            guard.cols,
+            guard.rows,
+            guard.tick_ms,
+            guard.seed,
+            total_p50 as f64 / 1000.0,
+            total_p95 as f64 / 1000.0,
+            total_p99 as f64 / 1000.0,
+            update_p50 as f64 / 1000.0,
+            update_p95 as f64 / 1000.0,
+            update_p99 as f64 / 1000.0,
+            render_p50 as f64 / 1000.0,
+            render_p95 as f64 / 1000.0,
+            render_p99 as f64 / 1000.0,
+            diff_p50 as f64 / 1000.0,
+            diff_p95 as f64 / 1000.0,
+            diff_p99 as f64 / 1000.0,
+            present_p50 as f64 / 1000.0,
+            present_p95 as f64 / 1000.0,
+            present_p99 as f64 / 1000.0,
+            top_p95 as f64 / 1000.0,
+            top_p99 as f64 / 1000.0
+        );
+        let _ = writeln!(guard.writer, "{line}");
+        let _ = guard.writer.flush();
+    }
+}
+
+impl FrameTimingSink for VfxHarnessLogger {
+    fn record_frame(&self, timing: &FrameTiming) {
+        self.write_perf_frame(timing);
+    }
+}
+
+impl Drop for VfxHarnessLogger {
+    fn drop(&mut self) {
+        if self.perf_enabled {
+            self.write_perf_summary();
+        }
     }
 }
 
@@ -1116,7 +1296,8 @@ pub struct VfxHarnessModel {
     exit_after_ms: u64,
     started: Cell<bool>,
     frame_idx: Cell<u64>,
-    logger: RefCell<Option<VfxHarnessLogger>>,
+    logger: Arc<VfxHarnessLogger>,
+    perf_enabled: bool,
 }
 
 impl VfxHarnessModel {
@@ -1153,7 +1334,7 @@ impl VfxHarnessModel {
                 determinism::demo_seed(VFX_HARNESS_SEED),
             )
         });
-        let logger = VfxHarnessLogger::new(
+        let logger = Arc::new(VfxHarnessLogger::new(
             &jsonl_path,
             run_id,
             effect_key.to_string(),
@@ -1161,7 +1342,8 @@ impl VfxHarnessModel {
             rows,
             tick_ms,
             seed,
-        )?;
+            config.perf_enabled,
+        )?);
 
         Ok(Self {
             screen,
@@ -1171,8 +1353,31 @@ impl VfxHarnessModel {
             exit_after_ms: config.exit_after_ms,
             started: Cell::new(false),
             frame_idx: Cell::new(0),
-            logger: RefCell::new(Some(logger)),
+            logger,
+            perf_enabled: config.perf_enabled,
         })
+    }
+
+    pub fn perf_logger(&self) -> Option<Arc<dyn FrameTimingSink>> {
+        if self.perf_enabled {
+            Some(self.logger.clone())
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod vfx_perf_tests {
+    use super::VfxPerfStats;
+
+    #[test]
+    fn vfx_perf_percentiles_nearest_rank() {
+        let values = vec![10, 20, 30, 40, 50];
+        let (p50, p95, p99) = VfxPerfStats::percentiles(&values);
+        assert_eq!(p50, 30);
+        assert_eq!(p95, 50);
+        assert_eq!(p99, 50);
     }
 }
 
@@ -1236,9 +1441,9 @@ impl Model for VfxHarnessModel {
         self.frame_idx.set(frame_idx);
         let pool = &*frame.pool;
         let hash = checksum_buffer(&frame.buffer, pool);
-        if let Some(logger) = self.logger.borrow_mut().as_mut() {
-            let _ = logger.write_frame(frame_idx, hash, self.screen.sim_time());
-        }
+        let _ = self
+            .logger
+            .write_frame(frame_idx, hash, self.screen.sim_time());
     }
 
     fn subscriptions(&self) -> Vec<Box<dyn Subscription<Self::Message>>> {
@@ -3254,13 +3459,15 @@ impl AppModel {
         let debug_inner = debug_block.inner(overlay_area);
         debug_block.render(overlay_area, frame);
 
+        let mermaid_summary = MermaidConfig::from_env().summary_short();
         let debug_text = format!(
-            "Tick: {}\nFrame: {}\nScreen: {:?}\nSize: {}x{}",
+            "Tick: {}\nFrame: {}\nScreen: {:?}\nSize: {}x{}\n{}",
             self.tick_count,
             self.frame_count,
             self.current_screen,
             self.terminal_width,
             self.terminal_height,
+            mermaid_summary,
         );
         Paragraph::new(debug_text)
             .style(Style::new().fg(theme::fg::PRIMARY))

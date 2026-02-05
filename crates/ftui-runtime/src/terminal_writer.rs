@@ -48,6 +48,7 @@
 //! ```
 
 use std::io::{self, BufWriter, Write};
+use std::time::Instant;
 
 use crate::evidence_sink::EvidenceSink;
 use crate::render_trace::{
@@ -290,6 +291,12 @@ struct FrameEmitStats {
     ui_height: u16,
 }
 
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+pub struct PresentTimings {
+    pub diff_us: u64,
+}
+
 // =============================================================================
 // Runtime Diff Configuration
 // =============================================================================
@@ -506,6 +513,10 @@ pub struct TerminalWriter<W: Write> {
     last_diff_strategy: Option<DiffStrategy>,
     /// Render-trace recorder (optional).
     render_trace: Option<RenderTraceRecorder>,
+    /// Whether per-frame timing capture is enabled.
+    timing_enabled: bool,
+    /// Last present timings (diff compute duration).
+    last_present_timings: Option<PresentTimings>,
 }
 
 impl<W: Write> TerminalWriter<W> {
@@ -604,6 +615,8 @@ impl<W: Write> TerminalWriter<W> {
             diff_evidence_idx: 0,
             last_diff_strategy: None,
             render_trace: None,
+            timing_enabled: false,
+            last_present_timings: None,
         }
     }
 
@@ -639,6 +652,19 @@ impl<W: Write> TerminalWriter<W> {
     /// Get the current diff configuration.
     pub fn diff_config(&self) -> &RuntimeDiffConfig {
         &self.diff_config
+    }
+
+    /// Enable or disable per-frame timing capture.
+    pub(crate) fn set_timing_enabled(&mut self, enabled: bool) {
+        self.timing_enabled = enabled;
+        if !enabled {
+            self.last_present_timings = None;
+        }
+    }
+
+    /// Take the last present timings (if available).
+    pub(crate) fn take_last_present_timings(&mut self) -> Option<PresentTimings> {
+        self.last_present_timings.take()
     }
 
     /// Attach an evidence sink for diff decision logging.
@@ -1326,6 +1352,12 @@ impl<W: Write> TerminalWriter<W> {
             let guard_reason_json = json_escape(evidence.guard_reason);
             let fallback_reason_json = json_escape(reason);
             let tile_fallback_json = json_escape(tile_fallback);
+            let schema_version = crate::evidence_sink::EVIDENCE_SCHEMA_VERSION;
+            let screen_mode = match self.screen_mode {
+                ScreenMode::Inline { .. } => "inline",
+                ScreenMode::InlineAuto { .. } => "inline_auto",
+                ScreenMode::AltScreen => "altscreen",
+            };
             let (
                 tile_w,
                 tile_h,
@@ -1377,9 +1409,13 @@ impl<W: Write> TerminalWriter<W> {
             );
             if let Some(ref sink) = self.evidence_sink {
                 let line = format!(
-                    r#"{{"event":"diff_decision","run_id":"{}","event_idx":{},"strategy":"{}","cost_full":{:.6},"cost_dirty":{:.6},"cost_redraw":{:.6},"posterior_mean":{:.6},"posterior_variance":{:.6},"alpha":{:.6},"beta":{:.6},"guard_reason":"{}","hysteresis_applied":{},"hysteresis_ratio":{:.6},"dirty_rows":{},"total_rows":{},"total_cells":{},"span_count":{},"span_coverage_pct":{:.6},"max_span_len":{},"fallback_reason":"{}","scan_cost_estimate":{},"tile_used":{},"tile_fallback":"{}","tile_w":{},"tile_h":{},"tile_size":{},"tiles_x":{},"tiles_y":{},"dirty_tiles":{},"dirty_tile_count":{},"dirty_cells":{},"dirty_tile_ratio":{:.6},"dirty_cell_ratio":{:.6},"scanned_tiles":{},"skipped_tiles":{},"skipped_tile_count":{},"tile_scan_cells_estimate":{},"sat_build_cost_est":{},"bayesian_enabled":{},"dirty_rows_enabled":{}}}"#,
+                    r#"{{"schema_version":"{}","event":"diff_decision","run_id":"{}","event_idx":{},"screen_mode":"{}","cols":{},"rows":{},"strategy":"{}","cost_full":{:.6},"cost_dirty":{:.6},"cost_redraw":{:.6},"posterior_mean":{:.6},"posterior_variance":{:.6},"alpha":{:.6},"beta":{:.6},"guard_reason":"{}","hysteresis_applied":{},"hysteresis_ratio":{:.6},"dirty_rows":{},"total_rows":{},"total_cells":{},"span_count":{},"span_coverage_pct":{:.6},"max_span_len":{},"fallback_reason":"{}","scan_cost_estimate":{},"tile_used":{},"tile_fallback":"{}","tile_w":{},"tile_h":{},"tile_size":{},"tiles_x":{},"tiles_y":{},"dirty_tiles":{},"dirty_tile_count":{},"dirty_cells":{},"dirty_tile_ratio":{:.6},"dirty_cell_ratio":{:.6},"scanned_tiles":{},"skipped_tiles":{},"skipped_tile_count":{},"tile_scan_cells_estimate":{},"sat_build_cost_est":{},"bayesian_enabled":{},"dirty_rows_enabled":{}}}"#,
+                    schema_version,
                     run_id,
                     event_idx,
+                    screen_mode,
+                    width,
+                    height,
                     strategy_json,
                     evidence.cost_full,
                     evidence.cost_dirty,
@@ -1477,6 +1513,7 @@ impl<W: Write> TerminalWriter<W> {
         self.clear_inline_region_diff(current_region)?;
 
         let mut diff_strategy = DiffStrategy::FullRedraw;
+        let mut diff_us = 0u64;
         let mut emit_stats = EmitStats {
             diff_cells: 0,
             diff_runs: 0,
@@ -1499,10 +1536,18 @@ impl<W: Write> TerminalWriter<W> {
             }
 
             // Compute diff
+            let diff_start = if self.timing_enabled {
+                Some(Instant::now())
+            } else {
+                None
+            };
             let decision = {
                 let _span = debug_span!("ftui.render.diff_compute").entered();
                 self.decide_diff(buffer)
             };
+            if let Some(start) = diff_start {
+                diff_us = start.elapsed().as_micros() as u64;
+            }
             diff_strategy = decision.strategy;
 
             // Emit diff
@@ -1558,6 +1603,10 @@ impl<W: Write> TerminalWriter<W> {
             None
         };
 
+        if self.timing_enabled {
+            self.last_present_timings = Some(PresentTimings { diff_us });
+        }
+
         Ok(FrameEmitStats {
             diff_strategy,
             diff_cells: emit_stats.diff_cells,
@@ -1573,10 +1622,18 @@ impl<W: Write> TerminalWriter<W> {
         cursor: Option<(u16, u16)>,
         cursor_visible: bool,
     ) -> io::Result<FrameEmitStats> {
+        let diff_start = if self.timing_enabled {
+            Some(Instant::now())
+        } else {
+            None
+        };
         let decision = {
             let _span = debug_span!("ftui.render.diff_compute").entered();
             self.decide_diff(buffer)
         };
+        let diff_us = diff_start
+            .map(|start| start.elapsed().as_micros() as u64)
+            .unwrap_or(0);
 
         // Begin sync if available
         if self.capabilities.sync_output {
@@ -1618,6 +1675,10 @@ impl<W: Write> TerminalWriter<W> {
         }
 
         self.writer().flush()?;
+
+        if self.timing_enabled {
+            self.last_present_timings = Some(PresentTimings { diff_us });
+        }
 
         Ok(FrameEmitStats {
             diff_strategy: decision.strategy,
@@ -3713,6 +3774,10 @@ mod tests {
             .expect("diff_decision line");
         let value: serde_json::Value = serde_json::from_str(line).expect("valid json");
 
+        assert_eq!(
+            value["schema_version"],
+            crate::evidence_sink::EVIDENCE_SCHEMA_VERSION
+        );
         assert_eq!(value["event"], "diff_decision");
         assert!(
             value["run_id"]
@@ -3725,6 +3790,9 @@ mod tests {
             value["event_idx"].is_number(),
             "event_idx should be numeric"
         );
+        assert_eq!(value["screen_mode"], "altscreen");
+        assert!(value["cols"].is_number(), "cols should be numeric");
+        assert!(value["rows"].is_number(), "rows should be numeric");
         assert!(
             value["span_count"].is_number(),
             "span_count should be numeric"

@@ -1025,7 +1025,7 @@ impl TableTheme {
                 row_hover: Style::new()
                     .fg(PackedRgba::rgb(245, 245, 245))
                     .bg(PackedRgba::rgb(60, 60, 60)),
-                divider: Style::new().fg(PackedRgba::rgb(100, 100, 100)),
+                divider: Style::new().fg(PackedRgba::rgb(120, 120, 120)),
             },
         )
     }
@@ -1078,7 +1078,7 @@ impl TableTheme {
                 row_hover: Style::new()
                     .fg(PackedRgba::rgb(235, 240, 245))
                     .bg(PackedRgba::rgb(50, 60, 70)),
-                divider: Style::new().fg(PackedRgba::rgb(90, 100, 110)),
+                divider: Style::new().fg(PackedRgba::rgb(110, 120, 130)),
             },
         )
     }
@@ -1188,7 +1188,7 @@ impl TableTheme {
                 row_hover: Style::new()
                     .fg(PackedRgba::rgb(240, 240, 255))
                     .bg(PackedRgba::rgb(45, 60, 90)),
-                divider: Style::new().fg(PackedRgba::rgb(60, 80, 110)),
+                divider: Style::new().fg(PackedRgba::rgb(100, 120, 150)),
             },
         )
     }
@@ -1208,7 +1208,7 @@ impl TableTheme {
         let row_fg = classic_color(profile, (230, 230, 230), Ansi16::White);
         let row_alt_bg = classic_color(profile, (30, 30, 30), Ansi16::Black);
         let selected_bg = classic_color(profile, (160, 90, 10), Ansi16::Yellow);
-        let hover_bg = classic_color(profile, (90, 90, 90), Ansi16::BrightBlack);
+        let hover_bg = classic_color(profile, (70, 70, 70), Ansi16::BrightBlack);
         let divider = classic_color(profile, (120, 120, 120), Ansi16::BrightBlack);
 
         Self::build(
@@ -1734,6 +1734,44 @@ fn hash_effect_rule(rule: &TableEffectRule, hasher: &mut StableHasher) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::color::{WCAG_AA_LARGE_TEXT, WCAG_AA_NORMAL_TEXT, contrast_ratio_packed};
+
+    fn base_bg(theme: &TableTheme) -> PackedRgba {
+        theme
+            .row
+            .bg
+            .or(theme.row_alt.bg)
+            .or(theme.header.bg)
+            .or(theme.row_selected.bg)
+            .or(theme.row_hover.bg)
+            .unwrap_or(PackedRgba::BLACK)
+    }
+
+    fn expect_fg(preset: TablePresetId, label: &str, style: Style) -> PackedRgba {
+        style
+            .fg
+            .unwrap_or_else(|| panic!("{preset:?} missing fg for {label}"))
+    }
+
+    fn expect_bg(preset: TablePresetId, label: &str, style: Style) -> PackedRgba {
+        style
+            .bg
+            .unwrap_or_else(|| panic!("{preset:?} missing bg for {label}"))
+    }
+
+    fn assert_contrast(
+        preset: TablePresetId,
+        label: &str,
+        fg: PackedRgba,
+        bg: PackedRgba,
+        minimum: f64,
+    ) {
+        let ratio = contrast_ratio_packed(fg, bg);
+        assert!(
+            ratio >= minimum,
+            "{preset:?} {label} contrast {ratio:.2} below {minimum:.2}"
+        );
+    }
 
     #[test]
     fn style_mask_default_is_fg_bg() {
@@ -1796,5 +1834,74 @@ mod tests {
             theme.effects_hash(),
             "effects hash should change with rules"
         );
+    }
+
+    #[test]
+    fn presets_meet_wcag_contrast_targets() {
+        let presets = [
+            TablePresetId::Aurora,
+            TablePresetId::Graphite,
+            TablePresetId::Neon,
+            TablePresetId::Slate,
+            TablePresetId::Solar,
+            TablePresetId::Orchard,
+            TablePresetId::Paper,
+            TablePresetId::Midnight,
+            TablePresetId::TerminalClassic,
+        ];
+
+        for preset in presets {
+            let theme = match preset {
+                TablePresetId::TerminalClassic => {
+                    TableTheme::terminal_classic_for(ColorProfile::Ansi16)
+                }
+                _ => TableTheme::preset(preset),
+            };
+            let base = base_bg(&theme);
+
+            let header_fg = expect_fg(preset, "header", theme.header);
+            let header_bg = expect_bg(preset, "header", theme.header);
+            assert_contrast(preset, "header", header_fg, header_bg, WCAG_AA_NORMAL_TEXT);
+
+            let row_fg = expect_fg(preset, "row", theme.row);
+            let row_bg = theme.row.bg.unwrap_or(base);
+            assert_contrast(preset, "row", row_fg, row_bg, WCAG_AA_NORMAL_TEXT);
+
+            let row_alt_fg = expect_fg(preset, "row_alt", theme.row_alt);
+            let row_alt_bg = expect_bg(preset, "row_alt", theme.row_alt);
+            assert_contrast(
+                preset,
+                "row_alt",
+                row_alt_fg,
+                row_alt_bg,
+                WCAG_AA_NORMAL_TEXT,
+            );
+
+            let selected_fg = expect_fg(preset, "row_selected", theme.row_selected);
+            let selected_bg = expect_bg(preset, "row_selected", theme.row_selected);
+            assert_contrast(
+                preset,
+                "row_selected",
+                selected_fg,
+                selected_bg,
+                WCAG_AA_NORMAL_TEXT,
+            );
+
+            let hover_fg = expect_fg(preset, "row_hover", theme.row_hover);
+            let hover_bg = expect_bg(preset, "row_hover", theme.row_hover);
+            let hover_min = if preset == TablePresetId::TerminalClassic {
+                // ANSI16 hover colors are bounded; accept AA large-text threshold.
+                WCAG_AA_LARGE_TEXT
+            } else {
+                WCAG_AA_NORMAL_TEXT
+            };
+            assert_contrast(preset, "row_hover", hover_fg, hover_bg, hover_min);
+
+            let border_fg = expect_fg(preset, "border", theme.border);
+            assert_contrast(preset, "border", border_fg, base, WCAG_AA_LARGE_TEXT);
+
+            let divider_fg = expect_fg(preset, "divider", theme.divider);
+            assert_contrast(preset, "divider", divider_fg, base, WCAG_AA_LARGE_TEXT);
+        }
     }
 }

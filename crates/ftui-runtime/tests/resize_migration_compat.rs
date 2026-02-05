@@ -7,7 +7,7 @@
 use std::time::{Duration, Instant};
 
 use ftui_runtime::resize_coalescer::TelemetryHooks;
-use ftui_runtime::{CoalesceAction, CoalescerConfig, Regime, ResizeCoalescer};
+use ftui_runtime::{CoalesceAction, CoalescerConfig, Regime, ResizeCoalescer, ScreenMode};
 
 // =============================================================================
 // Config API Tests
@@ -61,7 +61,7 @@ fn heavy_render_profile() {
 #[test]
 fn config_jsonl_export() {
     let cfg = CoalescerConfig::default();
-    let jsonl = cfg.to_jsonl();
+    let jsonl = cfg.to_jsonl("resize-test", ScreenMode::AltScreen, 80, 24, 0);
     assert!(jsonl.contains("steady_delay_ms"));
     assert!(jsonl.contains("burst_delay_ms"));
     assert!(jsonl.contains("hard_deadline_ms"));

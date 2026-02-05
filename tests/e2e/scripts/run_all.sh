@@ -35,8 +35,10 @@ for arg in "$@"; do
     esac
 done
 
-TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-E2E_LOG_DIR="${E2E_LOG_DIR:-/tmp/ftui_e2e_${TIMESTAMP}}"
+e2e_fixture_init "e2e"
+
+TIMESTAMP="$(e2e_log_stamp)"
+E2E_LOG_DIR="${E2E_LOG_DIR:-/tmp/ftui_e2e_${E2E_RUN_ID}_${TIMESTAMP}}"
 if [[ -e "$E2E_LOG_DIR" ]]; then
     base="$E2E_LOG_DIR"
     suffix=1
@@ -47,12 +49,15 @@ if [[ -e "$E2E_LOG_DIR" ]]; then
 fi
 E2E_RESULTS_DIR="$E2E_LOG_DIR/results"
 LOG_FILE="$E2E_LOG_DIR/e2e.log"
+E2E_JSONL_FILE="${E2E_JSONL_FILE:-$E2E_LOG_DIR/e2e.jsonl}"
+E2E_RUN_CMD="${E2E_RUN_CMD:-$0 $*}"
 
-export E2E_LOG_DIR E2E_RESULTS_DIR LOG_FILE LOG_LEVEL
-export E2E_RUN_START_MS="$(date +%s%3N)"
+export E2E_LOG_DIR E2E_RESULTS_DIR LOG_FILE LOG_LEVEL E2E_JSONL_FILE E2E_RUN_CMD
+export E2E_RUN_START_MS="${E2E_RUN_START_MS:-$(e2e_run_start_ms)}"
 
 # Prepare results directory without destructive cleanup
 mkdir -p "$E2E_LOG_DIR" "$E2E_RESULTS_DIR"
+jsonl_init
 
 log_info "FrankenTUI E2E Test Suite"
 log_info "Project root: $PROJECT_ROOT"
@@ -158,6 +163,9 @@ else
     fi
     if [[ -x "$SCRIPT_DIR/test_terminal_quirks.sh" ]]; then
         run_suite "terminal_quirks" "$SCRIPT_DIR/test_terminal_quirks.sh"
+    fi
+    if [[ -x "$SCRIPT_DIR/test_pty_canonicalize.sh" ]]; then
+        run_suite "pty_canonicalize" "$SCRIPT_DIR/test_pty_canonicalize.sh"
     fi
     if [[ -x "$SCRIPT_DIR/test_embedded_terminal.sh" ]]; then
         run_suite "embedded_terminal" "$SCRIPT_DIR/test_embedded_terminal.sh"

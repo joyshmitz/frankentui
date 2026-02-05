@@ -12,23 +12,24 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LIB_DIR="$PROJECT_ROOT/tests/e2e/lib"
 
 # shellcheck source=/dev/null
-if [[ -f "$LIB_DIR/logging.sh" ]]; then
-    source "$LIB_DIR/logging.sh"
-fi
-if ! declare -f e2e_timestamp >/dev/null 2>&1; then
-    e2e_timestamp() { date -Iseconds; }
-fi
-if ! declare -f e2e_log_stamp >/dev/null 2>&1; then
-    e2e_log_stamp() { date +%Y%m%d_%H%M%S; }
-fi
+source "$LIB_DIR/common.sh"
+# shellcheck source=/dev/null
+source "$LIB_DIR/logging.sh"
 
 LOG_DIR="${PROJECT_ROOT}/target/e2e-logs"
+e2e_fixture_init "tour"
+RUN_ID="${E2E_RUN_ID}"
 TIMESTAMP="$(e2e_log_stamp)"
-RUN_ID="tour_${TIMESTAMP}"
-LOG_FILE="${LOG_DIR}/guided_tour_${TIMESTAMP}.jsonl"
+LOG_FILE="${LOG_DIR}/guided_tour_${RUN_ID}_${TIMESTAMP}.jsonl"
 STDOUT_LOG="${LOG_DIR}/guided_tour_${TIMESTAMP}.log"
 
 mkdir -p "$LOG_DIR"
+export E2E_LOG_DIR="$LOG_DIR"
+export E2E_RESULTS_DIR="${E2E_RESULTS_DIR:-$LOG_DIR/results}"
+export E2E_RUN_CMD="${E2E_RUN_CMD:-$0 $*}"
+export E2E_JSONL_FILE="$LOG_FILE"
+mkdir -p "$E2E_RESULTS_DIR"
+jsonl_init
 
 # -----------------------------------------------------------------------
 # Environment info
@@ -39,20 +40,21 @@ echo "Date: $(e2e_timestamp)"
 echo "Log: $LOG_FILE"
 echo
 
-cat > "$LOG_FILE" <<EOF_ENV
-{"type":"env","timestamp":"$(e2e_timestamp)","rust_version":"$(rustc --version 2>/dev/null || echo 'unknown')","platform":"$(uname -s)","arch":"$(uname -m)","run_id":"${RUN_ID}"}
-EOF_ENV
-
 # -----------------------------------------------------------------------
 # Build
 # -----------------------------------------------------------------------
 
 echo "Building ftui-demo-showcase (debug)..."
+build_start_ms="$(e2e_now_ms)"
+jsonl_step_start "build"
 if cargo build -p ftui-demo-showcase > "$STDOUT_LOG" 2>&1; then
-    echo '{"type":"build","status":"success","target":"ftui-demo-showcase"}' >> "$LOG_FILE"
+    build_duration_ms=$(( $(e2e_now_ms) - build_start_ms ))
+    jsonl_step_end "build" "success" "$build_duration_ms"
 else
-    echo '{"type":"build","status":"failed","target":"ftui-demo-showcase"}' >> "$LOG_FILE"
+    build_duration_ms=$(( $(e2e_now_ms) - build_start_ms ))
+    jsonl_step_end "build" "failed" "$build_duration_ms"
     echo "FAIL: Build failed (see $STDOUT_LOG)"
+    jsonl_run_end "failed" "$build_duration_ms" 1
     exit 1
 fi
 
@@ -61,6 +63,9 @@ fi
 # -----------------------------------------------------------------------
 
 echo "Running guided tour..."
+cols="${COLUMNS:-}"
+rows="${LINES:-}"
+jsonl_set_context "alt" "$cols" "$rows" "${E2E_SEED:-0}"
 
 CMD=(
     cargo run -p ftui-demo-showcase --
@@ -73,27 +78,32 @@ CMD=(
 ENV_VARS=(
     "FTUI_TOUR_REPORT_PATH=$LOG_FILE"
     "FTUI_TOUR_RUN_ID=$RUN_ID"
-    "FTUI_TOUR_SEED=0"
+    "FTUI_TOUR_SEED=${E2E_SEED:-0}"
     "FTUI_TOUR_CAPS_PROFILE=${TERM:-unknown}"
     "FTUI_DEMO_SCREEN_MODE=alt"
 )
 
+run_start_ms="$(e2e_now_ms)"
+jsonl_step_start "guided_tour"
 if command -v timeout >/dev/null 2>&1; then
     if env "${ENV_VARS[@]}" timeout 12s "${CMD[@]}" >> "$STDOUT_LOG" 2>&1; then
-        echo '{"type":"run","status":"success","mode":"alt"}' >> "$LOG_FILE"
+        run_status="success"
     else
-        echo '{"type":"run","status":"failed","mode":"alt"}' >> "$LOG_FILE"
-        echo "FAIL: Run failed (see $STDOUT_LOG)"
-        exit 1
+        run_status="failed"
     fi
 else
     if env "${ENV_VARS[@]}" "${CMD[@]}" >> "$STDOUT_LOG" 2>&1; then
-        echo '{"type":"run","status":"success","mode":"alt"}' >> "$LOG_FILE"
+        run_status="success"
     else
-        echo '{"type":"run","status":"failed","mode":"alt"}' >> "$LOG_FILE"
-        echo "FAIL: Run failed (see $STDOUT_LOG)"
-        exit 1
+        run_status="failed"
     fi
+fi
+run_duration_ms=$(( $(e2e_now_ms) - run_start_ms ))
+jsonl_step_end "guided_tour" "$run_status" "$run_duration_ms"
+if [[ "$run_status" != "success" ]]; then
+    echo "FAIL: Run failed (see $STDOUT_LOG)"
+    jsonl_run_end "failed" "$run_duration_ms" 1
+    exit 1
 fi
 
 # -----------------------------------------------------------------------
@@ -110,7 +120,8 @@ if ! grep -q '"action":"start"' "$LOG_FILE"; then
     exit 1
 fi
 
-echo '{"type":"summary","status":"pass"}' >> "$LOG_FILE"
+jsonl_assert "tour_jsonl_entries" "pass" "guided tour JSONL entries present"
+jsonl_run_end "success" "$run_duration_ms" 0
 
 echo "PASS: Guided tour logs captured at $LOG_FILE"
 

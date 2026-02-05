@@ -3,5 +3,6 @@
 {"schema_version":"e2e-jsonl-v1","type":"step_start","timestamp":"T000003","run_id":"example_run","seed":0,"step":"inline","mode":"inline","hash_key":"inline-80x24-seed0","cols":80,"rows":24}
 {"schema_version":"e2e-jsonl-v1","type":"pty_capture","timestamp":"T000004","run_id":"example_run","seed":0,"output_file":"/tmp/out.pty","canonical_file":"","output_sha256":"deadbeef","canonical_sha256":"","output_bytes":100,"canonical_bytes":0,"cols":80,"rows":24,"exit_code":0}
 {"schema_version":"e2e-jsonl-v1","type":"assert","timestamp":"T000005","run_id":"example_run","seed":0,"assertion":"balanced_sync","status":"passed","details":"ok"}
+{"schema_version":"e2e-jsonl-v1","type":"artifact","timestamp":"T000005","run_id":"example_run","seed":0,"artifact_type":"log_dir","path":"/tmp/ftui_e2e","status":"present","sha256":"","bytes":0}
 {"schema_version":"e2e-jsonl-v1","type":"step_end","timestamp":"T000006","run_id":"example_run","seed":0,"step":"inline","status":"passed","duration_ms":42,"mode":"inline","hash_key":"inline-80x24-seed0","cols":80,"rows":24}
 {"schema_version":"e2e-jsonl-v1","type":"run_end","timestamp":"T000007","run_id":"example_run","seed":0,"status":"complete","duration_ms":420,"failed_count":0}

@@ -244,3 +244,194 @@ impl Screen for VoiOverlayScreen {
         "VOI"
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ftui_core::event::Modifiers;
+    use ftui_render::grapheme_pool::GraphemePool;
+    use ftui_runtime::{VoiDecision, VoiObservation};
+
+    fn sample_decision() -> VoiDecision {
+        VoiDecision {
+            event_idx: 7,
+            should_sample: true,
+            forced_by_interval: false,
+            blocked_by_min_interval: false,
+            voi_gain: 0.22,
+            score: 0.3,
+            cost: 0.1,
+            log_bayes_factor: 1.2,
+            posterior_mean: 0.4,
+            posterior_variance: 0.5,
+            e_value: 1.1,
+            e_threshold: 2.0,
+            boundary_score: 0.7,
+            events_since_sample: 3,
+            time_since_sample_ms: 12.0,
+            reason: "test",
+        }
+    }
+
+    fn sample_observation() -> VoiObservation {
+        VoiObservation {
+            event_idx: 7,
+            sample_idx: 2,
+            violated: true,
+            posterior_mean: 0.55,
+            posterior_variance: 0.1,
+            alpha: 2.0,
+            beta: 3.0,
+            e_value: 1.4,
+            e_threshold: 2.0,
+        }
+    }
+
+    #[test]
+    fn overlay_area_clamps_and_centers() {
+        let area = Rect::new(10, 5, 20, 10);
+        let overlay = VoiOverlayScreen::overlay_area(area, 60, 60);
+        assert_eq!(overlay.width, 20);
+        assert_eq!(overlay.height, 10);
+        assert_eq!(overlay.x, 10);
+        assert_eq!(overlay.y, 5);
+
+        let overlay = VoiOverlayScreen::overlay_area(area, 10, 4);
+        assert_eq!(overlay.width, 10);
+        assert_eq!(overlay.height, 4);
+        assert_eq!(overlay.x, 10 + (20 - 10) / 2);
+        assert_eq!(overlay.y, 5 + (10 - 4) / 2);
+    }
+
+    #[test]
+    fn ledger_entries_from_logs_maps_entries() {
+        let decision = sample_decision();
+        let observation = sample_observation();
+        let logs = [
+            VoiLogEntry::Decision(decision.clone()),
+            VoiLogEntry::Observation(observation.clone()),
+        ];
+        let entries = VoiOverlayScreen::ledger_entries_from_logs(logs.iter());
+        assert_eq!(entries.len(), 2);
+
+        match &entries[0] {
+            VoiLedgerEntry::Decision {
+                event_idx,
+                should_sample,
+                ..
+            } => {
+                assert_eq!(*event_idx, decision.event_idx);
+                assert_eq!(*should_sample, decision.should_sample);
+            }
+            _ => panic!("expected decision entry"),
+        }
+
+        match &entries[1] {
+            VoiLedgerEntry::Observation {
+                sample_idx,
+                violated,
+                ..
+            } => {
+                assert_eq!(*sample_idx, observation.sample_idx);
+                assert_eq!(*violated, observation.violated);
+            }
+            _ => panic!("expected observation entry"),
+        }
+    }
+
+    #[test]
+    fn data_from_snapshot_populates_fields() {
+        let decision = sample_decision();
+        let observation = sample_observation();
+        let logs = vec![
+            VoiLogEntry::Decision(decision.clone()),
+            VoiLogEntry::Observation(observation.clone()),
+        ];
+        let snapshot = VoiSamplerSnapshot {
+            captured_ms: 123,
+            alpha: 2.0,
+            beta: 3.0,
+            posterior_mean: 0.4,
+            posterior_variance: 0.05,
+            expected_variance_after: 0.02,
+            voi_gain: 0.03,
+            last_decision: Some(decision.clone()),
+            last_observation: Some(observation.clone()),
+            recent_logs: logs,
+        };
+
+        let mut screen = VoiOverlayScreen::new();
+        screen.tick = 42;
+        let data = screen.data_from_snapshot(&snapshot, "snapshot");
+        assert_eq!(data.tick, Some(42));
+        assert_eq!(data.source.as_deref(), Some("snapshot"));
+        assert_eq!(data.posterior.alpha, snapshot.alpha);
+        assert_eq!(data.posterior.beta, snapshot.beta);
+        assert!(data.decision.is_some());
+        assert!(data.observation.is_some());
+        assert_eq!(data.ledger.len(), 2);
+    }
+
+    #[test]
+    fn data_from_sampler_populates_fields() {
+        let mut screen = VoiOverlayScreen::new();
+        screen.tick = 7;
+        let now = Instant::now();
+        let _ = screen.sampler.decide(now);
+        let _ = screen.sampler.observe_at(true, now);
+
+        let data = screen.data_from_sampler("fallback");
+        assert_eq!(data.tick, Some(7));
+        assert_eq!(data.source.as_deref(), Some("fallback"));
+        assert!(data.decision.is_some());
+        assert!(data.observation.is_some());
+        assert!(!data.ledger.is_empty());
+    }
+
+    #[test]
+    fn update_resets_on_r() {
+        let mut screen = VoiOverlayScreen::new();
+        screen.tick(5);
+        assert!(!screen.sampler.logs().is_empty());
+        let event = Event::Key(KeyEvent {
+            code: KeyCode::Char('r'),
+            modifiers: Modifiers::NONE,
+            kind: KeyEventKind::Press,
+        });
+        screen.update(&event);
+        assert_eq!(screen.tick, 0);
+        assert!(screen.sampler.logs().is_empty());
+    }
+
+    #[test]
+    fn tick_updates_counter_and_sampler() {
+        let mut screen = VoiOverlayScreen::new();
+        screen.tick(1);
+        assert_eq!(screen.tick, 1);
+        assert_eq!(screen.sampler.summary().total_events, 1);
+    }
+
+    #[test]
+    fn render_no_panic_empty_area() {
+        let screen = VoiOverlayScreen::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(1, 1, &mut pool);
+        screen.view(&mut frame, Rect::new(0, 0, 0, 0));
+    }
+
+    #[test]
+    fn render_no_panic_small_area() {
+        let screen = VoiOverlayScreen::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 6, &mut pool);
+        screen.view(&mut frame, Rect::new(0, 0, 20, 6));
+    }
+
+    #[test]
+    fn render_no_panic_standard_area() {
+        let screen = VoiOverlayScreen::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+        screen.view(&mut frame, Rect::new(0, 0, 80, 24));
+    }
+}

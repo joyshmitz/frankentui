@@ -59,13 +59,74 @@
 
 use std::collections::VecDeque;
 
-use crate::evidence_sink::EvidenceSink;
+use crate::evidence_sink::{EVIDENCE_SCHEMA_VERSION, EvidenceSink};
 /// Minimum wealth floor.
 const E_MIN: f64 = 1e-15;
 /// Maximum wealth ceiling.
 const E_MAX: f64 = 1e15;
 /// Minimum variance floor.
 const SIGMA2_MIN: f64 = 1e-6;
+
+fn default_budget_run_id() -> String {
+    format!("budget-{}", std::process::id())
+}
+
+#[derive(Debug, Clone)]
+pub struct EvidenceContext {
+    run_id: String,
+    screen_mode: String,
+    cols: u16,
+    rows: u16,
+}
+
+impl EvidenceContext {
+    #[must_use]
+    pub fn new(
+        run_id: impl Into<String>,
+        screen_mode: impl Into<String>,
+        cols: u16,
+        rows: u16,
+    ) -> Self {
+        Self {
+            run_id: run_id.into(),
+            screen_mode: screen_mode.into(),
+            cols,
+            rows,
+        }
+    }
+
+    fn prefix(&self, event_idx: u64) -> String {
+        format!(
+            r#""schema_version":"{}","run_id":"{}","event_idx":{},"screen_mode":"{}","cols":{},"rows":{}"#,
+            EVIDENCE_SCHEMA_VERSION,
+            json_escape(&self.run_id),
+            event_idx,
+            json_escape(&self.screen_mode),
+            self.cols,
+            self.rows
+        )
+    }
+}
+
+#[inline]
+fn json_escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "\\u{:04X}", c as u32);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
 
 /// Configuration for the allocation budget monitor.
 #[derive(Debug, Clone)]
@@ -126,9 +187,10 @@ impl BudgetConfig {
 
     /// Serialize configuration to JSONL format.
     #[must_use]
-    pub fn to_jsonl(&self) -> String {
+    pub(crate) fn to_jsonl(&self, context: &EvidenceContext, event_idx: u64) -> String {
+        let prefix = context.prefix(event_idx);
         format!(
-            r#"{{"event":"allocation_budget_config","alpha":{:.6},"mu_0":{:.6},"sigma_sq":{:.6},"cusum_k":{:.6},"cusum_h":{:.6},"lambda":{:.6},"window_size":{}}}"#,
+            r#"{{{prefix},"event":"allocation_budget_config","alpha":{:.6},"mu_0":{:.6},"sigma_sq":{:.6},"cusum_k":{:.6},"cusum_h":{:.6},"lambda":{:.6},"window_size":{}}}"#,
             self.alpha,
             self.mu_0,
             self.sigma_sq,
@@ -171,9 +233,10 @@ pub struct BudgetEvidence {
 impl BudgetEvidence {
     /// Serialize evidence to JSONL format.
     #[must_use]
-    pub fn to_jsonl(&self) -> String {
+    pub(crate) fn to_jsonl(&self, context: &EvidenceContext) -> String {
+        let prefix = context.prefix(self.frame);
         format!(
-            r#"{{"event":"allocation_budget_evidence","frame":{},"x":{:.6},"residual":{:.6},"cusum_plus":{:.6},"cusum_minus":{:.6},"e_value":{:.6},"alert":{}}}"#,
+            r#"{{{prefix},"event":"allocation_budget_evidence","frame":{},"x":{:.6},"residual":{:.6},"cusum_plus":{:.6},"cusum_minus":{:.6},"e_value":{:.6},"alert":{}}}"#,
             self.frame,
             self.x,
             self.residual,
@@ -226,6 +289,8 @@ pub struct AllocationBudget {
     evidence_sink: Option<EvidenceSink>,
     /// Whether config has been logged to the sink.
     config_logged: bool,
+    /// Evidence metadata for JSONL logs.
+    evidence_context: EvidenceContext,
 }
 
 impl AllocationBudget {
@@ -243,6 +308,7 @@ impl AllocationBudget {
             ledger_max: 500,
             evidence_sink: None,
             config_logged: false,
+            evidence_context: EvidenceContext::new(default_budget_run_id(), "unknown", 0, 0),
         }
     }
 
@@ -252,6 +318,30 @@ impl AllocationBudget {
         self.evidence_sink = Some(sink);
         self.config_logged = false;
         self
+    }
+
+    /// Set evidence context fields for JSONL logs.
+    #[must_use]
+    pub fn with_evidence_context(
+        mut self,
+        run_id: impl Into<String>,
+        screen_mode: impl Into<String>,
+        cols: u16,
+        rows: u16,
+    ) -> Self {
+        self.evidence_context = EvidenceContext::new(run_id, screen_mode, cols, rows);
+        self
+    }
+
+    /// Set evidence context fields for JSONL logs.
+    pub fn set_evidence_context(
+        &mut self,
+        run_id: impl Into<String>,
+        screen_mode: impl Into<String>,
+        cols: u16,
+        rows: u16,
+    ) {
+        self.evidence_context = EvidenceContext::new(run_id, screen_mode, cols, rows);
     }
 
     /// Set or clear the evidence sink.
@@ -309,11 +399,12 @@ impl AllocationBudget {
             alert,
         };
         if let Some(ref sink) = self.evidence_sink {
+            let context = &self.evidence_context;
             if !self.config_logged {
-                let _ = sink.write_jsonl(&self.config.to_jsonl());
+                let _ = sink.write_jsonl(&self.config.to_jsonl(context, 0));
                 self.config_logged = true;
             }
-            let _ = sink.write_jsonl(&entry.to_jsonl());
+            let _ = sink.write_jsonl(&entry.to_jsonl(context));
         }
         self.ledger.push_back(entry);
         if self.ledger.len() > self.ledger_max {
@@ -425,9 +516,12 @@ pub struct BudgetSummary {
 impl BudgetSummary {
     /// Serialize summary to JSONL format.
     #[must_use]
-    pub fn to_jsonl(&self) -> String {
+    #[allow(dead_code)]
+    #[allow(dead_code)]
+    pub(crate) fn to_jsonl(&self, context: &EvidenceContext, event_idx: u64) -> String {
+        let prefix = context.prefix(event_idx);
         format!(
-            r#"{{"event":"allocation_budget_summary","frames":{},"total_alerts":{},"e_value":{:.6},"cusum_plus":{:.6},"cusum_minus":{:.6},"running_mean":{:.6},"mu_0":{:.6},"drift":{:.6}}}"#,
+            r#"{{{prefix},"event":"allocation_budget_summary","frames":{},"total_alerts":{},"e_value":{:.6},"cusum_plus":{:.6},"cusum_minus":{:.6},"running_mean":{:.6},"mu_0":{:.6},"drift":{:.6}}}"#,
             self.frames,
             self.total_alerts,
             self.e_value,
@@ -443,6 +537,10 @@ impl BudgetSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_context() -> EvidenceContext {
+        EvidenceContext::new("budget-test", "inline", 80, 24)
+    }
 
     // ─── CUSUM tests ──────────────────────────────────────────────
 
@@ -779,5 +877,149 @@ mod tests {
         assert_eq!(ev1, ev2);
         assert!((cp1 - cp2).abs() < 1e-15);
         assert!((cm1 - cm2).abs() < 1e-15);
+    }
+
+    // ─── JSONL schema tests ───────────────────────────────────────
+
+    #[test]
+    fn config_jsonl_parses_and_has_fields() {
+        use serde_json::Value;
+
+        let config = BudgetConfig::default();
+        let context = test_context();
+        let jsonl = config.to_jsonl(&context, 0);
+        let value: Value = serde_json::from_str(&jsonl).expect("valid JSONL");
+
+        assert_eq!(value["schema_version"], EVIDENCE_SCHEMA_VERSION);
+        assert_eq!(value["run_id"], "budget-test");
+        assert!(
+            value["event_idx"].is_number(),
+            "event_idx should be numeric"
+        );
+        assert_eq!(value["screen_mode"], "inline");
+        assert!(value["cols"].is_number(), "cols should be numeric");
+        assert!(value["rows"].is_number(), "rows should be numeric");
+        assert_eq!(value["event"], "allocation_budget_config");
+        for key in [
+            "alpha",
+            "mu_0",
+            "sigma_sq",
+            "cusum_k",
+            "cusum_h",
+            "lambda",
+            "window_size",
+        ] {
+            assert!(value.get(key).is_some(), "missing config field {key}");
+        }
+    }
+
+    #[test]
+    fn evidence_jsonl_parses_and_has_fields() {
+        use serde_json::Value;
+
+        let evidence = BudgetEvidence {
+            frame: 3,
+            x: 12.0,
+            residual: 2.0,
+            cusum_plus: 1.5,
+            cusum_minus: 0.5,
+            e_value: 1.2,
+            alert: false,
+        };
+        let context = test_context();
+        let jsonl = evidence.to_jsonl(&context);
+        let value: Value = serde_json::from_str(&jsonl).expect("valid JSONL");
+
+        assert_eq!(value["schema_version"], EVIDENCE_SCHEMA_VERSION);
+        assert_eq!(value["run_id"], "budget-test");
+        assert!(
+            value["event_idx"].is_number(),
+            "event_idx should be numeric"
+        );
+        assert_eq!(value["screen_mode"], "inline");
+        assert!(value["cols"].is_number(), "cols should be numeric");
+        assert!(value["rows"].is_number(), "rows should be numeric");
+        assert_eq!(value["event"], "allocation_budget_evidence");
+        for key in [
+            "frame",
+            "x",
+            "residual",
+            "cusum_plus",
+            "cusum_minus",
+            "e_value",
+            "alert",
+        ] {
+            assert!(value.get(key).is_some(), "missing evidence field {key}");
+        }
+    }
+
+    #[test]
+    fn summary_jsonl_parses_and_has_fields() {
+        use serde_json::Value;
+
+        let summary = BudgetSummary {
+            frames: 5,
+            total_alerts: 1,
+            e_value: 2.0,
+            cusum_plus: 3.0,
+            cusum_minus: 1.0,
+            running_mean: 11.0,
+            mu_0: 10.0,
+            drift: 1.0,
+        };
+        let context = test_context();
+        let jsonl = summary.to_jsonl(&context, 5);
+        let value: Value = serde_json::from_str(&jsonl).expect("valid JSONL");
+
+        assert_eq!(value["schema_version"], EVIDENCE_SCHEMA_VERSION);
+        assert_eq!(value["run_id"], "budget-test");
+        assert!(
+            value["event_idx"].is_number(),
+            "event_idx should be numeric"
+        );
+        assert_eq!(value["screen_mode"], "inline");
+        assert!(value["cols"].is_number(), "cols should be numeric");
+        assert!(value["rows"].is_number(), "rows should be numeric");
+        assert_eq!(value["event"], "allocation_budget_summary");
+        for key in [
+            "frames",
+            "total_alerts",
+            "e_value",
+            "cusum_plus",
+            "cusum_minus",
+            "running_mean",
+            "mu_0",
+            "drift",
+        ] {
+            assert!(value.get(key).is_some(), "missing summary field {key}");
+        }
+    }
+
+    #[test]
+    fn evidence_jsonl_is_deterministic_for_fixed_inputs() {
+        let config = BudgetConfig::calibrated(50.0, 4.0, 5.0, 0.05);
+        let inputs = [50.0, 51.0, 49.0, 55.0, 48.0, 60.0, 50.0, 52.0, 47.0, 53.0];
+
+        let run = || {
+            let context = test_context();
+            let mut monitor = AllocationBudget::new(config.clone()).with_evidence_context(
+                "budget-test",
+                "inline",
+                80,
+                24,
+            );
+            for x in inputs {
+                monitor.observe(x);
+            }
+            monitor
+                .ledger()
+                .iter()
+                .map(|entry| entry.to_jsonl(&context))
+                .collect::<Vec<_>>()
+        };
+
+        let first = run();
+        let second = run();
+        assert_eq!(first, second);
     }
 }

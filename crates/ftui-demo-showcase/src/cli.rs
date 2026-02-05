@@ -35,6 +35,7 @@ OPTIONS:
     --vfx-seed=N         VFX harness seed override (optional)
     --vfx-jsonl=PATH     VFX harness JSONL output path (default: vfx_harness.jsonl)
     --vfx-run-id=ID      VFX harness run id override (optional)
+    --vfx-perf           Emit per-frame timing JSONL for VFX harness
     --help, -h           Show this help message
     --version, -V        Show version
 
@@ -112,9 +113,11 @@ ENVIRONMENT VARIABLES:
     FTUI_DEMO_VFX_ROWS        Fixed render rows (if size not set)
     FTUI_DEMO_VFX_SEED        Deterministic seed for VFX harness logs
     FTUI_DEMO_VFX_RUN_ID      Run id for VFX JSONL logs
-    FTUI_DEMO_VFX_JSONL       Path for VFX JSONL logs (or '-' for stderr)";
+    FTUI_DEMO_VFX_JSONL       Path for VFX JSONL logs (or '-' for stderr)
+    FTUI_DEMO_VFX_PERF        Enable VFX timing JSONL (1/true)";
 
 /// Parsed command-line options.
+#[derive(Debug, Clone)]
 pub struct Opts {
     /// Screen mode: "alt" or "inline".
     pub screen_mode: String,
@@ -154,6 +157,16 @@ pub struct Opts {
     pub vfx_jsonl: Option<String>,
     /// VFX harness run id override.
     pub vfx_run_id: Option<String>,
+    /// VFX harness per-frame timing logs.
+    pub vfx_perf: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ParseError {
+    Help,
+    Version,
+    InvalidValue { flag: &'static str, value: String },
+    UnknownArg(String),
 }
 
 impl Default for Opts {
@@ -178,6 +191,7 @@ impl Default for Opts {
             vfx_seed: None,
             vfx_jsonl: None,
             vfx_run_id: None,
+            vfx_perf: false,
         }
     }
 }
@@ -188,127 +202,163 @@ impl Opts {
     /// Environment variables take precedence over defaults but are overridden
     /// by explicit command-line flags.
     pub fn parse() -> Self {
+        match Self::parse_from_env_and_args(env::args().skip(1), |key| env::var(key).ok()) {
+            Ok(opts) => opts,
+            Err(ParseError::Help) => {
+                println!("{HELP_TEXT}");
+                process::exit(0);
+            }
+            Err(ParseError::Version) => {
+                println!("ftui-demo-showcase {VERSION}");
+                process::exit(0);
+            }
+            Err(ParseError::InvalidValue { flag, value }) => {
+                eprintln!("Invalid {flag} value: {value}");
+                process::exit(1);
+            }
+            Err(ParseError::UnknownArg(arg)) => {
+                eprintln!("Unknown argument: {arg}");
+                eprintln!("Run with --help for usage information.");
+                process::exit(1);
+            }
+        }
+    }
+
+    fn parse_from_env_and_args<I, S, F>(args: I, get_env: F) -> Result<Self, ParseError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+        F: Fn(&str) -> Option<String>,
+    {
         let mut opts = Self::default();
 
         // Apply environment variable defaults first
-        if let Ok(val) = env::var("FTUI_DEMO_SCREEN_MODE") {
+        if let Some(val) = get_env("FTUI_DEMO_SCREEN_MODE") {
             opts.screen_mode = val;
         }
-        if let Ok(val) = env::var("FTUI_DEMO_UI_HEIGHT")
+        if let Some(val) = get_env("FTUI_DEMO_UI_HEIGHT")
             && let Ok(n) = val.parse()
         {
             opts.ui_height = n;
         }
-        if let Ok(val) = env::var("FTUI_DEMO_UI_MIN_HEIGHT")
+        if let Some(val) = get_env("FTUI_DEMO_UI_MIN_HEIGHT")
             && let Ok(n) = val.parse()
         {
             opts.ui_min_height = n;
         }
-        if let Ok(val) = env::var("FTUI_DEMO_UI_MAX_HEIGHT")
+        if let Some(val) = get_env("FTUI_DEMO_UI_MAX_HEIGHT")
             && let Ok(n) = val.parse()
         {
             opts.ui_max_height = n;
         }
-        if let Ok(val) = env::var("FTUI_DEMO_SCREEN")
+        if let Some(val) = get_env("FTUI_DEMO_SCREEN")
             && let Ok(n) = val.parse()
         {
             opts.start_screen = n;
         }
-        if let Ok(val) = env::var("FTUI_DEMO_TOUR") {
+        if let Some(val) = get_env("FTUI_DEMO_TOUR") {
             let enabled = val == "1" || val.eq_ignore_ascii_case("true");
             opts.tour = enabled;
         }
-        if let Ok(val) = env::var("FTUI_DEMO_TOUR_SPEED")
+        if let Some(val) = get_env("FTUI_DEMO_TOUR_SPEED")
             && let Ok(n) = val.parse()
         {
             opts.tour_speed = n;
         }
-        if let Ok(val) = env::var("FTUI_DEMO_TOUR_START_STEP")
+        if let Some(val) = get_env("FTUI_DEMO_TOUR_START_STEP")
             && let Ok(n) = val.parse()
         {
             opts.tour_start_step = n;
         }
-        if let Ok(val) = env::var("FTUI_DEMO_EXIT_AFTER_MS")
+        if let Some(val) = get_env("FTUI_DEMO_EXIT_AFTER_MS")
             && let Ok(n) = val.parse()
         {
             eprintln!("WARNING: FTUI_DEMO_EXIT_AFTER_MS is set to {n}. App will auto-exit.");
             opts.exit_after_ms = n;
         }
-        if let Ok(val) = env::var("FTUI_DEMO_VFX_HARNESS") {
+        if let Some(val) = get_env("FTUI_DEMO_VFX_HARNESS") {
             let enabled = val == "1" || val.eq_ignore_ascii_case("true");
             opts.vfx_harness = enabled;
         }
-        if let Ok(val) = env::var("FTUI_DEMO_VFX_EFFECT")
+        if let Some(val) = get_env("FTUI_DEMO_VFX_EFFECT")
             && !val.trim().is_empty()
         {
             opts.vfx_effect = Some(val);
         }
-        if let Ok(val) = env::var("FTUI_DEMO_VFX_TICK_MS")
+        if let Some(val) = get_env("FTUI_DEMO_VFX_TICK_MS")
             && let Ok(n) = val.parse()
         {
             opts.vfx_tick_ms = n;
         }
-        if let Ok(val) = env::var("FTUI_DEMO_VFX_FRAMES")
+        if let Some(val) = get_env("FTUI_DEMO_VFX_FRAMES")
             && let Ok(n) = val.parse()
         {
             opts.vfx_frames = n;
         }
-        if let Ok(val) = env::var("FTUI_DEMO_VFX_EXIT_AFTER_MS")
+        if let Some(val) = get_env("FTUI_DEMO_VFX_EXIT_AFTER_MS")
             && let Ok(n) = val.parse()
         {
             opts.exit_after_ms = n;
         }
-        if let Ok(val) = env::var("FTUI_DEMO_VFX_SIZE")
+        if let Some(val) = get_env("FTUI_DEMO_VFX_SIZE")
             && let Some((cols, rows)) = parse_size(&val)
         {
             opts.vfx_cols = cols;
             opts.vfx_rows = rows;
         }
-        if let Ok(val) = env::var("FTUI_DEMO_VFX_COLS")
+        if let Some(val) = get_env("FTUI_DEMO_VFX_COLS")
             && let Ok(n) = val.parse()
         {
             opts.vfx_cols = n;
         }
-        if let Ok(val) = env::var("FTUI_DEMO_VFX_ROWS")
+        if let Some(val) = get_env("FTUI_DEMO_VFX_ROWS")
             && let Ok(n) = val.parse()
         {
             opts.vfx_rows = n;
         }
-        if let Ok(val) = env::var("FTUI_DEMO_VFX_SEED")
+        if let Some(val) = get_env("FTUI_DEMO_VFX_SEED")
             && let Ok(n) = val.parse()
         {
             opts.vfx_seed = Some(n);
         }
-        if let Ok(val) = env::var("FTUI_DEMO_VFX_JSONL")
+        if let Some(val) = get_env("FTUI_DEMO_VFX_JSONL")
             && !val.trim().is_empty()
         {
             opts.vfx_jsonl = Some(val);
         }
-        if let Ok(val) = env::var("FTUI_DEMO_VFX_RUN_ID")
+        if let Some(val) = get_env("FTUI_DEMO_VFX_RUN_ID")
             && !val.trim().is_empty()
         {
             opts.vfx_run_id = Some(val);
         }
+        if let Some(val) = get_env("FTUI_DEMO_VFX_PERF") {
+            let enabled = val == "1" || val.eq_ignore_ascii_case("true");
+            opts.vfx_perf = enabled;
+        }
 
         // Parse command-line args (override env vars)
-        let args: Vec<String> = env::args().skip(1).collect();
+        let args: Vec<String> = args
+            .into_iter()
+            .map(|arg| arg.as_ref().to_string())
+            .collect();
         let mut i = 0;
         while i < args.len() {
             let arg = &args[i];
             match arg.as_str() {
                 "--help" | "-h" => {
-                    println!("{HELP_TEXT}");
-                    process::exit(0);
+                    return Err(ParseError::Help);
                 }
                 "--version" | "-V" => {
-                    println!("ftui-demo-showcase {VERSION}");
-                    process::exit(0);
+                    return Err(ParseError::Version);
                 }
                 "--no-mouse" => {
                     opts.mouse = false;
                 }
                 "--vfx-harness" => {
                     opts.vfx_harness = true;
+                }
+                "--vfx-perf" => {
+                    opts.vfx_perf = true;
                 }
                 "--tour" => {
                     opts.tour = true;
@@ -320,56 +370,70 @@ impl Opts {
                         match val.parse() {
                             Ok(n) => opts.ui_height = n,
                             Err(_) => {
-                                eprintln!("Invalid --ui-height value: {val}");
-                                process::exit(1);
+                                return Err(ParseError::InvalidValue {
+                                    flag: "--ui-height",
+                                    value: val.to_string(),
+                                });
                             }
                         }
                     } else if let Some(val) = other.strip_prefix("--ui-min-height=") {
                         match val.parse() {
                             Ok(n) => opts.ui_min_height = n,
                             Err(_) => {
-                                eprintln!("Invalid --ui-min-height value: {val}");
-                                process::exit(1);
+                                return Err(ParseError::InvalidValue {
+                                    flag: "--ui-min-height",
+                                    value: val.to_string(),
+                                });
                             }
                         }
                     } else if let Some(val) = other.strip_prefix("--ui-max-height=") {
                         match val.parse() {
                             Ok(n) => opts.ui_max_height = n,
                             Err(_) => {
-                                eprintln!("Invalid --ui-max-height value: {val}");
-                                process::exit(1);
+                                return Err(ParseError::InvalidValue {
+                                    flag: "--ui-max-height",
+                                    value: val.to_string(),
+                                });
                             }
                         }
                     } else if let Some(val) = other.strip_prefix("--screen=") {
                         match val.parse() {
                             Ok(n) => opts.start_screen = n,
                             Err(_) => {
-                                eprintln!("Invalid --screen value: {val}");
-                                process::exit(1);
+                                return Err(ParseError::InvalidValue {
+                                    flag: "--screen",
+                                    value: val.to_string(),
+                                });
                             }
                         }
                     } else if let Some(val) = other.strip_prefix("--tour-speed=") {
                         match val.parse() {
                             Ok(n) => opts.tour_speed = n,
                             Err(_) => {
-                                eprintln!("Invalid --tour-speed value: {val}");
-                                process::exit(1);
+                                return Err(ParseError::InvalidValue {
+                                    flag: "--tour-speed",
+                                    value: val.to_string(),
+                                });
                             }
                         }
                     } else if let Some(val) = other.strip_prefix("--tour-start-step=") {
                         match val.parse() {
                             Ok(n) => opts.tour_start_step = n,
                             Err(_) => {
-                                eprintln!("Invalid --tour-start-step value: {val}");
-                                process::exit(1);
+                                return Err(ParseError::InvalidValue {
+                                    flag: "--tour-start-step",
+                                    value: val.to_string(),
+                                });
                             }
                         }
                     } else if let Some(val) = other.strip_prefix("--exit-after-ms=") {
                         match val.parse() {
                             Ok(n) => opts.exit_after_ms = n,
                             Err(_) => {
-                                eprintln!("Invalid --exit-after-ms value: {val}");
-                                process::exit(1);
+                                return Err(ParseError::InvalidValue {
+                                    flag: "--exit-after-ms",
+                                    value: val.to_string(),
+                                });
                             }
                         }
                     } else if let Some(val) = other.strip_prefix("--vfx-effect=") {
@@ -380,40 +444,50 @@ impl Opts {
                         match val.parse() {
                             Ok(n) => opts.vfx_tick_ms = n,
                             Err(_) => {
-                                eprintln!("Invalid --vfx-tick-ms value: {val}");
-                                process::exit(1);
+                                return Err(ParseError::InvalidValue {
+                                    flag: "--vfx-tick-ms",
+                                    value: val.to_string(),
+                                });
                             }
                         }
                     } else if let Some(val) = other.strip_prefix("--vfx-frames=") {
                         match val.parse() {
                             Ok(n) => opts.vfx_frames = n,
                             Err(_) => {
-                                eprintln!("Invalid --vfx-frames value: {val}");
-                                process::exit(1);
+                                return Err(ParseError::InvalidValue {
+                                    flag: "--vfx-frames",
+                                    value: val.to_string(),
+                                });
                             }
                         }
                     } else if let Some(val) = other.strip_prefix("--vfx-cols=") {
                         match val.parse() {
                             Ok(n) => opts.vfx_cols = n,
                             Err(_) => {
-                                eprintln!("Invalid --vfx-cols value: {val}");
-                                process::exit(1);
+                                return Err(ParseError::InvalidValue {
+                                    flag: "--vfx-cols",
+                                    value: val.to_string(),
+                                });
                             }
                         }
                     } else if let Some(val) = other.strip_prefix("--vfx-rows=") {
                         match val.parse() {
                             Ok(n) => opts.vfx_rows = n,
                             Err(_) => {
-                                eprintln!("Invalid --vfx-rows value: {val}");
-                                process::exit(1);
+                                return Err(ParseError::InvalidValue {
+                                    flag: "--vfx-rows",
+                                    value: val.to_string(),
+                                });
                             }
                         }
                     } else if let Some(val) = other.strip_prefix("--vfx-seed=") {
                         match val.parse() {
                             Ok(n) => opts.vfx_seed = Some(n),
                             Err(_) => {
-                                eprintln!("Invalid --vfx-seed value: {val}");
-                                process::exit(1);
+                                return Err(ParseError::InvalidValue {
+                                    flag: "--vfx-seed",
+                                    value: val.to_string(),
+                                });
                             }
                         }
                     } else if let Some(val) = other.strip_prefix("--vfx-jsonl=") {
@@ -425,16 +499,14 @@ impl Opts {
                             opts.vfx_run_id = Some(val.to_string());
                         }
                     } else {
-                        eprintln!("Unknown argument: {other}");
-                        eprintln!("Run with --help for usage information.");
-                        process::exit(1);
+                        return Err(ParseError::UnknownArg(other.to_string()));
                     }
                 }
             }
             i += 1;
         }
 
-        opts
+        Ok(opts)
     }
 }
 
@@ -452,6 +524,21 @@ fn parse_size(raw: &str) -> Option<(u16, u16)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse_with_env<I, S>(
+        args: I,
+        env_pairs: &[(&'static str, &'static str)],
+    ) -> Result<Opts, ParseError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut map = std::collections::HashMap::new();
+        for (key, value) in env_pairs {
+            map.insert(*key, *value);
+        }
+        Opts::parse_from_env_and_args(args, |key| map.get(key).map(|value| (*value).to_string()))
+    }
 
     #[test]
     fn default_opts() {
@@ -475,6 +562,7 @@ mod tests {
         assert!(opts.vfx_seed.is_none());
         assert!(opts.vfx_jsonl.is_none());
         assert!(opts.vfx_run_id.is_none());
+        assert!(!opts.vfx_perf);
     }
 
     #[test]
@@ -538,5 +626,149 @@ mod tests {
         assert!(HELP_TEXT.contains("FTUI_DEMO_VFX_SEED"));
         assert!(HELP_TEXT.contains("FTUI_DEMO_VFX_RUN_ID"));
         assert!(HELP_TEXT.contains("FTUI_DEMO_VFX_JSONL"));
+        assert!(HELP_TEXT.contains("FTUI_DEMO_VFX_PERF"));
+    }
+
+    #[test]
+    fn help_text_mentions_vfx_jsonl_default_path() {
+        const DEFAULT_PATH: &str = "vfx_harness.jsonl";
+        assert!(
+            HELP_TEXT.contains(DEFAULT_PATH),
+            "HELP_TEXT missing VFX JSONL default path {DEFAULT_PATH}"
+        );
+    }
+
+    #[test]
+    fn parse_size_variants() {
+        assert_eq!(parse_size("120x40"), Some((120, 40)));
+        assert_eq!(parse_size("80X24"), Some((80, 24)));
+        assert_eq!(parse_size("80x24x10"), None);
+        assert_eq!(parse_size("bad"), None);
+    }
+
+    #[test]
+    fn env_overrides_apply() {
+        let env = [
+            ("FTUI_DEMO_SCREEN_MODE", "inline"),
+            ("FTUI_DEMO_UI_HEIGHT", "24"),
+            ("FTUI_DEMO_TOUR", "true"),
+            ("FTUI_DEMO_VFX_SIZE", "110x33"),
+            ("FTUI_DEMO_VFX_PERF", "1"),
+        ];
+        let opts = parse_with_env(Vec::<String>::new(), &env).expect("parse");
+        assert_eq!(
+            opts.screen_mode, "inline",
+            "env={env:?} expected screen_mode=inline, got {}",
+            opts.screen_mode
+        );
+        assert_eq!(
+            opts.ui_height, 24,
+            "env={env:?} expected ui_height=24, got {}",
+            opts.ui_height
+        );
+        assert!(
+            opts.tour,
+            "env={env:?} expected tour=true, got {}",
+            opts.tour
+        );
+        assert_eq!(
+            opts.vfx_cols, 110,
+            "env={env:?} expected vfx_cols=110, got {}",
+            opts.vfx_cols
+        );
+        assert_eq!(
+            opts.vfx_rows, 33,
+            "env={env:?} expected vfx_rows=33, got {}",
+            opts.vfx_rows
+        );
+        assert!(
+            opts.vfx_perf,
+            "env={env:?} expected vfx_perf=true, got {}",
+            opts.vfx_perf
+        );
+    }
+
+    #[test]
+    fn env_vfx_jsonl_sets_path() {
+        let opts = parse_with_env(
+            Vec::<String>::new(),
+            &[("FTUI_DEMO_VFX_JSONL", "out.jsonl")],
+        )
+        .expect("parse env");
+        assert_eq!(
+            opts.vfx_jsonl.as_deref(),
+            Some("out.jsonl"),
+            "expected FTUI_DEMO_VFX_JSONL to set vfx_jsonl, got {:?}",
+            opts.vfx_jsonl
+        );
+    }
+
+    #[test]
+    fn args_override_env_vfx_jsonl() {
+        let opts = parse_with_env(
+            ["--vfx-jsonl=cli.jsonl"],
+            &[("FTUI_DEMO_VFX_JSONL", "env.jsonl")],
+        )
+        .expect("parse args");
+        assert_eq!(
+            opts.vfx_jsonl.as_deref(),
+            Some("cli.jsonl"),
+            "expected args to override env for vfx_jsonl, got {:?}",
+            opts.vfx_jsonl
+        );
+    }
+
+    #[test]
+    fn args_override_env() {
+        let args = ["--screen-mode=alt"];
+        let env = [("FTUI_DEMO_SCREEN_MODE", "inline")];
+        let opts = parse_with_env(args, &env).expect("parse args");
+        assert_eq!(
+            opts.screen_mode, "alt",
+            "args={args:?} env={env:?} expected screen_mode=alt, got {}",
+            opts.screen_mode
+        );
+    }
+
+    #[test]
+    fn args_parse_vfx_seed_and_effect() {
+        let args = ["--vfx-seed=42", "--vfx-effect=doom"];
+        let opts = parse_with_env(args, &[]).expect("parse args");
+        assert_eq!(
+            opts.vfx_seed,
+            Some(42),
+            "args={args:?} expected vfx_seed=42, got {:?}",
+            opts.vfx_seed
+        );
+        assert_eq!(
+            opts.vfx_effect.as_deref(),
+            Some("doom"),
+            "args={args:?} expected vfx_effect=doom, got {:?}",
+            opts.vfx_effect
+        );
+    }
+
+    #[test]
+    fn invalid_value_reports_flag() {
+        let args = ["--ui-height=bad"];
+        let err = parse_with_env(args, &[]);
+        if !matches!(
+            err,
+            Err(ParseError::InvalidValue {
+                flag: "--ui-height",
+                ..
+            })
+        ) {
+            panic!("args={args:?} expected InvalidValue for --ui-height, got {err:?}");
+        }
+    }
+
+    #[test]
+    fn unknown_arg_reports_error() {
+        let args = ["--mystery-flag"];
+        let err = parse_with_env(args, &[]);
+        if !matches!(err, Err(ParseError::UnknownArg(ref arg)) if arg == "--mystery-flag") {
+            panic!("args={args:?} expected UnknownArg for --mystery-flag, got {err:?}");
+        }
     }
 }

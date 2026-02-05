@@ -497,6 +497,13 @@ mod tests {
     }
 
     #[test]
+    fn stop_refresh_thread_without_start_is_safe() {
+        let w = TestWriter::new();
+        let live = Live::new(Box::new(w), 80);
+        live.stop_refresh_thread();
+    }
+
+    #[test]
     fn start_auto_refresh_ignores_non_positive_rate() {
         let w = TestWriter::new();
         let cfg = LiveConfig {
@@ -552,6 +559,14 @@ mod tests {
         });
 
         assert!(!w.output().contains("Should not appear"));
+    }
+
+    #[test]
+    fn clear_when_stopped_is_noop() {
+        let w = TestWriter::new();
+        let live = Live::new(Box::new(w.clone()), 80);
+        live.clear().unwrap();
+        assert!(w.output().is_empty());
     }
 
     #[test]

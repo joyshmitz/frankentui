@@ -13,19 +13,80 @@ E2E_JSONL_VALIDATE_MODE="${E2E_JSONL_VALIDATE_MODE:-}"
 E2E_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 E2E_JSONL_SCHEMA_FILE="${E2E_JSONL_SCHEMA_FILE:-$E2E_LIB_DIR/e2e_jsonl_schema.json}"
 E2E_JSONL_VALIDATOR="${E2E_JSONL_VALIDATOR:-$E2E_LIB_DIR/validate_jsonl.py}"
-E2E_DETERMINISTIC="${E2E_DETERMINISTIC:-0}"
+E2E_DETERMINISTIC="${E2E_DETERMINISTIC:-1}"
 E2E_SEED="${E2E_SEED:-0}"
 E2E_TIME_STEP_MS="${E2E_TIME_STEP_MS:-100}"
 
 e2e_is_deterministic() {
-    [[ "${E2E_DETERMINISTIC:-0}" == "1" ]]
+    [[ "${E2E_DETERMINISTIC:-1}" == "1" ]]
+}
+
+e2e_state_dir() {
+    local dir="${E2E_STATE_DIR:-$E2E_LOG_DIR}"
+    if [[ -z "$dir" ]]; then
+        dir="/tmp/ftui_e2e_state"
+    fi
+    mkdir -p "$dir"
+    printf '%s' "$dir"
+}
+
+e2e_counter_file() {
+    local name="$1"
+    local dir
+    dir="$(e2e_state_dir)"
+    printf '%s/.e2e_%s_counter' "$dir" "$name"
+}
+
+e2e_counter_read() {
+    local name="$1"
+    local env_var="${2:-}"
+    local default="${3:-0}"
+    local file value
+    file="$(e2e_counter_file "$name")"
+    value=""
+    if [[ -f "$file" ]]; then
+        value="$(cat "$file" 2>/dev/null || true)"
+    fi
+    if [[ -z "$value" && -n "$env_var" && -n "${!env_var:-}" ]]; then
+        value="${!env_var}"
+    fi
+    if [[ -z "$value" || ! "$value" =~ ^[0-9]+$ ]]; then
+        value="$default"
+    fi
+    printf '%s' "$value"
+}
+
+e2e_counter_set() {
+    local name="$1"
+    local value="$2"
+    local env_var="${3:-}"
+    local file
+    file="$(e2e_counter_file "$name")"
+    printf '%s' "$value" > "$file"
+    if [[ -n "$env_var" ]]; then
+        export "$env_var"="$value"
+    fi
+}
+
+e2e_counter_next() {
+    local name="$1"
+    local step="${2:-1}"
+    local env_var="${3:-}"
+    local default="${4:-0}"
+    local value
+    value="$(e2e_counter_read "$name" "$env_var" "$default")"
+    if [[ -z "$step" || ! "$step" =~ ^[0-9]+$ ]]; then
+        step=1
+    fi
+    value=$((value + step))
+    e2e_counter_set "$name" "$value" "$env_var"
+    printf '%s' "$value"
 }
 
 e2e_timestamp() {
     if e2e_is_deterministic; then
-        local seq="${E2E_TS_COUNTER:-0}"
-        seq=$((seq + 1))
-        export E2E_TS_COUNTER="$seq"
+        local seq
+        seq="$(e2e_counter_next "ts" 1 "E2E_TS_COUNTER" 0)"
         printf 'T%06d' "$seq"
         return 0
     fi
@@ -39,13 +100,91 @@ e2e_run_id() {
     fi
     if e2e_is_deterministic; then
         local seed="${E2E_SEED:-0}"
-        local seq="${E2E_RUN_SEQ:-0}"
-        seq=$((seq + 1))
-        export E2E_RUN_SEQ="$seq"
+        local seq
+        seq="$(e2e_counter_next "run_seq" 1 "E2E_RUN_SEQ" 0)"
         printf 'det_%s_%s' "$seed" "$seq"
         return 0
     fi
     printf 'run_%s_%s' "$(date +%Y%m%d_%H%M%S)" "$$"
+}
+
+e2e_determinism_self_test() {
+    local had_det="${E2E_DETERMINISTIC+x}"
+    local had_seed="${E2E_SEED+x}"
+    local had_run_id="${E2E_RUN_ID+x}"
+    local had_run_seq="${E2E_RUN_SEQ+x}"
+    local had_ts="${E2E_TS_COUNTER+x}"
+    local had_ms="${E2E_MS_COUNTER+x}"
+    local prev_det="${E2E_DETERMINISTIC:-}"
+    local prev_seed="${E2E_SEED:-}"
+    local prev_run_id="${E2E_RUN_ID:-}"
+    local prev_run_seq="${E2E_RUN_SEQ:-}"
+    local prev_ts="${E2E_TS_COUNTER:-}"
+    local prev_ms="${E2E_MS_COUNTER:-}"
+    local prev_run_seq_file prev_ts_file prev_ms_file
+    prev_run_seq_file="$(e2e_counter_read "run_seq" "E2E_RUN_SEQ" 0)"
+    prev_ts_file="$(e2e_counter_read "ts" "E2E_TS_COUNTER" 0)"
+    prev_ms_file="$(e2e_counter_read "ms" "E2E_MS_COUNTER" 0)"
+
+    export E2E_DETERMINISTIC="1"
+    export E2E_SEED="${E2E_SEED:-0}"
+    unset E2E_RUN_ID
+    export E2E_RUN_SEQ="0"
+    export E2E_TS_COUNTER="0"
+    export E2E_MS_COUNTER="0"
+    e2e_counter_set "run_seq" 0 "E2E_RUN_SEQ"
+    e2e_counter_set "ts" 0 "E2E_TS_COUNTER"
+    e2e_counter_set "ms" 0 "E2E_MS_COUNTER"
+
+    local run1 run2 ts1 ts2 ms1 ms2 step
+    run1="$(e2e_run_id)"
+    run2="$(e2e_run_id)"
+    ts1="$(e2e_timestamp)"
+    ts2="$(e2e_timestamp)"
+    ms1="$(e2e_now_ms)"
+    ms2="$(e2e_now_ms)"
+
+    step="${E2E_TIME_STEP_MS:-100}"
+    local status=0
+    if [[ "$run1" == "$run2" ]]; then
+        echo "E2E determinism self-test failed: run_id did not advance ($run1)" >&2
+        status=1
+    fi
+    if [[ "$ts1" != "T000001" || "$ts2" != "T000002" ]]; then
+        echo "E2E determinism self-test failed: timestamp did not advance ($ts1/$ts2)" >&2
+        status=1
+    fi
+    if [[ "$ms1" != "$step" || "$ms2" != "$((step * 2))" ]]; then
+        echo "E2E determinism self-test failed: ms counter not step-aligned ($ms1/$ms2, step=$step)" >&2
+        status=1
+    fi
+
+    if [[ -n "$had_det" ]]; then export E2E_DETERMINISTIC="$prev_det"; else unset E2E_DETERMINISTIC; fi
+    if [[ -n "$had_seed" ]]; then export E2E_SEED="$prev_seed"; else unset E2E_SEED; fi
+    if [[ -n "$had_run_id" ]]; then export E2E_RUN_ID="$prev_run_id"; else unset E2E_RUN_ID; fi
+    if [[ -n "$had_run_seq" ]]; then
+        export E2E_RUN_SEQ="$prev_run_seq"
+        e2e_counter_set "run_seq" "$prev_run_seq_file" "E2E_RUN_SEQ"
+    else
+        unset E2E_RUN_SEQ
+        e2e_counter_set "run_seq" "$prev_run_seq_file"
+    fi
+    if [[ -n "$had_ts" ]]; then
+        export E2E_TS_COUNTER="$prev_ts"
+        e2e_counter_set "ts" "$prev_ts_file" "E2E_TS_COUNTER"
+    else
+        unset E2E_TS_COUNTER
+        e2e_counter_set "ts" "$prev_ts_file"
+    fi
+    if [[ -n "$had_ms" ]]; then
+        export E2E_MS_COUNTER="$prev_ms"
+        e2e_counter_set "ms" "$prev_ms_file" "E2E_MS_COUNTER"
+    else
+        unset E2E_MS_COUNTER
+        e2e_counter_set "ms" "$prev_ms_file"
+    fi
+
+    return $status
 }
 
 e2e_run_start_ms() {
@@ -58,9 +197,9 @@ e2e_run_start_ms() {
 
 e2e_now_ms() {
     if e2e_is_deterministic; then
-        local seq="${E2E_MS_COUNTER:-0}"
-        seq=$((seq + 100))
-        export E2E_MS_COUNTER="$seq"
+        local step="${E2E_TIME_STEP_MS:-100}"
+        local seq
+        seq="$(e2e_counter_next "ms" "$step" "E2E_MS_COUNTER" 0)"
         printf '%s' "$seq"
         return 0
     fi
@@ -240,6 +379,7 @@ jsonl_init() {
     export E2E_RUN_START_MS="${E2E_RUN_START_MS:-$(e2e_run_start_ms)}"
     jsonl_env
     jsonl_run_start "${E2E_RUN_CMD:-}"
+    jsonl_assert "artifact_log_dir" "pass" "log_dir=$E2E_LOG_DIR"
 }
 
 jsonl_env() {
@@ -364,6 +504,9 @@ e2e_seed() {
     fi
     if [[ -z "${E2E_CONTEXT_SEED:-}" ]]; then
         export E2E_CONTEXT_SEED="$seed"
+    fi
+    if [[ -z "${STORM_SEED:-}" ]]; then
+        export STORM_SEED="$seed"
     fi
     printf '%s' "$seed"
 }
@@ -491,10 +634,88 @@ jsonl_pty_capture() {
     fi
 }
 
+artifact_strict_mode() {
+    local mode="${E2E_JSONL_VALIDATE_MODE:-}"
+    if [[ -z "$mode" ]]; then
+        if [[ -n "${CI:-}" || "${E2E_JSONL_VALIDATE:-}" == "1" ]]; then
+            mode="strict"
+        else
+            mode="warn"
+        fi
+    fi
+    [[ "$mode" == "strict" ]]
+}
+
+artifact_path_from_details() {
+    local details="$1"
+    if [[ -z "$details" ]]; then
+        printf ''
+        return 0
+    fi
+    if [[ "$details" == *"="* ]]; then
+        local value="${details#*=}"
+        printf '%s' "${value%% *}"
+        return 0
+    fi
+    printf '%s' "${details%% *}"
+}
+
+jsonl_artifact() {
+    local artifact_type="$1"
+    local path="$2"
+    local status="${3:-present}"
+    local ts sha bytes
+    ts="$(e2e_timestamp)"
+    sha=""
+    bytes=0
+    if [[ -n "$path" && -e "$path" ]]; then
+        if [[ -f "$path" ]]; then
+            sha="$(sha256_file "$path" 2>/dev/null || true)"
+            bytes=$(wc -c < "$path" 2>/dev/null | tr -d ' ')
+        fi
+    else
+        status="missing"
+    fi
+    local seed_json="null"
+    if [[ -n "${E2E_SEED:-}" ]]; then seed_json="${E2E_SEED}"; fi
+    if command -v jq >/dev/null 2>&1; then
+        jsonl_emit "$(jq -nc \
+            --arg schema_version "$E2E_JSONL_SCHEMA_VERSION" \
+            --arg type "artifact" \
+            --arg timestamp "$ts" \
+            --arg run_id "$E2E_RUN_ID" \
+            --arg artifact_type "$artifact_type" \
+            --arg path "$path" \
+            --arg status "$status" \
+            --arg sha256 "$sha" \
+            --argjson bytes "${bytes:-0}" \
+            --argjson seed "$seed_json" \
+            '{schema_version:$schema_version,type:$type,timestamp:$timestamp,run_id:$run_id,seed:$seed,artifact_type:$artifact_type,path:$path,status:$status,sha256:$sha256,bytes:$bytes}')"
+    else
+        jsonl_emit "{\"schema_version\":\"${E2E_JSONL_SCHEMA_VERSION}\",\"type\":\"artifact\",\"timestamp\":\"$(json_escape "$ts")\",\"run_id\":\"$(json_escape "$E2E_RUN_ID")\",\"seed\":${seed_json},\"artifact_type\":\"$(json_escape "$artifact_type")\",\"path\":\"$(json_escape "$path")\",\"status\":\"$(json_escape "$status")\",\"sha256\":\"$(json_escape "$sha")\",\"bytes\":${bytes:-0}}"
+    fi
+}
+
 jsonl_assert() {
     local name="$1"
     local status="$2"
     local details="${3:-}"
+    local assert_status="$status"
+    if [[ "$name" == artifact_* ]]; then
+        local artifact_type="${name#artifact_}"
+        local path
+        path="$(artifact_path_from_details "$details")"
+        if [[ -z "$path" || ! -e "$path" ]]; then
+            assert_status="failed"
+            jsonl_artifact "$artifact_type" "$path" "missing"
+            if artifact_strict_mode; then
+                log_error "Missing required artifact: ${artifact_type} (${path:-no path})"
+                return 1
+            fi
+        else
+            jsonl_artifact "$artifact_type" "$path" "present"
+        fi
+    fi
     local ts
     ts="$(e2e_timestamp)"
     local seed_json="null"
@@ -506,14 +727,14 @@ jsonl_assert() {
             --arg timestamp "$ts" \
             --arg run_id "$E2E_RUN_ID" \
             --arg assertion "$name" \
-            --arg status "$status" \
+            --arg status "$assert_status" \
             --arg details "$details" \
             --argjson seed "$seed_json" \
             '{schema_version:$schema_version,type:$type,timestamp:$timestamp,run_id:$run_id,seed:$seed,assertion:$assertion,status:$status,details:$details}')"
     else
         local seed_json="null"
         if [[ -n "${E2E_SEED:-}" ]]; then seed_json="${E2E_SEED}"; fi
-        jsonl_emit "{\"schema_version\":\"${E2E_JSONL_SCHEMA_VERSION}\",\"type\":\"assert\",\"timestamp\":\"$(json_escape "$ts")\",\"run_id\":\"$(json_escape "$E2E_RUN_ID")\",\"seed\":${seed_json},\"assertion\":\"$(json_escape "$name")\",\"status\":\"$(json_escape "$status")\",\"details\":\"$(json_escape "$details")\"}"
+        jsonl_emit "{\"schema_version\":\"${E2E_JSONL_SCHEMA_VERSION}\",\"type\":\"assert\",\"timestamp\":\"$(json_escape "$ts")\",\"run_id\":\"$(json_escape "$E2E_RUN_ID")\",\"seed\":${seed_json},\"assertion\":\"$(json_escape "$name")\",\"status\":\"$(json_escape "$assert_status")\",\"details\":\"$(json_escape "$details")\"}"
     fi
 }
 
@@ -644,6 +865,7 @@ record_result() {
                 > "$result_file"
         fi
     fi
+    jsonl_assert "artifact_case_log" "pass" "case_log=$log_file"
     jsonl_step_end "$name" "$status" "$duration_ms"
 }
 
@@ -684,4 +906,6 @@ EOF_SUM
     else
         jsonl_run_end "complete" "$duration_ms" "$failed_count"
     fi
+    jsonl_assert "artifact_summary_json" "pass" "summary_json=$summary_file"
+    jsonl_assert "artifact_e2e_jsonl" "pass" "e2e_jsonl=$E2E_JSONL_FILE"
 }

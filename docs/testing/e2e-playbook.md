@@ -23,6 +23,30 @@ tests/e2e/scripts/run_all.sh
 - `tests/e2e/lib/logging.sh` — structured logs + JSON results
 - `tests/e2e/fixtures/` — input fixtures for unicode/paste/etc.
 
+## Script Inventory
+
+| Script | Fixtures | JSONL | Coverage Notes |
+| --- | --- | --- | --- |
+| `scripts/e2e_test.sh` | yes | yes | Main PTY suite runner + budget/span/tile scenarios; JSONL run_end + schema v1 validation |
+| `scripts/demo_showcase_e2e.sh` | yes | yes | Demo showcase end-to-end steps; VFX/layout inspector JSONL artifacts with schema v1 fields |
+| `scripts/e2e_demo_tour.sh` | yes | yes | Guided tour run + report validation |
+| `scripts/demo_text_effects_e2e.sh` | yes | yes | Text effects demo checks |
+| `scripts/widget_api_e2e.sh` | pending | pending | Needs fixture + JSONL wiring |
+| `scripts/command_palette_e2e.sh` | pending | pending | Needs fixture + JSONL wiring |
+| `scripts/hover_stabilizer_e2e.sh` | pending | pending | Needs fixture + JSONL wiring |
+| `scripts/a11y_transitions_e2e.sh` | pending | pending | Needs fixture + JSONL wiring |
+
+Inventory scope: this table tracks top-level scripts in `scripts/`. Nested suites under
+`tests/e2e/scripts/` are covered by `scripts/e2e_test.sh` and the gap analysis doc.
+
+## Prerequisites Checklist
+
+- Deterministic fixtures live in `tests/e2e/lib/common.sh` and `tests/e2e/lib/logging.sh`.
+- JSONL schema is `tests/e2e/lib/e2e_jsonl_schema.json` with validator `tests/e2e/lib/validate_jsonl.py`.
+- CI runs strict JSONL validation when `CI=1` (via `jsonl_run_end` → `jsonl_validate_current`).
+- Local validation: set `E2E_JSONL_VALIDATE=1` or `E2E_JSONL_VALIDATE_MODE=strict` when running scripts.
+- Example JSONL lines: `tests/e2e/lib/e2e_jsonl_examples.jsonl`.
+
 ## Environment Controls
 
 Common variables:

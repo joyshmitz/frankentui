@@ -96,6 +96,175 @@ const VFX_CASES: &[VfxCase] = &[
         rows: VFX_ROWS,
     },
 ];
+const VFX_PERF_FRAMES: u64 = 120;
+const VFX_PERF_CASES: &[VfxCase] = &[
+    VfxCase {
+        effect: "metaballs",
+        frames: VFX_PERF_FRAMES,
+        tick_ms: VFX_TICK_MS,
+        cols: 80,
+        rows: 24,
+    },
+    VfxCase {
+        effect: "metaballs",
+        frames: VFX_PERF_FRAMES,
+        tick_ms: VFX_TICK_MS,
+        cols: 120,
+        rows: 40,
+    },
+    VfxCase {
+        effect: "plasma",
+        frames: VFX_PERF_FRAMES,
+        tick_ms: VFX_TICK_MS,
+        cols: 80,
+        rows: 24,
+    },
+    VfxCase {
+        effect: "plasma",
+        frames: VFX_PERF_FRAMES,
+        tick_ms: VFX_TICK_MS,
+        cols: 120,
+        rows: 40,
+    },
+    VfxCase {
+        effect: "doom-e1m1",
+        frames: VFX_PERF_FRAMES,
+        tick_ms: VFX_TICK_MS,
+        cols: 80,
+        rows: 24,
+    },
+    VfxCase {
+        effect: "doom-e1m1",
+        frames: VFX_PERF_FRAMES,
+        tick_ms: VFX_TICK_MS,
+        cols: 120,
+        rows: 40,
+    },
+    VfxCase {
+        effect: "quake-e1m1",
+        frames: VFX_PERF_FRAMES,
+        tick_ms: VFX_TICK_MS,
+        cols: 80,
+        rows: 24,
+    },
+    VfxCase {
+        effect: "quake-e1m1",
+        frames: VFX_PERF_FRAMES,
+        tick_ms: VFX_TICK_MS,
+        cols: 120,
+        rows: 40,
+    },
+    VfxCase {
+        effect: "mandelbrot",
+        frames: VFX_PERF_FRAMES,
+        tick_ms: VFX_TICK_MS,
+        cols: 80,
+        rows: 24,
+    },
+    VfxCase {
+        effect: "mandelbrot",
+        frames: VFX_PERF_FRAMES,
+        tick_ms: VFX_TICK_MS,
+        cols: 120,
+        rows: 40,
+    },
+];
+
+const VFX_PERF_CI_MULTIPLIER: f64 = 2.0;
+
+#[derive(Debug, Clone, Copy)]
+struct VfxPerfBudget {
+    effect: &'static str,
+    cols: u16,
+    rows: u16,
+    total_p50_ms: f64,
+    total_p95_ms: f64,
+    total_p99_ms: f64,
+}
+
+// Baselines captured via bd-3e1t.5.7 (seed=0, tick_ms=16, frames=120).
+const VFX_PERF_BASELINES: &[VfxPerfBudget] = &[
+    VfxPerfBudget {
+        effect: "plasma",
+        cols: 80,
+        rows: 24,
+        total_p50_ms: 0.979,
+        total_p95_ms: 1.253,
+        total_p99_ms: 1.495,
+    },
+    VfxPerfBudget {
+        effect: "plasma",
+        cols: 120,
+        rows: 40,
+        total_p50_ms: 2.204,
+        total_p95_ms: 2.649,
+        total_p99_ms: 3.545,
+    },
+    VfxPerfBudget {
+        effect: "metaballs",
+        cols: 80,
+        rows: 24,
+        total_p50_ms: 1.371,
+        total_p95_ms: 1.668,
+        total_p99_ms: 2.004,
+    },
+    VfxPerfBudget {
+        effect: "metaballs",
+        cols: 120,
+        rows: 40,
+        total_p50_ms: 3.214,
+        total_p95_ms: 3.609,
+        total_p99_ms: 3.860,
+    },
+    VfxPerfBudget {
+        effect: "doom-e1m1",
+        cols: 80,
+        rows: 24,
+        total_p50_ms: 0.554,
+        total_p95_ms: 0.754,
+        total_p99_ms: 0.895,
+    },
+    VfxPerfBudget {
+        effect: "doom-e1m1",
+        cols: 120,
+        rows: 40,
+        total_p50_ms: 1.337,
+        total_p95_ms: 1.666,
+        total_p99_ms: 2.318,
+    },
+    VfxPerfBudget {
+        effect: "quake-e1m1",
+        cols: 80,
+        rows: 24,
+        total_p50_ms: 2.631,
+        total_p95_ms: 3.119,
+        total_p99_ms: 3.831,
+    },
+    VfxPerfBudget {
+        effect: "quake-e1m1",
+        cols: 120,
+        rows: 40,
+        total_p50_ms: 4.760,
+        total_p95_ms: 5.553,
+        total_p99_ms: 5.906,
+    },
+    VfxPerfBudget {
+        effect: "mandelbrot",
+        cols: 80,
+        rows: 24,
+        total_p50_ms: 2.251,
+        total_p95_ms: 2.905,
+        total_p99_ms: 3.047,
+    },
+    VfxPerfBudget {
+        effect: "mandelbrot",
+        cols: 120,
+        rows: 40,
+        total_p50_ms: 5.561,
+        total_p95_ms: 6.946,
+        total_p99_ms: 7.502,
+    },
+];
 
 fn vfx_golden_base_dir() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -136,6 +305,15 @@ fn parse_u64_field(line: &str, key: &str) -> Option<u64> {
     rest[..end].parse::<u64>().ok()
 }
 
+fn parse_f64_field(line: &str, key: &str) -> Option<f64> {
+    let start = line.find(key)? + key.len();
+    let rest = &line[start..];
+    let end = rest
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(rest.len());
+    rest[..end].parse::<f64>().ok()
+}
+
 fn extract_vfx_frames(output: &[u8]) -> Result<Vec<VfxFrame>, String> {
     let text = String::from_utf8_lossy(output);
     let mut frames = Vec::new();
@@ -170,7 +348,21 @@ fn extract_vfx_frames(output: &[u8]) -> Result<Vec<VfxFrame>, String> {
 }
 
 fn run_vfx_harness(demo_bin: &str, case: VfxCase, seed: u64) -> Result<Vec<VfxFrame>, String> {
-    let label = format!("vfx_harness_{}", case.effect);
+    let output = run_vfx_harness_output(demo_bin, case, seed, false)?;
+    extract_vfx_frames(&output)
+}
+
+fn run_vfx_harness_output(
+    demo_bin: &str,
+    case: VfxCase,
+    seed: u64,
+    perf: bool,
+) -> Result<Vec<u8>, String> {
+    let label = if perf {
+        format!("vfx_harness_perf_{}", case.effect)
+    } else {
+        format!("vfx_harness_{}", case.effect)
+    };
     let config = PtyConfig::default()
         .with_size(case.cols, case.rows)
         .with_test_name(label)
@@ -191,6 +383,9 @@ fn run_vfx_harness(demo_bin: &str, case: VfxCase, seed: u64) -> Result<Vec<VfxFr
     cmd.arg("--vfx-jsonl=-");
     cmd.arg(format!("--vfx-run-id={run_id}"));
     cmd.arg("--exit-after-ms=4000");
+    if perf {
+        cmd.arg("--vfx-perf");
+    }
 
     let mut session =
         spawn_command(config, cmd).map_err(|err| format!("spawn vfx harness: {err}"))?;
@@ -198,7 +393,6 @@ fn run_vfx_harness(demo_bin: &str, case: VfxCase, seed: u64) -> Result<Vec<VfxFr
         .wait_and_drain(Duration::from_secs(6))
         .map_err(|err| format!("wait vfx harness: {err}"))?;
     let output = session.output().to_vec();
-    let frames = extract_vfx_frames(&output)?;
 
     if !status.success() {
         let tail = tail_output(&output, 4096);
@@ -207,7 +401,132 @@ fn run_vfx_harness(demo_bin: &str, case: VfxCase, seed: u64) -> Result<Vec<VfxFr
         ));
     }
 
+    Ok(output)
+}
+
+fn extract_vfx_perf_frames(output: &[u8]) -> Result<Vec<u64>, String> {
+    let text = String::from_utf8_lossy(output);
+    let mut frames = Vec::new();
+    for line in text.lines() {
+        if !line.contains("\"event\":\"vfx_perf_frame\"") {
+            continue;
+        }
+        for key in [
+            "\"run_id\":",
+            "\"effect\":",
+            "\"frame_idx\":",
+            "\"update_ms\":",
+            "\"render_ms\":",
+            "\"diff_ms\":",
+            "\"present_ms\":",
+            "\"total_ms\":",
+            "\"cols\":",
+            "\"rows\":",
+            "\"tick_ms\":",
+        ] {
+            if !line.contains(key) {
+                return Err(format!("vfx_perf_frame missing {key}: {line}"));
+            }
+        }
+        let frame_idx = parse_u64_field(line, "\"frame_idx\":")
+            .ok_or_else(|| format!("vfx_perf_frame missing frame_idx: {line}"))?;
+        frames.push(frame_idx);
+    }
+
+    if frames.is_empty() {
+        return Err("no vfx_perf_frame entries found".to_string());
+    }
+
     Ok(frames)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct VfxPerfSummary {
+    count: u64,
+    total_p50_ms: f64,
+    total_p95_ms: f64,
+    total_p99_ms: f64,
+}
+
+fn extract_vfx_perf_summary(output: &[u8]) -> Result<VfxPerfSummary, String> {
+    let text = String::from_utf8_lossy(output);
+    for line in text.lines() {
+        if !line.contains("\"event\":\"vfx_perf_summary\"") {
+            continue;
+        }
+        for key in [
+            "\"count\":",
+            "\"total_ms_p50\":",
+            "\"total_ms_p95\":",
+            "\"total_ms_p99\":",
+        ] {
+            if !line.contains(key) {
+                return Err(format!("vfx_perf_summary missing {key}: {line}"));
+            }
+        }
+        let count = parse_u64_field(line, "\"count\":")
+            .ok_or_else(|| format!("vfx_perf_summary missing count: {line}"))?;
+        let total_p50_ms = parse_f64_field(line, "\"total_ms_p50\":")
+            .ok_or_else(|| format!("vfx_perf_summary missing total_ms_p50: {line}"))?;
+        let total_p95_ms = parse_f64_field(line, "\"total_ms_p95\":")
+            .ok_or_else(|| format!("vfx_perf_summary missing total_ms_p95: {line}"))?;
+        let total_p99_ms = parse_f64_field(line, "\"total_ms_p99\":")
+            .ok_or_else(|| format!("vfx_perf_summary missing total_ms_p99: {line}"))?;
+        return Ok(VfxPerfSummary {
+            count,
+            total_p50_ms,
+            total_p95_ms,
+            total_p99_ms,
+        });
+    }
+    Err("no vfx_perf_summary entry found".to_string())
+}
+
+fn ensure_vfx_perf_summary(output: &[u8]) -> Result<(), String> {
+    let text = String::from_utf8_lossy(output);
+    for line in text.lines() {
+        if !line.contains("\"event\":\"vfx_perf_summary\"") {
+            continue;
+        }
+        for key in [
+            "\"count\":",
+            "\"total_ms_p50\":",
+            "\"total_ms_p95\":",
+            "\"total_ms_p99\":",
+            "\"update_ms_p50\":",
+            "\"render_ms_p50\":",
+            "\"diff_ms_p50\":",
+            "\"present_ms_p50\":",
+            "\"top_phase\":",
+        ] {
+            if !line.contains(key) {
+                return Err(format!("vfx_perf_summary missing {key}: {line}"));
+            }
+        }
+        return Ok(());
+    }
+    Err("no vfx_perf_summary entry found".to_string())
+}
+
+fn find_perf_budget(case: VfxCase) -> Option<&'static VfxPerfBudget> {
+    VFX_PERF_BASELINES.iter().find(|budget| {
+        budget.effect == case.effect && budget.cols == case.cols && budget.rows == case.rows
+    })
+}
+
+fn perf_budget_limits(budget: &VfxPerfBudget, multiplier: f64) -> (f64, f64, f64) {
+    (
+        budget.total_p50_ms * multiplier,
+        budget.total_p95_ms * multiplier,
+        budget.total_p99_ms * multiplier,
+    )
+}
+
+fn perf_within_budget(summary: VfxPerfSummary, budget: &VfxPerfBudget, multiplier: f64) -> bool {
+    let (budget_p50, budget_p95, budget_p99) = perf_budget_limits(budget, multiplier);
+    summary.total_p50_ms <= budget_p50
+        && summary.total_p95_ms <= budget_p95
+        && summary.total_p99_ms <= budget_p99
 }
 
 fn validate_frame_suite(frames: &[VfxFrame], case: VfxCase) -> Result<(), String> {
@@ -239,6 +558,10 @@ fn frame_hash_sequence(frames: &[VfxFrame]) -> Vec<String> {
         .iter()
         .map(|frame| format!("{:03}:{:016x}", frame.frame_idx, frame.hash))
         .collect()
+}
+
+fn is_release_mode() -> bool {
+    !cfg!(debug_assertions)
 }
 
 // ---------------------------------------------------------------------------
@@ -404,6 +727,186 @@ fn pty_vfx_harness_deterministic_hashes() -> Result<(), String> {
     );
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// PTY E2E: VFX perf JSONL schema
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pty_vfx_perf_jsonl_schema() -> Result<(), String> {
+    let demo_bin = std::env::var("CARGO_BIN_EXE_ftui-demo-showcase").map_err(|err| {
+        format!("CARGO_BIN_EXE_ftui-demo-showcase must be set for PTY tests: {err}")
+    })?;
+
+    let seed = logger().fixture().seed();
+    let case = *VFX_CASES
+        .first()
+        .ok_or_else(|| "missing VFX cases".to_string())?;
+
+    logger().log_env();
+    log_jsonl(
+        "env",
+        &[
+            ("test", JsonValue::str("pty_vfx_perf_jsonl_schema")),
+            ("bin", JsonValue::str(&demo_bin)),
+            ("effect", JsonValue::str(case.effect)),
+            ("seed", JsonValue::u64(seed)),
+        ],
+    );
+
+    let output = run_vfx_harness_output(&demo_bin, case, seed, true)?;
+    let perf_frames = extract_vfx_perf_frames(&output)?;
+    ensure_vfx_perf_summary(&output)?;
+
+    let mut last = None;
+    for frame_idx in perf_frames {
+        if let Some(prev) = last
+            && frame_idx <= prev
+        {
+            return Err(format!(
+                "vfx perf frame order not monotonic for {}: {} -> {}",
+                case.effect, prev, frame_idx
+            ));
+        }
+        last = Some(frame_idx);
+    }
+
+    log_jsonl(
+        "result",
+        &[
+            ("case", JsonValue::str("pty_vfx_perf_jsonl_schema")),
+            ("effect", JsonValue::str(case.effect)),
+        ],
+    );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// PTY E2E: VFX perf regression guard (baseline + CI margin)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pty_vfx_perf_regression_guard() -> Result<(), String> {
+    if !is_release_mode() {
+        eprintln!("SKIPPED: pty_vfx_perf_regression_guard (debug build - run with --release)");
+        return Ok(());
+    }
+
+    let demo_bin = std::env::var("CARGO_BIN_EXE_ftui-demo-showcase").map_err(|err| {
+        format!("CARGO_BIN_EXE_ftui-demo-showcase must be set for PTY tests: {err}")
+    })?;
+    let seed = 0u64;
+
+    logger().log_env();
+    log_jsonl(
+        "env",
+        &[
+            ("test", JsonValue::str("pty_vfx_perf_regression_guard")),
+            ("bin", JsonValue::str(&demo_bin)),
+            ("seed", JsonValue::u64(seed)),
+            ("frames", JsonValue::u64(VFX_PERF_FRAMES)),
+            (
+                "ci_multiplier",
+                JsonValue::raw(format!("{:.2}", VFX_PERF_CI_MULTIPLIER)),
+            ),
+        ],
+    );
+
+    for case in VFX_PERF_CASES {
+        let output = run_vfx_harness_output(&demo_bin, *case, seed, true)?;
+        let summary = extract_vfx_perf_summary(&output)?;
+        let budget = find_perf_budget(*case).ok_or_else(|| {
+            format!(
+                "missing VFX perf baseline for {} {}x{}",
+                case.effect, case.cols, case.rows
+            )
+        })?;
+
+        let (budget_p50, budget_p95, budget_p99) =
+            perf_budget_limits(budget, VFX_PERF_CI_MULTIPLIER);
+        let passed = perf_within_budget(summary, budget, VFX_PERF_CI_MULTIPLIER);
+        let delta_p50 = summary.total_p50_ms - budget_p50;
+        let delta_p95 = summary.total_p95_ms - budget_p95;
+        let delta_p99 = summary.total_p99_ms - budget_p99;
+
+        log_jsonl(
+            "vfx_perf_guard",
+            &[
+                ("effect", JsonValue::str(case.effect)),
+                ("cols", JsonValue::u64(case.cols as u64)),
+                ("rows", JsonValue::u64(case.rows as u64)),
+                ("count", JsonValue::u64(summary.count)),
+                (
+                    "p50_ms",
+                    JsonValue::raw(format!("{:.3}", summary.total_p50_ms)),
+                ),
+                (
+                    "p95_ms",
+                    JsonValue::raw(format!("{:.3}", summary.total_p95_ms)),
+                ),
+                (
+                    "p99_ms",
+                    JsonValue::raw(format!("{:.3}", summary.total_p99_ms)),
+                ),
+                (
+                    "budget_p50_ms",
+                    JsonValue::raw(format!("{:.3}", budget_p50)),
+                ),
+                (
+                    "budget_p95_ms",
+                    JsonValue::raw(format!("{:.3}", budget_p95)),
+                ),
+                (
+                    "budget_p99_ms",
+                    JsonValue::raw(format!("{:.3}", budget_p99)),
+                ),
+                ("delta_p50_ms", JsonValue::raw(format!("{:.3}", delta_p50))),
+                ("delta_p95_ms", JsonValue::raw(format!("{:.3}", delta_p95))),
+                ("delta_p99_ms", JsonValue::raw(format!("{:.3}", delta_p99))),
+                ("passed", JsonValue::bool(passed)),
+            ],
+        );
+
+        if !passed {
+            return Err(format!(
+                "VFX perf regression for {} {}x{}: p50 {:.3} (budget {:.3}, delta {:.3}), p95 {:.3} (budget {:.3}, delta {:.3}), p99 {:.3} (budget {:.3}, delta {:.3})",
+                case.effect,
+                case.cols,
+                case.rows,
+                summary.total_p50_ms,
+                budget_p50,
+                delta_p50,
+                summary.total_p95_ms,
+                budget_p95,
+                delta_p95,
+                summary.total_p99_ms,
+                budget_p99,
+                delta_p99
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn vfx_perf_budget_rejects_regression() {
+    let budget = VFX_PERF_BASELINES
+        .first()
+        .expect("missing VFX perf baselines");
+    let summary = VfxPerfSummary {
+        count: VFX_PERF_FRAMES,
+        total_p50_ms: budget.total_p50_ms * 3.0,
+        total_p95_ms: budget.total_p95_ms * 3.0,
+        total_p99_ms: budget.total_p99_ms * 3.0,
+    };
+
+    assert!(
+        !perf_within_budget(summary, budget, VFX_PERF_CI_MULTIPLIER),
+        "expected synthetic regression to violate budget"
+    );
 }
 
 /// Update goldens:
