@@ -237,7 +237,7 @@ impl MetaballsParams {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 struct BallSample {
     x: f64,
     y: f64,
@@ -526,6 +526,112 @@ mod tests {
             }
         }
         sum
+    }
+
+    #[test]
+    fn field_intensity_crosses_thresholds() {
+        let params = MetaballsParams {
+            balls: vec![Metaball {
+                x: 0.5,
+                y: 0.5,
+                vx: 0.0,
+                vy: 0.0,
+                radius: 0.2,
+                hue: 0.0,
+                phase: 0.0,
+            }],
+            glow_threshold: 0.6,
+            threshold: 1.0,
+            pulse_amount: 0.0,
+            ..Default::default()
+        };
+        let mut fx = MetaballsFx::new(params);
+        fx.populate_ball_cache(0.0, FxQuality::Full);
+
+        let center = field_sum_at(&fx, 0.5, 0.5);
+        let far = field_sum_at(&fx, 0.9, 0.9);
+
+        assert!(center > 1.0, "center intensity should exceed threshold");
+        assert!(far < 0.6, "far intensity should be below glow threshold");
+    }
+
+    #[test]
+    fn ball_cache_respects_bounds_and_radius_clamp() {
+        let params = MetaballsParams {
+            balls: vec![Metaball {
+                x: 0.95,
+                y: 0.05,
+                vx: 0.5,
+                vy: -0.4,
+                radius: 1.0,
+                hue: 0.0,
+                phase: 0.0,
+            }],
+            bounds_min: 0.2,
+            bounds_max: 0.8,
+            radius_min: 0.1,
+            radius_max: 0.2,
+            pulse_amount: 0.0,
+            ..Default::default()
+        };
+        let mut fx = MetaballsFx::new(params);
+        fx.populate_ball_cache(1.0, FxQuality::Full);
+        let ball = fx.ball_cache[0];
+
+        assert!(
+            ball.x >= 0.2 && ball.x <= 0.8,
+            "x out of bounds: {}",
+            ball.x
+        );
+        assert!(
+            ball.y >= 0.2 && ball.y <= 0.8,
+            "y out of bounds: {}",
+            ball.y
+        );
+
+        let expected_r2 = 0.2 * 0.2;
+        assert!(
+            (ball.r2 - expected_r2).abs() < 1e-6,
+            "radius clamp failed: r2={}, expected {}",
+            ball.r2,
+            expected_r2
+        );
+    }
+
+    #[test]
+    fn hue_wraps_into_unit_interval() {
+        let params = MetaballsParams {
+            balls: vec![Metaball {
+                x: 0.5,
+                y: 0.5,
+                vx: 0.0,
+                vy: 0.0,
+                radius: 0.2,
+                hue: 0.95,
+                phase: 0.0,
+            }],
+            hue_speed: 0.2,
+            pulse_amount: 0.0,
+            ..Default::default()
+        };
+        let mut fx = MetaballsFx::new(params);
+        fx.populate_ball_cache(1.0, FxQuality::Full);
+        let hue = fx.ball_cache[0].hue;
+        assert!(
+            (0.0..=1.0).contains(&hue),
+            "hue should wrap into [0,1], got {}",
+            hue
+        );
+    }
+
+    #[test]
+    fn ball_cache_deterministic_for_fixed_time() {
+        let mut fx = MetaballsFx::default();
+        fx.populate_ball_cache(0.42, FxQuality::Full);
+        let first = fx.ball_cache.clone();
+        fx.populate_ball_cache(0.42, FxQuality::Full);
+        let second = fx.ball_cache.clone();
+        assert_eq!(first, second);
     }
 
     #[test]
