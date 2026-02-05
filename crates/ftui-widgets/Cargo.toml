@@ -1,6 +1,6 @@
 [package]
 name = "ftui-widgets"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "MIT"
 description = "Widget library built on FrankenTUI render and layout."
@@ -18,24 +18,24 @@ tracing = ["dep:tracing", "ftui-render/tracing"]
 
 [dependencies]
 bitflags = "2.10.0"
-ftui-core = { path = "../ftui-core", version = "0.1.0" }
-ftui-layout = { path = "../ftui-layout", version = "0.1.0" }
-ftui-render = { path = "../ftui-render", version = "0.1.0" }
-ftui-style = { path = "../ftui-style", version = "0.1.0" }
-ftui-text = { path = "../ftui-text", version = "0.1.0", features = ["markup"] }
+ftui-core = { path = "../ftui-core", version = "0.1.1" }
+ftui-layout = { path = "../ftui-layout", version = "0.1.1" }
+ftui-render = { path = "../ftui-render", version = "0.1.1" }
+ftui-style = { path = "../ftui-style", version = "0.1.1" }
+ftui-text = { path = "../ftui-text", version = "0.1.1", features = ["markup"] }
 regex = { version = "1.12.3", optional = true }
-serde = { version = "1", features = ["derive"], optional = true }
-tracing = { version = "0.1", optional = true }
+serde = { version = "1.0.227", features = ["derive"], optional = true }
+tracing = { version = "0.1.41", optional = true }
 unicode-segmentation = "1.12.0"
 unicode-width = "0.2.2"
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }
-proptest = "1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["registry"] }
+proptest = "1.7.0"
+serde = { version = "1.0.227", features = ["derive"] }
+serde_json = "1.0.145"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["registry"] }
 
 [[bench]]
 name = "widget_bench"

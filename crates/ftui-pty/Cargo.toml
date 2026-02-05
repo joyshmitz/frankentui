@@ -1,6 +1,6 @@
 [package]
 name = "ftui-pty"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "MIT"
 description = "PTY-backed test utilities for FrankenTUI."
@@ -10,6 +10,6 @@ documentation = "https://docs.rs/ftui-pty"
 readme = "../../README.md"
 
 [dependencies]
-ftui-core = { path = "../ftui-core", version = "0.1.0" }
+ftui-core = { path = "../ftui-core", version = "0.1.1" }
 portable-pty = "0.9.0"
-time = { version = "0.3", features = ["formatting"] }
+time = { version = "0.3.44", features = ["formatting"] }

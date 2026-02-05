@@ -1,6 +1,6 @@
 [package]
 name = "ftui-runtime"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "MIT"
 description = "Elm-style runtime loop and subscriptions for FrankenTUI."
@@ -35,14 +35,14 @@ telemetry = [
 ]
 
 [dependencies]
-ftui-core = { path = "../ftui-core", version = "0.1.0" }
-ftui-layout = { path = "../ftui-layout", version = "0.1.0" }
-ftui-i18n = { path = "../ftui-i18n", version = "0.1.0" }
-ftui-render = { path = "../ftui-render", version = "0.1.0" }
-ftui-style = { path = "../ftui-style", version = "0.1.0" }
-ftui-text = { path = "../ftui-text", version = "0.1.0" }
+ftui-core = { path = "../ftui-core", version = "0.1.1" }
+ftui-layout = { path = "../ftui-layout", version = "0.1.1" }
+ftui-i18n = { path = "../ftui-i18n", version = "0.1.1" }
+ftui-render = { path = "../ftui-render", version = "0.1.1" }
+ftui-style = { path = "../ftui-style", version = "0.1.1" }
+ftui-text = { path = "../ftui-text", version = "0.1.1" }
 crossterm = "0.29.0"
-tracing = "0.1"
+tracing = "0.1.41"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.2.2"
 
@@ -51,26 +51,26 @@ opentelemetry = { version = "0.31", optional = true }
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"], optional = true }
 opentelemetry-otlp = { version = "0.31", default-features = false, features = ["grpc-tonic", "http-proto", "reqwest-blocking-client"], optional = true }
 tracing-opentelemetry = { version = "0.32", optional = true }
-tracing-subscriber = { version = "0.3", features = ["registry", "env-filter"], optional = true }
+tracing-subscriber = { version = "0.3.20", features = ["registry", "env-filter"], optional = true }
 
 # State persistence dependencies (feature-gated)
-serde = { version = "1", features = ["derive"], optional = true }
-serde_json = { version = "1", optional = true }
+serde = { version = "1.0.227", features = ["derive"], optional = true }
+serde_json = { version = "1.0.145", optional = true }
 base64 = { version = "0.22", optional = true }
 
 [dev-dependencies]
-ftui-core = { path = "../ftui-core", version = "0.1.0", features = ["test-helpers"] }
+ftui-core = { path = "../ftui-core", version = "0.1.1", features = ["test-helpers"] }
 criterion = { version = "0.8.2", features = ["html_reports"] }
-proptest = "1"
-tempfile = "3"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+proptest = "1.7.0"
+tempfile = "3.22.0"
+serde = { version = "1.0.227", features = ["derive"] }
+serde_json = "1.0.145"
 base64 = "0.22"
 # OpenTelemetry testing infrastructure
 opentelemetry = "0.31"
 opentelemetry_sdk = { version = "0.31", features = ["testing"] }
 tracing-opentelemetry = "0.32"
-tracing-subscriber = { version = "0.3", features = ["registry", "env-filter"] }
+tracing-subscriber = { version = "0.3.20", features = ["registry", "env-filter"] }
 
 [[bench]]
 name = "telemetry_bench"

@@ -1,6 +1,6 @@
 [package]
 name = "ftui-core"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "MIT"
 description = "Terminal lifecycle, capabilities, and event parsing for FrankenTUI."
@@ -32,10 +32,10 @@ unicode-width = "0.2.2"
 signal-hook = { version = "0.4.3", features = ["iterator"] }
 
 # Optional tracing support
-tracing = { version = "0.1", optional = true }
-tracing-subscriber = { version = "0.3", features = ["json", "env-filter"], optional = true }
+tracing = { version = "0.1.41", optional = true }
+tracing-subscriber = { version = "0.3.20", features = ["json", "env-filter"], optional = true }
 
 [dev-dependencies]
 # For spike PTY tests
 portable-pty = "0.9.0"
-proptest = "1"
+proptest = "1.7.0"

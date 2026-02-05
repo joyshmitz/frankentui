@@ -1,6 +1,6 @@
 [package]
 name = "ftui-layout"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "MIT"
 description = "Flex and grid layout solvers for FrankenTUI."
@@ -10,7 +10,7 @@ documentation = "https://docs.rs/ftui-layout"
 readme = "../../README.md"
 
 [dependencies]
-ftui-core = { path = "../ftui-core", version = "0.1.0" }
+ftui-core = { path = "../ftui-core", version = "0.1.1" }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }
