@@ -2586,8 +2586,8 @@ mod tests {
             writer.write_log("test log\n").unwrap();
         }
 
-        // Should not contain log text (altscreen drops logs)
         let output_str = String::from_utf8_lossy(&output);
+        // Should not contain log text (altscreen drops logs)
         assert!(!output_str.contains("test log"));
     }
 
