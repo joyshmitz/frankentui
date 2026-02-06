@@ -955,4 +955,110 @@ mod tests {
             "ordering overhead too high: {elapsed:?} for 1000 iterations"
         );
     }
+
+    #[test]
+    fn pipeline_config_default_values() {
+        let config = PipelineConfig::default();
+        assert!((config.prior_alpha - 1.0).abs() < 1e-10);
+        assert!((config.prior_beta - 1.0).abs() < 1e-10);
+        assert!((config.gamma - DEFAULT_GAMMA).abs() < 1e-10);
+        assert_eq!(config.c_min, C_MIN);
+    }
+
+    #[test]
+    fn pipeline_default_impl() {
+        let p = ValidationPipeline::default();
+        assert_eq!(p.validator_count(), 0);
+        assert_eq!(p.total_runs(), 0);
+    }
+
+    #[test]
+    fn all_stats_returns_all_registered() {
+        let mut pipeline = ValidationPipeline::new();
+        pipeline.register("a", Duration::from_millis(5));
+        pipeline.register("b", Duration::from_millis(10));
+        pipeline.register("c", Duration::from_millis(15));
+        let stats = pipeline.all_stats();
+        assert_eq!(stats.len(), 3);
+        assert_eq!(stats[0].name, "a");
+        assert_eq!(stats[1].name, "b");
+        assert_eq!(stats[2].name, "c");
+    }
+
+    #[test]
+    fn stats_invalid_id_returns_none() {
+        let pipeline = ValidationPipeline::new();
+        assert!(pipeline.stats(0).is_none());
+        assert!(pipeline.stats(999).is_none());
+    }
+
+    #[test]
+    fn update_invalid_id_is_noop() {
+        let mut pipeline = ValidationPipeline::new();
+        pipeline.register("v", Duration::from_millis(5));
+        pipeline.update(&ValidationOutcome {
+            id: 99,
+            passed: false,
+            duration: Duration::from_millis(5),
+        });
+        // Should not panic, and valid validator unchanged
+        assert_eq!(pipeline.stats(0).unwrap().observations, 0);
+    }
+
+    #[test]
+    fn failure_prob_zero_sum_returns_half() {
+        let config = PipelineConfig {
+            prior_alpha: 0.0,
+            prior_beta: 0.0,
+            ..Default::default()
+        };
+        let mut pipeline = ValidationPipeline::with_config(config);
+        let id = pipeline.register("v", Duration::from_millis(5));
+        let p = pipeline.stats(id).unwrap().failure_prob();
+        assert!((p - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn variance_zero_sum_returns_uniform() {
+        let config = PipelineConfig {
+            prior_alpha: 0.0,
+            prior_beta: 0.0,
+            ..Default::default()
+        };
+        let mut pipeline = ValidationPipeline::with_config(config);
+        let id = pipeline.register("v", Duration::from_millis(5));
+        let var = pipeline.stats(id).unwrap().variance();
+        assert!((var - 1.0 / 12.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn score_uses_cost_floor() {
+        let mut pipeline = ValidationPipeline::new();
+        let id = pipeline.register("v", Duration::ZERO);
+        let score = pipeline.stats(id).unwrap().score(C_MIN);
+        assert!(score.is_finite());
+        assert!(score > 0.0);
+    }
+
+    #[test]
+    fn summary_empty_pipeline() {
+        let pipeline = ValidationPipeline::new();
+        let summary = pipeline.summary();
+        assert_eq!(summary.validator_count, 0);
+        assert_eq!(summary.total_runs, 0);
+        assert!(summary.optimal_ordering.is_empty());
+        assert!((summary.expected_cost_secs).abs() < 1e-10);
+        assert!((summary.improvement_fraction).abs() < 1e-10);
+    }
+
+    #[test]
+    fn register_returns_sequential_ids() {
+        let mut pipeline = ValidationPipeline::new();
+        let id0 = pipeline.register("first", Duration::from_millis(1));
+        let id1 = pipeline.register("second", Duration::from_millis(2));
+        let id2 = pipeline.register("third", Duration::from_millis(3));
+        assert_eq!(id0, 0);
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+    }
 }

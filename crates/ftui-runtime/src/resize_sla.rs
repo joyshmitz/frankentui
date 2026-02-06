@@ -813,4 +813,82 @@ mod tests {
         let sampling = monitor.sampling_summary().expect("sampling summary");
         assert_eq!(sampling.total_samples, 1);
     }
+
+    #[test]
+    fn sla_config_default_values() {
+        let config = SlaConfig::default();
+        assert!((config.alpha - 0.05).abs() < 1e-10);
+        assert_eq!(config.min_calibration, 20);
+        assert_eq!(config.max_calibration, 200);
+        assert!((config.target_latency_ms - 100.0).abs() < 1e-10);
+        assert!(config.enable_logging);
+        assert_eq!(config.alert_cooldown, 10);
+        assert!((config.hysteresis - 1.1).abs() < 1e-10);
+        assert!(config.voi_sampling.is_none());
+    }
+
+    #[test]
+    fn last_alert_initially_none() {
+        let monitor = ResizeSlaMonitor::new(test_config());
+        assert!(monitor.last_alert().is_none());
+    }
+
+    #[test]
+    fn clear_logs_empties_log_vec() {
+        let monitor = ResizeSlaMonitor::new(test_config());
+        let now = Instant::now();
+        for i in 0..3 {
+            monitor.on_decision(&sample_decision_log(now, 10.0 + i as f64));
+        }
+        assert!(!monitor.logs().is_empty());
+        monitor.clear_logs();
+        assert!(monitor.logs().is_empty());
+    }
+
+    #[test]
+    fn threshold_ms_returns_value() {
+        let monitor = ResizeSlaMonitor::new(test_config());
+        let threshold = monitor.threshold_ms();
+        // Before calibration, threshold should be some default
+        assert!(threshold.is_finite());
+    }
+
+    #[test]
+    fn is_active_after_calibration() {
+        let monitor = ResizeSlaMonitor::new(test_config());
+        assert!(!monitor.is_active());
+        let now = Instant::now();
+        for i in 0..5 {
+            monitor.on_decision(&sample_decision_log(now, 10.0 + i as f64));
+        }
+        assert!(monitor.is_active());
+    }
+
+    #[test]
+    fn calibration_count_tracks_samples() {
+        let monitor = ResizeSlaMonitor::new(test_config());
+        assert_eq!(monitor.calibration_count(), 0);
+        let now = Instant::now();
+        monitor.on_decision(&sample_decision_log(now, 10.0));
+        assert_eq!(monitor.calibration_count(), 1);
+    }
+
+    #[test]
+    fn alerter_stats_returns_valid() {
+        let monitor = ResizeSlaMonitor::new(test_config());
+        let stats = monitor.alerter_stats();
+        assert_eq!(stats.calibration_samples, 0);
+    }
+
+    #[test]
+    fn sampling_summary_none_without_voi() {
+        let monitor = ResizeSlaMonitor::new(test_config());
+        assert!(monitor.sampling_summary().is_none());
+    }
+
+    #[test]
+    fn sampling_logs_to_jsonl_none_without_voi() {
+        let monitor = ResizeSlaMonitor::new(test_config());
+        assert!(monitor.sampling_logs_to_jsonl().is_none());
+    }
 }
