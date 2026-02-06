@@ -716,4 +716,295 @@ mod tests {
             assert!(decision.e_value > 0.0);
         }
     }
+
+    // ── FlakeConfig defaults ─────────────────────────────────────
+
+    #[test]
+    fn config_default_values() {
+        let config = FlakeConfig::default();
+        assert!((config.alpha - DEFAULT_ALPHA).abs() < f64::EPSILON);
+        assert!((config.lambda - DEFAULT_LAMBDA).abs() < f64::EPSILON);
+        assert!((config.sigma - 1.0).abs() < f64::EPSILON);
+        assert_eq!(config.variance_window, 50);
+        assert_eq!(config.min_observations, 3);
+        assert!(!config.enable_logging);
+        assert!(config.threshold.is_none());
+    }
+
+    #[test]
+    fn config_threshold_computed_from_alpha() {
+        let config = FlakeConfig::new(0.05);
+        assert!((config.threshold() - 20.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn config_threshold_override() {
+        let mut config = FlakeConfig::new(0.05);
+        config.threshold = Some(42.0);
+        assert!((config.threshold() - 42.0).abs() < f64::EPSILON);
+    }
+
+    // ── FlakeConfig clamping ─────────────────────────────────────
+
+    #[test]
+    fn config_new_clamps_alpha_low() {
+        let config = FlakeConfig::new(0.0);
+        assert!(config.alpha >= 1e-10);
+    }
+
+    #[test]
+    fn config_new_clamps_alpha_high() {
+        let config = FlakeConfig::new(1.0);
+        assert!(config.alpha <= 0.5);
+    }
+
+    #[test]
+    fn config_with_lambda_clamps_low() {
+        let config = FlakeConfig::default().with_lambda(0.0);
+        assert!(config.lambda >= 0.01);
+    }
+
+    #[test]
+    fn config_with_lambda_clamps_high() {
+        let config = FlakeConfig::default().with_lambda(100.0);
+        assert!(config.lambda <= 2.0);
+    }
+
+    #[test]
+    fn config_with_sigma_clamps_to_min() {
+        let config = FlakeConfig::default().with_sigma(0.0);
+        assert!(config.sigma >= SIGMA_MIN);
+    }
+
+    #[test]
+    fn config_with_min_observations_clamps_to_one() {
+        let config = FlakeConfig::default().with_min_observations(0);
+        assert!(config.min_observations >= 1);
+    }
+
+    // ── FlakeDecision ────────────────────────────────────────────
+
+    #[test]
+    fn decision_should_fail_requires_both_flaky_and_warmed_up() {
+        let d1 = FlakeDecision {
+            is_flaky: true,
+            warmed_up: false,
+            e_value: 100.0,
+            threshold: 20.0,
+            observation_count: 1,
+            variance_estimate: 1.0,
+        };
+        assert!(!d1.should_fail());
+
+        let d2 = FlakeDecision {
+            is_flaky: false,
+            warmed_up: true,
+            e_value: 1.0,
+            threshold: 20.0,
+            observation_count: 5,
+            variance_estimate: 1.0,
+        };
+        assert!(!d2.should_fail());
+
+        let d3 = FlakeDecision {
+            is_flaky: true,
+            warmed_up: true,
+            e_value: 100.0,
+            threshold: 20.0,
+            observation_count: 5,
+            variance_estimate: 1.0,
+        };
+        assert!(d3.should_fail());
+    }
+
+    // ── EvidenceLog JSONL ────────────────────────────────────────
+
+    #[test]
+    fn evidence_log_to_jsonl_format() {
+        let log = EvidenceLog {
+            observation_idx: 3,
+            residual: 1.5,
+            e_increment: 2.1,
+            e_cumulative: 4.2,
+            variance: 0.9,
+            decision: true,
+        };
+        let jsonl = log.to_jsonl();
+        assert!(jsonl.contains("\"idx\":3"));
+        assert!(jsonl.contains("\"residual\":"));
+        assert!(jsonl.contains("\"e_inc\":"));
+        assert!(jsonl.contains("\"e_cum\":"));
+        assert!(jsonl.contains("\"var\":"));
+        assert!(jsonl.contains("\"decision\":true"));
+    }
+
+    #[test]
+    fn evidence_log_to_jsonl_false_decision() {
+        let log = EvidenceLog {
+            observation_idx: 1,
+            residual: 0.0,
+            e_increment: 1.0,
+            e_cumulative: 1.0,
+            variance: 1.0,
+            decision: false,
+        };
+        let jsonl = log.to_jsonl();
+        assert!(jsonl.contains("\"decision\":false"));
+    }
+
+    // ── FlakeDetector accessors ──────────────────────────────────
+
+    #[test]
+    fn detector_default_initial_state() {
+        let detector = FlakeDetector::default();
+        assert_eq!(detector.observation_count(), 0);
+        assert!((detector.e_value() - 1.0).abs() < f64::EPSILON);
+        assert!(!detector.is_warmed_up());
+        assert!(detector.evidence_log().is_empty());
+    }
+
+    #[test]
+    fn detector_config_accessor() {
+        let config = FlakeConfig::new(0.01).with_lambda(0.3);
+        let detector = FlakeDetector::new(config);
+        assert!((detector.config().alpha - 0.01).abs() < 1e-10);
+        assert!((detector.config().lambda - 0.3).abs() < 1e-10);
+    }
+
+    #[test]
+    fn detector_is_warmed_up_after_min_observations() {
+        let config = FlakeConfig::default().with_min_observations(3);
+        let mut detector = FlakeDetector::new(config);
+        assert!(!detector.is_warmed_up());
+        detector.observe(0.0);
+        detector.observe(0.0);
+        assert!(!detector.is_warmed_up());
+        detector.observe(0.0);
+        assert!(detector.is_warmed_up());
+    }
+
+    // ── Variance window = 0 (fixed sigma) ────────────────────────
+
+    #[test]
+    fn fixed_sigma_when_variance_window_zero() {
+        let config = FlakeConfig::default()
+            .with_sigma(3.0)
+            .with_variance_window(0);
+        let mut detector = FlakeDetector::new(config);
+        detector.observe(10.0);
+        detector.observe(20.0);
+        assert!((detector.current_sigma() - 3.0).abs() < f64::EPSILON);
+    }
+
+    // ── Summary edge cases ───────────────────────────────────────
+
+    #[test]
+    fn summary_empty_detector() {
+        let detector = FlakeDetector::new(FlakeConfig::default().with_logging(true));
+        let summary = detector.summary();
+        assert_eq!(summary.total_observations, 0);
+        assert!((summary.final_e_value - 1.0).abs() < f64::EPSILON);
+        assert!(!summary.is_flaky);
+        assert!(summary.first_flaky_at.is_none());
+        assert!((summary.max_e_value - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn summary_first_flaky_at_recorded() {
+        let config = FlakeConfig::new(0.05)
+            .with_min_observations(1)
+            .with_logging(true);
+        let mut detector = FlakeDetector::new(config);
+        for _ in 0..50 {
+            detector.observe(5.0);
+        }
+        let summary = detector.summary();
+        if summary.is_flaky {
+            assert!(
+                summary.first_flaky_at.is_some(),
+                "should record first flaky index"
+            );
+            assert!(summary.first_flaky_at.unwrap() > 0);
+        }
+    }
+
+    // ── Determinism ──────────────────────────────────────────────
+
+    #[test]
+    fn deterministic_same_inputs() {
+        let config = FlakeConfig::new(0.05).with_lambda(0.5).with_sigma(1.0);
+        let residuals = [0.1, -0.2, 0.5, -0.1, 3.0, 0.0, -1.0, 2.0];
+        let mut d1 = FlakeDetector::new(config.clone());
+        let mut d2 = FlakeDetector::new(config);
+        for &r in &residuals {
+            d1.observe(r);
+            d2.observe(r);
+        }
+        assert!((d1.e_value() - d2.e_value()).abs() < 1e-10);
+        assert_eq!(d1.observation_count(), d2.observation_count());
+    }
+
+    // ── Batch early stopping ─────────────────────────────────────
+
+    #[test]
+    fn batch_early_stops_on_flaky() {
+        let config = FlakeConfig::new(0.05)
+            .with_min_observations(1)
+            .with_lambda(0.5);
+        let mut detector = FlakeDetector::new(config);
+        let mut residuals = vec![10.0; 20];
+        residuals.extend(vec![0.0; 80]);
+        let decision = detector.observe_batch(&residuals);
+        if decision.should_fail() {
+            assert!(
+                decision.observation_count < 100,
+                "should stop early, count={}",
+                decision.observation_count
+            );
+        }
+    }
+
+    // ── E-value monotone under positive residuals ────────────────
+
+    #[test]
+    fn e_value_increases_under_consistent_positive_residuals() {
+        let config = FlakeConfig::default()
+            .with_variance_window(0)
+            .with_sigma(1.0);
+        let mut detector = FlakeDetector::new(config);
+        let mut prev_e = 1.0;
+        for _ in 0..5 {
+            let decision = detector.observe(2.0);
+            assert!(
+                decision.e_value >= prev_e,
+                "e-value should increase: prev={prev_e}, cur={}",
+                decision.e_value
+            );
+            prev_e = decision.e_value;
+        }
+    }
+
+    // ── Evidence log only when enabled ───────────────────────────
+
+    #[test]
+    fn no_evidence_log_when_disabled() {
+        let config = FlakeConfig::default();
+        let mut detector = FlakeDetector::new(config);
+        detector.observe(1.0);
+        detector.observe(2.0);
+        assert!(detector.evidence_log().is_empty());
+        assert!(detector.evidence_to_jsonl().is_empty());
+    }
+
+    // ── Reset clears everything ──────────────────────────────────
+
+    #[test]
+    fn reset_clears_evidence_log() {
+        let config = FlakeConfig::default().with_logging(true);
+        let mut detector = FlakeDetector::new(config);
+        detector.observe(1.0);
+        assert_eq!(detector.evidence_log().len(), 1);
+        detector.reset();
+        assert!(detector.evidence_log().is_empty());
+    }
 }
