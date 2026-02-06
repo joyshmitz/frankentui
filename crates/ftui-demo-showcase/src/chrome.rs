@@ -567,6 +567,14 @@ pub struct StatusBarState<'a> {
     pub a11y_high_contrast: bool,
     pub a11y_reduced_motion: bool,
     pub a11y_large_text: bool,
+    /// Whether the help overlay is currently shown.
+    pub help_visible: bool,
+    /// Whether the command palette is currently shown.
+    pub palette_visible: bool,
+    /// Whether the perf HUD overlay is currently shown.
+    pub perf_hud_visible: bool,
+    /// Whether the debug overlay is currently shown.
+    pub debug_visible: bool,
     /// Whether undo is available.
     pub can_undo: bool,
     /// Whether redo is available.
@@ -622,6 +630,24 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
         String::new()
     };
 
+    // Toggle strip for clickable status bar indicators (bd-iuvb.17.4)
+    let toggle_help = if state.help_visible { " [H]" } else { " [h]" };
+    let toggle_palette = if state.palette_visible {
+        " [Cmd]"
+    } else {
+        " [cmd]"
+    };
+    let toggle_perf = if state.perf_hud_visible {
+        " [P]"
+    } else {
+        " [p]"
+    };
+    let toggle_debug = if state.debug_visible { " [D]" } else { " [d]" };
+    let mut toggle_strip = format!(
+        "{}{}{}{}",
+        toggle_help, toggle_palette, toggle_perf, toggle_debug
+    );
+
     // Mouse capture indicator (bd-iuvb.17.1)
     let mouse_label_compact = if state.mouse_capture_enabled {
         "  Mouse:ON".to_string()
@@ -672,6 +698,18 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
                 .attrs(StyleFlags::DIM),
         )
     };
+    let toggle_active_style = theme::apply_large_text(
+        Style::new()
+            .bg(bg_color)
+            .fg(theme::accent::SUCCESS)
+            .attrs(StyleFlags::BOLD),
+    );
+    let toggle_inactive_style = theme::apply_large_text(
+        Style::new()
+            .bg(bg_color)
+            .fg(theme::fg::MUTED)
+            .attrs(StyleFlags::DIM),
+    );
     let time_style = theme::apply_large_text(Style::new().bg(bg_color).fg(theme::fg::SECONDARY));
     let pad_style = Style::new().bg(bg_color);
 
@@ -704,6 +742,7 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
         + 1
         + display_width(&position_str)
         + display_width(&theme_str)
+        + display_width(&toggle_strip)
         + display_width(&mouse_label)
         + display_width(&a11y_label)
         + display_width(&undo_label);
@@ -721,6 +760,7 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
             + 1
             + display_width(&position_str)
             + display_width(&theme_str)
+            + display_width(&toggle_strip)
             + display_width(&mouse_label)
             + display_width(&a11y_label)
             + display_width(&undo_label);
@@ -733,6 +773,7 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
             + 1
             + display_width(&position_str)
             + display_width(&theme_str)
+            + display_width(&toggle_strip)
             + display_width(&mouse_label)
             + display_width(&a11y_label)
             + display_width(&undo_label);
@@ -746,6 +787,7 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
             + 1
             + display_width(&position_str)
             + display_width(&theme_str)
+            + display_width(&toggle_strip)
             + display_width(&mouse_label)
             + display_width(&a11y_label)
             + display_width(&undo_label);
@@ -758,6 +800,20 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
             + 1
             + display_width(&position_str)
             + display_width(&theme_str)
+            + display_width(&toggle_strip)
+            + display_width(&mouse_label)
+            + display_width(&a11y_label)
+            + display_width(&undo_label);
+        total_content = left_content_len + center_content_len + right_content_len;
+    }
+    if total_content > available && !toggle_strip.is_empty() {
+        toggle_strip.clear();
+        left_content_len = 1
+            + display_width(state.screen_title)
+            + 1
+            + display_width(&position_str)
+            + display_width(&theme_str)
+            + display_width(&toggle_strip)
             + display_width(&mouse_label)
             + display_width(&a11y_label)
             + display_width(&undo_label);
@@ -765,12 +821,39 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
     }
 
     // Pre-compute hit region positions for clickable elements (bd-iuvb.17.4).
-    let mouse_hit_x = area.x
+    let toggle_base_x = area.x
         + 1
         + display_width(state.screen_title) as u16
         + 1
         + display_width(&position_str) as u16
         + display_width(&theme_str) as u16;
+    // Individual toggle positions within the strip (each " [X]" is 4-5 chars)
+    let help_toggle_w = if toggle_strip.is_empty() {
+        0u16
+    } else {
+        display_width(toggle_help) as u16
+    };
+    let palette_toggle_w = if toggle_strip.is_empty() {
+        0u16
+    } else {
+        display_width(toggle_palette) as u16
+    };
+    let perf_toggle_w = if toggle_strip.is_empty() {
+        0u16
+    } else {
+        display_width(toggle_perf) as u16
+    };
+    let debug_toggle_w = if toggle_strip.is_empty() {
+        0u16
+    } else {
+        display_width(toggle_debug) as u16
+    };
+    let help_toggle_x = toggle_base_x;
+    let palette_toggle_x = help_toggle_x + help_toggle_w;
+    let perf_toggle_x = palette_toggle_x + palette_toggle_w;
+    let debug_toggle_x = perf_toggle_x + perf_toggle_w;
+    let toggle_strip_w = help_toggle_w + palette_toggle_w + perf_toggle_w + debug_toggle_w;
+    let mouse_hit_x = toggle_base_x + toggle_strip_w;
     let mouse_hit_w = display_width(&mouse_label) as u16;
     let a11y_hit_x = mouse_hit_x + mouse_hit_w;
     let a11y_hit_w = display_width(&a11y_label) as u16;
@@ -784,6 +867,41 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
     spans.push(Span::styled(" ", pad_style));
     spans.push(Span::styled(position_str, position_style));
     spans.push(Span::styled(theme_str, muted_style));
+    if !toggle_strip.is_empty() {
+        // Render each toggle with its own style (active=highlighted, inactive=dim)
+        spans.push(Span::styled(
+            toggle_help,
+            if state.help_visible {
+                toggle_active_style
+            } else {
+                toggle_inactive_style
+            },
+        ));
+        spans.push(Span::styled(
+            toggle_palette,
+            if state.palette_visible {
+                toggle_active_style
+            } else {
+                toggle_inactive_style
+            },
+        ));
+        spans.push(Span::styled(
+            toggle_perf,
+            if state.perf_hud_visible {
+                toggle_active_style
+            } else {
+                toggle_inactive_style
+            },
+        ));
+        spans.push(Span::styled(
+            toggle_debug,
+            if state.debug_visible {
+                toggle_active_style
+            } else {
+                toggle_inactive_style
+            },
+        ));
+    }
     if !mouse_label.is_empty() {
         spans.push(Span::styled(mouse_label, mouse_style));
     }
@@ -836,6 +954,30 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
 
     // Register hit regions for clickable status bar elements (bd-iuvb.17.4).
     // Uses pre-computed positions from above (before spans consumed the strings).
+    if help_toggle_w > 0 {
+        frame.register_hit_region(
+            Rect::new(help_toggle_x, area.y, help_toggle_w, 1),
+            HitId::new(STATUS_HELP_TOGGLE),
+        );
+    }
+    if palette_toggle_w > 0 {
+        frame.register_hit_region(
+            Rect::new(palette_toggle_x, area.y, palette_toggle_w, 1),
+            HitId::new(STATUS_PALETTE_TOGGLE),
+        );
+    }
+    if perf_toggle_w > 0 {
+        frame.register_hit_region(
+            Rect::new(perf_toggle_x, area.y, perf_toggle_w, 1),
+            HitId::new(STATUS_PERF_TOGGLE),
+        );
+    }
+    if debug_toggle_w > 0 {
+        frame.register_hit_region(
+            Rect::new(debug_toggle_x, area.y, debug_toggle_w, 1),
+            HitId::new(STATUS_DEBUG_TOGGLE),
+        );
+    }
     if mouse_hit_w > 0 {
         frame.register_hit_region(
             Rect::new(mouse_hit_x, area.y, mouse_hit_w, 1),
@@ -1263,9 +1405,17 @@ mod tests {
             theme_name: "default",
             inline_mode: false,
             mouse_capture_enabled: true,
+            help_visible: false,
+            palette_visible: false,
+            perf_hud_visible: false,
+            debug_visible: false,
             a11y_high_contrast: false,
             a11y_reduced_motion: false,
             a11y_large_text: false,
+            help_visible: false,
+            palette_visible: false,
+            perf_hud_visible: false,
+            debug_visible: false,
             can_undo: false,
             can_redo: false,
             undo_description: None,
@@ -1405,4 +1555,169 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn status_bar_registers_mouse_toggle_hit_region() {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::with_hit_grid(120, 1, &mut pool);
+        let area = Rect::new(0, 0, 120, 1);
+
+        let state = StatusBarState {
+            current_screen: ScreenId::Dashboard,
+            screen_title: "Dashboard",
+            screen_index: 0,
+            screen_count: 10,
+            tick_count: 50,
+            frame_count: 100,
+            terminal_width: 120,
+            terminal_height: 40,
+            theme_name: "Neon",
+            inline_mode: false,
+            mouse_capture_enabled: true,
+            a11y_high_contrast: false,
+            a11y_reduced_motion: false,
+            a11y_large_text: false,
+            help_visible: false,
+            palette_visible: false,
+            perf_hud_visible: false,
+            debug_visible: false,
+            can_undo: false,
+            can_redo: false,
+            undo_description: None,
+        };
+        render_status_bar(&state, &mut frame, area);
+
+        // Search for STATUS_MOUSE_TOGGLE hit region.
+        let target = HitId::new(STATUS_MOUSE_TOGGLE);
+        let mut found = false;
+        for x in 0..120u16 {
+            if let Some((id, _, _)) = frame.hit_test(x, 0) {
+                if id == target {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        assert!(found, "Status bar should register mouse toggle hit region");
+    }
+
+    #[test]
+    fn help_overlay_registers_hit_regions() {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::with_hit_grid(120, 40, &mut pool);
+        let area = Rect::new(0, 0, 120, 40);
+
+        let bindings = vec![];
+        render_help_overlay(ScreenId::Dashboard, &bindings, &mut frame, area);
+
+        let close_target = HitId::new(OVERLAY_HELP_CLOSE);
+        let content_target = HitId::new(OVERLAY_HELP_CONTENT);
+        let mut found_close = false;
+        let mut found_content = false;
+        for y in 0..40u16 {
+            for x in 0..120u16 {
+                if let Some((id, _, _)) = frame.hit_test(x, y) {
+                    if id == close_target {
+                        found_close = true;
+                    }
+                    if id == content_target {
+                        found_content = true;
+                    }
+                }
+                if found_close && found_content {
+                    break;
+                }
+            }
+        }
+        assert!(found_close, "Help overlay should register close hit region");
+        assert!(
+            found_content,
+            "Help overlay should register content hit region"
+        );
+    }
+
+    #[test]
+    fn a11y_panel_registers_hit_region() {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::with_hit_grid(120, 40, &mut pool);
+        let area = Rect::new(0, 0, 120, 40);
+
+        let state = A11yPanelState {
+            high_contrast: false,
+            reduced_motion: false,
+            large_text: false,
+            base_theme: "Neon",
+        };
+        render_a11y_panel(&state, &mut frame, area);
+
+        let target = HitId::new(OVERLAY_A11Y);
+        let mut found = false;
+        for y in 0..40u16 {
+            for x in 0..120u16 {
+                if let Some((id, _, _)) = frame.hit_test(x, y) {
+                    if id == target {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if found {
+                break;
+            }
+        }
+        assert!(found, "A11y panel should register overlay hit region");
+    }
+
+    #[test]
+    fn classify_hit_maps_status_toggles() {
+        assert!(matches!(
+            classify_hit(HitId::new(STATUS_HELP_TOGGLE)),
+            HitLayer::StatusToggle(_)
+        ));
+        assert!(matches!(
+            classify_hit(HitId::new(STATUS_PALETTE_TOGGLE)),
+            HitLayer::StatusToggle(_)
+        ));
+        assert!(matches!(
+            classify_hit(HitId::new(STATUS_A11Y_TOGGLE)),
+            HitLayer::StatusToggle(_)
+        ));
+        assert!(matches!(
+            classify_hit(HitId::new(STATUS_PERF_TOGGLE)),
+            HitLayer::StatusToggle(_)
+        ));
+        assert!(matches!(
+            classify_hit(HitId::new(STATUS_DEBUG_TOGGLE)),
+            HitLayer::StatusToggle(_)
+        ));
+        assert!(matches!(
+            classify_hit(HitId::new(STATUS_MOUSE_TOGGLE)),
+            HitLayer::StatusToggle(_)
+        ));
+    }
+
+    #[test]
+    fn classify_hit_maps_overlays() {
+        assert!(matches!(
+            classify_hit(HitId::new(OVERLAY_HELP_CLOSE)),
+            HitLayer::Overlay(_)
+        ));
+        assert!(matches!(
+            classify_hit(HitId::new(OVERLAY_A11Y)),
+            HitLayer::Overlay(_)
+        ));
+        assert!(matches!(
+            classify_hit(HitId::new(OVERLAY_PERF_HUD)),
+            HitLayer::Overlay(_)
+        ));
+        assert!(matches!(
+            classify_hit(HitId::new(OVERLAY_DEBUG)),
+            HitLayer::Overlay(_)
+        ));
+        assert!(matches!(
+            classify_hit(HitId::new(OVERLAY_TOUR)),
+            HitLayer::Overlay(_)
+        ));
+    }
+
 }

@@ -432,7 +432,7 @@ impl Painter {
                 let px_x = cx * cols;
                 let px_y = cy * rows;
 
-                let (ch, color) = match self.mode {
+                let (ch, fg_color, bg_color) = match self.mode {
                     Mode::Braille => self.braille_cell(px_x, px_y),
                     Mode::Block => self.block_cell(px_x, px_y),
                     Mode::HalfBlock => self.halfblock_cell(px_x, px_y),
@@ -450,8 +450,11 @@ impl Painter {
                     cell.bg = bg;
                 }
                 // Per-pixel color overrides base style
-                if let Some(c) = color {
+                if let Some(c) = fg_color {
                     cell.fg = c;
+                }
+                if let Some(c) = bg_color {
+                    cell.bg = c;
                 }
 
                 buf.set(
@@ -464,7 +467,7 @@ impl Painter {
     }
 
     /// Compute the Braille character for a 2×4 sub-pixel block.
-    fn braille_cell(&self, px_x: i32, px_y: i32) -> (char, Option<PackedRgba>) {
+    fn braille_cell(&self, px_x: i32, px_y: i32) -> (char, Option<PackedRgba>, Option<PackedRgba>) {
         // Braille dot numbering to bit mapping:
         // dot 1 (0,0) = bit 0    dot 4 (1,0) = bit 3
         // dot 2 (0,1) = bit 1    dot 5 (1,1) = bit 4
@@ -494,16 +497,16 @@ impl Painter {
         }
 
         if bits == 0 {
-            (' ', None)
+            (' ', None, None)
         } else {
             // Braille patterns start at U+2800
             let ch = char::from_u32(0x2800 + bits as u32).unwrap_or(' ');
-            (ch, first_color)
+            (ch, first_color, None)
         }
     }
 
     /// Compute the block character for a 2×2 sub-pixel block.
-    fn block_cell(&self, px_x: i32, px_y: i32) -> (char, Option<PackedRgba>) {
+    fn block_cell(&self, px_x: i32, px_y: i32) -> (char, Option<PackedRgba>, Option<PackedRgba>) {
         let tl = self.get(px_x, px_y);
         let tr = self.get(px_x + 1, px_y);
         let bl = self.get(px_x, px_y + 1);
@@ -535,24 +538,22 @@ impl Painter {
             (true, true, true, true) => '█',
         };
 
-        (ch, first_color)
+        (ch, first_color, None)
     }
 
     /// Compute the half-block character for a 1×2 sub-pixel block.
-    fn halfblock_cell(&self, px_x: i32, px_y: i32) -> (char, Option<PackedRgba>) {
+    fn halfblock_cell(&self, px_x: i32, px_y: i32) -> (char, Option<PackedRgba>, Option<PackedRgba>) {
         let top = self.get(px_x, px_y);
         let bot = self.get(px_x, px_y + 1);
+        let top_color = self.color_at(px_x, px_y);
+        let bot_color = self.color_at(px_x, px_y + 1);
 
-        let first_color = self.first_set_color(&[(px_x, px_y), (px_x, px_y + 1)]);
-
-        let ch = match (top, bot) {
-            (false, false) => ' ',
-            (true, false) => '▀',
-            (false, true) => '▄',
-            (true, true) => '█',
-        };
-
-        (ch, first_color)
+        match (top, bot) {
+            (false, false) => (' ', None, None),
+            (true, false) => ('▀', top_color, None),
+            (false, true) => ('▄', bot_color, None),
+            (true, true) => ('▀', top_color, bot_color),
+        }
     }
 
     fn first_set_color(&self, coords: &[(i32, i32)]) -> Option<PackedRgba> {
@@ -562,6 +563,15 @@ impl Painter {
                 && let Some(c) = self.colors[idx]
             {
                 return Some(c);
+            }
+        }
+        None
+    }
+
+    fn color_at(&self, x: i32, y: i32) -> Option<PackedRgba> {
+        if self.get(x, y) {
+            if let Some(idx) = self.index(x, y) {
+                return self.colors[idx];
             }
         }
         None
@@ -799,7 +809,7 @@ mod tests {
     #[test]
     fn braille_empty_cell() {
         let p = Painter::new(2, 4, Mode::Braille);
-        let (ch, _) = p.braille_cell(0, 0);
+        let (ch, _, _) = p.braille_cell(0, 0);
         assert_eq!(ch, ' ');
     }
 
@@ -807,7 +817,7 @@ mod tests {
     fn braille_single_dot() {
         let mut p = Painter::new(2, 4, Mode::Braille);
         p.point(0, 0); // dot 1 = bit 0
-        let (ch, _) = p.braille_cell(0, 0);
+        let (ch, _, _) = p.braille_cell(0, 0);
         assert_eq!(ch, '\u{2801}');
     }
 
@@ -819,7 +829,7 @@ mod tests {
                 p.point(x, y);
             }
         }
-        let (ch, _) = p.braille_cell(0, 0);
+        let (ch, _, _) = p.braille_cell(0, 0);
         assert_eq!(ch, '\u{28FF}');
     }
 
@@ -850,7 +860,7 @@ mod tests {
         assert_eq!(p.halfblock_cell(0, 0).0, '▄');
 
         p.point(0, 0);
-        assert_eq!(p.halfblock_cell(0, 0).0, '█');
+        assert_eq!(p.halfblock_cell(0, 0).0, '▀');
     }
 
     #[test]
@@ -896,7 +906,7 @@ mod tests {
         let red = PackedRgba::rgb(255, 0, 0);
         p.point_colored(0, 0, red);
         assert!(p.get(0, 0));
-        let (_, color) = p.braille_cell(0, 0);
+        let (_, color, _) = p.braille_cell(0, 0);
         assert_eq!(color, Some(red));
     }
 

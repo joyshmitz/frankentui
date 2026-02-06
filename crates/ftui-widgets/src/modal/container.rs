@@ -920,7 +920,10 @@ mod tests {
             .close_on_escape(false)
             .hit_id(HitId::new(99));
 
-        assert_eq!(modal.config.position, ModalPosition::TopCenter { margin: 3 });
+        assert_eq!(
+            modal.config.position,
+            ModalPosition::TopCenter { margin: 3 }
+        );
         assert!(!modal.config.close_on_backdrop);
         assert!(!modal.config.close_on_escape);
         assert_eq!(modal.config.hit_id, Some(HitId::new(99)));

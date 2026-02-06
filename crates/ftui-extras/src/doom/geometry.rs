@@ -273,23 +273,31 @@ mod tests {
 
     #[test]
     fn circle_intersects_segment_hit() {
-        assert!(circle_intersects_segment(5.0, 2.0, 3.0, 0.0, 0.0, 10.0, 0.0));
+        assert!(circle_intersects_segment(
+            5.0, 2.0, 3.0, 0.0, 0.0, 10.0, 0.0
+        ));
     }
 
     #[test]
     fn circle_intersects_segment_miss() {
-        assert!(!circle_intersects_segment(5.0, 5.0, 3.0, 0.0, 0.0, 10.0, 0.0));
+        assert!(!circle_intersects_segment(
+            5.0, 5.0, 3.0, 0.0, 0.0, 10.0, 0.0
+        ));
     }
 
     #[test]
     fn circle_intersects_segment_tangent() {
         // Circle radius exactly equals distance — not intersecting (strict <)
-        assert!(!circle_intersects_segment(5.0, 3.0, 3.0, 0.0, 0.0, 10.0, 0.0));
+        assert!(!circle_intersects_segment(
+            5.0, 3.0, 3.0, 0.0, 0.0, 10.0, 0.0
+        ));
     }
 
     #[test]
     fn circle_intersects_segment_at_endpoint() {
         // Circle near endpoint of segment
-        assert!(circle_intersects_segment(11.0, 0.0, 2.0, 0.0, 0.0, 10.0, 0.0));
+        assert!(circle_intersects_segment(
+            11.0, 0.0, 2.0, 0.0, 0.0, 10.0, 0.0
+        ));
     }
 }
