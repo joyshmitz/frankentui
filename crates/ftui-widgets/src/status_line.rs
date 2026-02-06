@@ -541,7 +541,11 @@ mod tests {
         let mut frame = Frame::new(10, 1, &mut pool);
         status.render(area, &mut frame);
 
-        let c = frame.buffer.get(0, 0).and_then(|c| c.content.as_char()).unwrap();
+        let c = frame
+            .buffer
+            .get(0, 0)
+            .and_then(|c| c.content.as_char())
+            .unwrap();
         assert_eq!(c, '⠋');
     }
 

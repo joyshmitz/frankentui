@@ -635,4 +635,116 @@ mod tests {
         let h = map.supportive_floor_at(656.0, 64.0, 32.0);
         assert!((h - 32.0).abs() < 0.01, "expected 32.0, got {h}");
     }
+
+    // ── circle_intersects_segment tests ──────────────────────────────────
+
+    #[test]
+    fn circle_misses_distant_segment() {
+        assert!(!circle_intersects_segment(
+            100.0, 100.0, 5.0, 0.0, 0.0, 10.0, 0.0
+        ));
+    }
+
+    #[test]
+    fn circle_hits_segment_center() {
+        // Circle at (5, 1) with r=2, segment from (0,0) to (10,0)
+        assert!(circle_intersects_segment(5.0, 1.0, 2.0, 0.0, 0.0, 10.0, 0.0));
+    }
+
+    #[test]
+    fn circle_hits_segment_endpoint() {
+        // Circle centered at (0.5, 0) with r=1, segment from (1,0) to (10,0)
+        assert!(circle_intersects_segment(0.5, 0.0, 1.0, 1.0, 0.0, 10.0, 0.0));
+    }
+
+    #[test]
+    fn circle_tangent_just_misses() {
+        // Circle at (5, 5.1) with r=5, segment at y=0 → distance = 5.1 > 5
+        assert!(!circle_intersects_segment(
+            5.0, 5.1, 5.0, 0.0, 0.0, 10.0, 0.0
+        ));
+    }
+
+    #[test]
+    fn circle_zero_length_segment() {
+        // Degenerate segment (point), circle overlaps it
+        assert!(circle_intersects_segment(0.0, 0.0, 1.0, 0.5, 0.0, 0.5, 0.0));
+        // Circle doesn't overlap
+        assert!(!circle_intersects_segment(
+            10.0, 10.0, 1.0, 0.5, 0.0, 0.5, 0.0
+        ));
+    }
+
+    // ── QuakeMap direct construction tests ───────────────────────────────
+
+    #[test]
+    fn empty_map_defaults() {
+        let map = QuakeMap::new();
+        assert!(map.vertices.is_empty());
+        assert!(map.faces.is_empty());
+        assert!(map.walls.is_empty());
+        assert!(map.rooms.is_empty());
+        assert_eq!(map.player_start, [0.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn floor_height_outside_all_rooms() {
+        let map = generate_e1m1();
+        // Very far away from any room
+        let h = map.floor_height_at(99999.0, 99999.0);
+        // Should return lowest floor in the map (fallback)
+        let lowest = map.rooms.iter().map(|r| r.floor_z).fold(f32::MAX, f32::min);
+        assert!(
+            (h - lowest).abs() < 0.01,
+            "outside rooms should return lowest floor, got {h}"
+        );
+    }
+
+    #[test]
+    fn ceiling_height_outside_all_rooms() {
+        let map = generate_e1m1();
+        let h = map.ceiling_height_at(99999.0, 99999.0);
+        assert!(
+            (h - 1000.0).abs() < 0.01,
+            "outside rooms should return 1000.0, got {h}"
+        );
+    }
+
+    #[test]
+    fn no_collision_in_open_area() {
+        let map = generate_e1m1();
+        // Center of spawn room, no walls nearby
+        assert!(!map.point_in_solid(128.0, 128.0, 10.0, 16.0));
+    }
+
+    #[test]
+    fn player_start_tuple_matches_array() {
+        let map = generate_e1m1();
+        let (x, y, z, a) = map.player_start();
+        assert_eq!(x, map.player_start[0]);
+        assert_eq!(y, map.player_start[1]);
+        assert_eq!(z, map.player_start[2]);
+        assert_eq!(a, map.player_start[3]);
+    }
+
+    #[test]
+    fn e1m1_has_multiple_rooms() {
+        let map = generate_e1m1();
+        assert!(
+            map.rooms.len() >= 4,
+            "expected at least 4 rooms, got {}",
+            map.rooms.len()
+        );
+    }
+
+    #[test]
+    fn supportive_floor_outside_all_rooms() {
+        let map = generate_e1m1();
+        let h = map.supportive_floor_at(99999.0, 99999.0, 0.0);
+        let lowest = map.rooms.iter().map(|r| r.floor_z).fold(f32::MAX, f32::min);
+        assert!(
+            (h - lowest).abs() < 0.01,
+            "outside rooms should return lowest floor, got {h}"
+        );
+    }
 }

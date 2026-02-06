@@ -771,4 +771,152 @@ mod tests {
         assert!(bounds.width > 0);
         assert!(bounds.height > 0);
     }
+
+    // ── Width utility tests ─────────────────────────────────────────────
+
+    #[test]
+    fn width_u64_to_usize_normal_and_overflow() {
+        assert_eq!(width_u64_to_usize(42), 42);
+        assert_eq!(width_u64_to_usize(0), 0);
+        assert_eq!(width_u64_to_usize(u64::MAX), usize::MAX);
+    }
+
+    #[test]
+    fn ascii_display_width_counts_printable_and_control() {
+        assert_eq!(ascii_display_width("hello"), 5);
+        assert_eq!(ascii_display_width(""), 0);
+        assert_eq!(ascii_display_width("a\tb\nc"), 5); // tab/newline each count as 1
+        assert_eq!(ascii_display_width("\r"), 1);
+    }
+
+    #[test]
+    fn display_width_pure_ascii() {
+        assert_eq!(display_width("hello"), 5);
+        assert_eq!(display_width(""), 0);
+        assert_eq!(display_width(" "), 1);
+    }
+
+    #[test]
+    fn display_width_ascii_with_control() {
+        assert_eq!(display_width("a\tb"), 3);
+    }
+
+    #[test]
+    fn is_zero_width_combining_marks() {
+        assert!(is_zero_width_codepoint('\u{0300}')); // Combining grave
+        assert!(is_zero_width_codepoint('\u{0301}')); // Combining acute
+        assert!(is_zero_width_codepoint('\u{200B}')); // Zero-width space
+        assert!(is_zero_width_codepoint('\u{200D}')); // Zero-width joiner
+        assert!(is_zero_width_codepoint('\u{FE0F}')); // Variation selector
+        assert!(is_zero_width_codepoint('\u{FEFF}')); // BOM
+        assert!(is_zero_width_codepoint('\u{00AD}')); // Soft hyphen
+        assert!(!is_zero_width_codepoint('a'));
+        assert!(!is_zero_width_codepoint(' '));
+    }
+
+    #[test]
+    fn is_zero_width_control_chars() {
+        assert!(is_zero_width_codepoint('\u{0000}')); // null
+        assert!(is_zero_width_codepoint('\u{001F}')); // unit separator
+        assert!(is_zero_width_codepoint('\u{007F}')); // DEL
+        assert!(is_zero_width_codepoint('\u{009F}')); // APC
+        assert!(!is_zero_width_codepoint('\u{0020}')); // space is not zero-width
+    }
+
+    #[test]
+    fn is_zero_width_bidi_marks() {
+        assert!(is_zero_width_codepoint('\u{202A}')); // LRE
+        assert!(is_zero_width_codepoint('\u{202E}')); // RLO
+        assert!(is_zero_width_codepoint('\u{2066}')); // LRI
+        assert!(is_zero_width_codepoint('\u{2069}')); // PDI
+        assert!(is_zero_width_codepoint('\u{200E}')); // LRM
+        assert!(is_zero_width_codepoint('\u{200F}')); // RLM
+    }
+
+    // ── Text wrapping edge cases ────────────────────────────────────────
+
+    #[test]
+    fn text_wrap_zero_width_returns_empty() {
+        let spotlight = Spotlight::new();
+        let lines = spotlight.wrap_text("some text", 0);
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn text_wrap_preserves_paragraphs() {
+        let spotlight = Spotlight::new();
+        let lines = spotlight.wrap_text("first\n\nsecond", 40);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], "first");
+        assert_eq!(lines[1], "");
+        assert_eq!(lines[2], "second");
+    }
+
+    #[test]
+    fn text_wrap_single_word_per_line() {
+        let spotlight = Spotlight::new();
+        let lines = spotlight.wrap_text("a b c d", 1);
+        // Each word gets its own line
+        assert_eq!(lines.len(), 4);
+    }
+
+    // ── Panel size/position edge cases ──────────────────────────────────
+
+    #[test]
+    fn panel_size_with_progress() {
+        let without = Spotlight::new().title("T").content("C");
+        let with_progress = Spotlight::new().title("T").content("C").progress("1/3");
+        let screen = Rect::new(0, 0, 80, 24);
+        let (_, h1) = without.panel_size(screen);
+        let (_, h2) = with_progress.panel_size(screen);
+        assert_eq!(h2, h1 + 1, "progress adds one line of height");
+    }
+
+    #[test]
+    fn panel_size_with_hints() {
+        let without = Spotlight::new().title("T").content("C");
+        let with_hints = Spotlight::new().title("T").content("C").hints("Esc: Close");
+        let screen = Rect::new(0, 0, 80, 24);
+        let (_, h1) = without.panel_size(screen);
+        let (_, h2) = with_hints.panel_size(screen);
+        assert_eq!(h2, h1 + 1, "hints add one line of height");
+    }
+
+    #[test]
+    fn panel_position_falls_back_to_right() {
+        // Target in the middle, fill top and bottom
+        // Screen too short for below or above, but wide enough for right
+        let spotlight = Spotlight::new()
+            .target(Rect::new(5, 3, 10, 14)) // Tall target in short screen
+            .title("T");
+        let screen = Rect::new(0, 0, 80, 20);
+        let (_, _, pos) = spotlight.panel_position(screen);
+        // Either right or left depending on space
+        assert!(
+            pos == PanelPosition::Right || pos == PanelPosition::Left,
+            "should fall back to side position, got {pos:?}"
+        );
+    }
+
+    #[test]
+    fn panel_position_no_target_centers() {
+        let spotlight = Spotlight::new().title("Centered");
+        let screen = Rect::new(0, 0, 80, 24);
+        let (px, py, _) = spotlight.panel_position(screen);
+        // Without target, default target is center of screen
+        // Panel should be near center
+        assert!(px < 60, "panel x should be reasonable, got {px}");
+        assert!(py < 20, "panel y should be reasonable, got {py}");
+    }
+
+    #[test]
+    fn panel_forced_left_position() {
+        let spotlight = Spotlight::new()
+            .target(Rect::new(40, 10, 20, 3))
+            .title("Test")
+            .force_position(PanelPosition::Left);
+        let screen = Rect::new(0, 0, 80, 24);
+        let (_, _, pos) = spotlight.panel_position(screen);
+        assert_eq!(pos, PanelPosition::Left);
+    }
 }

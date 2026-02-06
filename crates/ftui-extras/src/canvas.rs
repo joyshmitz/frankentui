@@ -573,10 +573,10 @@ impl Painter {
     }
 
     fn color_at(&self, x: i32, y: i32) -> Option<PackedRgba> {
-        if self.get(x, y) {
-            if let Some(idx) = self.index(x, y) {
-                return self.colors[idx];
-            }
+        if self.get(x, y)
+            && let Some(idx) = self.index(x, y)
+        {
+            return self.colors[idx];
         }
         None
     }

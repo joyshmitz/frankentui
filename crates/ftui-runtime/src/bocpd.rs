@@ -1136,11 +1136,11 @@ mod tests {
     }
 
     #[test]
-    fn regime_clone_copy() {
+    fn regime_copy() {
         let r = BocpdRegime::Burst;
         let r2 = r;
         assert_eq!(r, r2);
-        let r3 = r.clone();
+        let r3 = r;
         assert_eq!(r, r3);
     }
 

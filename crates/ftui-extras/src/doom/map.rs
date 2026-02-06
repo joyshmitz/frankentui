@@ -404,8 +404,13 @@ mod tests {
     #[test]
     fn linedef_is_two_sided() {
         let ld = LineDef {
-            v1: 0, v2: 1, flags: ML_TWOSIDED, special: 0,
-            tag: 0, front_sidedef: None, back_sidedef: None,
+            v1: 0,
+            v2: 1,
+            flags: ML_TWOSIDED,
+            special: 0,
+            tag: 0,
+            front_sidedef: None,
+            back_sidedef: None,
         };
         assert!(ld.is_two_sided());
     }
@@ -413,8 +418,13 @@ mod tests {
     #[test]
     fn linedef_not_two_sided() {
         let ld = LineDef {
-            v1: 0, v2: 1, flags: 0, special: 0,
-            tag: 0, front_sidedef: None, back_sidedef: None,
+            v1: 0,
+            v2: 1,
+            flags: 0,
+            special: 0,
+            tag: 0,
+            front_sidedef: None,
+            back_sidedef: None,
         };
         assert!(!ld.is_two_sided());
     }
@@ -422,8 +432,13 @@ mod tests {
     #[test]
     fn linedef_is_blocking() {
         let ld = LineDef {
-            v1: 0, v2: 1, flags: ML_BLOCKING, special: 0,
-            tag: 0, front_sidedef: None, back_sidedef: None,
+            v1: 0,
+            v2: 1,
+            flags: ML_BLOCKING,
+            special: 0,
+            tag: 0,
+            front_sidedef: None,
+            back_sidedef: None,
         };
         assert!(ld.is_blocking());
     }
@@ -431,8 +446,13 @@ mod tests {
     #[test]
     fn linedef_not_blocking() {
         let ld = LineDef {
-            v1: 0, v2: 1, flags: ML_TWOSIDED, special: 0,
-            tag: 0, front_sidedef: None, back_sidedef: None,
+            v1: 0,
+            v2: 1,
+            flags: ML_TWOSIDED,
+            special: 0,
+            tag: 0,
+            front_sidedef: None,
+            back_sidedef: None,
         };
         assert!(!ld.is_blocking());
     }
@@ -440,13 +460,21 @@ mod tests {
     #[test]
     fn linedef_front_sector_some() {
         let sidedefs = vec![SideDef {
-            x_offset: 0.0, y_offset: 0.0,
-            upper_texture: String::new(), lower_texture: String::new(),
-            middle_texture: String::new(), sector: 3,
+            x_offset: 0.0,
+            y_offset: 0.0,
+            upper_texture: String::new(),
+            lower_texture: String::new(),
+            middle_texture: String::new(),
+            sector: 3,
         }];
         let ld = LineDef {
-            v1: 0, v2: 1, flags: 0, special: 0, tag: 0,
-            front_sidedef: Some(0), back_sidedef: None,
+            v1: 0,
+            v2: 1,
+            flags: 0,
+            special: 0,
+            tag: 0,
+            front_sidedef: Some(0),
+            back_sidedef: None,
         };
         assert_eq!(ld.front_sector(&sidedefs), Some(3));
     }
@@ -455,8 +483,13 @@ mod tests {
     fn linedef_front_sector_none() {
         let sidedefs: Vec<SideDef> = vec![];
         let ld = LineDef {
-            v1: 0, v2: 1, flags: 0, special: 0, tag: 0,
-            front_sidedef: None, back_sidedef: None,
+            v1: 0,
+            v2: 1,
+            flags: 0,
+            special: 0,
+            tag: 0,
+            front_sidedef: None,
+            back_sidedef: None,
         };
         assert_eq!(ld.front_sector(&sidedefs), None);
     }
@@ -464,13 +497,21 @@ mod tests {
     #[test]
     fn linedef_back_sector_some() {
         let sidedefs = vec![SideDef {
-            x_offset: 0.0, y_offset: 0.0,
-            upper_texture: String::new(), lower_texture: String::new(),
-            middle_texture: String::new(), sector: 7,
+            x_offset: 0.0,
+            y_offset: 0.0,
+            upper_texture: String::new(),
+            lower_texture: String::new(),
+            middle_texture: String::new(),
+            sector: 7,
         }];
         let ld = LineDef {
-            v1: 0, v2: 1, flags: 0, special: 0, tag: 0,
-            front_sidedef: None, back_sidedef: Some(0),
+            v1: 0,
+            v2: 1,
+            flags: 0,
+            special: 0,
+            tag: 0,
+            front_sidedef: None,
+            back_sidedef: Some(0),
         };
         assert_eq!(ld.back_sector(&sidedefs), Some(7));
     }
@@ -478,9 +519,13 @@ mod tests {
     #[test]
     fn linedef_combined_flags() {
         let ld = LineDef {
-            v1: 0, v2: 1, flags: ML_BLOCKING | ML_TWOSIDED,
-            special: 0, tag: 0,
-            front_sidedef: None, back_sidedef: None,
+            v1: 0,
+            v2: 1,
+            flags: ML_BLOCKING | ML_TWOSIDED,
+            special: 0,
+            tag: 0,
+            front_sidedef: None,
+            back_sidedef: None,
         };
         assert!(ld.is_blocking());
         assert!(ld.is_two_sided());
@@ -489,9 +534,13 @@ mod tests {
     #[test]
     fn sector_is_sky_ceiling() {
         let s = Sector {
-            floor_height: 0.0, ceiling_height: 128.0,
-            floor_texture: String::new(), ceiling_texture: "F_SKY1".into(),
-            light_level: 200, special: 0, tag: 0,
+            floor_height: 0.0,
+            ceiling_height: 128.0,
+            floor_texture: String::new(),
+            ceiling_texture: "F_SKY1".into(),
+            light_level: 200,
+            special: 0,
+            tag: 0,
         };
         assert!(s.is_sky_ceiling());
     }
@@ -499,9 +548,13 @@ mod tests {
     #[test]
     fn sector_not_sky_ceiling() {
         let s = Sector {
-            floor_height: 0.0, ceiling_height: 128.0,
-            floor_texture: String::new(), ceiling_texture: "FLAT1".into(),
-            light_level: 200, special: 0, tag: 0,
+            floor_height: 0.0,
+            ceiling_height: 128.0,
+            floor_texture: String::new(),
+            ceiling_texture: "FLAT1".into(),
+            light_level: 200,
+            special: 0,
+            tag: 0,
         };
         assert!(!s.is_sky_ceiling());
     }
@@ -510,9 +563,14 @@ mod tests {
     fn point_in_subsector_empty_nodes() {
         let map = DoomMap {
             name: "TEST".into(),
-            vertices: vec![], linedefs: vec![], sidedefs: vec![],
-            sectors: vec![], segs: vec![], subsectors: vec![],
-            nodes: vec![], things: vec![],
+            vertices: vec![],
+            linedefs: vec![],
+            sidedefs: vec![],
+            sectors: vec![],
+            segs: vec![],
+            subsectors: vec![],
+            nodes: vec![],
+            things: vec![],
         };
         assert_eq!(map.point_in_subsector(0.0, 0.0), 0);
     }
@@ -527,8 +585,11 @@ mod tests {
     #[test]
     fn thing_fields() {
         let t = Thing {
-            x: 100.0, y: 200.0, angle: 1.5,
-            thing_type: THING_PLAYER1, flags: 0,
+            x: 100.0,
+            y: 200.0,
+            angle: 1.5,
+            thing_type: THING_PLAYER1,
+            flags: 0,
         };
         assert_eq!(t.thing_type, THING_PLAYER1);
         assert!((t.angle - 1.5).abs() < f32::EPSILON);
@@ -537,8 +598,12 @@ mod tests {
     #[test]
     fn seg_fields() {
         let s = Seg {
-            v1: 0, v2: 1, angle: 3.14,
-            linedef: 5, direction: 0, offset: 10.0,
+            v1: 0,
+            v2: 1,
+            angle: std::f32::consts::PI,
+            linedef: 5,
+            direction: 0,
+            offset: 10.0,
         };
         assert_eq!(s.linedef, 5);
         assert_eq!(s.direction, 0);
@@ -546,7 +611,10 @@ mod tests {
 
     #[test]
     fn subsector_fields() {
-        let ss = SubSector { num_segs: 4, first_seg: 10 };
+        let ss = SubSector {
+            num_segs: 4,
+            first_seg: 10,
+        };
         assert_eq!(ss.num_segs, 4);
         assert_eq!(ss.first_seg, 10);
     }
@@ -555,12 +623,28 @@ mod tests {
     fn player_start_found() {
         let map = DoomMap {
             name: "TEST".into(),
-            vertices: vec![], linedefs: vec![], sidedefs: vec![],
-            sectors: vec![], segs: vec![], subsectors: vec![],
+            vertices: vec![],
+            linedefs: vec![],
+            sidedefs: vec![],
+            sectors: vec![],
+            segs: vec![],
+            subsectors: vec![],
             nodes: vec![],
             things: vec![
-                Thing { x: 50.0, y: 60.0, angle: 0.0, thing_type: 0, flags: 0 },
-                Thing { x: 100.0, y: 200.0, angle: 1.5, thing_type: THING_PLAYER1, flags: 0x07 },
+                Thing {
+                    x: 50.0,
+                    y: 60.0,
+                    angle: 0.0,
+                    thing_type: 0,
+                    flags: 0,
+                },
+                Thing {
+                    x: 100.0,
+                    y: 200.0,
+                    angle: 1.5,
+                    thing_type: THING_PLAYER1,
+                    flags: 0x07,
+                },
             ],
         };
         let start = map.player_start();
@@ -575,12 +659,20 @@ mod tests {
     fn player_start_not_found() {
         let map = DoomMap {
             name: "TEST".into(),
-            vertices: vec![], linedefs: vec![], sidedefs: vec![],
-            sectors: vec![], segs: vec![], subsectors: vec![],
+            vertices: vec![],
+            linedefs: vec![],
+            sidedefs: vec![],
+            sectors: vec![],
+            segs: vec![],
+            subsectors: vec![],
             nodes: vec![],
-            things: vec![
-                Thing { x: 50.0, y: 60.0, angle: 0.0, thing_type: 0, flags: 0 },
-            ],
+            things: vec![Thing {
+                x: 50.0,
+                y: 60.0,
+                angle: 0.0,
+                thing_type: 0,
+                flags: 0,
+            }],
         };
         assert!(map.player_start().is_none());
     }

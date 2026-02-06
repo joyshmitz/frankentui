@@ -674,7 +674,9 @@ mod tests {
             "missing decision equation header: {lines:?}"
         );
         assert!(
-            lines.iter().any(|l| l.contains("score=") && l.contains("cost=")),
+            lines
+                .iter()
+                .any(|l| l.contains("score=") && l.contains("cost=")),
             "missing score/cost line: {lines:?}"
         );
     }
@@ -706,7 +708,9 @@ mod tests {
         );
         // VOI = 0.040000 - 0.030000 = 0.010000
         assert!(
-            lines.iter().any(|l| l.contains("0.040000") && l.contains("0.030000") && l.contains("0.010000")),
+            lines.iter().any(|l| l.contains("0.040000")
+                && l.contains("0.030000")
+                && l.contains("0.010000")),
             "missing VOI computation line: {lines:?}"
         );
     }

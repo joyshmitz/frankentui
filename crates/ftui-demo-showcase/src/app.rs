@@ -6365,11 +6365,11 @@ mod tests {
         let status_y = 39u16;
         let mut help_x = None;
         for x in 0..200u16 {
-            if let Some((id, _region, _data)) = frame.hit_test(x, status_y) {
-                if id.id() == crate::chrome::STATUS_HELP_TOGGLE {
-                    help_x = Some(x);
-                    break;
-                }
+            if let Some((id, _region, _data)) = frame.hit_test(x, status_y)
+                && id.id() == crate::chrome::STATUS_HELP_TOGGLE
+            {
+                help_x = Some(x);
+                break;
             }
         }
 
@@ -6405,11 +6405,11 @@ mod tests {
         let status_y = 39u16;
         let mut debug_x = None;
         for x in 0..200u16 {
-            if let Some((id, _region, _data)) = frame.hit_test(x, status_y) {
-                if id.id() == crate::chrome::STATUS_DEBUG_TOGGLE {
-                    debug_x = Some(x);
-                    break;
-                }
+            if let Some((id, _region, _data)) = frame.hit_test(x, status_y)
+                && id.id() == crate::chrome::STATUS_DEBUG_TOGGLE
+            {
+                debug_x = Some(x);
+                break;
             }
         }
 
@@ -6445,11 +6445,11 @@ mod tests {
         let status_y = 39u16;
         let mut perf_x = None;
         for x in 0..200u16 {
-            if let Some((id, _region, _data)) = frame.hit_test(x, status_y) {
-                if id.id() == crate::chrome::STATUS_PERF_TOGGLE {
-                    perf_x = Some(x);
-                    break;
-                }
+            if let Some((id, _region, _data)) = frame.hit_test(x, status_y)
+                && id.id() == crate::chrome::STATUS_PERF_TOGGLE
+            {
+                perf_x = Some(x);
+                break;
             }
         }
 
@@ -6541,11 +6541,11 @@ mod tests {
         let status_y = 39u16;
         let mut help_x = None;
         for x in 0..200u16 {
-            if let Some((id, _region, _data)) = frame.hit_test(x, status_y) {
-                if id.id() == crate::chrome::STATUS_HELP_TOGGLE {
-                    help_x = Some(x);
-                    break;
-                }
+            if let Some((id, _region, _data)) = frame.hit_test(x, status_y)
+                && id.id() == crate::chrome::STATUS_HELP_TOGGLE
+            {
+                help_x = Some(x);
+                break;
             }
         }
 
@@ -6602,11 +6602,11 @@ mod tests {
         let status_y = 39u16;
         let mut mouse_x = None;
         for x in 0..200u16 {
-            if let Some((id, _region, _data)) = frame.hit_test(x, status_y) {
-                if id.id() == crate::chrome::STATUS_MOUSE_TOGGLE {
-                    mouse_x = Some(x);
-                    break;
-                }
+            if let Some((id, _region, _data)) = frame.hit_test(x, status_y)
+                && id.id() == crate::chrome::STATUS_MOUSE_TOGGLE
+            {
+                mouse_x = Some(x);
+                break;
             }
         }
 
@@ -6646,11 +6646,11 @@ mod tests {
         let mut close_pos = None;
         for y in 0..40u16 {
             for x in 0..200u16 {
-                if let Some((id, _region, _data)) = frame.hit_test(x, y) {
-                    if id.id() == crate::chrome::OVERLAY_HELP_CLOSE {
-                        close_pos = Some((x, y));
-                        break;
-                    }
+                if let Some((id, _region, _data)) = frame.hit_test(x, y)
+                    && id.id() == crate::chrome::OVERLAY_HELP_CLOSE
+                {
+                    close_pos = Some((x, y));
+                    break;
                 }
             }
             if close_pos.is_some() {

@@ -750,9 +750,7 @@ mod tests {
     #[test]
     fn posterior_variance_unknown_returns_prior() {
         let pred = HeightPredictor::default();
-        assert!(
-            (pred.posterior_variance(999) - pred.config.prior_variance).abs() < f64::EPSILON
-        );
+        assert!((pred.posterior_variance(999) - pred.config.prior_variance).abs() < f64::EPSILON);
     }
 
     // ── Register category ────────────────────────────────────────

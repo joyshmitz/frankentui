@@ -788,7 +788,10 @@ mod tests {
 
     #[test]
     fn notification_priority_default_is_normal() {
-        assert_eq!(NotificationPriority::default(), NotificationPriority::Normal);
+        assert_eq!(
+            NotificationPriority::default(),
+            NotificationPriority::Normal
+        );
     }
 
     #[test]

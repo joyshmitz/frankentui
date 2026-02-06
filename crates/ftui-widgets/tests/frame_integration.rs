@@ -802,14 +802,14 @@ fn dialog_modal_backdrop_covers_full_area() {
     let mut has_button = false;
     for y in 0..24u16 {
         for x in 0..80u16 {
-            if let Some((id, region, _data)) = frame.hit_test(x, y) {
-                if id == HitId::new(100) {
-                    match region {
-                        HitRegion::Custom(1) => has_backdrop = true,
-                        HitRegion::Custom(2) => has_content = true,
-                        HitRegion::Custom(10) => has_button = true,
-                        _ => {}
-                    }
+            if let Some((id, region, _data)) = frame.hit_test(x, y)
+                && id == HitId::new(100)
+            {
+                match region {
+                    HitRegion::Custom(1) => has_backdrop = true,
+                    HitRegion::Custom(2) => has_content = true,
+                    HitRegion::Custom(10) => has_button = true,
+                    _ => {}
                 }
             }
         }
