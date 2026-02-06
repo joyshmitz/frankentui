@@ -422,6 +422,12 @@ fn pty_mermaid_harness_metrics_jsonl_present() -> Result<(), String> {
         render_lines.len()
     );
 
+    // Ensure the harness cycles through block-beta at least once.
+    assert!(
+        text.contains("\"diagram_type\":\"block-beta\""),
+        "expected at least one mermaid_render event for diagram_type=block-beta"
+    );
+
     Ok(())
 }
 

@@ -207,6 +207,7 @@ enum SampleFamily {
     GitGraph,
     Journey,
     Requirement,
+    BlockBeta,
     Unsupported,
 }
 
@@ -224,6 +225,7 @@ impl SampleFamily {
             Self::GitGraph => "gitgraph",
             Self::Journey => "journey",
             Self::Requirement => "requirement",
+            Self::BlockBeta => "block-beta",
             Self::Unsupported => "unsupported",
         }
     }
@@ -240,6 +242,7 @@ impl SampleFamily {
         Self::GitGraph,
         Self::Journey,
         Self::Requirement,
+        Self::BlockBeta,
         Self::Unsupported,
     ];
 }
@@ -524,6 +527,10 @@ const KNOWN_FEATURE_TAGS: &[&str] = &[
     "commits",
     "scores",
     "requirements",
+    // Block-beta features
+    "block-columns",
+    "block-spans",
+    "block-nesting",
 ];
 
 /// Features known to be supported but lacking dedicated samples.
@@ -1046,6 +1053,53 @@ B -->|No| D[Fix]"#,
     risk: high
     verifyMethod: test
   }"#,
+    },
+    MermaidSample {
+        id: "block-beta-basic",
+        name: "Block Beta Basic",
+        family: SampleFamily::BlockBeta,
+        complexity: SampleComplexity::S,
+        tags: &["block-beta", "columns"],
+        features: &["block-columns", "block-spans"],
+        edge_cases: &[],
+        default_size: SampleSizeHint {
+            width: 60,
+            height: 15,
+        },
+        notes: "Columns + spans in a simple grid",
+        source: r#"block-beta
+  columns 3
+  a["Frontend"] b["Backend"] c["Database"]
+  space
+  d["Load Balancer"]:3"#,
+    },
+    MermaidSample {
+        id: "block-beta-nested",
+        name: "Block Beta Nested",
+        family: SampleFamily::BlockBeta,
+        complexity: SampleComplexity::M,
+        tags: &["block-beta", "nested"],
+        features: &["block-columns", "block-spans", "block-nesting"],
+        edge_cases: &["nested-blocks"],
+        default_size: SampleSizeHint {
+            width: 80,
+            height: 25,
+        },
+        notes: "Nested blocks and many spans (stress)",
+        source: r#"block-beta
+  columns 4
+  a["Service A"]:2 b["Service B"]:2
+  block:inner1:2
+    columns 2
+    c["Cache"] d["Queue"]
+  end
+  block:inner2:2
+    columns 2
+    e["Worker 1"] f["Worker 2"]
+  end
+  g["Load Balancer"]:4
+  space:2
+  h["Database"]:2"#,
     },
 ];
 
