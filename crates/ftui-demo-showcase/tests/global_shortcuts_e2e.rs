@@ -320,3 +320,85 @@ fn number_keys_navigate_to_screens() {
         "number key should change screen"
     );
 }
+
+#[test]
+fn tab_cycles_screens_forward() {
+    let mut app = AppModel::new();
+    let initial = app.current_screen;
+
+    app.update(AppMsg::from(press(KeyCode::Tab)));
+    assert_ne!(
+        app.current_screen, initial,
+        "Tab should advance to next screen"
+    );
+}
+
+#[test]
+fn backtab_cycles_screens_backward() {
+    let mut app = AppModel::new();
+    app.current_screen = ScreenId::Shakespeare;
+
+    app.update(AppMsg::from(press_mod(KeyCode::BackTab, Modifiers::SHIFT)));
+    assert_eq!(
+        app.current_screen,
+        ScreenId::Dashboard,
+        "BackTab should go to previous screen"
+    );
+}
+
+#[test]
+fn ctrl_t_cycles_theme() {
+    let mut app = AppModel::new();
+    let initial_theme = app.base_theme;
+
+    app.update(AppMsg::from(press_mod(KeyCode::Char('t'), Modifiers::CTRL)));
+    assert_ne!(
+        app.base_theme, initial_theme,
+        "Ctrl+T should cycle to next theme"
+    );
+}
+
+#[test]
+fn q_key_is_quit_signal() {
+    let mut app = AppModel::new();
+    // q should return a quit command, but we can't easily test the return
+    // value of update(). Instead, verify q doesn't toggle any overlays.
+    let help_before = app.help_visible;
+    let debug_before = app.debug_visible;
+    let perf_before = app.perf_hud_visible;
+    let screen_before = app.current_screen;
+
+    app.update(AppMsg::from(press(KeyCode::Char('q'))));
+
+    assert_eq!(app.help_visible, help_before, "q should not toggle help");
+    assert_eq!(app.debug_visible, debug_before, "q should not toggle debug");
+    assert_eq!(
+        app.perf_hud_visible, perf_before,
+        "q should not toggle perf"
+    );
+    assert_eq!(
+        app.current_screen, screen_before,
+        "q should not change screen"
+    );
+}
+
+#[test]
+fn multiple_overlays_coexist() {
+    // Multiple overlays can be visible simultaneously
+    let mut app = AppModel::new();
+
+    // Open help, debug, and perf HUD
+    app.update(AppMsg::from(press(KeyCode::Char('?'))));
+    app.update(AppMsg::from(press(KeyCode::F(12))));
+    app.update(AppMsg::from(press_mod(KeyCode::Char('p'), Modifiers::CTRL)));
+
+    assert!(app.help_visible, "help should be on");
+    assert!(app.debug_visible, "debug should be on");
+    assert!(app.perf_hud_visible, "perf HUD should be on");
+
+    // Close them individually
+    app.update(AppMsg::from(press(KeyCode::Char('?'))));
+    assert!(!app.help_visible, "help should be off");
+    assert!(app.debug_visible, "debug still on");
+    assert!(app.perf_hud_visible, "perf HUD still on");
+}
