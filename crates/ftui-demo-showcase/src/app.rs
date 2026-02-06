@@ -3894,6 +3894,15 @@ impl AppModel {
                     | crate::chrome::HitLayer::Category(_)
             )
         );
+        // Dashboard registers pane hit regions as "links" to other screens.
+        // Treat these as click targets (MouseUp activation + drag-threshold),
+        // but do NOT treat them as chrome for hover-move consumption; the
+        // Dashboard screen uses move events to drive its own hover highlight.
+        let pane_link_hit = matches!(
+            hit_layer,
+            Some(crate::chrome::HitLayer::Pane(target))
+                if current == ScreenId::Dashboard && target != ScreenId::Dashboard
+        );
 
         // Handle drag state machine transitions.
         match mouse.kind {
@@ -3912,6 +3921,20 @@ impl AppModel {
                     emit_mouse_jsonl(mouse, hit_id, "down", None, current);
                     // Down alone does not activate — wait for Up or drag.
                     return MouseDispatchResult::Consumed;
+                }
+
+                // Dashboard tile "pane links" should activate on MouseUp, but we
+                // still track drag threshold to avoid accidental navigation.
+                if pane_link_hit {
+                    self.mouse_dispatcher.drag = DragPhase::PendingDrag {
+                        button,
+                        start_x: mouse.x,
+                        start_y: mouse.y,
+                        hit_id,
+                    };
+                    emit_mouse_jsonl(mouse, hit_id, "down_pane_link", None, current);
+                    // Allow the Dashboard screen to also update focus/hover.
+                    return MouseDispatchResult::NotConsumed;
                 }
 
                 // Screen-level input: do not interfere. Also clear any stale
@@ -3982,7 +4005,7 @@ impl AppModel {
                 // chrome/overlay targets, or a screen-level Up event.
                 self.mouse_dispatcher.cancel_drag();
 
-                if chrome_hit {
+                if chrome_hit || pane_link_hit {
                     // Only left-click activates chrome/overlay targets.
                     if button != MouseButton::Left {
                         emit_mouse_jsonl(mouse, hit_id, "click_non_left", None, current);
@@ -4062,8 +4085,13 @@ impl AppModel {
                 }
                 MouseDispatchResult::Consumed
             }
-            // 5) Screen pane content — forward to screen.
-            HitLayer::Pane(_screen) => {
+            // 5) Screen pane content — forward to screen (except Dashboard pane-links).
+            HitLayer::Pane(target) => {
+                if current == ScreenId::Dashboard && target != ScreenId::Dashboard {
+                    self.handle_tab_click(mouse, hit_id, target, current);
+                    return MouseDispatchResult::Consumed;
+                }
+
                 emit_mouse_jsonl(mouse, Some(hit_id), "pane_click", None, current);
                 // Not consumed — let the event flow to the screen's update.
                 MouseDispatchResult::NotConsumed
@@ -5249,14 +5277,36 @@ mod tests {
         let mut frame = Frame::new(120, 40, &mut pool);
         app.view(&mut frame);
 
-        // Content pane inner area starts at roughly (1,2) for this layout.
-        let down = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 2, 2);
+        // Pick a coordinate that maps to the current screen's pane hit region.
+        //
+        // NOTE: The Dashboard registers "pane links" to other screens (tiles),
+        // so hard-coding a coordinate inside the pane is brittle. We explicitly
+        // choose a cell with the Dashboard pane hit id to validate forwarding.
+        let expected =
+            crate::chrome::PANE_HIT_BASE + crate::screens::screen_index(ScreenId::Dashboard) as u32;
+        let mut pane_xy = None;
+        for y in 0..40u16 {
+            for x in 0..120u16 {
+                if let Some((id, _region, _data)) = frame.hit_test(x, y)
+                    && id.id() == expected
+                {
+                    pane_xy = Some((x, y));
+                    break;
+                }
+            }
+            if pane_xy.is_some() {
+                break;
+            }
+        }
+        let (x, y) = pane_xy.expect("Should find Dashboard pane hit region");
+
+        let down = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), x, y);
         assert_eq!(app.dispatch_mouse(&down), MouseDispatchResult::NotConsumed);
 
-        let drag = MouseEvent::new(MouseEventKind::Drag(MouseButton::Left), 6, 6);
+        let drag = MouseEvent::new(MouseEventKind::Drag(MouseButton::Left), x, y);
         assert_eq!(app.dispatch_mouse(&drag), MouseDispatchResult::NotConsumed);
 
-        let up = MouseEvent::new(MouseEventKind::Up(MouseButton::Left), 6, 6);
+        let up = MouseEvent::new(MouseEventKind::Up(MouseButton::Left), x, y);
         assert_eq!(app.dispatch_mouse(&up), MouseDispatchResult::NotConsumed);
     }
 

@@ -3267,6 +3267,7 @@ pub struct Dashboard {
 
     // Focus + hit testing
     focus: DashboardFocus,
+    hover: DashboardFocus,
     layout_plasma: StdCell<Rect>,
     layout_charts: StdCell<Rect>,
     layout_code: StdCell<Rect>,
@@ -3312,6 +3313,7 @@ impl Dashboard {
             effect_index: 0,
             chart_mode: ChartMode::Pulse,
             focus: DashboardFocus::Code,
+            hover: DashboardFocus::None,
             layout_plasma: StdCell::new(Rect::default()),
             layout_charts: StdCell::new(Rect::default()),
             layout_code: StdCell::new(Rect::default()),
@@ -3343,7 +3345,23 @@ impl Dashboard {
         self.focus == panel
     }
 
-    fn focus_from_point(&mut self, x: u16, y: u16) {
+    fn is_hovered(&self, panel: DashboardFocus) -> bool {
+        self.hover == panel
+    }
+
+    fn panel_border_style(&self, panel: DashboardFocus, accent: theme::ColorToken) -> Style {
+        if self.is_focused(panel) {
+            // Keep focused styling identical to `theme::panel_border_style(true, accent)` to avoid
+            // changing existing dashboard snapshots.
+            Style::new().fg(accent)
+        } else if self.is_hovered(panel) {
+            Style::new().fg(accent).attrs(StyleFlags::DIM)
+        } else {
+            theme::content_border()
+        }
+    }
+
+    fn panel_from_point(&self, x: u16, y: u16) -> DashboardFocus {
         let plasma = self.layout_plasma.get();
         let charts = self.layout_charts.get();
         let code = self.layout_code.get();
@@ -3352,7 +3370,7 @@ impl Dashboard {
         let activity = self.layout_activity.get();
         let markdown = self.layout_markdown.get();
 
-        self.focus = if plasma.contains(x, y) {
+        if plasma.contains(x, y) {
             DashboardFocus::Plasma
         } else if charts.contains(x, y) {
             DashboardFocus::Charts
@@ -3368,7 +3386,11 @@ impl Dashboard {
             DashboardFocus::Markdown
         } else {
             DashboardFocus::None
-        };
+        }
+    }
+
+    fn focus_from_point(&mut self, x: u16, y: u16) {
+        self.focus = self.panel_from_point(x, y);
     }
 
     fn current_code_sample(&self) -> &'static CodeSample {
@@ -3624,10 +3646,9 @@ impl Dashboard {
             .border_type(BorderType::Rounded)
             .title("Plasma")
             .title_alignment(Alignment::Center)
-            .style(theme::panel_border_style(
-                self.is_focused(DashboardFocus::Plasma),
-                theme::screen_accent::DASHBOARD,
-            ));
+            .style(
+                self.panel_border_style(DashboardFocus::Plasma, theme::screen_accent::DASHBOARD),
+            );
 
         let inner = block.inner(area);
         block.render(area, frame);
@@ -3678,10 +3699,7 @@ impl Dashboard {
             .border_type(BorderType::Rounded)
             .title(title.as_str())
             .title_alignment(Alignment::Center)
-            .style(theme::panel_border_style(
-                self.is_focused(DashboardFocus::Charts),
-                theme::screen_accent::DATA_VIZ,
-            ));
+            .style(self.panel_border_style(DashboardFocus::Charts, theme::screen_accent::DATA_VIZ));
 
         let inner = block.inner(area);
         block.render(area, frame);
@@ -4432,10 +4450,9 @@ impl Dashboard {
             .border_type(BorderType::Rounded)
             .title(title.as_str())
             .title_alignment(Alignment::Center)
-            .style(theme::panel_border_style(
-                self.is_focused(DashboardFocus::Code),
-                theme::screen_accent::CODE_EXPLORER,
-            ));
+            .style(
+                self.panel_border_style(DashboardFocus::Code, theme::screen_accent::CODE_EXPLORER),
+            );
 
         let inner = block.inner(area);
         block.render(area, frame);
@@ -4464,10 +4481,9 @@ impl Dashboard {
             .border_type(BorderType::Rounded)
             .title("Info")
             .title_alignment(Alignment::Center)
-            .style(theme::panel_border_style(
-                self.is_focused(DashboardFocus::Info),
-                theme::screen_accent::PERFORMANCE,
-            ));
+            .style(
+                self.panel_border_style(DashboardFocus::Info, theme::screen_accent::PERFORMANCE),
+            );
 
         let inner = block.inner(area);
         block.render(area, frame);
@@ -5068,10 +5084,9 @@ impl Dashboard {
             .border_type(BorderType::Rounded)
             .title(title.as_str())
             .title_alignment(Alignment::Center)
-            .style(theme::panel_border_style(
-                self.is_focused(DashboardFocus::Markdown),
-                theme::screen_accent::MARKDOWN,
-            ));
+            .style(
+                self.panel_border_style(DashboardFocus::Markdown, theme::screen_accent::MARKDOWN),
+            );
 
         let inner = block.inner(area);
         block.render(area, frame);
@@ -5129,15 +5144,16 @@ impl Dashboard {
             EFFECT_DEMOS.len()
         );
 
-        let block = Block::new()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .title(title.as_str())
-            .title_alignment(Alignment::Center)
-            .style(theme::panel_border_style(
-                self.is_focused(DashboardFocus::TextFx),
-                theme::screen_accent::WIDGET_GALLERY,
-            ));
+        let block =
+            Block::new()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(title.as_str())
+                .title_alignment(Alignment::Center)
+                .style(self.panel_border_style(
+                    DashboardFocus::TextFx,
+                    theme::screen_accent::WIDGET_GALLERY,
+                ));
 
         let inner = block.inner(area);
         block.render(area, frame);
@@ -5222,10 +5238,9 @@ impl Dashboard {
             .border_type(BorderType::Rounded)
             .title("Activity")
             .title_alignment(Alignment::Center)
-            .style(theme::panel_border_style(
-                self.is_focused(DashboardFocus::Activity),
-                theme::screen_accent::ADVANCED,
-            ));
+            .style(
+                self.panel_border_style(DashboardFocus::Activity, theme::screen_accent::ADVANCED),
+            );
 
         let inner = block.inner(area);
         block.render(area, frame);
@@ -5717,8 +5732,15 @@ impl Screen for Dashboard {
 
     fn update(&mut self, event: &Event) -> Cmd<Self::Message> {
         if let Event::Mouse(mouse) = event {
-            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-                self.focus_from_point(mouse.x, mouse.y);
+            match mouse.kind {
+                MouseEventKind::Moved => {
+                    self.hover = self.panel_from_point(mouse.x, mouse.y);
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    self.focus_from_point(mouse.x, mouse.y);
+                    self.hover = self.focus;
+                }
+                _ => {}
             }
             return Cmd::None;
         }
@@ -5849,7 +5871,7 @@ impl Screen for Dashboard {
             },
             HelpEntry {
                 key: "Mouse",
-                action: "Click pane to focus",
+                action: "Hover tile to highlight; click to open",
             },
         ]
     }
