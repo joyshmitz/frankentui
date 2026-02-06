@@ -444,4 +444,92 @@ mod tests {
         state.terminal_mut().put_char('A');
         assert_eq!(state.terminal().cell(0, 0).unwrap().ch, 'A');
     }
+
+    #[test]
+    fn default_emulator_has_cursor_hidden() {
+        // Derived Default sets bools to false, while new() sets them to true
+        let from_default = TerminalEmulator::default();
+        assert!(!from_default.show_cursor);
+        assert!(!from_default.cursor_visible_phase);
+    }
+
+    #[test]
+    fn widget_render_clears_area() {
+        use ftui_render::grapheme_pool::GraphemePool;
+
+        let widget = TerminalEmulator::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 5, &mut pool);
+
+        // Set a cell to something non-space first
+        frame.buffer.set(1, 1, BufferCell::from_char('Z'));
+        assert_eq!(frame.buffer.get(1, 1).unwrap().content.as_char(), Some('Z'));
+
+        // Widget::render should overwrite with spaces
+        Widget::render(&widget, Rect::new(0, 0, 10, 5), &mut frame);
+        assert_eq!(frame.buffer.get(1, 1).unwrap().content.as_char(), Some(' '));
+    }
+
+    #[test]
+    fn stateful_render_without_scroll() {
+        use ftui_render::grapheme_pool::GraphemePool;
+
+        let widget = TerminalEmulator::new().show_cursor(false);
+        let mut state = TerminalEmulatorState::new(10, 5);
+        state.terminal_mut().put_char('H');
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 5, &mut pool);
+        let area = Rect::new(0, 0, 10, 5);
+        StatefulWidget::render(&widget, area, &mut frame, &mut state);
+
+        assert_eq!(frame.buffer.get(0, 0).unwrap().content.as_char(), Some('H'));
+    }
+
+    #[test]
+    fn stateful_render_zero_area_noop() {
+        use ftui_render::grapheme_pool::GraphemePool;
+
+        let widget = TerminalEmulator::new();
+        let mut state = TerminalEmulatorState::new(10, 5);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 5, &mut pool);
+        // Zero-width area should not panic
+        StatefulWidget::render(&widget, Rect::new(0, 0, 0, 5), &mut frame, &mut state);
+        // Zero-height area should not panic
+        StatefulWidget::render(&widget, Rect::new(0, 0, 10, 0), &mut frame, &mut state);
+    }
+
+    #[test]
+    fn convert_cell_all_attrs() {
+        let widget = TerminalEmulator::new();
+        let term_cell = TerminalCell {
+            ch: 'A',
+            fg: None,
+            bg: None,
+            attrs: CellAttrs::DIM
+                .with(CellAttrs::UNDERLINE)
+                .with(CellAttrs::BLINK)
+                .with(CellAttrs::REVERSE)
+                .with(CellAttrs::STRIKETHROUGH)
+                .with(CellAttrs::HIDDEN),
+        };
+        let buf_cell = widget.convert_cell(&term_cell);
+        let flags = buf_cell.attrs.flags();
+        assert!(flags.contains(StyleFlags::DIM));
+        assert!(flags.contains(StyleFlags::UNDERLINE));
+        assert!(flags.contains(StyleFlags::BLINK));
+        assert!(flags.contains(StyleFlags::REVERSE));
+        assert!(flags.contains(StyleFlags::STRIKETHROUGH));
+        assert!(flags.contains(StyleFlags::HIDDEN));
+    }
+
+    #[test]
+    fn with_scrollback_constructor() {
+        let state = TerminalEmulatorState::with_scrollback(20, 10, 500);
+        assert_eq!(state.terminal.width(), 20);
+        assert_eq!(state.terminal.height(), 10);
+        assert_eq!(state.scroll_offset, 0);
+    }
 }

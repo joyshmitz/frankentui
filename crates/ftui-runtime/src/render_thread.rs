@@ -521,4 +521,87 @@ mod tests {
         ));
         assert!(result.is_err());
     }
+
+    #[test]
+    fn set_mode_debug_format() {
+        let msg = OutMsg::SetMode(ScreenMode::AltScreen);
+        let dbg = format!("{msg:?}");
+        assert!(dbg.contains("SetMode"));
+    }
+
+    #[test]
+    fn render_with_cursor_position() {
+        let (mut writer, tw) = test_writer();
+        writer.set_size(10, 5);
+        let rt = RenderThread::start(writer);
+
+        let buf = Buffer::new(10, 5);
+        rt.send(OutMsg::Render {
+            buffer: buf,
+            cursor: Some((3, 2)),
+            cursor_visible: true,
+        })
+        .unwrap();
+
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(rt.check_error().is_none());
+        rt.shutdown();
+
+        let bytes = tw.output();
+        assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn render_with_hidden_cursor() {
+        let (mut writer, _tw) = test_writer();
+        writer.set_size(10, 5);
+        let rt = RenderThread::start(writer);
+
+        let buf = Buffer::new(10, 5);
+        rt.send(OutMsg::Render {
+            buffer: buf,
+            cursor: None,
+            cursor_visible: false,
+        })
+        .unwrap();
+
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(rt.check_error().is_none());
+        rt.shutdown();
+    }
+
+    #[test]
+    fn rapid_resize_messages() {
+        let (writer, _tw) = test_writer();
+        let rt = RenderThread::start(writer);
+
+        for size in [(80, 24), (120, 40), (40, 10), (200, 60)] {
+            rt.send(OutMsg::Resize {
+                w: size.0,
+                h: size.1,
+            })
+            .unwrap();
+        }
+
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(rt.check_error().is_none());
+        rt.shutdown();
+    }
+
+    #[test]
+    fn sequential_log_send_no_panic() {
+        let (writer, _tw) = test_writer();
+        let rt = RenderThread::start(writer);
+
+        // Rapidly send different message types in sequence
+        rt.send(OutMsg::Log(b"line-1\n".to_vec())).unwrap();
+        rt.send(OutMsg::Resize { w: 20, h: 10 }).unwrap();
+        rt.send(OutMsg::Log(b"line-2\n".to_vec())).unwrap();
+        rt.send(OutMsg::SetMode(ScreenMode::AltScreen)).unwrap();
+        rt.send(OutMsg::Log(b"line-3\n".to_vec())).unwrap();
+
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(rt.check_error().is_none());
+        rt.shutdown();
+    }
 }
