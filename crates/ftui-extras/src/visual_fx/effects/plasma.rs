@@ -630,6 +630,12 @@ impl PlasmaFx {
         let quality = ctx.quality;
         let breath = 0.85 + 0.15 * (time * 0.3).sin();
 
+        // Hoist per-frame time-derived constants.
+        let time_0_6 = time * 0.6;
+        let time_0_8 = time * 0.8;
+        let time_1_2 = time * 1.2;
+        let time_0_5 = time * 0.5;
+
         // Precompute x-dependent terms once per frame (no per-frame allocation).
         let scratch = &mut self.scratch;
         scratch.ensure_width(ctx.width, w);
@@ -641,28 +647,28 @@ impl PlasmaFx {
             let y_sq = y * y;
             let y_center = y - 3.0;
             let y_center_sq = y_center * y_center;
-            let v2 = (y * 1.8 + time * 0.8).sin();
+            let v2 = (y * 1.8 + time_0_8).sin();
             let cos_y2 = (y * 2.0).cos();
 
             for dx in 0..ctx.width {
                 let idx = dy as usize * ctx.width as usize + dx as usize;
                 let x = scratch.x[dx as usize];
                 let v1 = scratch.v1[dx as usize];
-                let v3 = ((x + y) * 1.2 + time * 0.6).sin();
+                let v3 = ((x + y) * 1.2 + time_0_6).sin();
 
                 let wave = if quality == FxQuality::Minimal {
                     let value = (v1 + v2 + v3) / 3.0;
                     (value + 1.0) / 2.0
                 } else if quality == FxQuality::Reduced {
                     // 4 components: skip sqrt-based v4/v5, keep interference v6
-                    let v6 = (scratch.sin_x2[dx as usize] * cos_y2 + time * 0.5).sin();
+                    let v6 = (scratch.sin_x2[dx as usize] * cos_y2 + time_0_5).sin();
                     let value = (v1 + v2 + v3 + v6) / 4.0;
                     ((value * breath) + 1.0) / 2.0
                 } else {
-                    let v4 = ((scratch.x_sq[dx as usize] + y_sq).sqrt() * 2.0 - time * 1.2).sin();
+                    let v4 = ((scratch.x_sq[dx as usize] + y_sq).sqrt() * 2.0 - time_1_2).sin();
                     let v5 = ((scratch.x_center_sq[dx as usize] + y_center_sq).sqrt() * 1.8 + time)
                         .cos();
-                    let v6 = (scratch.sin_x2[dx as usize] * cos_y2 + time * 0.5).sin();
+                    let v6 = (scratch.sin_x2[dx as usize] * cos_y2 + time_0_5).sin();
                     let value = (v1 + v2 + v3 + v4 + v5 + v6) / 6.0;
                     ((value * breath) + 1.0) / 2.0
                 };

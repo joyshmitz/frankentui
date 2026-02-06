@@ -50,10 +50,10 @@
 //!
 //! The cache uses LRU (Least Recently Used) eviction when at capacity.
 
-use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 
 use ftui_core::geometry::Rect;
+use rustc_hash::{FxHashMap, FxHasher};
 
 use crate::{Constraint, Direction, LayoutSizeHint};
 
@@ -116,7 +116,7 @@ impl LayoutCacheKey {
 
     /// Hash a slice of constraints.
     fn hash_constraints(constraints: &[Constraint]) -> u64 {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = FxHasher::default();
         for c in constraints {
             // Hash each constraint's discriminant and value
             std::mem::discriminant(c).hash(&mut hasher);
@@ -159,7 +159,7 @@ impl LayoutCacheKey {
 
     /// Hash a slice of intrinsic size hints.
     fn hash_intrinsics(intrinsics: &[LayoutSizeHint]) -> u64 {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = FxHasher::default();
         for hint in intrinsics {
             hint.min.hash(&mut hasher);
             hint.preferred.hash(&mut hasher);
@@ -211,7 +211,7 @@ pub struct LayoutCacheStats {
 /// [`invalidate_all()`]: LayoutCache::invalidate_all
 #[derive(Debug)]
 pub struct LayoutCache {
-    entries: HashMap<LayoutCacheKey, CachedLayoutEntry>,
+    entries: FxHashMap<LayoutCacheKey, CachedLayoutEntry>,
     generation: u64,
     max_entries: usize,
     hits: u64,
@@ -235,7 +235,7 @@ impl LayoutCache {
     #[inline]
     pub fn new(max_entries: usize) -> Self {
         Self {
-            entries: HashMap::with_capacity(max_entries),
+            entries: FxHashMap::with_capacity_and_hasher(max_entries, Default::default()),
             generation: 0,
             max_entries,
             hits: 0,
@@ -455,7 +455,7 @@ impl CoherenceId {
 /// reaches capacity. The cache does not grow unboundedly.
 #[derive(Debug)]
 pub struct CoherenceCache {
-    entries: HashMap<CoherenceId, CoherenceEntry>,
+    entries: FxHashMap<CoherenceId, CoherenceEntry>,
     max_entries: usize,
     /// Monotonic counter for LRU eviction.
     tick: u64,
@@ -473,7 +473,7 @@ impl CoherenceCache {
     /// Create a new coherence cache with the specified capacity.
     pub fn new(max_entries: usize) -> Self {
         Self {
-            entries: HashMap::with_capacity(max_entries.min(256)),
+            entries: FxHashMap::with_capacity_and_hasher(max_entries.min(256), Default::default()),
             max_entries,
             tick: 0,
         }

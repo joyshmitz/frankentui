@@ -405,9 +405,19 @@ impl BackdropFx for MetaballsFx {
         }
 
         let inv_threshold_range = 1.0 / (threshold - glow);
+        let ball_count = self.ball_cache.len();
 
         for dy in 0..ctx.height {
             let ny = self.y_coords[dy as usize];
+
+            // Precompute per-row dy² for each ball. ny and ball.y are constant
+            // within a row, so this saves 1 subtract + 1 multiply per ball per pixel.
+            let mut row_dy_sq = [0.0_f64; 16];
+            for (b, ball) in self.ball_cache.iter().enumerate() {
+                let bdy = ny - ball.y;
+                row_dy_sq[b] = bdy * bdy;
+            }
+
             for dx in 0..ctx.width {
                 let idx = dy as usize * ctx.width as usize + dx as usize;
                 let nx = self.x_coords[dx as usize];
@@ -416,10 +426,9 @@ impl BackdropFx for MetaballsFx {
                 let mut weighted_hue = 0.0;
                 let mut total_weight = 0.0;
 
-                for ball in &self.ball_cache {
-                    let dx = nx - ball.x;
-                    let dy = ny - ball.y;
-                    let dist_sq = dx * dx + dy * dy;
+                for (b, ball) in self.ball_cache.iter().enumerate().take(ball_count) {
+                    let bdx = nx - ball.x;
+                    let dist_sq = bdx * bdx + row_dy_sq[b];
                     if dist_sq > eps {
                         let contrib = ball.r2 / dist_sq;
                         sum += contrib;
