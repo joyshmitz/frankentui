@@ -29,7 +29,9 @@ use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
-use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers};
+use ftui_core::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseButton, MouseEventKind,
+};
 use ftui_core::geometry::Rect;
 use ftui_layout::{Constraint, Flex};
 use ftui_render::frame::Frame;
@@ -41,6 +43,7 @@ use ftui_widgets::borders::{BorderType, Borders};
 use ftui_widgets::log_viewer::{LogViewer, LogViewerState, LogWrapMode, SearchConfig, SearchMode};
 use ftui_widgets::paragraph::Paragraph;
 use ftui_widgets::{StatefulWidget, Widget};
+use std::cell::Cell;
 
 use super::{HelpEntry, Screen};
 use crate::determinism;
@@ -629,6 +632,8 @@ pub struct LogSearch {
     diagnostic_log: Option<DiagnosticLog>,
     /// Telemetry hooks for external observers (bd-1b5h.9).
     telemetry_hooks: Option<TelemetryHooks>,
+    /// Cached log panel area for mouse hit-testing.
+    last_log_area: Cell<Rect>,
 }
 
 impl Default for LogSearch {
@@ -677,6 +682,7 @@ impl LogSearch {
             paused: false,
             diagnostic_log,
             telemetry_hooks: None,
+            last_log_area: Cell::new(Rect::default()),
         }
     }
 
@@ -1148,12 +1154,42 @@ impl LogSearch {
         let para = Paragraph::new(Text::from(display)).style(input_style);
         Widget::render(&para, area, frame);
     }
+
+    /// Handle mouse events: scroll to navigate log, click to focus/unfocus search.
+    fn handle_mouse(&mut self, event: &Event) {
+        if let Event::Mouse(mouse) = event {
+            let log_area = self.last_log_area.get();
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if log_area.contains(mouse.x, mouse.y) && self.mode != UiMode::Normal {
+                        // Click log area while in search/filter mode: return to normal
+                        self.mode = UiMode::Normal;
+                    }
+                }
+                MouseEventKind::ScrollUp => {
+                    if log_area.contains(mouse.x, mouse.y) {
+                        self.viewer.scroll_up(3);
+                    }
+                }
+                MouseEventKind::ScrollDown => {
+                    if log_area.contains(mouse.x, mouse.y) {
+                        self.viewer.scroll_down(3);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 impl Screen for LogSearch {
     type Message = ();
 
     fn update(&mut self, event: &Event) -> Cmd<Self::Message> {
+        if matches!(event, Event::Mouse(_)) {
+            self.handle_mouse(event);
+            return Cmd::none();
+        }
         if let Event::Key(key) = event
             && key.kind == KeyEventKind::Press
         {
@@ -1198,6 +1234,7 @@ impl Screen for LogSearch {
             .border_type(BorderType::Rounded)
             .border_style(border_style);
 
+        self.last_log_area.set(log_area);
         let inner = block.inner(log_area);
         Widget::render(&block, log_area, frame);
 
@@ -1271,6 +1308,14 @@ impl Screen for LogSearch {
             HelpEntry {
                 key: "Ctrl+X",
                 action: "Cycle context lines (search)",
+            },
+            HelpEntry {
+                key: "Click",
+                action: "Return to normal mode",
+            },
+            HelpEntry {
+                key: "Scroll",
+                action: "Navigate log",
             },
         ]
     }
@@ -2418,5 +2463,71 @@ mod tests {
         // Reopen search - query should be recalled
         screen.update(&key_press(KeyCode::Char('/')));
         assert_eq!(screen.query, "TEST", "Previous search should be recalled");
+    }
+
+    #[test]
+    fn mouse_scroll_navigates_log() {
+        use crate::screens::Screen;
+        let mut screen = LogSearch::new();
+        let mut pool = ftui_render::grapheme_pool::GraphemePool::new();
+        let mut frame = Frame::new(120, 40, &mut pool);
+        screen.view(&mut frame, Rect::new(0, 0, 120, 40));
+
+        let log_area = screen.last_log_area.get();
+        let scroll_down = Event::Mouse(ftui_core::event::MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            x: log_area.x + 2,
+            y: log_area.y + 2,
+            modifiers: Modifiers::NONE,
+        });
+        screen.update(&scroll_down);
+        // Scroll should not panic and should navigate
+    }
+
+    #[test]
+    fn mouse_click_returns_to_normal() {
+        use crate::screens::Screen;
+        let mut screen = LogSearch::new();
+        // Enter search mode
+        let slash = Event::Key(KeyEvent {
+            code: KeyCode::Char('/'),
+            modifiers: Modifiers::NONE,
+            kind: KeyEventKind::Press,
+        });
+        screen.update(&slash);
+        assert_ne!(screen.mode, UiMode::Normal);
+
+        let mut pool = ftui_render::grapheme_pool::GraphemePool::new();
+        let mut frame = Frame::new(120, 40, &mut pool);
+        screen.view(&mut frame, Rect::new(0, 0, 120, 40));
+
+        let log_area = screen.last_log_area.get();
+        let click = Event::Mouse(ftui_core::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            x: log_area.x + 2,
+            y: log_area.y + 2,
+            modifiers: Modifiers::NONE,
+        });
+        screen.update(&click);
+        assert_eq!(
+            screen.mode,
+            UiMode::Normal,
+            "click should return to normal mode"
+        );
+    }
+
+    #[test]
+    fn keybindings_includes_mouse() {
+        use crate::screens::Screen;
+        let screen = LogSearch::new();
+        let bindings = screen.keybindings();
+        assert!(
+            bindings.iter().any(|h| h.key == "Click"),
+            "missing Click keybinding"
+        );
+        assert!(
+            bindings.iter().any(|h| h.key == "Scroll"),
+            "missing Scroll keybinding"
+        );
     }
 }
