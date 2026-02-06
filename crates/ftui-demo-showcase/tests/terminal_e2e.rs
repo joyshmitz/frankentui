@@ -39,6 +39,28 @@ mod pty_management {
     use ftui_pty::{PtyConfig, spawn_command};
     use portable_pty::CommandBuilder;
 
+    fn output_contains(output: &[u8], needle: &[u8]) -> bool {
+        if needle.is_empty() {
+            return true;
+        }
+        output.windows(needle.len()).any(|w| w == needle)
+    }
+
+    fn output_has_mouse_enable_sequences(output: &[u8]) -> bool {
+        // crossterm typically uses a small set of DECSET sequences to enable mouse reporting.
+        // We treat any of these as "mouse capture enabled".
+        [
+            b"\x1b[?1000h" as &[u8], // normal tracking
+            b"\x1b[?1002h",          // button-event tracking
+            b"\x1b[?1003h",          // any-event tracking
+            b"\x1b[?1005h",          // UTF-8 mouse mode
+            b"\x1b[?1006h",          // SGR extended mouse mode
+            b"\x1b[?1015h",          // urxvt extended mouse mode
+        ]
+        .into_iter()
+        .any(|needle| output_contains(output, needle))
+    }
+
     #[test]
     fn e2e_shell_spawn_and_output_capture() {
         let config = PtyConfig::default()
@@ -177,6 +199,73 @@ mod pty_management {
         let found = output.windows(4).any(|w| w == b"dumb");
         log_jsonl("pty_term", "propagation", found, "");
         assert!(found, "TERM env var must propagate to child");
+    }
+
+    #[test]
+    fn e2e_demo_inline_mouse_auto_does_not_enable_capture() {
+        let demo_bin = std::env::var("CARGO_BIN_EXE_ftui-demo-showcase")
+            .expect("CARGO_BIN_EXE_ftui-demo-showcase must be set for PTY tests");
+
+        let config = PtyConfig::default()
+            .with_size(80, 24)
+            .with_test_name("demo_inline_mouse_auto")
+            .logging(false);
+
+        let mut cmd = CommandBuilder::new(&demo_bin);
+        cmd.arg("--screen-mode=inline");
+        cmd.arg("--mouse=auto");
+        cmd.arg("--screen=36"); // Inline Mode
+        cmd.arg("--exit-after-ms=1500");
+
+        let mut session = spawn_command(config, cmd).expect("spawn should succeed");
+        let status = session
+            .wait_and_drain(Duration::from_secs(10))
+            .expect("wait should succeed");
+        assert!(status.success(), "demo should exit successfully");
+
+        let enabled = output_has_mouse_enable_sequences(session.output());
+        log_jsonl(
+            "demo_inline_mouse",
+            "mouse_auto_no_enable",
+            !enabled,
+            "screen_mode=inline mouse=auto",
+        );
+        assert!(
+            !enabled,
+            "inline mode + mouse=auto must not enable mouse capture by default"
+        );
+    }
+
+    #[test]
+    fn e2e_demo_inline_mouse_on_enables_capture() {
+        let demo_bin = std::env::var("CARGO_BIN_EXE_ftui-demo-showcase")
+            .expect("CARGO_BIN_EXE_ftui-demo-showcase must be set for PTY tests");
+
+        let config = PtyConfig::default()
+            .with_size(80, 24)
+            .with_test_name("demo_inline_mouse_on")
+            .logging(false);
+
+        let mut cmd = CommandBuilder::new(&demo_bin);
+        cmd.arg("--screen-mode=inline");
+        cmd.arg("--mouse=on");
+        cmd.arg("--screen=36"); // Inline Mode
+        cmd.arg("--exit-after-ms=1500");
+
+        let mut session = spawn_command(config, cmd).expect("spawn should succeed");
+        let status = session
+            .wait_and_drain(Duration::from_secs(10))
+            .expect("wait should succeed");
+        assert!(status.success(), "demo should exit successfully");
+
+        let enabled = output_has_mouse_enable_sequences(session.output());
+        log_jsonl(
+            "demo_inline_mouse",
+            "mouse_on_enable",
+            enabled,
+            "screen_mode=inline mouse=on",
+        );
+        assert!(enabled, "inline mode + mouse=on must enable mouse capture");
     }
 }
 
