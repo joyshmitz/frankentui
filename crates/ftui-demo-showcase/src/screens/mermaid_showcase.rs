@@ -1117,6 +1117,36 @@ struct StatusLogEntry {
 
 const STATUS_LOG_CAP: usize = 50;
 
+/// Granular debug overlay toggles for visualizing layout internals.
+#[derive(Debug, Clone, Copy, Default)]
+struct DebugOverlayFlags {
+    /// Show node bounding boxes.
+    bounds: bool,
+    /// Show edge routing waypoints.
+    routes: bool,
+    /// Show port/connection markers.
+    ports: bool,
+    /// Show alignment grid.
+    grid: bool,
+}
+
+impl DebugOverlayFlags {
+    fn any_active(self) -> bool {
+        self.bounds || self.routes || self.ports || self.grid
+    }
+
+    fn toggle_all(&mut self) {
+        if self.any_active() {
+            *self = Self::default();
+        } else {
+            self.bounds = true;
+            self.routes = true;
+            self.ports = true;
+            self.grid = true;
+        }
+    }
+}
+
 #[derive(Debug)]
 struct MermaidShowcaseState {
     samples: Vec<MermaidSample>,
@@ -1153,7 +1183,8 @@ struct MermaidShowcaseState {
     /// Whether the help overlay is visible.
     help_visible: bool,
     /// Whether the debug overlay is visible.
-    debug_overlay: bool,
+    /// Debug overlay flags (node bounds, edge routes, ports, grid).
+    debug_overlay: DebugOverlayFlags,
 }
 
 #[derive(Debug)]
@@ -1228,7 +1259,7 @@ impl MermaidShowcaseState {
             search_matches: Vec::new(),
             palette: DiagramPalettePreset::Default,
             help_visible: false,
-            debug_overlay: false,
+            debug_overlay: DebugOverlayFlags::default(),
         };
         state.recompute_metrics();
         state
@@ -1637,11 +1668,63 @@ impl MermaidShowcaseState {
                 );
             }
             MermaidShowcaseAction::ToggleDebugOverlay => {
-                self.debug_overlay = !self.debug_overlay;
+                self.debug_overlay.toggle_all();
                 self.bump_render();
                 self.log_action(
                     "debug",
-                    if self.debug_overlay { "on" } else { "off" }.to_string(),
+                    if self.debug_overlay.any_active() {
+                        "on"
+                    } else {
+                        "off"
+                    }
+                    .to_string(),
+                );
+            }
+            MermaidShowcaseAction::ToggleDebugBounds => {
+                self.debug_overlay.bounds = !self.debug_overlay.bounds;
+                self.bump_render();
+                self.log_action(
+                    "debug:bounds",
+                    if self.debug_overlay.bounds {
+                        "on"
+                    } else {
+                        "off"
+                    }
+                    .to_string(),
+                );
+            }
+            MermaidShowcaseAction::ToggleDebugRoutes => {
+                self.debug_overlay.routes = !self.debug_overlay.routes;
+                self.bump_render();
+                self.log_action(
+                    "debug:routes",
+                    if self.debug_overlay.routes {
+                        "on"
+                    } else {
+                        "off"
+                    }
+                    .to_string(),
+                );
+            }
+            MermaidShowcaseAction::ToggleDebugPorts => {
+                self.debug_overlay.ports = !self.debug_overlay.ports;
+                self.bump_render();
+                self.log_action(
+                    "debug:ports",
+                    if self.debug_overlay.ports {
+                        "on"
+                    } else {
+                        "off"
+                    }
+                    .to_string(),
+                );
+            }
+            MermaidShowcaseAction::ToggleDebugGrid => {
+                self.debug_overlay.grid = !self.debug_overlay.grid;
+                self.bump_render();
+                self.log_action(
+                    "debug:grid",
+                    if self.debug_overlay.grid { "on" } else { "off" }.to_string(),
                 );
             }
             MermaidShowcaseAction::SelectNextNode => {
@@ -1757,6 +1840,10 @@ enum MermaidShowcaseAction {
     PrevPalette,
     ToggleHelp,
     ToggleDebugOverlay,
+    ToggleDebugBounds,
+    ToggleDebugRoutes,
+    ToggleDebugPorts,
+    ToggleDebugGrid,
     SelectNextNode,
     SelectPrevNode,
     NavigateUp,
@@ -1985,6 +2072,19 @@ impl MermaidShowcaseScreen {
                 let selection = SelectionState::from_selected(node_idx, ir);
                 renderer.render_with_selection(layout, ir, &plan, &selection, &mut buffer);
             }
+            // Apply debug overlays if active.
+            if self.state.debug_overlay.any_active()
+                && let Some(layout_ref) = cache.layout.as_ref()
+            {
+                Self::render_debug_overlays(
+                    &mut buffer,
+                    layout_ref,
+                    self.state.debug_overlay,
+                    render_width,
+                    render_height,
+                );
+            }
+
             // Apply search dimming to non-matching nodes.
             if self.state.mode == ShowcaseMode::Search && !self.state.search_matches.is_empty() {
                 Self::apply_search_dimming(
@@ -2127,6 +2227,173 @@ impl MermaidShowcaseScreen {
     fn apply_search_backspace(&mut self) {
         self.state.search_query.pop();
         self.recompute_search_matches();
+    }
+
+    /// Render debug overlays for layout visualization.
+    fn render_debug_overlays(
+        buffer: &mut Buffer,
+        layout: &mermaid_layout::DiagramLayout,
+        flags: DebugOverlayFlags,
+        render_width: u16,
+        render_height: u16,
+    ) {
+        let bb = &layout.bounding_box;
+        let margin = 1.0_f64;
+        let avail_w = f64::from(render_width).max(1.0) - 2.0 * margin;
+        let avail_h = f64::from(render_height).max(1.0) - 2.0 * margin;
+        let bb_w = bb.width.max(1.0);
+        let bb_h = bb.height.max(1.0);
+        let scale = (avail_w / bb_w).min(avail_h / bb_h).max(0.1);
+        let offset_x = margin + (avail_w - bb_w * scale) / 2.0 - bb.x * scale;
+        let offset_y = margin + (avail_h - bb_h * scale) / 2.0 - bb.y * scale;
+
+        let to_cell = |x: f64, y: f64| -> (u16, u16) {
+            let cx = (x * scale + offset_x).round().max(0.0) as u16;
+            let cy = (y * scale + offset_y).round().max(0.0) as u16;
+            (
+                cx.min(render_width.saturating_sub(1)),
+                cy.min(render_height.saturating_sub(1)),
+            )
+        };
+
+        // Grid overlay: draw alignment grid lines.
+        if flags.grid {
+            let grid_color = PackedRgba::rgba(60, 60, 80, 255);
+            let step = 5.0;
+            let mut gx = (bb.x / step).floor() * step;
+            while gx <= bb.x + bb.width {
+                let (cx, _) = to_cell(gx, 0.0);
+                for y in 0..render_height {
+                    if let Some(&cell) = buffer.get(cx, y)
+                        && cell.content.as_char() == Some(' ')
+                    {
+                        buffer.set(cx, y, Cell::from_char('|').with_fg(grid_color));
+                    }
+                }
+                gx += step;
+            }
+            let mut gy = (bb.y / step).floor() * step;
+            while gy <= bb.y + bb.height {
+                let (_, cy) = to_cell(0.0, gy);
+                for x in 0..render_width {
+                    if let Some(&cell) = buffer.get(x, cy)
+                        && cell.content.as_char() == Some(' ')
+                    {
+                        buffer.set(x, cy, Cell::from_char('-').with_fg(grid_color));
+                    }
+                }
+                gy += step;
+            }
+        }
+
+        // Node bounds overlay: draw bounding box outlines.
+        if flags.bounds {
+            let bounds_color = PackedRgba::rgb(80, 200, 80);
+            for node in &layout.nodes {
+                let (x0, y0) = to_cell(node.rect.x, node.rect.y);
+                let (x1, y1) = to_cell(
+                    node.rect.x + node.rect.width,
+                    node.rect.y + node.rect.height,
+                );
+                // Top/bottom edges.
+                for x in x0..=x1.min(render_width.saturating_sub(1)) {
+                    if let Some(&c) = buffer.get(x, y0)
+                        && c.content.as_char() == Some(' ')
+                    {
+                        buffer.set(x, y0, Cell::from_char('.').with_fg(bounds_color));
+                    }
+                    if let Some(&c) = buffer.get(x, y1)
+                        && c.content.as_char() == Some(' ')
+                    {
+                        buffer.set(x, y1, Cell::from_char('.').with_fg(bounds_color));
+                    }
+                }
+                // Left/right edges.
+                for y in y0..=y1.min(render_height.saturating_sub(1)) {
+                    if let Some(&c) = buffer.get(x0, y)
+                        && c.content.as_char() == Some(' ')
+                    {
+                        buffer.set(x0, y, Cell::from_char(':').with_fg(bounds_color));
+                    }
+                    if let Some(&c) = buffer.get(x1, y)
+                        && c.content.as_char() == Some(' ')
+                    {
+                        buffer.set(x1, y, Cell::from_char(':').with_fg(bounds_color));
+                    }
+                }
+            }
+        }
+
+        // Edge route overlay: show waypoints as colored dots.
+        if flags.routes {
+            let route_color = PackedRgba::rgb(255, 140, 40);
+            for edge in &layout.edges {
+                for wp in &edge.waypoints {
+                    let (cx, cy) = to_cell(wp.x, wp.y);
+                    if let Some(&cell) = buffer.get(cx, cy)
+                        && cell.content.as_char() == Some(' ')
+                    {
+                        buffer.set(cx, cy, Cell::from_char('*').with_fg(route_color));
+                    }
+                }
+            }
+        }
+
+        // Port overlay: show node connection ports.
+        if flags.ports {
+            let port_color = PackedRgba::rgb(200, 80, 200);
+            for node in &layout.nodes {
+                // Draw markers at the midpoints of each edge of the node rect.
+                let cx = node.rect.x + node.rect.width / 2.0;
+                let cy = node.rect.y + node.rect.height / 2.0;
+                let ports = [
+                    (cx, node.rect.y),                    // top
+                    (cx, node.rect.y + node.rect.height), // bottom
+                    (node.rect.x, cy),                    // left
+                    (node.rect.x + node.rect.width, cy),  // right
+                ];
+                for (px, py) in ports {
+                    let (cell_x, cell_y) = to_cell(px, py);
+                    if let Some(&c) = buffer.get(cell_x, cell_y) {
+                        buffer.set(cell_x, cell_y, Cell::from_char('+').with_fg(port_color));
+                        let _ = c; // suppress unused warning
+                    }
+                }
+            }
+        }
+
+        // Legend in top-right corner.
+        if flags.any_active() {
+            let legend_items: Vec<(&str, PackedRgba)> = [
+                (flags.bounds, "B=bounds", PackedRgba::rgb(80, 200, 80)),
+                (flags.routes, "R=routes", PackedRgba::rgb(255, 140, 40)),
+                (flags.ports, "P=ports", PackedRgba::rgb(200, 80, 200)),
+                (flags.grid, "G=grid", PackedRgba::rgba(60, 60, 80, 255)),
+            ]
+            .iter()
+            .filter(|(active, _, _)| *active)
+            .map(|(_, label, color)| (*label, *color))
+            .collect();
+
+            let legend_w: u16 = legend_items
+                .iter()
+                .map(|(l, _)| l.len() as u16 + 1)
+                .sum::<u16>()
+                + 1;
+            let start_x = render_width.saturating_sub(legend_w);
+            let mut x = start_x;
+            let bg = PackedRgba::rgba(20, 20, 30, 255);
+            for (label, color) in &legend_items {
+                buffer.set(x, 0, Cell::from_char(' ').with_bg(bg));
+                x += 1;
+                for ch in label.chars() {
+                    if x < render_width {
+                        buffer.set(x, 0, Cell::from_char(ch).with_fg(*color).with_bg(bg));
+                        x += 1;
+                    }
+                }
+            }
+        }
     }
 
     /// Render the search input bar at the bottom of the diagram area.
@@ -2418,6 +2685,10 @@ impl MermaidShowcaseScreen {
                 KeyCode::Char('p') => Some(MermaidShowcaseAction::CyclePalette),
                 KeyCode::Char('P') => Some(MermaidShowcaseAction::PrevPalette),
                 KeyCode::Char('d') => Some(MermaidShowcaseAction::ToggleDebugOverlay),
+                KeyCode::Char('1') => Some(MermaidShowcaseAction::ToggleDebugBounds),
+                KeyCode::Char('2') => Some(MermaidShowcaseAction::ToggleDebugRoutes),
+                KeyCode::Char('3') => Some(MermaidShowcaseAction::ToggleDebugPorts),
+                KeyCode::Char('4') => Some(MermaidShowcaseAction::ToggleDebugGrid),
                 KeyCode::Tab => Some(MermaidShowcaseAction::SelectNextNode),
                 KeyCode::BackTab => Some(MermaidShowcaseAction::SelectPrevNode),
                 KeyCode::Char('/') => Some(MermaidShowcaseAction::EnterSearchMode),
@@ -2924,6 +3195,7 @@ impl MermaidShowcaseScreen {
                     ("c", "Toggle controls"),
                     ("i", "Toggle status log"),
                     ("d", "Toggle debug overlay"),
+                    ("1-4", "Toggle bounds/routes/ports/grid"),
                     ("?", "Toggle this help"),
                     ("Esc", "Collapse panels"),
                 ],
@@ -4853,11 +5125,11 @@ mod tests {
     #[test]
     fn debug_overlay_toggles() {
         let mut s = new_state();
-        assert!(!s.debug_overlay);
+        assert!(!s.debug_overlay.any_active());
         s.apply_action(MermaidShowcaseAction::ToggleDebugOverlay);
-        assert!(s.debug_overlay);
+        assert!(s.debug_overlay.any_active());
         s.apply_action(MermaidShowcaseAction::ToggleDebugOverlay);
-        assert!(!s.debug_overlay);
+        assert!(!s.debug_overlay.any_active());
     }
 
     #[test]
