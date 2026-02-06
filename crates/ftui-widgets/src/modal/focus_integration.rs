@@ -577,4 +577,50 @@ mod tests {
         assert_eq!(modals.focus_manager().current(), Some(1));
         assert!(!modals.is_focus_trapped());
     }
+
+    #[test]
+    fn default_creates_empty_stack() {
+        let modals = FocusAwareModalStack::default();
+        assert!(modals.is_empty());
+        assert_eq!(modals.depth(), 0);
+        assert!(!modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn with_focus_manager_uses_provided() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(make_focus_node(42));
+        fm.focus(42);
+
+        let modals = FocusAwareModalStack::with_focus_manager(fm);
+        assert!(modals.is_empty());
+        assert_eq!(modals.focus_manager().current(), Some(42));
+    }
+
+    #[test]
+    fn stack_accessors() {
+        let mut modals = FocusAwareModalStack::new();
+        assert!(modals.stack().is_empty());
+        modals.push(Box::new(WidgetModalEntry::new(StubWidget)));
+        assert!(!modals.stack().is_empty());
+        assert_eq!(modals.stack_mut().depth(), 1);
+    }
+
+    #[test]
+    fn depth_tracks_push_pop() {
+        let mut modals = FocusAwareModalStack::new();
+        assert_eq!(modals.depth(), 0);
+        modals.push(Box::new(WidgetModalEntry::new(StubWidget)));
+        assert_eq!(modals.depth(), 1);
+        modals.push(Box::new(WidgetModalEntry::new(StubWidget)));
+        assert_eq!(modals.depth(), 2);
+        modals.pop();
+        assert_eq!(modals.depth(), 1);
+    }
+
+    #[test]
+    fn pop_empty_stack_returns_none() {
+        let mut modals = FocusAwareModalStack::new();
+        assert!(modals.pop().is_none());
+    }
 }
