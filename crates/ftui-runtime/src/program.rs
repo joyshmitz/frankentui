@@ -2022,6 +2022,47 @@ impl EffectQueueConfig {
     }
 }
 
+/// Immediate event-drain policy for the runtime main loop.
+///
+/// When a poll reports readiness, the runtime drains events by repeatedly
+/// checking `poll_event(Duration::ZERO)` to avoid latency between buffered
+/// inputs. This policy bounds that immediate-drain path so bursty workloads do
+/// not devolve into zero-timeout spin storms.
+#[derive(Debug, Clone)]
+pub struct ImmediateDrainConfig {
+    /// Maximum consecutive zero-timeout polls allowed in a single burst window.
+    pub max_zero_timeout_polls_per_burst: usize,
+    /// Maximum wall-clock time spent in a single immediate-drain burst window.
+    pub max_burst_duration: Duration,
+    /// Non-zero poll timeout used when the burst window budget is exhausted.
+    pub backoff_timeout: Duration,
+}
+
+impl Default for ImmediateDrainConfig {
+    fn default() -> Self {
+        Self {
+            max_zero_timeout_polls_per_burst: 64,
+            max_burst_duration: Duration::from_millis(2),
+            backoff_timeout: Duration::from_millis(1),
+        }
+    }
+}
+
+/// Runtime counters for immediate-drain behavior.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ImmediateDrainStats {
+    /// Number of event-drain bursts observed.
+    pub bursts: u64,
+    /// Total zero-timeout polls executed (`poll_event(Duration::ZERO)`).
+    pub zero_timeout_polls: u64,
+    /// Total non-zero backoff polls executed after exhausting burst budget.
+    pub backoff_polls: u64,
+    /// Number of bursts that hit the configured immediate-drain cap.
+    pub capped_bursts: u64,
+    /// Max number of zero-timeout polls seen in a single burst window.
+    pub max_zero_timeout_polls_in_burst: u64,
+}
+
 /// Configuration for the program runtime.
 #[derive(Debug, Clone)]
 pub struct ProgramConfig {
@@ -2045,6 +2086,8 @@ pub struct ProgramConfig {
     pub locale_context: LocaleContext,
     /// Input poll timeout.
     pub poll_timeout: Duration,
+    /// Immediate event-drain policy for burst handling.
+    pub immediate_drain: ImmediateDrainConfig,
     /// Resize coalescer configuration.
     pub resize_coalescer: CoalescerConfig,
     /// Resize handling behavior (immediate/throttled).
@@ -2096,6 +2139,7 @@ impl Default for ProgramConfig {
             conformal_config: None,
             locale_context: LocaleContext::global(),
             poll_timeout: Duration::from_millis(100),
+            immediate_drain: ImmediateDrainConfig::default(),
             resize_coalescer: CoalescerConfig::default(),
             resize_behavior: ResizeBehavior::Throttled,
             forced_size: None,
@@ -2329,6 +2373,13 @@ impl ProgramConfig {
     #[must_use]
     pub fn with_guardrails(mut self, config: GuardrailsConfig) -> Self {
         self.guardrails = config;
+        self
+    }
+
+    /// Set the immediate event-drain policy for burst handling.
+    #[must_use]
+    pub fn with_immediate_drain(mut self, config: ImmediateDrainConfig) -> Self {
+        self.immediate_drain = config;
         self
     }
 
@@ -3177,6 +3228,10 @@ pub struct Program<M: Model, E: BackendEventSource<Error = io::Error>, W: Write 
     forced_size: Option<(u16, u16)>,
     /// Poll timeout when no tick is scheduled.
     poll_timeout: Duration,
+    /// Immediate drain policy for bursty input handling.
+    immediate_drain_config: ImmediateDrainConfig,
+    /// Runtime counters for immediate-drain behavior.
+    immediate_drain_stats: ImmediateDrainStats,
     /// Frame budget configuration.
     budget: RenderBudget,
     /// Conformal predictor for frame-time risk gating.
@@ -3348,6 +3403,8 @@ impl<M: Model> Program<M, CrosstermEventSource, Stdout> {
             height,
             forced_size: config.forced_size,
             poll_timeout: config.poll_timeout,
+            immediate_drain_config: config.immediate_drain,
+            immediate_drain_stats: ImmediateDrainStats::default(),
             budget,
             conformal_predictor,
             last_frame_time_us: None,
@@ -3473,6 +3530,8 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             height,
             forced_size: config.forced_size,
             poll_timeout: config.poll_timeout,
+            immediate_drain_config: config.immediate_drain,
+            immediate_drain_stats: ImmediateDrainStats::default(),
             budget,
             conformal_predictor,
             last_frame_time_us: None,
@@ -3587,6 +3646,12 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
         &self.widget_signals
     }
 
+    /// Snapshot immediate-drain runtime counters.
+    #[inline]
+    pub fn immediate_drain_stats(&self) -> ImmediateDrainStats {
+        self.immediate_drain_stats
+    }
+
     /// The inner event loop, separated for proper cleanup handling.
     fn run_event_loop(&mut self) -> io::Result<()> {
         // Auto-load state on start
@@ -3622,15 +3687,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             // Poll for events with timeout
             let poll_result = self.events.poll_event(timeout)?;
             if poll_result {
-                // Drain all pending events
-                loop {
-                    if let Some(event) = self.events.read_event()? {
-                        self.handle_event(event)?;
-                    }
-                    if !self.events.poll_event(Duration::from_millis(0))? {
-                        break;
-                    }
-                }
+                self.drain_ready_events()?;
             }
 
             // Process subscription messages
@@ -3775,6 +3832,68 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
         // Stop all subscriptions on exit
         self.subscriptions.stop_all();
         self.reap_finished_tasks();
+
+        Ok(())
+    }
+
+    /// Drain ready events while bounding zero-timeout polling work.
+    ///
+    /// The runtime preserves low-latency draining by polling with
+    /// `Duration::ZERO`, but switches to a bounded backoff path when a burst
+    /// exceeds configured immediate-drain budgets.
+    fn drain_ready_events(&mut self) -> io::Result<()> {
+        self.immediate_drain_stats.bursts = self.immediate_drain_stats.bursts.saturating_add(1);
+
+        let zero_poll_limit = self
+            .immediate_drain_config
+            .max_zero_timeout_polls_per_burst
+            .max(1);
+        let max_burst_duration = self.immediate_drain_config.max_burst_duration;
+        let backoff_timeout = self.immediate_drain_config.backoff_timeout;
+
+        let mut burst_start = Instant::now();
+        let mut zero_polls_in_burst_window: u64 = 0;
+        let mut capped_this_burst = false;
+
+        loop {
+            if let Some(event) = self.events.read_event()? {
+                self.handle_event(event)?;
+            }
+
+            let budget_exhausted = (zero_polls_in_burst_window as usize) >= zero_poll_limit
+                || burst_start.elapsed() >= max_burst_duration;
+
+            if budget_exhausted {
+                if !capped_this_burst {
+                    capped_this_burst = true;
+                    self.immediate_drain_stats.capped_bursts =
+                        self.immediate_drain_stats.capped_bursts.saturating_add(1);
+                }
+                std::thread::yield_now();
+                self.immediate_drain_stats.backoff_polls =
+                    self.immediate_drain_stats.backoff_polls.saturating_add(1);
+                if !self.events.poll_event(backoff_timeout)? {
+                    break;
+                }
+                zero_polls_in_burst_window = 0;
+                burst_start = Instant::now();
+                continue;
+            }
+
+            self.immediate_drain_stats.zero_timeout_polls = self
+                .immediate_drain_stats
+                .zero_timeout_polls
+                .saturating_add(1);
+            zero_polls_in_burst_window = zero_polls_in_burst_window.saturating_add(1);
+            if !self.events.poll_event(Duration::ZERO)? {
+                break;
+            }
+        }
+
+        self.immediate_drain_stats.max_zero_timeout_polls_in_burst = self
+            .immediate_drain_stats
+            .max_zero_timeout_polls_in_burst
+            .max(zero_polls_in_burst_window);
 
         Ok(())
     }
@@ -5304,7 +5423,7 @@ mod tests {
     use ftui_render::diff_strategy::DiffStrategy;
     use ftui_render::frame::CostEstimateSource;
     use serde_json::Value;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
     use std::path::PathBuf;
     use std::sync::mpsc;
     use std::sync::{
@@ -5437,9 +5556,40 @@ mod tests {
         assert!(config.diff_config.dirty_rows_enabled);
         assert!(!config.resize_coalescer.enable_bocpd);
         assert!(!config.effect_queue.enabled);
+        assert_eq!(config.immediate_drain.max_zero_timeout_polls_per_burst, 64);
+        assert_eq!(
+            config.immediate_drain.max_burst_duration,
+            Duration::from_millis(2)
+        );
+        assert_eq!(
+            config.immediate_drain.backoff_timeout,
+            Duration::from_millis(1)
+        );
         assert_eq!(
             config.resize_coalescer.steady_delay_ms,
             CoalescerConfig::default().steady_delay_ms
+        );
+    }
+
+    #[test]
+    fn program_config_with_immediate_drain() {
+        let custom = ImmediateDrainConfig {
+            max_zero_timeout_polls_per_burst: 7,
+            max_burst_duration: Duration::from_millis(9),
+            backoff_timeout: Duration::from_millis(3),
+        };
+        let config = ProgramConfig::default().with_immediate_drain(custom.clone());
+        assert_eq!(
+            config.immediate_drain.max_zero_timeout_polls_per_burst,
+            custom.max_zero_timeout_polls_per_burst
+        );
+        assert_eq!(
+            config.immediate_drain.max_burst_duration,
+            custom.max_burst_duration
+        );
+        assert_eq!(
+            config.immediate_drain.backoff_timeout,
+            custom.backoff_timeout
         );
     }
 
@@ -7750,6 +7900,8 @@ mod tests {
             height,
             forced_size: config.forced_size,
             poll_timeout: config.poll_timeout,
+            immediate_drain_config: config.immediate_drain,
+            immediate_drain_stats: ImmediateDrainStats::default(),
             budget,
             conformal_predictor,
             last_frame_time_us: None,
@@ -9173,6 +9325,220 @@ mod tests {
         };
         source.set_features(features).unwrap();
         assert_eq!(source.features, features);
+    }
+
+    #[test]
+    fn immediate_drain_budget_adds_backoff_poll_under_burst() {
+        use ftui_core::event::{KeyCode, KeyEvent};
+
+        struct DrainBurstModel {
+            processed: usize,
+            quit_after: usize,
+        }
+
+        #[derive(Debug)]
+        enum DrainBurstMsg {
+            Event(Event),
+        }
+
+        impl From<Event> for DrainBurstMsg {
+            fn from(event: Event) -> Self {
+                DrainBurstMsg::Event(event)
+            }
+        }
+
+        impl Model for DrainBurstModel {
+            type Message = DrainBurstMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    DrainBurstMsg::Event(_) => {
+                        self.processed = self.processed.saturating_add(1);
+                        if self.processed >= self.quit_after {
+                            Cmd::quit()
+                        } else {
+                            Cmd::none()
+                        }
+                    }
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        struct DrainBurstEventSource {
+            queue: VecDeque<Event>,
+            poll_timeouts: Arc<std::sync::Mutex<Vec<Duration>>>,
+            size: (u16, u16),
+        }
+
+        impl BackendEventSource for DrainBurstEventSource {
+            type Error = io::Error;
+
+            fn size(&self) -> Result<(u16, u16), Self::Error> {
+                Ok(self.size)
+            }
+
+            fn set_features(&mut self, _features: BackendFeatures) -> Result<(), Self::Error> {
+                Ok(())
+            }
+
+            fn poll_event(&mut self, timeout: Duration) -> Result<bool, Self::Error> {
+                self.poll_timeouts.lock().unwrap().push(timeout);
+                Ok(!self.queue.is_empty())
+            }
+
+            fn read_event(&mut self) -> Result<Option<Event>, Self::Error> {
+                Ok(self.queue.pop_front())
+            }
+        }
+
+        let burst_events = 24usize;
+        let poll_timeouts = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut queue = VecDeque::new();
+        for _ in 0..burst_events {
+            queue.push_back(Event::Key(KeyEvent::new(KeyCode::Char('x'))));
+        }
+
+        let events = DrainBurstEventSource {
+            queue,
+            poll_timeouts: poll_timeouts.clone(),
+            size: (80, 24),
+        };
+        let writer = TerminalWriter::new(
+            Vec::<u8>::new(),
+            ScreenMode::AltScreen,
+            UiAnchor::Bottom,
+            TerminalCapabilities::dumb(),
+        );
+        let config = ProgramConfig::default()
+            .with_forced_size(80, 24)
+            .with_signal_interception(false)
+            .with_immediate_drain(ImmediateDrainConfig {
+                max_zero_timeout_polls_per_burst: 3,
+                max_burst_duration: Duration::from_secs(1),
+                backoff_timeout: Duration::from_millis(1),
+            });
+
+        let model = DrainBurstModel {
+            processed: 0,
+            quit_after: burst_events,
+        };
+        let mut program =
+            Program::with_event_source(model, events, BackendFeatures::default(), writer, config)
+                .expect("program creation");
+        program.run().expect("run burst");
+
+        assert_eq!(program.model().processed, burst_events);
+
+        let stats = program.immediate_drain_stats();
+        assert_eq!(stats.bursts, 1);
+        assert!(stats.capped_bursts >= 1);
+        assert!(stats.backoff_polls >= 1);
+        assert!(stats.zero_timeout_polls >= 1);
+        assert!(stats.max_zero_timeout_polls_in_burst <= 3);
+
+        let timeouts = poll_timeouts.lock().unwrap();
+        assert!(timeouts.contains(&Duration::ZERO));
+        assert!(timeouts.contains(&Duration::from_millis(1)));
+    }
+
+    #[test]
+    fn immediate_drain_zero_poll_limit_is_clamped() {
+        use ftui_core::event::{KeyCode, KeyEvent};
+
+        struct ClampModel {
+            processed: usize,
+            quit_after: usize,
+        }
+
+        #[derive(Debug)]
+        enum ClampMsg {
+            Event(Event),
+        }
+
+        impl From<Event> for ClampMsg {
+            fn from(event: Event) -> Self {
+                ClampMsg::Event(event)
+            }
+        }
+
+        impl Model for ClampModel {
+            type Message = ClampMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    ClampMsg::Event(_) => {
+                        self.processed = self.processed.saturating_add(1);
+                        if self.processed >= self.quit_after {
+                            Cmd::quit()
+                        } else {
+                            Cmd::none()
+                        }
+                    }
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        struct ClampSource {
+            queue: VecDeque<Event>,
+        }
+
+        impl BackendEventSource for ClampSource {
+            type Error = io::Error;
+
+            fn size(&self) -> Result<(u16, u16), Self::Error> {
+                Ok((80, 24))
+            }
+
+            fn set_features(&mut self, _features: BackendFeatures) -> Result<(), Self::Error> {
+                Ok(())
+            }
+
+            fn poll_event(&mut self, _timeout: Duration) -> Result<bool, Self::Error> {
+                Ok(!self.queue.is_empty())
+            }
+
+            fn read_event(&mut self) -> Result<Option<Event>, Self::Error> {
+                Ok(self.queue.pop_front())
+            }
+        }
+
+        let burst_events = 8usize;
+        let mut queue = VecDeque::new();
+        for _ in 0..burst_events {
+            queue.push_back(Event::Key(KeyEvent::new(KeyCode::Char('z'))));
+        }
+        let events = ClampSource { queue };
+
+        let writer = TerminalWriter::new(
+            Vec::<u8>::new(),
+            ScreenMode::AltScreen,
+            UiAnchor::Bottom,
+            TerminalCapabilities::dumb(),
+        );
+        let config = ProgramConfig::default()
+            .with_forced_size(80, 24)
+            .with_signal_interception(false)
+            .with_immediate_drain(ImmediateDrainConfig {
+                max_zero_timeout_polls_per_burst: 0,
+                max_burst_duration: Duration::from_secs(1),
+                backoff_timeout: Duration::from_millis(1),
+            });
+        let model = ClampModel {
+            processed: 0,
+            quit_after: burst_events,
+        };
+
+        let mut program =
+            Program::with_event_source(model, events, BackendFeatures::default(), writer, config)
+                .expect("program creation");
+        program.run().expect("run clamp");
+
+        let stats = program.immediate_drain_stats();
+        assert!(stats.max_zero_timeout_polls_in_burst <= 1);
     }
 
     // =========================================================================
