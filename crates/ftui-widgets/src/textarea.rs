@@ -460,13 +460,21 @@ impl TextArea {
 
     /// Move cursor up.
     pub fn move_up(&mut self) {
-        self.editor.move_up();
+        if self.soft_wrap {
+            self.move_cursor_visual_up(1);
+        } else {
+            self.editor.move_up();
+        }
         self.ensure_cursor_visible();
     }
 
     /// Move cursor down.
     pub fn move_down(&mut self) {
-        self.editor.move_down();
+        if self.soft_wrap {
+            self.move_cursor_visual_down(1);
+        } else {
+            self.editor.move_down();
+        }
         self.ensure_cursor_visible();
     }
 
@@ -541,53 +549,55 @@ impl TextArea {
             let line_text = line_text.trim_end_matches(['\n', '\r']);
             let wrap_count = Self::measure_wrap_count(line_text, width);
 
-            let available_in_line = wrap_count - 1 - current_v_row;
+            let available_in_line = wrap_count.saturating_sub(1).saturating_sub(current_v_row);
 
             if remaining <= available_in_line {
                 current_v_row += remaining;
                 remaining = 0;
-
-                let slices = Self::wrap_line_slices(line_text, width);
-                if let Some(slice) = slices.get(current_v_row) {
-                    let target_in_slice = target_screen_x.min(slice.width);
-
-                    let mut g_idx = 0;
-                    let mut v_w = 0;
-                    for g in slice.text.graphemes(true) {
-                        let w = display_width(g);
-                        if v_w + w > target_in_slice {
-                            break;
-                        }
-                        v_w += w;
-                        g_idx += 1;
-                    }
-
-                    let nav = CursorNavigator::new(rope);
-                    let line_start_byte = nav.to_byte_index(nav.from_line_grapheme(cursor.line, 0));
-                    let slice_byte_offset: usize = slice
-                        .text
-                        .graphemes(true)
-                        .take(g_idx)
-                        .map(|g| g.len())
-                        .sum();
-                    let final_byte = line_start_byte + slice.start_byte + slice_byte_offset;
-                    cursor = nav.from_byte_index(final_byte);
-                }
             } else {
                 remaining -= available_in_line + 1;
                 if cursor.line + 1 < self.editor.line_count() {
                     cursor.line += 1;
-                    cursor.grapheme = 0;
                     current_v_row = 0;
-                    let nav = CursorNavigator::new(rope);
-                    cursor = nav.from_line_grapheme(cursor.line, 0);
                 } else {
-                    let nav = CursorNavigator::new(rope);
-                    cursor = nav.document_end();
+                    current_v_row = wrap_count.saturating_sub(1);
                     remaining = 0;
                 }
             }
         }
+
+        let line_text = rope
+            .line(cursor.line)
+            .unwrap_or(std::borrow::Cow::Borrowed(""));
+        let line_text = line_text.trim_end_matches(['\n', '\r']);
+        let slices = Self::wrap_line_slices(line_text, width);
+
+        if let Some(slice) = slices.get(current_v_row) {
+            let target_in_slice = target_screen_x.min(slice.width);
+
+            let mut g_idx = 0;
+            let mut v_w = 0;
+            for g in slice.text.graphemes(true) {
+                let w = display_width(g);
+                if v_w + w > target_in_slice {
+                    break;
+                }
+                v_w += w;
+                g_idx += 1;
+            }
+
+            let nav = CursorNavigator::new(rope);
+            let line_start_byte = nav.to_byte_index(nav.from_line_grapheme(cursor.line, 0));
+            let slice_byte_offset: usize = slice
+                .text
+                .graphemes(true)
+                .take(g_idx)
+                .map(|g| g.len())
+                .sum();
+            let final_byte = line_start_byte + slice.start_byte + slice_byte_offset;
+            cursor = nav.from_byte_index(final_byte);
+        }
+
         self.editor.set_cursor(cursor);
     }
 
@@ -623,38 +633,6 @@ impl TextArea {
             if remaining <= current_v_row {
                 current_v_row -= remaining;
                 remaining = 0;
-
-                let line_text = rope
-                    .line(cursor.line)
-                    .unwrap_or(std::borrow::Cow::Borrowed(""));
-                let line_text = line_text.trim_end_matches(['\n', '\r']);
-                let slices = Self::wrap_line_slices(line_text, width);
-
-                if let Some(slice) = slices.get(current_v_row) {
-                    let target_in_slice = target_screen_x.min(slice.width);
-
-                    let mut g_idx = 0;
-                    let mut v_w = 0;
-                    for g in slice.text.graphemes(true) {
-                        let w = display_width(g);
-                        if v_w + w > target_in_slice {
-                            break;
-                        }
-                        v_w += w;
-                        g_idx += 1;
-                    }
-
-                    let nav = CursorNavigator::new(rope);
-                    let line_start_byte = nav.to_byte_index(nav.from_line_grapheme(cursor.line, 0));
-                    let slice_byte_offset: usize = slice
-                        .text
-                        .graphemes(true)
-                        .take(g_idx)
-                        .map(|g| g.len())
-                        .sum();
-                    let final_byte = line_start_byte + slice.start_byte + slice_byte_offset;
-                    cursor = nav.from_byte_index(final_byte);
-                }
             } else {
                 remaining -= current_v_row + 1;
                 if cursor.line > 0 {
@@ -665,16 +643,45 @@ impl TextArea {
                     let line_text = line_text.trim_end_matches(['\n', '\r']);
                     let wrap_count = Self::measure_wrap_count(line_text, width);
                     current_v_row = wrap_count.saturating_sub(1);
-
-                    let nav = CursorNavigator::new(rope);
-                    cursor = nav.from_line_grapheme(cursor.line, 0);
                 } else {
-                    let nav = CursorNavigator::new(rope);
-                    cursor = nav.document_start();
+                    current_v_row = 0;
                     remaining = 0;
                 }
             }
         }
+
+        let line_text = rope
+            .line(cursor.line)
+            .unwrap_or(std::borrow::Cow::Borrowed(""));
+        let line_text = line_text.trim_end_matches(['\n', '\r']);
+        let slices = Self::wrap_line_slices(line_text, width);
+
+        if let Some(slice) = slices.get(current_v_row) {
+            let target_in_slice = target_screen_x.min(slice.width);
+
+            let mut g_idx = 0;
+            let mut v_w = 0;
+            for g in slice.text.graphemes(true) {
+                let w = display_width(g);
+                if v_w + w > target_in_slice {
+                    break;
+                }
+                v_w += w;
+                g_idx += 1;
+            }
+
+            let nav = CursorNavigator::new(rope);
+            let line_start_byte = nav.to_byte_index(nav.from_line_grapheme(cursor.line, 0));
+            let slice_byte_offset: usize = slice
+                .text
+                .graphemes(true)
+                .take(g_idx)
+                .map(|g| g.len())
+                .sum();
+            let final_byte = line_start_byte + slice.start_byte + slice_byte_offset;
+            cursor = nav.from_byte_index(final_byte);
+        }
+
         self.editor.set_cursor(cursor);
     }
 
@@ -974,7 +981,7 @@ impl TextArea {
     }
 
     /// Ensure the cursor line and column are visible in the viewport.
-    fn ensure_cursor_visible(&mut self) {
+    fn ensure_cursor_visible(&self) {
         let cursor = self.editor.cursor();
 
         let last_height = self.last_viewport_height.get();
@@ -991,7 +998,7 @@ impl TextArea {
     }
 
     fn ensure_cursor_visible_internal(
-        &mut self,
+        &self,
         vp_height: usize,
         vp_width: usize,
         cursor: CursorPosition,
@@ -1163,42 +1170,11 @@ impl Widget for TextArea {
 
         let cursor = self.editor.cursor();
 
-        // Initialize scroll_top from state, handling sentinel
-        if self.scroll_anchor.get().0 == usize::MAX {
-            self.scroll_anchor.set((0, 0));
-        }
-        let (anchor_line, _anchor_vrow) = self.scroll_anchor.get();
+        self.ensure_cursor_visible();
 
-        // If NOT soft wrapping, scroll_anchor.0 is the logical line index.
-        // Ensure cursor is visible by adjusting scroll_anchor.
-        if !self.soft_wrap && vp_height > 0 {
-            let mut new_line = anchor_line;
-            if cursor.line < new_line {
-                new_line = cursor.line;
-            } else if cursor.line >= new_line + vp_height {
-                new_line = cursor.line.saturating_sub(vp_height - 1);
-            }
-            if new_line != anchor_line {
-                self.scroll_anchor.set((new_line, 0));
-            }
-        }
         // Re-fetch potentially updated anchor
         let (scroll_top_line, scroll_top_vrow) = self.scroll_anchor.get();
-
-        let mut scroll_left = self.scroll_left.get();
-        if !self.soft_wrap && text_area_w > 0 {
-            let visual_col = cursor.visual_col;
-            if visual_col < scroll_left {
-                scroll_left = visual_col;
-            } else if visual_col >= scroll_left + text_area_w {
-                let candidate_scroll = visual_col.saturating_sub(text_area_w - 1);
-                let prev_width = self.get_prev_char_width();
-                let max_scroll_for_prev = visual_col.saturating_sub(prev_width);
-
-                scroll_left = candidate_scroll.min(max_scroll_for_prev);
-            }
-        }
-        self.scroll_left.set(scroll_left);
+        let scroll_left = self.scroll_left.get();
 
         let rope = self.editor.rope();
         let nav = CursorNavigator::new(rope);

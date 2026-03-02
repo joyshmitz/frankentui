@@ -1278,7 +1278,7 @@ impl AnimationClock {
     #[inline]
     pub fn tick(&mut self) {
         let now = Instant::now();
-        let delta = now.duration_since(self.last_tick).as_secs_f64();
+        let delta = now.saturating_duration_since(self.last_tick).as_secs_f64();
         self.time += delta * self.speed;
         self.last_tick = now;
     }
@@ -2005,29 +2005,36 @@ impl RevealMode {
         }
 
         match self {
-            RevealMode::LeftToRight => {
-                let threshold = (progress * total as f64) as usize;
-                idx < threshold
+            RevealMode::LeftToRight | RevealMode::ByLine => {
+                let visible_count = (progress * total as f64).ceil() as usize;
+                idx < visible_count
             }
             RevealMode::RightToLeft => {
-                let hidden_count = ((1.0 - progress) * total as f64) as usize;
-                idx >= hidden_count
+                let visible_count = (progress * total as f64).ceil() as usize;
+                let threshold = total.saturating_sub(visible_count);
+                idx >= threshold
             }
             RevealMode::CenterOut => {
-                let center = total as f64 / 2.0;
-                let max_dist = center;
-                let char_dist = (idx as f64 - center).abs();
-                let threshold = progress * max_dist;
-                char_dist <= threshold
-            }
-            RevealMode::EdgesIn => {
-                // Distance from nearest edge
                 let dist_from_left = idx;
                 let dist_from_right = total.saturating_sub(1).saturating_sub(idx);
                 let dist_from_edge = dist_from_left.min(dist_from_right);
-                let max_dist = total / 2;
-                let threshold = (progress * max_dist as f64) as usize;
-                dist_from_edge < threshold
+
+                let max_dist = total.saturating_sub(1) / 2;
+                let num_stages = max_dist + 1;
+                let stages_visible = (progress * num_stages as f64).ceil() as usize;
+
+                dist_from_edge >= num_stages.saturating_sub(stages_visible)
+            }
+            RevealMode::EdgesIn => {
+                let dist_from_left = idx;
+                let dist_from_right = total.saturating_sub(1).saturating_sub(idx);
+                let dist_from_edge = dist_from_left.min(dist_from_right);
+
+                let max_dist = total.saturating_sub(1) / 2;
+                let num_stages = max_dist + 1;
+                let stages_visible = (progress * num_stages as f64).ceil() as usize;
+
+                dist_from_edge < stages_visible
             }
             RevealMode::Random => {
                 // Deterministic random based on seed and index
@@ -2061,12 +2068,6 @@ impl RevealMode {
                 let word_count = text.split_whitespace().count().max(1);
                 let visible_words = (progress * word_count as f64).ceil() as usize;
                 word_idx < visible_words
-            }
-            RevealMode::ByLine => {
-                // For single-line text, just use LeftToRight behavior
-                // ByLine is meant for multi-line StyledMultiLine
-                let threshold = (progress * total as f64) as usize;
-                idx < threshold
             }
         }
     }

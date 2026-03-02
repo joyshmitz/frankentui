@@ -215,14 +215,19 @@ impl ScrollbarState {
                                 return MouseResult::Ignored;
                             }
 
-                            // Map click position directly onto content position.
+                            // Unify track click with drag logic: center the thumb on the click.
+                            let (_, thumb_size) = self.calc_thumb_geometry(track_len);
+                            let available = track_len.saturating_sub(thumb_size);
+                            let denom = available.max(1);
+
+                            let target_thumb_top = track_pos.saturating_sub(thumb_size / 2);
+                            let clamped_top = target_thumb_top.min(denom);
+
                             let max_pos = self.content_length.saturating_sub(self.viewport_length);
-                            let denom = track_len.saturating_sub(1).max(1);
-                            let clamped_pos = track_pos.min(denom);
                             self.position = if max_pos == 0 {
                                 0
                             } else {
-                                let num = (clamped_pos as u128) * (max_pos as u128);
+                                let num = (clamped_top as u128) * (max_pos as u128);
                                 let pos = (num + (denom as u128 / 2)) / denom as u128;
                                 pos as usize
                             };
@@ -243,18 +248,23 @@ impl ScrollbarState {
                 // Determine track length and mouse position relative to track.
                 // 1. Try Hit data (accurate for wide chars, complex layouts).
                 // 2. Fallback to cached layout (if dragging outside component).
-                let (track_len, track_pos) = if let Some((id, HitRegion::Scrollbar, data)) = hit
+                let hit_data = if let Some((id, HitRegion::Scrollbar, data)) = hit
                     && id == expected_id
                 {
                     let part = data >> 56;
                     if matches!(part, SCROLLBAR_PART_TRACK | SCROLLBAR_PART_THUMB) {
                         let len = ((data >> 28) & 0x0FFF_FFFF) as usize;
                         let pos = (data & 0x0FFF_FFFF) as usize;
-                        (len, pos)
+                        Some((len, pos))
                     } else {
-                        // Dragging on button? Ignore or handle as button repeat (not impl)
-                        return MouseResult::Ignored;
+                        None
                     }
+                } else {
+                    None
+                };
+
+                let (track_len, track_pos) = if let Some((len, pos)) = hit_data {
+                    (len, pos)
                 } else if self.drag_anchor.is_some()
                     && let Some(layout) = self.track_layout
                 {
@@ -949,8 +959,8 @@ mod tests {
         let hit = Some((HitId::new(1), HitRegion::Scrollbar, data));
         let result = state.handle_mouse(&event, hit, HitId::new(1));
         assert_eq!(result, MouseResult::Scrolled);
-        // Track click maps proportionally to content position.
-        assert_eq!(state.position, 42);
+        // Track click maps proportionally to content position, centered on thumb.
+        assert_eq!(state.position, 40);
     }
 
     #[test]

@@ -715,10 +715,10 @@ proptest! {
             .with_stiffness(stiffness)
             .with_damping(damping);
 
-        // Tick for up to 30 simulated seconds at 16ms steps (1875 frames).
-        // Low-stiffness, low-damping springs (e.g. k=10, c=1) oscillate slowly
-        // and need ~15s+ to decay below the rest threshold.
-        for _ in 0..1875 {
+        // Tick for up to 96 simulated seconds at 16ms steps (6000 frames).
+        // Low-stiffness, high-damping springs (e.g. k=10, c=85) are extremely
+        // overdamped and need >30s to decay below the rest threshold.
+        for _ in 0..6000 {
             spring.tick(Duration::from_millis(16));
             if spring.is_complete() {
                 break;
@@ -727,7 +727,7 @@ proptest! {
 
         prop_assert!(
             spring.is_complete(),
-            "spring(k={stiffness}, c={damping}) did not converge after 30s \
+            "spring(k={stiffness}, c={damping}) did not converge after 96s \
              (pos={}, vel={})",
             spring.position(),
             spring.velocity()

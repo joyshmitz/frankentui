@@ -544,6 +544,8 @@ pub fn ansi16_to_rgb(color: Ansi16) -> Rgb {
 /// Convert an RGB color to the nearest ANSI 256-color index.
 #[must_use]
 pub fn rgb_to_256(r: u8, g: u8, b: u8) -> u8 {
+    let cube_idx = 16 + 36 * cube_index(r) + 6 * cube_index(g) + cube_index(b);
+
     if r == g && g == b {
         if r < 8 {
             return 16;
@@ -551,11 +553,21 @@ pub fn rgb_to_256(r: u8, g: u8, b: u8) -> u8 {
         if r > 246 {
             return 231;
         }
-        let idx = ((r - 8) / 10).min(23);
-        return 232 + idx;
+        let gray_idx = 232 + ((r - 8) / 10).min(23);
+
+        // Compare distance of cube_idx vs gray_idx
+        let target = Rgb::new(r, g, b);
+        let cube_dist = weighted_distance(target, ansi256_to_rgb(cube_idx));
+        let gray_dist = weighted_distance(target, ansi256_to_rgb(gray_idx));
+
+        if cube_dist <= gray_dist {
+            return cube_idx;
+        } else {
+            return gray_idx;
+        }
     }
 
-    16 + 36 * cube_index(r) + 6 * cube_index(g) + cube_index(b)
+    cube_idx
 }
 
 /// Map an 8-bit channel value to the nearest ANSI 256-color 6×6×6 cube index.

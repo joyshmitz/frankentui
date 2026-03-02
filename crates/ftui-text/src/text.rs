@@ -101,12 +101,26 @@ impl<'a> Span<'a> {
     #[must_use]
     pub fn split_at_cell(&self, cell_pos: usize) -> (Self, Self) {
         if self.content.is_empty() || cell_pos == 0 {
-            return (Self::raw(""), self.clone());
+            return (
+                Self {
+                    content: Cow::Borrowed(""),
+                    style: self.style,
+                    link: self.link.clone(),
+                },
+                self.clone(),
+            );
         }
 
         let total_width = self.width();
         if cell_pos >= total_width {
-            return (self.clone(), Self::raw(""));
+            return (
+                self.clone(),
+                Self {
+                    content: Cow::Borrowed(""),
+                    style: self.style,
+                    link: self.link.clone(),
+                },
+            );
         }
 
         let (byte_pos, _actual_width) = find_cell_boundary(&self.content, cell_pos);

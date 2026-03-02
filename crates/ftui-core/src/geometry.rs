@@ -206,6 +206,13 @@ impl Rect {
     /// The result is the smallest rectangle that contains both.
     #[inline]
     pub fn union(&self, other: &Rect) -> Rect {
+        if self.is_empty() {
+            return *other;
+        }
+        if other.is_empty() {
+            return *self;
+        }
+
         let x = self.x.min(other.x);
         let y = self.y.min(other.y);
         let right = self.right().max(other.right());

@@ -560,11 +560,11 @@ impl Tree {
 }
 
 fn filter_node(node: &TreeNode, query_lower: &str) -> Option<TreeNode> {
-    let label_matches = node.label.to_lowercase().contains(query_lower)
+    let label_matches = crate::contains_ignore_case(&node.label, query_lower)
         || node
             .icon
             .as_deref()
-            .is_some_and(|icon| icon.to_lowercase().contains(query_lower));
+            .is_some_and(|icon| crate::contains_ignore_case(icon, query_lower));
 
     let mut filtered_children = Vec::new();
     for child in &node.children {
@@ -603,15 +603,46 @@ struct FilteredPathNode {
     children: Vec<(usize, FilteredPathNode)>,
 }
 
+fn create_unfiltered_path_node(node: &TreeNode) -> FilteredPathNode {
+    let mut children = Vec::new();
+    for (idx, child) in node.children.iter().enumerate() {
+        children.push((idx, create_unfiltered_path_node(child)));
+    }
+    let lazy_offset = node.children.len();
+    if let Some(lazy) = &node.lazy_children {
+        for (idx, child) in lazy.iter().enumerate() {
+            children.push((lazy_offset + idx, create_unfiltered_path_node(child)));
+        }
+    }
+    FilteredPathNode {
+        expanded: node.expanded,
+        children,
+    }
+}
+
 fn filter_node_paths(
     node: &TreeNode,
     query_lower: &str,
 ) -> Option<(bool, Vec<(usize, FilteredPathNode)>)> {
-    let label_matches = node.label.to_lowercase().contains(query_lower)
+    let label_matches = crate::contains_ignore_case(&node.label, query_lower)
         || node
             .icon
             .as_deref()
-            .is_some_and(|icon| icon.to_lowercase().contains(query_lower));
+            .is_some_and(|icon| crate::contains_ignore_case(icon, query_lower));
+
+    if label_matches {
+        let mut children = Vec::new();
+        for (idx, child) in node.children.iter().enumerate() {
+            children.push((idx, create_unfiltered_path_node(child)));
+        }
+        let lazy_offset = node.children.len();
+        if let Some(lazy) = &node.lazy_children {
+            for (idx, child) in lazy.iter().enumerate() {
+                children.push((lazy_offset + idx, create_unfiltered_path_node(child)));
+            }
+        }
+        return Some((node.expanded, children));
+    }
 
     let mut filtered_children = Vec::new();
     for (idx, child) in node.children.iter().enumerate() {
@@ -642,14 +673,12 @@ fn filter_node_paths(
         }
     }
 
-    if !label_matches && filtered_children.is_empty() && filtered_lazy.is_empty() {
+    if filtered_children.is_empty() && filtered_lazy.is_empty() {
         return None;
     }
 
-    let expanded = if !label_matches { true } else { node.expanded };
-
     filtered_children.extend(filtered_lazy);
-    Some((expanded, filtered_children))
+    Some((true, filtered_children))
 }
 
 impl Widget for Tree {

@@ -129,10 +129,18 @@ proptest! {
     #[test]
     fn union_contains_both(a in small_rect_strategy(), b in small_rect_strategy()) {
         let u = a.union(&b);
-        prop_assert!(u.left() <= a.left() && u.left() <= b.left());
-        prop_assert!(u.top() <= a.top() && u.top() <= b.top());
-        prop_assert!(u.right() >= a.right() && u.right() >= b.right());
-        prop_assert!(u.bottom() >= a.bottom() && u.bottom() >= b.bottom());
+        if !a.is_empty() {
+            prop_assert!(u.left() <= a.left());
+            prop_assert!(u.top() <= a.top());
+            prop_assert!(u.right() >= a.right());
+            prop_assert!(u.bottom() >= a.bottom());
+        }
+        if !b.is_empty() {
+            prop_assert!(u.left() <= b.left());
+            prop_assert!(u.top() <= b.top());
+            prop_assert!(u.right() >= b.right());
+            prop_assert!(u.bottom() >= b.bottom());
+        }
     }
 }
 

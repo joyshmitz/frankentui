@@ -763,11 +763,18 @@ impl GenericTokenizer {
                 continue;
             }
 
-            // Attribute (#[...] or @...)
+            // Attribute (#[...] or #![...] or @...)
             if ch == b'#' || ch == b'@' {
                 let start = pos;
                 pos += 1;
+                let mut is_bracketed = false;
+
+                if ch == b'#' && pos < bytes.len() && bytes[pos] == b'!' {
+                    pos += 1;
+                }
+
                 if pos < bytes.len() && bytes[pos] == b'[' {
+                    is_bracketed = true;
                     // Scan until closing ]
                     while pos < bytes.len() && bytes[pos] != b']' {
                         pos += 1;
@@ -776,6 +783,14 @@ impl GenericTokenizer {
                         pos += 1;
                     }
                 }
+
+                if !is_bracketed {
+                    // C macros (#define) or decorators (@Override)
+                    while pos < bytes.len() && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'_') {
+                        pos += 1;
+                    }
+                }
+
                 tokens.push(Token::new(
                     TokenKind::Attribute,
                     base_offset + start..base_offset + pos,

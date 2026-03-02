@@ -226,7 +226,7 @@ impl<'a> List<'a> {
         let next_pos = if let Some(selected) = state.selected {
             // `filtered` is sorted by index (ascending), so we can use binary search
             // for O(log N) lookup instead of O(N) linear scan.
-            let current_pos = filtered.binary_search(&selected).unwrap_or(0);
+            let current_pos = filtered.binary_search(&selected).unwrap_or_else(|pos| pos);
             (current_pos as isize + direction).clamp(0, max_pos) as usize
         } else if direction > 0 {
             0

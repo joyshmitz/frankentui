@@ -782,10 +782,16 @@ impl BocpdDetector {
         // Here, "regime" is a global latent variable, not per-run-segment.
         // So we update the regime probability first, then weight the RL update.
 
-        // Update regime probability: P(burst | x) ∝ P(x | burst) * P(burst)
-        let prior_odds = self.p_burst / (1.0 - self.p_burst).max(1e-10);
+        // Update regime probability using a Hidden Markov Model (HMM) step
+        // 1. Transition prior: incorporate hazard rate (chance of switching regime)
+        let prior_burst = self.p_burst * (1.0 - self.hazard) + self.config.burst_prior * self.hazard;
+
+        // 2. Bayesian update with new observation
+        let prior_odds = prior_burst / (1.0 - prior_burst).max(1e-10);
         let likelihood_ratio = pred_burst / pred_steady.max(1e-10);
         let posterior_odds = prior_odds * likelihood_ratio;
+        
+        // Clamp to prevent total float lock-in, but the transition prior does the heavy lifting now
         self.p_burst = (posterior_odds / (1.0 + posterior_odds)).clamp(0.001, 0.999);
 
         // Update run-length distribution

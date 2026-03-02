@@ -1089,19 +1089,12 @@ mod tests {
         assert_eq!(seg.base_direction(), Direction::Rtl);
 
         // Check visual pos of End (3)
-        // Current implementation returns 3 (Right side), which is wrong for RTL base.
-        // We expect it to correspond to Visual 0 (Left side).
-
-        // This test documents the EXPECTED behavior for a fix.
-        // If I can't fix visual_pos return value (compatibility),
-        // at least move_right should work.
+        // Cursor at logical end should be at visual left (0) for RTL paragraphs.
 
         let start_pos = 3; // End
 
         // Move Right from End (Visual Left) -> Visual 1 (He, logical 1)
         let right = seg.move_right(start_pos);
-        // If current impl returns 3, move_right(3) stays at 3.
-        // If fixed, it should wrap to 1.
 
         assert_eq!(
             right, 2,

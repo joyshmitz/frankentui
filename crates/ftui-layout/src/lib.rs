@@ -1223,23 +1223,32 @@ fn redistribute_overflow(floors: &[u16], total: u16) -> Vec<u16> {
 
     let mut overflow = current_sum - total_u64;
 
-    // Sort indices by value descending
-    let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| result[b].cmp(&result[a]));
-
     while overflow > 0 {
-        let mut reduced_any = false;
-        let reduce_amount = (overflow / n as u64).min(u16::MAX as u64).max(1) as u16;
+        let max_val = *result.iter().max().unwrap();
+        if max_val == 0 {
+            break;
+        }
 
-        for &idx in &indices {
-            if overflow == 0 {
-                break;
-            }
-            if result[idx] > 0 {
-                let amount = (result[idx] as u64).min(reduce_amount as u64).min(overflow) as u16;
-                result[idx] -= amount;
-                overflow -= amount as u64;
-                reduced_any = true;
+        let count_max = result.iter().filter(|&&v| v == max_val).count() as u64;
+        let next_max = *result.iter().filter(|&&v| v < max_val).max().unwrap_or(&0);
+
+        let delta = (max_val - next_max) as u64;
+        let max_reduction_per_item = delta.max(1);
+        let required_per_item = (overflow.saturating_add(count_max).saturating_sub(1)) / count_max;
+        let reduce_per_item = max_reduction_per_item.min(required_per_item.max(1));
+
+        let mut reduced_any = false;
+        for val in result.iter_mut() {
+            if *val == max_val {
+                let amount = (*val as u64).min(reduce_per_item).min(overflow) as u16;
+                if amount > 0 {
+                    *val -= amount;
+                    overflow -= amount as u64;
+                    reduced_any = true;
+                }
+                if overflow == 0 {
+                    break;
+                }
             }
         }
 

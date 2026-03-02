@@ -564,6 +564,10 @@ impl InputParser {
             b'D' => Some(Event::Key(self.key_with_modifiers(KeyCode::Left, params))),
             b'H' => Some(Event::Key(self.key_with_modifiers(KeyCode::Home, params))),
             b'F' => Some(Event::Key(self.key_with_modifiers(KeyCode::End, params))),
+            b'P' => Some(Event::Key(self.key_with_modifiers(KeyCode::F(1), params))),
+            b'Q' => Some(Event::Key(self.key_with_modifiers(KeyCode::F(2), params))),
+            b'R' => Some(Event::Key(self.key_with_modifiers(KeyCode::F(3), params))),
+            b'S' => Some(Event::Key(self.key_with_modifiers(KeyCode::F(4), params))),
             b'Z' => Some(Event::Key(
                 self.key_with_modifiers(KeyCode::BackTab, params),
             )),

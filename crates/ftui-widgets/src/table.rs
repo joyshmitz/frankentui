@@ -1208,7 +1208,10 @@ impl MeasurableWidget for Table<'_> {
         let total_height = content_height.saturating_add(block_height);
 
         SizeConstraints {
-            min: Size::new(col_count as u16, 1), // At least column count width, 1 row
+            min: Size::new(
+                (col_count as u16).saturating_add(block_width),
+                header_height.max(1).saturating_add(block_height),
+            ),
             preferred: Size::new(total_width, total_height),
             max: Some(Size::new(total_width, total_height)), // Fixed content size
         }

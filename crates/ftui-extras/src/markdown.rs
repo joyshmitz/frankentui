@@ -560,10 +560,12 @@ fn apply_latex_fallbacks(text: &str) -> String {
     }
 
     // Handle generic \frac{a}{b} -> a/b
-    while let Some(start) = result.find(r"\frac{") {
-        if let Some(end) = find_matching_brace(&result[start + 6..]) {
-            let num_end = start + 6 + end;
-            let numerator = &result[start + 6..num_end];
+    let mut search_start = 0;
+    while let Some(start) = result[search_start..].find(r"\frac{") {
+        let abs_start = search_start + start;
+        if let Some(end) = find_matching_brace(&result[abs_start + 6..]) {
+            let num_end = abs_start + 6 + end;
+            let numerator = &result[abs_start + 6..num_end];
 
             // Look for denominator
             if result[num_end + 1..].starts_with('{')
@@ -572,26 +574,30 @@ fn apply_latex_fallbacks(text: &str) -> String {
                 let denominator = &result[num_end + 2..num_end + 2 + denom_end];
                 let replacement = format!("{numerator}/{denominator}");
                 let full_end = num_end + 3 + denom_end;
-                result = format!("{}{}{}", &result[..start], replacement, &result[full_end..]);
+                result = format!("{}{}{}", &result[..abs_start], replacement, &result[full_end..]);
+                search_start = abs_start + replacement.len();
                 continue;
             }
         }
-        break;
+        search_start = abs_start + 6;
     }
 
     // Square root: \sqrt{x} -> √x
-    while let Some(start) = result.find(r"\sqrt{") {
-        if let Some(end) = find_matching_brace(&result[start + 6..]) {
-            let content = &result[start + 6..start + 6 + end];
+    let mut search_start = 0;
+    while let Some(start) = result[search_start..].find(r"\sqrt{") {
+        let abs_start = search_start + start;
+        if let Some(end) = find_matching_brace(&result[abs_start + 6..]) {
+            let content = &result[abs_start + 6..abs_start + 6 + end];
             let replacement = format!("√{content}");
             result = format!(
                 "{}{}{}",
-                &result[..start],
+                &result[..abs_start],
                 replacement,
-                &result[start + 7 + end..]
+                &result[abs_start + 7 + end..]
             );
+            search_start = abs_start + replacement.len();
         } else {
-            break;
+            search_start = abs_start + 6;
         }
     }
 
