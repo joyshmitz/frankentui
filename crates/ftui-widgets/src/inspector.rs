@@ -1263,9 +1263,8 @@ impl<'a> InspectorOverlay<'a> {
     fn draw_panel_text(&self, frame: &mut Frame, x: u16, y: u16, text: &str, fg: PackedRgba) {
         for (i, ch) in text.chars().enumerate() {
             let cx = x + i as u16;
-            if let Some(cell) = frame.buffer.get_mut(cx, y) {
-                *cell = Cell::from_char(ch).with_fg(fg);
-            }
+            let cell = Cell::from_char(ch).with_fg(fg);
+            frame.buffer.set_fast(cx, y, cell);
         }
     }
 }

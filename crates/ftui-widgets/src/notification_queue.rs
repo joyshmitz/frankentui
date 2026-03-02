@@ -370,7 +370,7 @@ impl NotificationQueue {
         // Clean expired dedup hashes
         let now = Instant::now();
         self.recent_hashes
-            .retain(|_, t| now.duration_since(*t) < self.dedup_window);
+            .retain(|_, t| now.saturating_duration_since(*t) < self.dedup_window);
 
         // Process visible toasts for expiry and animations
         let mut i = 0;
@@ -500,7 +500,7 @@ impl NotificationQueue {
 
         // Clean old hashes
         self.recent_hashes
-            .retain(|_, t| now.duration_since(*t) < self.dedup_window);
+            .retain(|_, t| now.saturating_duration_since(*t) < self.dedup_window);
 
         // Check if duplicate
         if self.recent_hashes.contains_key(&hash) {

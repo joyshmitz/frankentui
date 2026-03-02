@@ -949,24 +949,22 @@ impl CommandPalette {
         let bg = self.palette_background();
 
         // Top border with title.
-        if let Some(cell) = frame.buffer.get_mut(area.x, area.y) {
-            cell.content = CellContent::from_char('╭');
-            cell.fg = border_fg;
-            cell.bg = bg;
-        }
+        let mut cell = Cell::from_char('╭');
+        cell.fg = border_fg;
+        cell.bg = bg;
+        frame.buffer.set_fast(area.x, area.y, cell);
+
         for x in (area.x + 1)..area.right().saturating_sub(1) {
-            if let Some(cell) = frame.buffer.get_mut(x, area.y) {
-                cell.content = CellContent::from_char('─');
-                cell.fg = border_fg;
-                cell.bg = bg;
-            }
-        }
-        if area.width > 1
-            && let Some(cell) = frame.buffer.get_mut(area.right() - 1, area.y)
-        {
-            cell.content = CellContent::from_char('╮');
+            let mut cell = Cell::from_char('─');
             cell.fg = border_fg;
             cell.bg = bg;
+            frame.buffer.set_fast(x, area.y, cell);
+        }
+        if area.width > 1 {
+            let mut cell = Cell::from_char('╮');
+            cell.fg = border_fg;
+            cell.bg = bg;
+            frame.buffer.set_fast(area.right() - 1, area.y, cell);
         }
 
         // Title "Command Palette" in top border.
@@ -978,41 +976,38 @@ impl CommandPalette {
 
         // Side borders.
         for y in (area.y + 1)..area.bottom().saturating_sub(1) {
-            if let Some(cell) = frame.buffer.get_mut(area.x, y) {
-                cell.content = CellContent::from_char('│');
-                cell.fg = border_fg;
-                cell.bg = bg;
-            }
-            if area.width > 1
-                && let Some(cell) = frame.buffer.get_mut(area.right() - 1, y)
-            {
-                cell.content = CellContent::from_char('│');
-                cell.fg = border_fg;
-                cell.bg = bg;
+            let mut cell_l = Cell::from_char('│');
+            cell_l.fg = border_fg;
+            cell_l.bg = bg;
+            frame.buffer.set_fast(area.x, y, cell_l);
+
+            if area.width > 1 {
+                let mut cell_r = Cell::from_char('│');
+                cell_r.fg = border_fg;
+                cell_r.bg = bg;
+                frame.buffer.set_fast(area.right() - 1, y, cell_r);
             }
         }
 
         // Bottom border.
         if area.height > 1 {
             let by = area.bottom() - 1;
-            if let Some(cell) = frame.buffer.get_mut(area.x, by) {
-                cell.content = CellContent::from_char('╰');
-                cell.fg = border_fg;
-                cell.bg = bg;
-            }
+            let mut cell_bl = Cell::from_char('╰');
+            cell_bl.fg = border_fg;
+            cell_bl.bg = bg;
+            frame.buffer.set_fast(area.x, by, cell_bl);
+
             for x in (area.x + 1)..area.right().saturating_sub(1) {
-                if let Some(cell) = frame.buffer.get_mut(x, by) {
-                    cell.content = CellContent::from_char('─');
-                    cell.fg = border_fg;
-                    cell.bg = bg;
-                }
-            }
-            if area.width > 1
-                && let Some(cell) = frame.buffer.get_mut(area.right() - 1, by)
-            {
-                cell.content = CellContent::from_char('╯');
+                let mut cell = Cell::from_char('─');
                 cell.fg = border_fg;
                 cell.bg = bg;
+                frame.buffer.set_fast(x, by, cell);
+            }
+            if area.width > 1 {
+                let mut cell_br = Cell::from_char('╯');
+                cell_br.fg = border_fg;
+                cell_br.bg = bg;
+                frame.buffer.set_fast(area.right() - 1, by, cell_br);
             }
         }
     }
@@ -1072,11 +1067,10 @@ impl CommandPalette {
                 } else {
                     continue;
                 };
-                if let Some(cell) = frame.buffer.get_mut(col, area.y) {
-                    cell.content = content;
-                    cell.fg = input_fg;
-                    cell.bg = bg;
-                }
+                let mut cell = Cell::new(content);
+                cell.fg = input_fg;
+                cell.bg = bg;
+                frame.buffer.set_fast(col, area.y, cell);
                 col = col.saturating_add(w as u16);
             }
         }

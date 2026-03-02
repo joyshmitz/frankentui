@@ -199,10 +199,9 @@ impl Widget for Rule<'_> {
 
                 // Draw left padding space.
                 let pad_x = title_block_x;
-                if let Some(cell) = frame.buffer.get_mut(pad_x, y) {
-                    *cell = Cell::from_char(' ');
-                    apply_style(cell, self.style);
-                }
+                let mut cell_pad_l = Cell::from_char(' ');
+                crate::apply_style(&mut cell_pad_l, self.style);
+                frame.buffer.set_fast(pad_x, y, cell_pad_l);
 
                 // Draw title text.
                 let ts = self.title_style.unwrap_or(self.style);
@@ -212,11 +211,10 @@ impl Widget for Rule<'_> {
 
                 // Draw right padding space.
                 let right_pad_x = title_end;
-                if right_pad_x < area.right()
-                    && let Some(cell) = frame.buffer.get_mut(right_pad_x, y)
-                {
-                    *cell = Cell::from_char(' ');
-                    apply_style(cell, self.style);
+                if right_pad_x < area.right() {
+                    let mut cell_pad_r = Cell::from_char(' ');
+                    crate::apply_style(&mut cell_pad_r, self.style);
+                    frame.buffer.set_fast(right_pad_x, y, cell_pad_r);
                 }
 
                 // Draw right rule section.

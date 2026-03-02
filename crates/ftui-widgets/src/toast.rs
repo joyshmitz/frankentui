@@ -1308,73 +1308,69 @@ impl Widget for Toast {
         };
 
         // Top border
-        if let Some(cell) = frame.buffer.get_mut(render_area.x, render_area.y) {
-            *cell = Cell::from_char(tl);
-            if deg.apply_styling() {
-                crate::apply_style(cell, self.style);
-            }
+        let mut cell = Cell::from_char(tl);
+        if deg.apply_styling() {
+            crate::apply_style(&mut cell, self.style);
         }
+        frame.buffer.set_fast(render_area.x, render_area.y, cell);
+
         for x in (render_area.x + 1)..(render_area.right().saturating_sub(1)) {
-            if let Some(cell) = frame.buffer.get_mut(x, render_area.y) {
-                *cell = Cell::from_char(h);
-                if deg.apply_styling() {
-                    crate::apply_style(cell, self.style);
-                }
-            }
-        }
-        if let Some(cell) = frame
-            .buffer
-            .get_mut(render_area.right().saturating_sub(1), render_area.y)
-        {
-            *cell = Cell::from_char(tr);
+            let mut cell = Cell::from_char(h);
             if deg.apply_styling() {
-                crate::apply_style(cell, self.style);
+                crate::apply_style(&mut cell, self.style);
             }
+            frame.buffer.set_fast(x, render_area.y, cell);
         }
+
+        let mut cell_tr = Cell::from_char(tr);
+        if deg.apply_styling() {
+            crate::apply_style(&mut cell_tr, self.style);
+        }
+        frame.buffer.set_fast(
+            render_area.right().saturating_sub(1),
+            render_area.y,
+            cell_tr,
+        );
 
         // Bottom border
         let bottom_y = render_area.bottom().saturating_sub(1);
-        if let Some(cell) = frame.buffer.get_mut(render_area.x, bottom_y) {
-            *cell = Cell::from_char(bl);
-            if deg.apply_styling() {
-                crate::apply_style(cell, self.style);
-            }
+        let mut cell_bl = Cell::from_char(bl);
+        if deg.apply_styling() {
+            crate::apply_style(&mut cell_bl, self.style);
         }
+        frame.buffer.set_fast(render_area.x, bottom_y, cell_bl);
+
         for x in (render_area.x + 1)..(render_area.right().saturating_sub(1)) {
-            if let Some(cell) = frame.buffer.get_mut(x, bottom_y) {
-                *cell = Cell::from_char(h);
-                if deg.apply_styling() {
-                    crate::apply_style(cell, self.style);
-                }
-            }
-        }
-        if let Some(cell) = frame
-            .buffer
-            .get_mut(render_area.right().saturating_sub(1), bottom_y)
-        {
-            *cell = Cell::from_char(br);
+            let mut cell = Cell::from_char(h);
             if deg.apply_styling() {
-                crate::apply_style(cell, self.style);
+                crate::apply_style(&mut cell, self.style);
             }
+            frame.buffer.set_fast(x, bottom_y, cell);
         }
+
+        let mut cell_br = Cell::from_char(br);
+        if deg.apply_styling() {
+            crate::apply_style(&mut cell_br, self.style);
+        }
+        frame
+            .buffer
+            .set_fast(render_area.right().saturating_sub(1), bottom_y, cell_br);
 
         // Side borders
         for y in (render_area.y + 1)..bottom_y {
-            if let Some(cell) = frame.buffer.get_mut(render_area.x, y) {
-                *cell = Cell::from_char(v);
-                if deg.apply_styling() {
-                    crate::apply_style(cell, self.style);
-                }
+            let mut cell_l = Cell::from_char(v);
+            if deg.apply_styling() {
+                crate::apply_style(&mut cell_l, self.style);
             }
-            if let Some(cell) = frame
+            frame.buffer.set_fast(render_area.x, y, cell_l);
+
+            let mut cell_r = Cell::from_char(v);
+            if deg.apply_styling() {
+                crate::apply_style(&mut cell_r, self.style);
+            }
+            frame
                 .buffer
-                .get_mut(render_area.right().saturating_sub(1), y)
-            {
-                *cell = Cell::from_char(v);
-                if deg.apply_styling() {
-                    crate::apply_style(cell, self.style);
-                }
-            }
+                .set_fast(render_area.right().saturating_sub(1), y, cell_r);
         }
 
         // Draw content

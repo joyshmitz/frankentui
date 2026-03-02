@@ -55,7 +55,7 @@
 use crate::drag::DragPayload;
 use crate::measure_cache::WidgetId;
 use ftui_core::geometry::Rect;
-use ftui_render::cell::CellContent;
+use ftui_render::cell::Cell;
 use ftui_render::cell::PackedRgba;
 use ftui_render::frame::Frame;
 use ftui_style::Style;
@@ -748,17 +748,16 @@ impl KeyboardDragManager {
         // Top and bottom borders
         for x in bounds.x..bounds.x.saturating_add(bounds.width) {
             // Top
-            if let Some(cell) = frame.buffer.get_mut(x, bounds.y) {
-                cell.content = CellContent::from_char(border_char);
-                cell.fg = fg_style.fg.unwrap_or(style.border_fg);
-            }
+            let mut cell = Cell::from_char(border_char);
+            cell.fg = fg_style.fg.unwrap_or(style.border_fg);
+            frame.buffer.set_fast(x, bounds.y, cell);
+
             // Bottom
             let bottom_y = bounds.y.saturating_add(bounds.height.saturating_sub(1));
-            if bounds.height > 1
-                && let Some(cell) = frame.buffer.get_mut(x, bottom_y)
-            {
-                cell.content = CellContent::from_char(border_char);
-                cell.fg = fg_style.fg.unwrap_or(style.border_fg);
+            if bounds.height > 1 {
+                let mut cell_b = Cell::from_char(border_char);
+                cell_b.fg = fg_style.fg.unwrap_or(style.border_fg);
+                frame.buffer.set_fast(x, bottom_y, cell_b);
             }
         }
 
@@ -767,17 +766,16 @@ impl KeyboardDragManager {
             bounds.y.saturating_add(1)..bounds.y.saturating_add(bounds.height.saturating_sub(1))
         {
             // Left
-            if let Some(cell) = frame.buffer.get_mut(bounds.x, y) {
-                cell.content = CellContent::from_char(border_char);
-                cell.fg = fg_style.fg.unwrap_or(style.border_fg);
-            }
+            let mut cell = Cell::from_char(border_char);
+            cell.fg = fg_style.fg.unwrap_or(style.border_fg);
+            frame.buffer.set_fast(bounds.x, y, cell);
+
             // Right
             let right_x = bounds.x.saturating_add(bounds.width.saturating_sub(1));
-            if bounds.width > 1
-                && let Some(cell) = frame.buffer.get_mut(right_x, y)
-            {
-                cell.content = CellContent::from_char(border_char);
-                cell.fg = fg_style.fg.unwrap_or(style.border_fg);
+            if bounds.width > 1 {
+                let mut cell_r = Cell::from_char(border_char);
+                cell_r.fg = fg_style.fg.unwrap_or(style.border_fg);
+                frame.buffer.set_fast(right_x, y, cell_r);
             }
         }
     }

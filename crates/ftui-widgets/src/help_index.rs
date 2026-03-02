@@ -398,7 +398,7 @@ impl HelpIndex {
         scores: &mut HashMap<HelpId, (f32, MatchedField, String)>,
     ) {
         for (id, content) in &self.content_cache {
-            if content.short.to_lowercase().contains(query) {
+            if crate::contains_ignore_case(&content.short, query) {
                 let entry =
                     scores
                         .entry(*id)
@@ -407,7 +407,7 @@ impl HelpIndex {
             }
 
             if let Some(ref long) = content.long
-                && long.to_lowercase().contains(query)
+                && crate::contains_ignore_case(long, query)
             {
                 let entry = scores
                     .entry(*id)
@@ -416,7 +416,7 @@ impl HelpIndex {
             }
 
             for (key, action) in &content.keybindings {
-                if action.to_lowercase().contains(query) {
+                if crate::contains_ignore_case(action, query) {
                     let entry = scores.entry(*id).or_insert((
                         0.0,
                         MatchedField::KeybindingAction,
@@ -424,7 +424,7 @@ impl HelpIndex {
                     ));
                     entry.0 += WEIGHT_KEYBINDING_ACTION * 0.5;
                 }
-                if key.to_lowercase().contains(query) {
+                if crate::contains_ignore_case(key, query) {
                     let entry = scores.entry(*id).or_insert((
                         0.0,
                         MatchedField::KeybindingKey,

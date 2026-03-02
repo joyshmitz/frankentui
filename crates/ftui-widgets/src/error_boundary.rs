@@ -420,10 +420,9 @@ impl Widget for FallbackWidget {
             let inner_right = area.x.saturating_add(area.width).saturating_sub(1);
             // Clear the retry hint line
             for x in inner_left..inner_right {
-                if let Some(cell) = frame.buffer.get_mut(x, inner_y) {
-                    cell.content = ftui_render::cell::CellContent::from_char(' ');
-                    apply_style(cell, bg_style);
-                }
+                let mut cell = Cell::new(ftui_render::cell::CellContent::from_char(' '));
+                crate::apply_style(&mut cell, bg_style);
+                frame.buffer.set_fast(x, inner_y, cell);
             }
         }
     }

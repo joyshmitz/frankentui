@@ -434,7 +434,7 @@ impl BayesianScorer {
         let query_lower = query.to_lowercase();
         let tag_match = tags
             .iter()
-            .any(|tag| tag.to_lowercase().contains(&query_lower));
+            .any(|tag| crate::contains_ignore_case(tag, &query_lower));
 
         if tag_match && result.match_type != MatchType::NoMatch {
             // Strong positive evidence
