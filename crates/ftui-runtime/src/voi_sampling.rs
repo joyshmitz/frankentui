@@ -463,7 +463,7 @@ impl VoiSampler {
             self.event_idx.saturating_sub(self.last_sample_event)
         };
         let time_since_sample = if now >= self.last_sample_time {
-            now.duration_since(self.last_sample_time)
+            now.saturating_duration_since(self.last_sample_time)
         } else {
             Duration::ZERO
         };

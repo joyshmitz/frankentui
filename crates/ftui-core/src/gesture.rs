@@ -252,7 +252,7 @@ impl GestureRecognizer {
             return None;
         }
         if let Some((pos, down_time)) = self.long_press_pos {
-            let elapsed = now.duration_since(down_time);
+            let elapsed = now.saturating_duration_since(down_time);
             if elapsed >= self.config.long_press_threshold {
                 self.long_press_fired = true;
                 return Some(SemanticEvent::LongPress {
@@ -347,7 +347,7 @@ impl GestureRecognizer {
         let click_count = if let Some(ref last) = self.last_click {
             if last.button == button
                 && last.pos.manhattan_distance(pos) <= u32::from(self.config.click_tolerance)
-                && now.duration_since(last.time) <= self.config.multi_click_timeout
+                && now.saturating_duration_since(last.time) <= self.config.multi_click_timeout
                 && last.count < 3
             {
                 last.count + 1
@@ -417,7 +417,7 @@ impl GestureRecognizer {
 
     fn expire_chord(&mut self, now: Instant) {
         if let Some(start) = self.chord_start
-            && now.duration_since(start) > self.config.chord_timeout
+            && now.saturating_duration_since(start) > self.config.chord_timeout
         {
             self.chord_buffer.clear();
             self.chord_start = None;

@@ -489,7 +489,7 @@ impl UndoableCmd for TextInsertCmd {
         let elapsed = other
             .metadata
             .timestamp
-            .duration_since(self.metadata.timestamp);
+            .saturating_duration_since(self.metadata.timestamp);
         if elapsed.as_millis() > config.max_delay_ms as u128 {
             return false;
         }
@@ -654,7 +654,7 @@ impl UndoableCmd for TextDeleteCmd {
         let elapsed = other
             .metadata
             .timestamp
-            .duration_since(self.metadata.timestamp);
+            .saturating_duration_since(self.metadata.timestamp);
         if elapsed.as_millis() > config.max_delay_ms as u128 {
             return false;
         }

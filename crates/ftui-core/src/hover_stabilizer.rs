@@ -157,7 +157,7 @@ impl HoverStabilizer {
     ) -> Option<u64> {
         // Check for hold timeout
         if let Some(last) = self.last_update
-            && now.duration_since(last) > self.config.hold_timeout
+            && now.saturating_duration_since(last) > self.config.hold_timeout
         {
             self.reset();
         }

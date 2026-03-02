@@ -625,7 +625,7 @@ impl CapabilityProber {
         let timed_out: Vec<ProbeId> = self
             .pending
             .iter()
-            .filter(|(_, (sent, _))| now.duration_since(*sent) > self.timeout)
+            .filter(|(_, (sent, _))| now.saturating_duration_since(*sent) > self.timeout)
             .map(|(&id, _)| id)
             .collect();
 

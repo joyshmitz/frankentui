@@ -62,6 +62,7 @@ use crate::{Constraint, Direction, LayoutSizeHint};
 /// Includes all parameters that affect layout computation:
 /// - The available area (stored as components for Hash)
 /// - A fingerprint of all constraints
+/// - The length of the constraints slice
 /// - The layout direction
 /// - Optionally, a fingerprint of intrinsic size hints
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -74,12 +75,18 @@ pub struct LayoutCacheKey {
     pub area_width: u16,
     /// Area height.
     pub area_height: u16,
-    /// Hash fingerprint of constraints.
+    /// Primary hash fingerprint of constraints.
     pub constraints_hash: u64,
+    /// Secondary hash fingerprint of constraints (for 128-bit collision resistance).
+    pub constraints_hash_fx: u64,
+    /// Length of constraints slice.
+    pub constraints_len: u16,
     /// Layout direction.
     pub direction: Direction,
-    /// Hash fingerprint of intrinsic sizes (if using FitContent).
+    /// Primary hash fingerprint of intrinsic sizes (if using FitContent).
     pub intrinsics_hash: Option<u64>,
+    /// Secondary hash fingerprint of intrinsic sizes.
+    pub intrinsics_hash_fx: Option<u64>,
 }
 
 impl LayoutCacheKey {
@@ -97,14 +104,19 @@ impl LayoutCacheKey {
         direction: Direction,
         intrinsics: Option<&[LayoutSizeHint]>,
     ) -> Self {
+        let (ch1, ch2) = Self::hash_constraints(constraints);
+        let intr_hashes = intrinsics.map(Self::hash_intrinsics);
         Self {
             area_x: area.x,
             area_y: area.y,
             area_width: area.width,
             area_height: area.height,
-            constraints_hash: Self::hash_constraints(constraints),
+            constraints_hash: ch1,
+            constraints_hash_fx: ch2,
+            constraints_len: constraints.len() as u16,
             direction,
-            intrinsics_hash: intrinsics.map(Self::hash_intrinsics),
+            intrinsics_hash: intr_hashes.map(|h| h.0),
+            intrinsics_hash_fx: intr_hashes.map(|h| h.1),
         }
     }
 
@@ -114,17 +126,18 @@ impl LayoutCacheKey {
         Rect::new(self.area_x, self.area_y, self.area_width, self.area_height)
     }
 
-    /// Hash a slice of constraints.
-    fn hash_constraints(constraints: &[Constraint]) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    /// Hash a slice of constraints with two independent hashers.
+    fn hash_constraints(constraints: &[Constraint]) -> (u64, u64) {
+        let mut h1 = std::collections::hash_map::DefaultHasher::new();
+        let mut h2 = rustc_hash::FxHasher::default();
         for c in constraints {
-            // Hash each constraint's discriminant and value
-            std::mem::discriminant(c).hash(&mut hasher);
+            std::mem::discriminant(c).hash(&mut h1);
+            std::mem::discriminant(c).hash(&mut h2);
             match c {
-                Constraint::Fixed(v) => v.hash(&mut hasher),
-                Constraint::Percentage(p) => p.to_bits().hash(&mut hasher),
-                Constraint::Min(v) => v.hash(&mut hasher),
-                Constraint::Max(v) => v.hash(&mut hasher),
+                Constraint::Fixed(v) => { v.hash(&mut h1); v.hash(&mut h2); }
+                Constraint::Percentage(p) => { p.to_bits().hash(&mut h1); p.to_bits().hash(&mut h2); }
+                Constraint::Min(v) => { v.hash(&mut h1); v.hash(&mut h2); }
+                Constraint::Max(v) => { v.hash(&mut h1); v.hash(&mut h2); }
                 Constraint::Ratio(n, d) => {
                     fn gcd(mut a: u32, mut b: u32) -> u32 {
                         while b != 0 {
@@ -138,34 +151,44 @@ impl LayoutCacheKey {
                     if let (Some(n_div), Some(d_div)) =
                         (n.checked_div(divisor), d.checked_div(divisor))
                     {
-                        n_div.hash(&mut hasher);
-                        d_div.hash(&mut hasher);
+                        n_div.hash(&mut h1);
+                        d_div.hash(&mut h1);
+                        n_div.hash(&mut h2);
+                        d_div.hash(&mut h2);
                     } else {
-                        n.hash(&mut hasher);
-                        d.hash(&mut hasher);
+                        n.hash(&mut h1);
+                        d.hash(&mut h1);
+                        n.hash(&mut h2);
+                        d.hash(&mut h2);
                     }
                 }
                 Constraint::Fill => {}
                 Constraint::FitContent => {}
                 Constraint::FitContentBounded { min, max } => {
-                    min.hash(&mut hasher);
-                    max.hash(&mut hasher);
+                    min.hash(&mut h1);
+                    max.hash(&mut h1);
+                    min.hash(&mut h2);
+                    max.hash(&mut h2);
                 }
                 Constraint::FitMin => {}
             }
         }
-        hasher.finish()
+        (h1.finish(), h2.finish())
     }
 
     /// Hash a slice of intrinsic size hints.
-    fn hash_intrinsics(intrinsics: &[LayoutSizeHint]) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    fn hash_intrinsics(intrinsics: &[LayoutSizeHint]) -> (u64, u64) {
+        let mut h1 = std::collections::hash_map::DefaultHasher::new();
+        let mut h2 = rustc_hash::FxHasher::default();
         for hint in intrinsics {
-            hint.min.hash(&mut hasher);
-            hint.preferred.hash(&mut hasher);
-            hint.max.hash(&mut hasher);
+            hint.min.hash(&mut h1);
+            hint.preferred.hash(&mut h1);
+            hint.max.hash(&mut h1);
+            hint.min.hash(&mut h2);
+            hint.preferred.hash(&mut h2);
+            hint.max.hash(&mut h2);
         }
-        hasher.finish()
+        (h1.finish(), h2.finish())
     }
 }
 
@@ -538,7 +561,7 @@ impl CoherenceId {
     /// Create a coherence ID from layout parameters.
     pub fn new(constraints: &[Constraint], direction: Direction) -> Self {
         Self {
-            constraints_hash: LayoutCacheKey::hash_constraints(constraints),
+            constraints_hash: LayoutCacheKey::hash_constraints(constraints).0,
             direction,
         }
     }
@@ -1323,6 +1346,7 @@ mod tests {
             area_width: w,
             area_height: 24,
             constraints_hash: 42,
+            constraints_len: 2,
             direction: Direction::Horizontal,
             intrinsics_hash: None,
         }

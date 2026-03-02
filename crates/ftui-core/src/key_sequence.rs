@@ -257,7 +257,7 @@ impl KeySequenceInterpreter {
     /// Returns `None` if no timeout has expired or no keys are pending.
     pub fn check_timeout(&mut self, now: Instant) -> Option<Vec<KeySequenceAction>> {
         if let Some(start) = self.buffer_start {
-            if now.duration_since(start) >= self.config.sequence_timeout {
+            if now.saturating_duration_since(start) >= self.config.sequence_timeout {
                 // Timeout expired - flush all buffered keys
                 let actions: Vec<_> = self.buffer.drain(..).map(KeySequenceAction::Emit).collect();
                 self.buffer_start = None;
@@ -286,7 +286,7 @@ impl KeySequenceInterpreter {
     #[must_use]
     pub fn time_until_timeout(&self, now: Instant) -> Option<Duration> {
         self.buffer_start.map(|start| {
-            let elapsed = now.duration_since(start);
+            let elapsed = now.saturating_duration_since(start);
             self.config.sequence_timeout.saturating_sub(elapsed)
         })
     }

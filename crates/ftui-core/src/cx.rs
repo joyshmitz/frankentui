@@ -696,7 +696,7 @@ mod tests {
         let t0 = clock.now();
         clock.advance(Duration::from_millis(100));
         clock.advance(Duration::from_millis(200));
-        let elapsed = clock.now().duration_since(t0);
+        let elapsed = clock.now().saturating_duration_since(t0);
         // Should be ~300ms
         assert!(elapsed >= Duration::from_millis(290));
         assert!(elapsed <= Duration::from_millis(310));

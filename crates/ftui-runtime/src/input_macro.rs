@@ -194,7 +194,7 @@ impl MacroRecorder {
     /// The delay is measured from the previous event (or recording start).
     pub fn record_event(&mut self, event: Event) {
         let now = Instant::now();
-        let delay = now.duration_since(self.last_event_time);
+        let delay = now.saturating_duration_since(self.last_event_time);
         #[cfg(feature = "tracing")]
         tracing::debug!(event = ?event, delay = ?delay, "macro record event");
         self.events.push(TimedEvent::new(event, delay));
@@ -217,7 +217,9 @@ impl MacroRecorder {
 
     /// Finish recording and produce the macro.
     pub fn finish(self) -> InputMacro {
-        let total_duration = self.last_event_time.duration_since(self.start_time);
+        let total_duration = self
+            .last_event_time
+            .saturating_duration_since(self.start_time);
         InputMacro {
             events: self.events,
             metadata: MacroMetadata {

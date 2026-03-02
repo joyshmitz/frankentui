@@ -53,7 +53,7 @@ use ftui_render::budget::{DegradationLevel, EProcessConfig, PidGains};
 /// Groups every tunable parameter into a single struct that can be
 /// loaded from TOML or JSON. All fields default to the values currently
 /// hardcoded in the individual config structs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "policy-config", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "policy-config", serde(default))]
 pub struct PolicyConfig {
@@ -85,22 +85,6 @@ pub struct PolicyConfig {
     pub evidence: EvidencePolicyConfig,
 }
 
-impl Default for PolicyConfig {
-    fn default() -> Self {
-        Self {
-            conformal: ConformalPolicyConfig::default(),
-            frame_guard: FrameGuardPolicyConfig::default(),
-            cascade: CascadePolicyConfig::default(),
-            pid: PidPolicyConfig::default(),
-            eprocess_budget: EProcessBudgetPolicyConfig::default(),
-            bocpd: BocpdPolicyConfig::default(),
-            eprocess_throttle: EProcessThrottlePolicyConfig::default(),
-            voi: VoiPolicyConfig::default(),
-            evidence: EvidencePolicyConfig::default(),
-        }
-    }
-}
-
 impl PolicyConfig {
     /// Load from a TOML string.
     #[cfg(feature = "policy-config")]
@@ -111,8 +95,7 @@ impl PolicyConfig {
     /// Load from a TOML file on disk.
     #[cfg(feature = "policy-config")]
     pub fn from_toml_file(path: impl AsRef<Path>) -> Result<Self, PolicyConfigError> {
-        let content = std::fs::read_to_string(path.as_ref())
-            .map_err(PolicyConfigError::Io)?;
+        let content = std::fs::read_to_string(path.as_ref()).map_err(PolicyConfigError::Io)?;
         Self::from_toml_str(&content)
     }
 
@@ -125,8 +108,7 @@ impl PolicyConfig {
     /// Load from a JSON file on disk.
     #[cfg(feature = "policy-config")]
     pub fn from_json_file(path: impl AsRef<Path>) -> Result<Self, PolicyConfigError> {
-        let content = std::fs::read_to_string(path.as_ref())
-            .map_err(PolicyConfigError::Io)?;
+        let content = std::fs::read_to_string(path.as_ref()).map_err(PolicyConfigError::Io)?;
         Self::from_json_str(&content)
     }
 
@@ -746,9 +728,7 @@ where
 }
 
 #[cfg(feature = "policy-config")]
-fn deserialize_degradation_level<'de, D>(
-    deserializer: D,
-) -> Result<DegradationLevel, D::Error>
+fn deserialize_degradation_level<'de, D>(deserializer: D) -> Result<DegradationLevel, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -908,11 +888,7 @@ mod tests {
         let mut policy = PolicyConfig::default();
         policy.eprocess_throttle.alpha = 0.0;
         let errors = policy.validate();
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.contains("eprocess_throttle.alpha"))
-        );
+        assert!(errors.iter().any(|e| e.contains("eprocess_throttle.alpha")));
     }
 
     #[test]
@@ -937,10 +913,7 @@ mod tests {
         let mut policy = PolicyConfig::default();
         policy.evidence.sink_file = Some("/tmp/evidence.jsonl".into());
         let sink = policy.to_evidence_sink_config();
-        assert!(matches!(
-            sink.destination,
-            EvidenceSinkDestination::File(_)
-        ));
+        assert!(matches!(sink.destination, EvidenceSinkDestination::File(_)));
     }
 
     #[test]
@@ -968,6 +941,9 @@ mod tests {
         policy.pid.kp = -1.0;
         policy.evidence.ledger_capacity = 0;
         let errors = policy.validate();
-        assert!(errors.len() >= 3, "should catch multiple errors: {errors:?}");
+        assert!(
+            errors.len() >= 3,
+            "should catch multiple errors: {errors:?}"
+        );
     }
 }

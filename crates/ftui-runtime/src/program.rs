@@ -3869,6 +3869,12 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
                     self.immediate_drain_stats.capped_bursts =
                         self.immediate_drain_stats.capped_bursts.saturating_add(1);
                 }
+
+                self.immediate_drain_stats.max_zero_timeout_polls_in_burst = self
+                    .immediate_drain_stats
+                    .max_zero_timeout_polls_in_burst
+                    .max(zero_polls_in_burst_window);
+
                 std::thread::yield_now();
                 self.immediate_drain_stats.backoff_polls =
                     self.immediate_drain_stats.backoff_polls.saturating_add(1);
@@ -5338,7 +5344,7 @@ impl BatchController {
     /// Record an event arrival, updating the inter-arrival estimate.
     pub fn observe_arrival(&mut self, now: Instant) {
         if let Some(last) = self.last_arrival {
-            let dt = now.duration_since(last).as_secs_f64();
+            let dt = now.saturating_duration_since(last).as_secs_f64();
             if dt > 0.0 && dt < 10.0 {
                 // Guard against stale gaps (e.g., app was suspended)
                 self.ema_inter_arrival_s =
@@ -9337,6 +9343,7 @@ mod tests {
         }
 
         #[derive(Debug)]
+        #[allow(dead_code)]
         enum DrainBurstMsg {
             Event(Event),
         }
@@ -9453,6 +9460,7 @@ mod tests {
         }
 
         #[derive(Debug)]
+        #[allow(dead_code)]
         enum ClampMsg {
             Event(Event),
         }

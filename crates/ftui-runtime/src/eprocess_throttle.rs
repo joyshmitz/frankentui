@@ -346,7 +346,7 @@ impl EProcessThrottle {
         }
 
         // Check recompute conditions
-        let time_since_recompute = now.duration_since(self.last_recompute);
+        let time_since_recompute = now.saturating_duration_since(self.last_recompute);
         let hard_deadline_exceeded =
             time_since_recompute >= Duration::from_millis(self.config.hard_deadline_ms);
         let min_obs_met = self.observations_since_recompute >= self.config.min_observations_between;

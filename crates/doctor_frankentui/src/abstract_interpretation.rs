@@ -749,7 +749,7 @@ mod tests {
         CanonicalEffect {
             id: IrNodeId(format!("ir-{name}")),
             name: name.to_string(),
-            original_kind: kind,
+            original_kind: kind.clone(),
             execution_model: match kind {
                 EffectKind::Timer | EffectKind::Subscription | EffectKind::Process => {
                     ExecutionModel::Subscription
@@ -768,6 +768,14 @@ mod tests {
             async_boundary: AsyncBoundary::ThreadPool,
             reads: BTreeSet::new(),
             writes: BTreeSet::new(),
+            dependencies: BTreeSet::new(),
+            provenance: crate::migration_ir::Provenance {
+                file: "test.rs".to_string(),
+                line: 1,
+                column: None,
+                source_name: None,
+                policy_category: None,
+            },
             deterministic,
             idempotent: deterministic,
             confidence: ClassificationConfidence {
@@ -1131,7 +1139,7 @@ mod tests {
 
     #[test]
     fn property_key_unique() {
-        let keys: Vec<_> = vec![
+        let keys: Vec<_> = [
             SafetyProperty::EffectOrderingSafety,
             SafetyProperty::NoForbiddenSideEffects {
                 forbidden: BTreeSet::new(),

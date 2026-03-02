@@ -1063,7 +1063,7 @@ impl BackendEventSource for TtyEventSource {
                     }
                     return Ok(false);
                 }
-                let remaining = deadline.duration_since(now);
+                let remaining = deadline.saturating_duration_since(now);
                 let poll_for = remaining.min(slice_max);
                 let _ = self.poll_tty(poll_for)?;
                 self.drain_resize_notifications();

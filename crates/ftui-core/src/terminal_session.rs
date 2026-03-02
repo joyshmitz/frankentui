@@ -1794,6 +1794,12 @@ mod tests {
         cmd.args(["--exact", TEST_NAME, "--nocapture"]);
         cmd.env("FTUI_CORE_PANIC_CHILD", "1");
         cmd.env("RUST_BACKTRACE", "0");
+        cmd.env("TERM", "xterm-256color");
+        cmd.env_remove("TMUX");
+        cmd.env_remove("STY");
+        cmd.env_remove("TERM_PROGRAM");
+        cmd.env_remove("ZELLIJ");
+        cmd.env_remove("WEZTERM_PANE");
 
         let pty_system = portable_pty::native_pty_system();
         let pair = pty_system
@@ -1889,6 +1895,12 @@ mod tests {
         cmd.args(["--exact", TEST_NAME, "--nocapture"]);
         cmd.env("FTUI_CORE_EXCLUSIVITY_CHILD", "1");
         cmd.env("RUST_BACKTRACE", "0");
+        cmd.env("TERM", "xterm-256color");
+        cmd.env_remove("TMUX");
+        cmd.env_remove("STY");
+        cmd.env_remove("TERM_PROGRAM");
+        cmd.env_remove("ZELLIJ");
+        cmd.env_remove("WEZTERM_PANE");
 
         let pty_system = portable_pty::native_pty_system();
         let pair = pty_system

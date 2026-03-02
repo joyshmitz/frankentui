@@ -866,18 +866,22 @@ impl VirtualTerminal {
                 let digit = u16::from(byte - b'0');
                 if let Some(last) = self.csi_params.last_mut() {
                     *last = last.saturating_mul(10).saturating_add(digit);
-                } else {
+                } else if self.csi_params.len() < 32 {
                     self.csi_params.push(digit);
                 }
             }
             b';' => {
-                if self.csi_params.is_empty() {
+                if self.csi_params.len() < 32 {
+                    if self.csi_params.is_empty() {
+                        self.csi_params.push(0);
+                    }
                     self.csi_params.push(0);
                 }
-                self.csi_params.push(0);
             }
             b'?' | b'>' | b'!' | b' ' => {
-                self.csi_intermediate.push(byte);
+                if self.csi_intermediate.len() < 16 {
+                    self.csi_intermediate.push(byte);
+                }
             }
             0x40..=0x7e => {
                 // Final byte — dispatch
@@ -904,7 +908,10 @@ impl VirtualTerminal {
                 self.parse_state = ParseState::OscEscapeSeen;
             }
             _ => {
-                self.osc_data.push(byte);
+                // Limit OSC data to prevent memory exhaustion
+                if self.osc_data.len() < 4096 {
+                    self.osc_data.push(byte);
+                }
             }
         }
     }

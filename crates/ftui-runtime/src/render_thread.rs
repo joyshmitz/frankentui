@@ -192,8 +192,8 @@ fn render_loop<W: Write + Send>(
                 // thrashing the terminal with Clear/Draw cycles when logs invalidate the UI state.
                 // Always render on the last chunk to ensure final consistency.
                 let now = Instant::now();
-                let should_render =
-                    is_last_chunk || now.duration_since(last_render_time).as_millis() >= 33;
+                let should_render = is_last_chunk
+                    || now.saturating_duration_since(last_render_time).as_millis() >= 33;
 
                 if should_render && let Some((buffer, cursor, cursor_visible)) = &latest_render {
                     if let Err(e) = writer.present_ui(buffer, *cursor, *cursor_visible) {

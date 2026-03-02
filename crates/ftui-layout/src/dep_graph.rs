@@ -258,14 +258,36 @@ impl DepGraph {
         }
     }
 
-    /// Remove a node, recycling its slot. Edges are lazily cleaned.
+    /// Remove a node, recycling its slot. Edges and parent pointers are eagerly cleaned.
     pub fn remove_node(&mut self, id: NodeId) {
         let idx = id.0 as usize;
-        if idx < self.nodes.len() {
+        if idx < self.nodes.len() && self.nodes[idx].generation != 0 {
+            // Clear parent pointers for children that had this node as parent
+            for &rev in &self.rev_adj[idx] {
+                let child_idx = rev.0 as usize;
+                if child_idx < self.nodes.len() && self.nodes[child_idx].parent == id.0 {
+                    self.nodes[child_idx].parent = NodeId::NONE;
+                }
+            }
+
+            // Remove `id` from `rev_adj` of all nodes that `id` depends on (fwd_adj)
+            let fwds = std::mem::take(&mut self.fwd_adj[idx]);
+            for fwd in fwds {
+                if let Some(revs) = self.rev_adj.get_mut(fwd.0 as usize) {
+                    revs.retain(|&x| x != id);
+                }
+            }
+
+            // Remove `id` from `fwd_adj` of all nodes that depend on `id` (rev_adj)
+            let revs = std::mem::take(&mut self.rev_adj[idx]);
+            for rev in revs {
+                if let Some(fwds) = self.fwd_adj.get_mut(rev.0 as usize) {
+                    fwds.retain(|&x| x != id);
+                }
+            }
+
             self.nodes[idx].generation = 0;
             self.nodes[idx].dirty_gen = 0;
-            self.fwd_adj[idx].clear();
-            self.rev_adj[idx].clear();
             self.free_list.push(id.0);
         }
     }
