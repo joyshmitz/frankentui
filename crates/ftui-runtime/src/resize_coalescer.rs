@@ -906,10 +906,12 @@ impl ResizeCoalescer {
 
         // If enough time has passed since the last event, apply now.
         // In heuristic mode, only apply immediately in Steady; burst applies via tick.
-        if let Some(dt) = dt
-            && dt >= Duration::from_millis(self.current_delay_ms())
-            && (self.bocpd.is_some() || self.regime == Regime::Steady)
-        {
+        let time_ok = match dt {
+            Some(d) => d >= Duration::from_millis(self.current_delay_ms()),
+            None => true, // First event ever, no reason to wait
+        };
+
+        if time_ok && (self.bocpd.is_some() || self.regime == Regime::Steady) {
             return self.apply_pending_at(now, false);
         }
 
