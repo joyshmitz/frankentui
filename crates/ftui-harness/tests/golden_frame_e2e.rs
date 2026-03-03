@@ -1272,6 +1272,7 @@ mod span_capture {
     where
         F: FnOnce() -> R,
     {
+        ensure_global_trace_level();
         let spans = Arc::new(Mutex::new(Vec::new()));
         let events = Arc::new(Mutex::new(Vec::new()));
         let handle = CaptureHandle {
@@ -1280,8 +1281,20 @@ mod span_capture {
         };
         let layer = SpanCapture { spans, events };
         let subscriber = tracing_subscriber::registry().with(layer);
-        let result = tracing::subscriber::with_default(subscriber, f);
+        let result = tracing::subscriber::with_default(subscriber, || {
+            tracing::callsite::rebuild_interest_cache();
+            f()
+        });
         (result, handle)
+    }
+
+    fn ensure_global_trace_level() {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(|| {
+            let subscriber = tracing_subscriber::registry()
+                .with(tracing_subscriber::filter::LevelFilter::TRACE);
+            let _ = tracing::subscriber::set_global_default(subscriber);
+        });
     }
 }
 

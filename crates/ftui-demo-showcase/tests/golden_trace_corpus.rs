@@ -76,7 +76,8 @@ const FNV64_PRIME: u64 = 0x0000_0100_0000_01b3;
 
 /// Record a session with the given script, then replay and assert determinism.
 fn record_and_verify(cols: u16, rows: u16, script: impl FnOnce(&mut SessionRecorder<AppModel>)) {
-    let model = AppModel::new();
+    let mut model = AppModel::new();
+    model.enable_deterministic_mode_for_test(TICK_MS, TICK_MS);
     let mut rec = SessionRecorder::new(model, cols, rows, SEED);
     rec.init().unwrap();
 
@@ -89,7 +90,9 @@ fn record_and_verify(cols: u16, rows: u16, script: impl FnOnce(&mut SessionRecor
     );
 
     // Replay against a fresh model and verify checksums match.
-    let replay_result = replay(AppModel::new(), &trace).unwrap();
+    let mut replay_model = AppModel::new();
+    replay_model.enable_deterministic_mode_for_test(TICK_MS, TICK_MS);
+    let replay_result = replay(replay_model, &trace).unwrap();
     assert!(
         replay_result.ok(),
         "replay checksum mismatch at frame {:?}",
@@ -248,7 +251,9 @@ fn validate_frame_jsonl_schema(lines: &[String]) {
 }
 
 fn build_repro_trace(cols: u16, rows: u16, screen: ScreenId) -> String {
-    let mut recorder = SessionRecorder::new(AppModel::new(), cols, rows, SEED);
+    let mut model = AppModel::new();
+    model.enable_deterministic_mode_for_test(TICK_MS, TICK_MS);
+    let mut recorder = SessionRecorder::new(model, cols, rows, SEED);
     recorder.init().unwrap();
     recorder.program_mut().model_mut().current_screen = screen;
     let ts_ns = TICK_MS * 1_000_000;
@@ -283,6 +288,7 @@ fn apply_web_sweep_deterministic_profile(program: &mut StepProgram<AppModel>, sc
 fn run_web_sweep(cols: u16, rows: u16, dpr: f32) -> Vec<WebSweepRecord> {
     let mut program = StepProgram::new(AppModel::new(), cols, rows);
     program.init().unwrap();
+    program.model_mut().enable_deterministic_mode_for_test(TICK_MS, TICK_MS);
 
     let mut records = Vec::new();
     let mut ts_ms = 0_u64;
@@ -367,6 +373,7 @@ fn run_web_sweep(cols: u16, rows: u16, dpr: f32) -> Vec<WebSweepRecord> {
 fn run_web_sweep_soak(cols: u16, rows: u16, dpr: f32, cycles: usize, tick_ms: u64) -> WebSweepSoak {
     let mut program = StepProgram::new(AppModel::new(), cols, rows);
     program.init().unwrap();
+    program.model_mut().enable_deterministic_mode_for_test(TICK_MS, TICK_MS);
 
     let mut records = Vec::new();
     let mut ts_ms = 0_u64;

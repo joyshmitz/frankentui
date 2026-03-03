@@ -456,8 +456,8 @@ fn legibility_preset_labels_visible() {
 fn legibility_tiny_terminal_message() {
     let lab = LayoutLab::new();
 
-    // Terminal too small: 30x5
-    let text = frame_text(&lab, 30, 5);
+    // Terminal too small: 30x3 (height < 4 triggers the message)
+    let text = frame_text(&lab, 30, 3);
     let has_message = text.contains("too small") || text.contains("Terminal");
     log_jsonl("legibility_tiny", "too_small_msg", has_message, "");
     assert!(has_message, "Tiny terminal should show 'too small' message");

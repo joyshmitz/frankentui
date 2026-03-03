@@ -16,7 +16,7 @@
 //!   cargo test -p ftui-harness --test e2e_flicker_free_round_trip
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 
 use ftui_core::terminal_capabilities::TerminalCapabilities;
 use ftui_harness::flicker_detection::{analyze_stream, assert_flicker_free};
@@ -27,6 +27,15 @@ use ftui_render::presenter::Presenter;
 
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
+
+fn ensure_global_trace_level() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_subscriber::filter::LevelFilter::TRACE);
+        let _ = tracing::subscriber::set_global_default(subscriber);
+    });
+}
 
 // ============================================================================
 // Tracing capture infrastructure
@@ -142,9 +151,13 @@ fn with_captured_tracing<F, R>(f: F) -> (R, CaptureHandle)
 where
     F: FnOnce() -> R,
 {
+    ensure_global_trace_level();
     let (layer, handle) = SpanCapture::new();
     let subscriber = tracing_subscriber::registry().with(layer);
-    let result = tracing::subscriber::with_default(subscriber, f);
+    let result = tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        f()
+    });
     (result, handle)
 }
 
@@ -623,6 +636,9 @@ fn full_e2e_lifecycle_sync_fallback_resize() {
             .iter()
             .filter(|s| s.name == "render.sync_bracket")
             .collect();
+        if sync_spans.is_empty() {
+            println!("Spans for phase {}: {:?}", name, spans.iter().map(|s| &s.name).collect::<Vec<_>>());
+        }
         assert!(
             !sync_spans.is_empty(),
             "phase '{name}' should emit render.sync_bracket span"

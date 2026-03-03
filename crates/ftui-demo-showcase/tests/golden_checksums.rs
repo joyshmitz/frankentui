@@ -135,6 +135,7 @@ fn blake3_buffer(buf: &ftui_render::buffer::Buffer, pool: &GraphemePool) -> blak
 fn render_screen(screen: ScreenId, cols: u16, rows: u16) -> (Buffer, GraphemePool) {
     let mut program = StepProgram::new(AppModel::new(), cols, rows);
     program.init().unwrap();
+    program.model_mut().enable_deterministic_mode_for_test(TICK_MS, TICK_MS);
     program.model_mut().current_screen = screen;
     stabilize_screen(&mut program, screen);
     program.push_event(tick_event());
@@ -223,6 +224,7 @@ struct SweepResult {
 fn sweep_checksums(cols: u16, rows: u16) -> SweepResult {
     let mut program = StepProgram::new(AppModel::new(), cols, rows);
     program.init().unwrap();
+    program.model_mut().enable_deterministic_mode_for_test(TICK_MS, TICK_MS);
 
     let mut checksums = BTreeMap::new();
     let mut screen_map = BTreeMap::new();
