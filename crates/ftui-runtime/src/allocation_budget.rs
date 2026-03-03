@@ -367,13 +367,21 @@ impl AllocationBudget {
         self.cusum_plus.s = (self.cusum_plus.s + residual - self.config.cusum_k).max(0.0);
         self.cusum_minus.s = (self.cusum_minus.s - residual - self.config.cusum_k).max(0.0);
 
-        let cusum_triggered =
-            self.cusum_plus.s >= self.config.cusum_h || self.cusum_minus.s >= self.config.cusum_h;
-
-        if cusum_triggered {
+        let cusum_plus_triggered = self.cusum_plus.s >= self.config.cusum_h;
+        if cusum_plus_triggered {
             self.cusum_plus.alarm_count += 1;
-            self.cusum_minus.alarm_count += 1;
+        } else {
+            self.cusum_plus.alarm_count = 0;
         }
+
+        let cusum_minus_triggered = self.cusum_minus.s >= self.config.cusum_h;
+        if cusum_minus_triggered {
+            self.cusum_minus.alarm_count += 1;
+        } else {
+            self.cusum_minus.alarm_count = 0;
+        }
+
+        let cusum_triggered = cusum_plus_triggered || cusum_minus_triggered;
 
         // --- E-process update ---
         let sigma_sq = self.config.sigma_sq.max(SIGMA2_MIN);
@@ -421,6 +429,8 @@ impl AllocationBudget {
             self.e_value = 1.0;
             self.cusum_plus.s = 0.0;
             self.cusum_minus.s = 0.0;
+            self.cusum_plus.alarm_count = 0;
+            self.cusum_minus.alarm_count = 0;
 
             Some(BudgetAlert {
                 frame: self.frame,

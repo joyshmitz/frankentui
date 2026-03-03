@@ -85,6 +85,8 @@ pub struct Table<'a> {
     /// Optional hit ID for mouse interaction.
     /// When set, each table row registers a hit region with the hit grid.
     hit_id: Option<HitId>,
+    /// Optional data hash to enable caching of filtered and sorted indices.
+    data_hash: Option<u64>,
 }
 
 impl<'a> Table<'a> {
@@ -116,7 +118,20 @@ impl<'a> Table<'a> {
             theme_phase: 0.0,
             column_spacing: 1,
             hit_id: None,
+            data_hash: None,
         }
+    }
+
+    /// Set an explicit data hash to enable caching of filtered and sorted indices.
+    ///
+    /// This is highly recommended for large tables. When provided, the table widget
+    /// will cache the result of filtering and sorting in the `TableState`, skipping
+    /// expensive O(N) re-evaluation on frames where the hash, filter, and sort
+    /// parameters have not changed.
+    #[must_use]
+    pub fn data_hash(mut self, hash: u64) -> Self {
+        self.data_hash = Some(hash);
+        self
     }
 
     /// Set the header row.
@@ -181,7 +196,26 @@ impl<'a> Table<'a> {
         self
     }
 
-    fn filtered_and_sorted_indices(&self, state: &TableState) -> Vec<usize> {
+    fn filtered_and_sorted_indices(&self, state: &mut TableState) -> std::sync::Arc<[usize]> {
+        if let Some(hash) = self.data_hash {
+            if let Some((
+                cached_hash,
+                cached_filter,
+                cached_sort_col,
+                cached_sort_asc,
+                indices,
+            )) = &state.cached_display_indices
+            {
+                if *cached_hash == hash
+                    && *cached_filter == state.filter
+                    && *cached_sort_col == state.sort_column
+                    && *cached_sort_asc == state.sort_ascending
+                {
+                    return std::sync::Arc::clone(indices);
+                }
+            }
+        }
+
         let mut indices: Vec<usize> = (0..self.rows.len()).collect();
 
         // 1. Filter
@@ -238,7 +272,19 @@ impl<'a> Table<'a> {
             indices = sort_keys.into_iter().map(|(i, _)| i).collect();
         }
 
-        indices
+        let arc_indices: std::sync::Arc<[usize]> = indices.into();
+
+        if let Some(hash) = self.data_hash {
+            state.cached_display_indices = Some((
+                hash,
+                state.filter.clone(),
+                state.sort_column,
+                state.sort_ascending,
+                std::sync::Arc::clone(&arc_indices),
+            ));
+        }
+
+        arc_indices
     }
 
     fn requires_measurement(constraints: &[Constraint]) -> bool {
@@ -319,6 +365,9 @@ pub struct TableState {
     pub filter: String,
     /// Cache for stable layout resizing (temporal coherence).
     coherence: ftui_layout::CoherenceCache,
+    /// Cached display indices (data_hash, filter, sort_column, sort_ascending, indices)
+    #[doc(hidden)]
+    pub cached_display_indices: Option<(u64, String, Option<usize>, bool, std::sync::Arc<[usize]>)>,
 }
 
 impl TableState {

@@ -535,12 +535,15 @@ impl HeightCache {
             return;
         }
         let mut local = idx - self.base_offset;
-        if local >= self.capacity {
-            // Large index jump: reset window to avoid huge allocations.
+        
+        // If the jump is so large that we'd drain the entire current cache anyway,
+        // reset the window to avoid a huge allocation of Nones.
+        if local + 1 >= self.cache.len() + self.capacity {
             self.base_offset = idx.saturating_add(1).saturating_sub(self.capacity);
             self.cache.clear();
             local = idx - self.base_offset;
         }
+        
         if local >= self.cache.len() {
             self.cache.resize(local + 1, None);
         }
@@ -2966,7 +2969,11 @@ mod tests {
         assert!(cache.cache.len() <= cache.capacity);
         // Recent indices should be accessible
         assert_eq!(cache.get(5), 15);
+        assert_eq!(cache.get(4), 14);
+        assert_eq!(cache.get(3), 13);
+        assert_eq!(cache.get(2), 12);
         // Old indices return default
+        assert_eq!(cache.get(1), 1);
         assert_eq!(cache.get(0), 1);
     }
 

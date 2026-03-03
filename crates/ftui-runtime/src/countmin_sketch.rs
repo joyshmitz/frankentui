@@ -255,6 +255,7 @@ impl CountMinSketch {
             self.counters[i][idx] = self.counters[i][idx].saturating_add(count);
         }
         self.total_count = self.total_count.saturating_add(count);
+        self.calibrated_bound = None;
     }
 
     /// Estimate count for an item.

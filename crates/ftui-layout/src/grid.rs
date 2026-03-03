@@ -212,8 +212,8 @@ impl Grid {
                 row_positions: vec![area.y; num_rows],
                 col_positions: vec![area.x; num_cols],
                 named_areas: self.named_areas.clone(),
-                row_gap: self.row_gap,
-                col_gap: self.col_gap,
+                row_gap: 0,
+                col_gap: 0,
             };
         }
 

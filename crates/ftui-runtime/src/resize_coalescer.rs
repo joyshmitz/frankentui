@@ -937,11 +937,13 @@ impl ResizeCoalescer {
     /// Tick at a specific time (for testing).
     pub fn tick_at(&mut self, now: Instant) -> CoalesceAction {
         // Update cooldown
-        if self.cooldown_remaining > 0 {
-            self.cooldown_remaining -= 1;
-            if self.cooldown_remaining == 0 && self.regime == Regime::Burst {
-                let rate = self.calculate_event_rate(now);
-                if rate < self.config.burst_exit_rate {
+        if self.regime == Regime::Burst {
+            let rate = self.calculate_event_rate(now);
+            if rate >= self.config.burst_exit_rate {
+                self.cooldown_remaining = self.config.cooldown_frames;
+            } else if self.cooldown_remaining > 0 {
+                self.cooldown_remaining -= 1;
+                if self.cooldown_remaining == 0 {
                     self.record_regime_transition(
                         now,
                         Regime::Steady,
@@ -1343,13 +1345,7 @@ impl ResizeCoalescer {
                     }
                 }
                 Regime::Burst => {
-                    if rate < self.config.burst_exit_rate {
-                        // Don't exit immediately — use cooldown
-                        if self.cooldown_remaining == 0 {
-                            self.cooldown_remaining = self.config.cooldown_frames;
-                        }
-                    } else {
-                        // Still in burst, reset cooldown
+                    if rate >= self.config.burst_exit_rate {
                         self.cooldown_remaining = self.config.cooldown_frames;
                     }
                 }
