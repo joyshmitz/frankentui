@@ -377,6 +377,38 @@ impl Editor {
         true
     }
 
+    /// Delete the word after the cursor (Ctrl+Delete).
+    ///
+    /// Returns `true` if any text was deleted.
+    pub fn delete_word_forward(&mut self) -> bool {
+        if self.delete_selection_inner() {
+            return true;
+        }
+        let nav = CursorNavigator::new(&self.rope);
+        let old_pos = self.cursor;
+        let word_end = nav.move_word_right(old_pos);
+
+        if word_end == old_pos {
+            return false;
+        }
+
+        let start_byte = nav.to_byte_index(old_pos);
+        let end_byte = nav.to_byte_index(word_end);
+        let start_char = self.rope.byte_to_char(start_byte);
+        let end_char = self.rope.byte_to_char(end_byte);
+        let deleted = self.rope.slice(start_char..end_char).into_owned();
+
+        self.push_undo(EditOp::Delete {
+            byte_offset: start_byte,
+            text: deleted,
+        });
+
+        self.rope.remove(start_char..end_char);
+
+        // Cursor doesn't move
+        true
+    }
+
     /// Delete from cursor to end of line (Ctrl+K).
     ///
     /// Returns `true` if any text was deleted.
@@ -925,6 +957,14 @@ mod tests {
         let mut ed = Editor::with_text("hello world");
         assert!(ed.delete_word_backward());
         assert_eq!(ed.text(), "hello ");
+    }
+
+    #[test]
+    fn delete_word_forward() {
+        let mut ed = Editor::with_text("hello world");
+        ed.set_cursor(CursorPosition::new(0, 0, 0));
+        assert!(ed.delete_word_forward());
+        assert_eq!(ed.text(), " world");
     }
 
     #[test]

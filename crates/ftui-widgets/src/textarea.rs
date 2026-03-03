@@ -153,7 +153,11 @@ impl TextArea {
                 true
             }
             KeyCode::Delete => {
-                self.delete_forward();
+                if ctrl {
+                    self.delete_word_forward();
+                } else {
+                    self.delete_forward();
+                }
                 true
             }
             KeyCode::Left => {
@@ -427,6 +431,12 @@ impl TextArea {
     /// Delete word backward (Ctrl+Backspace).
     pub fn delete_word_backward(&mut self) {
         self.editor.delete_word_backward();
+        self.ensure_cursor_visible();
+    }
+
+    /// Delete word forward (Ctrl+Delete).
+    pub fn delete_word_forward(&mut self) {
+        self.editor.delete_word_forward();
         self.ensure_cursor_visible();
     }
 
