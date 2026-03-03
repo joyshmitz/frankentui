@@ -9944,8 +9944,7 @@ fn parse_journey_line(trimmed: &str, line: &str, span: Span) -> Option<Statement
     let lower = trimmed.to_ascii_lowercase();
     // Section header: "section <name>"
     if lower.starts_with("section") {
-        let rest = &line[line.to_ascii_lowercase().find("section").unwrap() + "section".len()..];
-        let name = rest.trim();
+        let name = trimmed["section".len()..].trim();
         if !name.is_empty() {
             return Some(Statement::JourneySection {
                 name: normalize_ws(name),
@@ -10288,8 +10287,7 @@ fn parse_xychart_data_array(s: &str) -> Option<Vec<f64>> {
 fn parse_timeline_line(trimmed: &str, line: &str, span: Span) -> Option<Statement> {
     let lower = trimmed.to_ascii_lowercase();
     if lower.starts_with("section") {
-        let rest = &line[line.to_ascii_lowercase().find("section").unwrap() + "section".len()..];
-        let name = rest.trim();
+        let name = trimmed["section".len()..].trim();
         if !name.is_empty() {
             return Some(Statement::TimelineSection {
                 name: normalize_ws(name),
