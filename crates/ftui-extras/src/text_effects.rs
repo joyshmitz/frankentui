@@ -1996,7 +1996,7 @@ impl RevealMode {
         if total == 0 {
             return true;
         }
-        let progress = progress.clamp(0.0, 1.0);
+        let progress = if progress.is_nan() { 0.0 } else { progress.clamp(0.0, 1.0) };
         if progress >= 1.0 {
             return true;
         }

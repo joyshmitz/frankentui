@@ -220,7 +220,11 @@ impl DiffStrategyConfig {
         config.prior_alpha = normalize_positive(config.prior_alpha, 1.0);
         config.prior_beta = normalize_positive(config.prior_beta, 19.0);
         config.decay = normalize_decay(config.decay);
-        config.conservative_quantile = config.conservative_quantile.clamp(EPS, 1.0 - EPS);
+        config.conservative_quantile = if config.conservative_quantile.is_nan() {
+            EPS
+        } else {
+            config.conservative_quantile.clamp(EPS, 1.0 - EPS)
+        };
         config.hysteresis_ratio = normalize_ratio(config.hysteresis_ratio, 0.05);
         config.uncertainty_guard_variance =
             normalize_cost(config.uncertainty_guard_variance, 0.002);
