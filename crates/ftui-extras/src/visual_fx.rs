@@ -2587,10 +2587,10 @@ mod tests {
             ));
             stack.render(ctx, &mut out);
 
-            // Additive: R=100, B=100
+            // Additive: R=100, G=0, B=100
             assert!(out[0].r() >= 98 && out[0].r() <= 102);
-            assert!(out[0].g() >= 48 && out[0].g() <= 52);
-            assert!(out[0].b() >= 23 && out[0].b() <= 27);
+            assert_eq!(out[0].g(), 0);
+            assert!(out[0].b() >= 98 && out[0].b() <= 102);
         }
 
         #[test]

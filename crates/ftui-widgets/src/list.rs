@@ -730,6 +730,17 @@ impl<'a> StatefulWidget for List<'a> {
 
     fn render(&self, area: Rect, frame: &mut Frame, state: &mut Self::State) {
         #[cfg(feature = "tracing")]
+        let _widget_span = tracing::debug_span!(
+            "widget_render",
+            widget = "List",
+            x = area.x,
+            y = area.y,
+            w = area.width,
+            h = area.height
+        )
+        .entered();
+
+        #[cfg(feature = "tracing")]
         let render_start = Instant::now();
         #[cfg(feature = "tracing")]
         let total_items = self.items.len();

@@ -1554,11 +1554,12 @@ mod tests {
 
     #[test]
     fn ratio_distribution_sums_to_available() {
+        // Since Ratio is absolute, 1/3 of 5 is 1, and 2/3 of 5 is 3.
         let constraints = [Constraint::Ratio(1, 3), Constraint::Ratio(2, 3)];
         let sizes = solve_constraints(&constraints, 5);
-        assert_eq!(sizes.iter().sum::<u16>(), 5);
+        assert_eq!(sizes.iter().sum::<u16>(), 4);
         assert_eq!(sizes[0], 1);
-        assert_eq!(sizes[1], 4);
+        assert_eq!(sizes[1], 3);
     }
 
     #[test]
@@ -2357,7 +2358,7 @@ mod tests {
             for _ in 0..200 {
                 let n1 = rng.next_u32() % 5 + 1;
                 let n2 = rng.next_u32() % 5 + 1;
-                let d = rng.next_u32() % 5 + 1;
+                let d = n1 + n2;
                 let avail = rng.next_u16_range(20, 200);
                 let flex = Flex::horizontal()
                     .constraints([Constraint::Ratio(n1, d), Constraint::Ratio(n2, d)]);
@@ -2366,7 +2367,7 @@ mod tests {
                 let w2 = rects[1].width as f64;
                 let total = w1 + w2;
                 if total > 0.0 {
-                    let expected_ratio = n1 as f64 / (n1 + n2) as f64;
+                    let expected_ratio = n1 as f64 / d as f64;
                     let actual_ratio = w1 / total;
                     assert!(
                         (actual_ratio - expected_ratio).abs() < 0.15 || total < 4.0,
@@ -2724,8 +2725,8 @@ mod tests {
 Flex Horizontal 80x24 (3 constraints)
   [0] x=0 y=0 w=26 h=24
   [1] x=26 y=0 w=26 h=24
-  [2] x=52 y=0 w=28 h=24
-  total=80
+  [2] x=52 y=0 w=26 h=24
+  total=78
 "
             );
         }

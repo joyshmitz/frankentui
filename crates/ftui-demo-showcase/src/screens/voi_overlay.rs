@@ -41,6 +41,7 @@ pub struct VoiOverlayScreen {
     sampler: VoiSampler,
     tick: u64,
     start: Instant,
+    pub deterministic_tick_ms: Option<u64>,
     /// Currently focused overlay section (if any).
     focused_section: Option<VoiSection>,
     /// Selected ledger entry index.
@@ -71,6 +72,7 @@ impl VoiOverlayScreen {
             sampler,
             tick: 0,
             start: Instant::now(),
+            deterministic_tick_ms: None,
             focused_section: None,
             selected_ledger_idx: 0,
             expanded: false,
@@ -394,7 +396,11 @@ impl Screen for VoiOverlayScreen {
 
     fn tick(&mut self, tick_count: u64) {
         self.tick = tick_count;
-        let now = Instant::now();
+        let now = if let Some(ms) = self.deterministic_tick_ms {
+            self.start + std::time::Duration::from_millis(tick_count.saturating_mul(ms))
+        } else {
+            Instant::now()
+        };
         let decision = self.sampler.decide(now);
         if decision.should_sample {
             let violated = (tick_count % 17) < 3;

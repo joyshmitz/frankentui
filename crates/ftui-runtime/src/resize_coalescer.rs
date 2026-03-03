@@ -986,18 +986,33 @@ impl ResizeCoalescer {
     /// Time until the pending resize should be applied.
     pub fn time_until_apply(&self, now: Instant) -> Option<Duration> {
         let _pending = self.pending_size?;
-        let last_event = self.last_event?;
 
-        let delay_ms = self.current_delay_ms();
-
-        let elapsed = duration_since_or_zero(now, last_event);
-        let target = Duration::from_millis(delay_ms);
-
-        if elapsed >= target {
-            Some(Duration::ZERO)
+        // 1. Check hard deadline relative to last_render
+        let time_since_render = duration_since_or_zero(now, self.last_render);
+        let hard_deadline = Duration::from_millis(self.config.hard_deadline_ms);
+        let hard_deadline_remaining = if time_since_render >= hard_deadline {
+            Duration::ZERO
         } else {
-            Some(target - elapsed)
-        }
+            hard_deadline - time_since_render
+        };
+
+        // 2. Check delay since last event
+        let delay_remaining = if let Some(last_event) = self.last_event {
+            let delay_ms = self.current_delay_ms();
+            let elapsed = duration_since_or_zero(now, last_event);
+            let target = Duration::from_millis(delay_ms);
+
+            if elapsed >= target {
+                Duration::ZERO
+            } else {
+                target - elapsed
+            }
+        } else {
+            // Should not happen if pending_size is Some, but fallback to hard deadline
+            hard_deadline_remaining
+        };
+
+        Some(hard_deadline_remaining.min(delay_remaining))
     }
 
     /// Check if there's a pending resize.

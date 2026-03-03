@@ -3614,12 +3614,12 @@ mod tests {
 
         // Line 1: opens block comment
         let (tokens1, state1) = t.tokenize_line("x /* start", LineState::Normal);
-        assert_eq!(state1, LineState::InComment(CommentKind::Block));
+        assert_eq!(state1, LineState::InComment(CommentKind::Nested(1)));
         assert_eq!(tokens1.last().unwrap().kind, TokenKind::CommentBlock);
 
         // Line 2: still in block comment
         let (tokens2, state2) = t.tokenize_line("middle", state1);
-        assert_eq!(state2, LineState::InComment(CommentKind::Block));
+        assert_eq!(state2, LineState::InComment(CommentKind::Nested(1)));
         assert_eq!(tokens2[0].kind, TokenKind::CommentBlock);
 
         // Line 3: closes block comment
@@ -4595,7 +4595,7 @@ fn main() {
     fn highlighter_empty_input() {
         let hl = SyntaxHighlighter::new();
         let text = hl.highlight("", "rs");
-        assert_eq!(text.height(), 1); // One empty line
+        assert_eq!(text.height(), 0); // Empty string has 0 lines
     }
 
     #[test]
@@ -5319,7 +5319,7 @@ fn main() {
     fn haskell_multiline_block_comment() {
         let t = haskell_tokenizer();
         let (_, state) = t.tokenize_line("x {- start", LineState::Normal);
-        assert!(matches!(state, LineState::InComment(CommentKind::Block)));
+        assert!(matches!(state, LineState::InComment(CommentKind::Nested(1))));
         let (_, state2) = t.tokenize_line("end -} y", state);
         assert_eq!(state2, LineState::Normal);
     }

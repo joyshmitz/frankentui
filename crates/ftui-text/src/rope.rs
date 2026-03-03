@@ -237,6 +237,13 @@ impl Rope {
     }
 
     fn grapheme_to_char_idx(&self, grapheme_idx: usize) -> usize {
+        if grapheme_idx == 0 {
+            return 0;
+        }
+        if grapheme_idx >= self.len_chars() {
+            return self.len_chars();
+        }
+
         let mut g_count = 0;
         let mut char_count = 0;
 

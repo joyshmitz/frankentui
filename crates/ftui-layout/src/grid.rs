@@ -114,6 +114,8 @@ pub struct GridLayout {
     row_gap: u16,
     /// Gap between columns.
     col_gap: u16,
+    /// The bounding area.
+    bounds: Rect,
 }
 
 impl Grid {
@@ -214,6 +216,7 @@ impl Grid {
                 named_areas: self.named_areas.clone(),
                 row_gap: 0,
                 col_gap: 0,
+                bounds: area,
             };
         }
 
@@ -251,6 +254,7 @@ impl Grid {
             named_areas: self.named_areas.clone(),
             row_gap: self.row_gap,
             col_gap: self.col_gap,
+            bounds: area,
         }
     }
 
@@ -320,7 +324,7 @@ impl GridLayout {
             height = height.saturating_add(self.row_gap.saturating_mul(gap_count));
         }
 
-        Rect::new(x, y, width, height)
+        Rect::new(x, y, width, height).intersection(&self.bounds)
     }
 
     /// Get the rectangle for a named area.

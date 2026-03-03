@@ -464,7 +464,7 @@ impl DepGraph {
         self.collect_dirty_dfs_preorder()
     }
 
-    /// Collect all dirty nodes in DFS pre-order from roots.
+    /// Collect all dirty nodes in DFS topological order from roots.
     fn collect_dirty_dfs_preorder(&self) -> Vec<NodeId> {
         // Find roots: dirty nodes with no dirty parent.
         let mut roots = Vec::new();
@@ -484,18 +484,23 @@ impl DepGraph {
         }
         roots.sort(); // Deterministic ordering.
 
-        // DFS pre-order from each root.
+        // DFS post-order from each root to guarantee a valid topological sort
+        // even in the presence of cross-edges (DAGs). We process roots and
+        // children in reverse so that reversing the final result restores the
+        // expected top-to-bottom, left-to-right DOM traversal order.
         let mut result = Vec::new();
         let mut visited = vec![false; self.nodes.len()];
 
-        for root in roots {
-            self.dfs_preorder(root, &mut result, &mut visited);
+        for root in roots.into_iter().rev() {
+            self.dfs_postorder(root, &mut result, &mut visited);
         }
+        
+        result.reverse();
         result
     }
 
-    /// DFS pre-order traversal of dirty nodes via reverse edges (children).
-    fn dfs_preorder(&self, id: NodeId, result: &mut Vec<NodeId>, visited: &mut [bool]) {
+    /// DFS post-order traversal of dirty nodes via reverse edges (children).
+    fn dfs_postorder(&self, id: NodeId, result: &mut Vec<NodeId>, visited: &mut [bool]) {
         let idx = id.0 as usize;
         if idx >= self.nodes.len() || visited[idx] {
             return;
@@ -505,7 +510,6 @@ impl DepGraph {
             return;
         }
         visited[idx] = true;
-        result.push(id);
 
         // Visit dependents (children in the dirty tree).
         let mut children: Vec<NodeId> = self.rev_adj[idx]
@@ -519,10 +523,15 @@ impl DepGraph {
             })
             .copied()
             .collect();
+            
         children.sort(); // Deterministic.
-        for child in children {
-            self.dfs_preorder(child, result, visited);
+        
+        // Iterate children in reverse for the post-order topological sort
+        for child in children.into_iter().rev() {
+            self.dfs_postorder(child, result, visited);
         }
+        
+        result.push(id);
     }
 
     /// Check if a node is currently dirty.

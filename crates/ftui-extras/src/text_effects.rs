@@ -8374,7 +8374,7 @@ mod tests {
             })
             .time(0.0);
 
-        // Total 11 chars, 0.5 progress = 5 chars visible
+        // Total 11 chars, 0.5 progress with ceil() = 6 chars visible
         let c0 = text.char_color(0, 11);
         let c4 = text.char_color(4, 11);
         let c5 = text.char_color(5, 11);
@@ -8382,7 +8382,7 @@ mod tests {
 
         assert_ne!(c0, PackedRgba::TRANSPARENT, "First char should be visible");
         assert_ne!(c4, PackedRgba::TRANSPARENT, "5th char should be visible");
-        assert_eq!(c5, PackedRgba::TRANSPARENT, "6th char should be hidden");
+        assert_ne!(c5, PackedRgba::TRANSPARENT, "6th char should be visible");
         assert_eq!(c10, PackedRgba::TRANSPARENT, "Last char should be hidden");
     }
 

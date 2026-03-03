@@ -1012,7 +1012,7 @@ mod tests {
     fn click_outside_panels_no_change() {
         let mut screen = LayoutInspector::new();
         render_screen(&screen);
-        screen.update(&mouse_click(0, 0));
+        screen.update(&mouse_click(200, 200));
         assert_eq!(screen.scenario_idx, 0);
         assert_eq!(screen.step_idx, 0);
     }

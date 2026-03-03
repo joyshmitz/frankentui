@@ -157,7 +157,9 @@ impl TextArea {
                 true
             }
             KeyCode::Left => {
-                if ctrl {
+                if ctrl && shift {
+                    self.select_word_left();
+                } else if ctrl {
                     self.move_word_left();
                 } else if shift {
                     self.select_left();
@@ -167,7 +169,9 @@ impl TextArea {
                 true
             }
             KeyCode::Right => {
-                if ctrl {
+                if ctrl && shift {
+                    self.select_word_right();
+                } else if ctrl {
                     self.move_word_right();
                 } else if shift {
                     self.select_right();
@@ -487,6 +491,18 @@ impl TextArea {
     /// Move cursor right by word.
     pub fn move_word_right(&mut self) {
         self.editor.move_word_right();
+        self.ensure_cursor_visible();
+    }
+
+    /// Extend selection left by word.
+    pub fn select_word_left(&mut self) {
+        self.editor.select_word_left();
+        self.ensure_cursor_visible();
+    }
+
+    /// Extend selection right by word.
+    pub fn select_word_right(&mut self) {
+        self.editor.select_word_right();
         self.ensure_cursor_visible();
     }
 

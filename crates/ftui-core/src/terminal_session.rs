@@ -1795,6 +1795,7 @@ mod tests {
         cmd.env("FTUI_CORE_PANIC_CHILD", "1");
         cmd.env("RUST_BACKTRACE", "0");
         cmd.env("TERM", "xterm-256color");
+        cmd.env("FTUI_TEST_PROFILE", "modern");
         cmd.env_remove("TMUX");
         cmd.env_remove("STY");
         cmd.env_remove("TERM_PROGRAM");

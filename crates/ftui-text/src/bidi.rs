@@ -298,10 +298,8 @@ impl BidiSegment {
 
     /// The base paragraph direction detected or forced for this segment.
     pub fn base_direction(&self) -> Direction {
-        if self.levels.first().is_some_and(|l| l.is_rtl()) {
-            // Check if paragraph level is RTL (first char's embedding level
-            // may differ, but the paragraph level sets the overall direction).
-            // For a simple heuristic: use the minimum even/odd level.
+        let min_level = self.levels.iter().map(|l| l.number()).min().unwrap_or(0);
+        if min_level % 2 == 1 {
             Direction::Rtl
         } else {
             Direction::Ltr

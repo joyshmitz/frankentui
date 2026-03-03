@@ -1085,6 +1085,8 @@ mod tests {
             "--nocapture",
         ]);
         cmd.env("FTUI_PTY_CHILD", "1");
+        cmd.env("FTUI_TEST_PROFILE", "modern");
+        cmd.env("TERM", "xterm-256color");
 
         let config = PtyConfig::default()
             .with_test_name("terminal_session_cleanup")
@@ -1144,6 +1146,8 @@ mod tests {
             "--nocapture",
         ]);
         cmd.env("FTUI_PTY_PANIC_CHILD", "1");
+        cmd.env("FTUI_TEST_PROFILE", "modern");
+        cmd.env("TERM", "xterm-256color");
 
         let config = PtyConfig::default()
             .with_test_name("terminal_session_cleanup_panic")
@@ -1207,6 +1211,8 @@ mod tests {
             "--nocapture",
         ]);
         cmd.env("FTUI_PTY_EXIT_CHILD", "1");
+        cmd.env("FTUI_TEST_PROFILE", "modern");
+        cmd.env("TERM", "xterm-256color");
 
         let config = PtyConfig::default()
             .with_test_name("terminal_session_cleanup_exit")

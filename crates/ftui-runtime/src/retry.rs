@@ -214,15 +214,14 @@ where
     F: Fn() -> Result<M, String> + Send + Sync + 'static,
 {
     Cmd::task(move || {
+        let f = std::sync::Arc::new(f);
         let mut last_err = String::new();
         for attempt in 0..=policy.max_retries {
             let (tx, rx) = std::sync::mpsc::channel();
-            let f_ref = &f;
-            std::thread::scope(|s| {
-                s.spawn(|| {
-                    let result = f_ref();
-                    let _ = tx.send(result);
-                });
+            let f_clone = std::sync::Arc::clone(&f);
+            std::thread::spawn(move || {
+                let result = f_clone();
+                let _ = tx.send(result);
             });
             match rx.recv_timeout(per_attempt_timeout) {
                 Ok(Ok(msg)) => return msg,

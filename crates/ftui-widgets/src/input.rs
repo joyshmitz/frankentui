@@ -544,12 +544,12 @@ impl TextInput {
     }
 
     fn insert_char(&mut self, c: char) {
-        self.delete_selection();
-
         // Strict control character filtering to prevent terminal corruption
         if c.is_control() {
             return;
         }
+
+        self.delete_selection();
 
         let byte_offset = self.grapheme_byte_offset(self.cursor);
         self.value.insert(byte_offset, c);

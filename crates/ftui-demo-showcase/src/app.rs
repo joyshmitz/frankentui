@@ -2781,6 +2781,7 @@ impl AppModel {
             .enable_deterministic_mode(tick_ms);
         self.screens
             .set_visual_effects_deterministic_tick_ms(vfx_tick_ms);
+        self.screens.voi_overlay.deterministic_tick_ms = Some(tick_ms);
     }
 
     fn display_screen(&self) -> ScreenId {
@@ -5502,7 +5503,12 @@ mod tests {
     fn quit_returns_quit_cmd() {
         let mut app = AppModel::new();
         let cmd = app.update(AppMsg::Quit);
-        assert!(matches!(cmd, Cmd::Quit));
+        let contains_quit = match cmd {
+            Cmd::Quit => true,
+            Cmd::Batch(cmds) => cmds.iter().any(|c| matches!(c, Cmd::Quit)),
+            _ => false,
+        };
+        assert!(contains_quit, "expected Cmd::Quit in returned commands");
     }
 
     #[test]
@@ -5514,7 +5520,12 @@ mod tests {
             kind: KeyEventKind::Press,
         });
         let cmd = app.update(AppMsg::from(event));
-        assert!(matches!(cmd, Cmd::Quit));
+        let contains_quit = match cmd {
+            Cmd::Quit => true,
+            Cmd::Batch(cmds) => cmds.iter().any(|c| matches!(c, Cmd::Quit)),
+            _ => false,
+        };
+        assert!(contains_quit, "expected Cmd::Quit in returned commands");
     }
 
     #[test]
@@ -7475,9 +7486,15 @@ mod tests {
             ));
             let down_cmd = app.update(AppMsg::from(down));
             let up_cmd = app.update(AppMsg::from(up));
+
+            let contains_capture = |cmd: &Cmd<AppMsg>| match cmd {
+                Cmd::SetMouseCapture(_) => true,
+                Cmd::Batch(cmds) => cmds.iter().any(|c| matches!(c, Cmd::SetMouseCapture(_))),
+                _ => false,
+            };
+
             assert!(
-                matches!(down_cmd, Cmd::SetMouseCapture(_))
-                    || matches!(up_cmd, Cmd::SetMouseCapture(_)),
+                contains_capture(&down_cmd) || contains_capture(&up_cmd),
                 "status-bar mouse toggle must emit a backend mouse-capture command"
             );
             assert_ne!(
