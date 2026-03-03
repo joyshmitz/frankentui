@@ -80,6 +80,8 @@ pub struct List<'a> {
     /// Optional hit ID for mouse interaction.
     /// When set, each list item registers a hit region with the hit grid.
     hit_id: Option<HitId>,
+    /// Optional data hash to enable caching of filtered indices.
+    data_hash: Option<u64>,
 }
 
 impl<'a> List<'a> {
@@ -94,7 +96,19 @@ impl<'a> List<'a> {
             hover_style: Style::default(),
             highlight_symbol: None,
             hit_id: None,
+            data_hash: None,
         }
+    }
+
+    /// Set an explicit data hash to enable caching of filtered indices.
+    ///
+    /// This is highly recommended for large lists. When provided, the list widget
+    /// will cache the result of filtering in the `ListState`, skipping expensive
+    /// O(N) string processing on frames where the hash and filter query have not changed.
+    #[must_use]
+    pub fn data_hash(mut self, hash: u64) -> Self {
+        self.data_hash = Some(hash);
+        self
     }
 
     /// Wrap the list in a decorative block.
@@ -143,39 +157,62 @@ impl<'a> List<'a> {
         self
     }
 
-    fn filtered_indices(&self, query: &str) -> Vec<usize> {
-        let query = query.trim();
-        if query.is_empty() {
-            return (0..self.items.len()).collect();
-        }
-        let query_lower = query.to_lowercase();
-        self.items
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, item)| {
-                // Optimization: check single-span content directly to avoid allocation
-                // from to_plain_text().
-                let line_text_cow;
-                let line_text_ref = if let Some(line) = item.content.lines().first() {
-                    if line.spans().len() == 1 {
-                        &line.spans()[0].content
-                    } else {
-                        line_text_cow = std::borrow::Cow::Owned(line.to_plain_text());
-                        &line_text_cow
-                    }
-                } else {
-                    ""
-                };
-
-                let marker_matches = !item.marker.is_empty()
-                    && crate::contains_ignore_case(item.marker, &query_lower);
-                if marker_matches || crate::contains_ignore_case(line_text_ref, &query_lower) {
-                    Some(idx)
-                } else {
-                    None
+    fn filtered_indices(&self, state: &mut ListState) -> std::sync::Arc<[usize]> {
+        let query_str = state.filter_query();
+        
+        if let Some(hash) = self.data_hash {
+            if let Some((cached_hash, ref cached_query, ref indices)) = state.cached_display_indices {
+                if cached_hash == hash && cached_query == query_str {
+                    return std::sync::Arc::clone(indices);
                 }
-            })
-            .collect()
+            }
+        }
+
+        let query = query_str.trim();
+        let indices: Vec<usize> = if query.is_empty() {
+            (0..self.items.len()).collect()
+        } else {
+            let query_lower = query.to_lowercase();
+            self.items
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, item)| {
+                    // Optimization: check single-span content directly to avoid allocation
+                    // from to_plain_text().
+                    let line_text_cow;
+                    let line_text_ref = if let Some(line) = item.content.lines().first() {
+                        if line.spans().len() == 1 {
+                            &line.spans()[0].content
+                        } else {
+                            line_text_cow = std::borrow::Cow::Owned(line.to_plain_text());
+                            &line_text_cow
+                        }
+                    } else {
+                        ""
+                    };
+
+                    let marker_matches = !item.marker.is_empty()
+                        && crate::contains_ignore_case(item.marker, &query_lower);
+                    if marker_matches || crate::contains_ignore_case(line_text_ref, &query_lower) {
+                        Some(idx)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+
+        let arc_indices: std::sync::Arc<[usize]> = indices.into();
+
+        if let Some(hash) = self.data_hash {
+            state.cached_display_indices = Some((
+                hash,
+                query_str.to_string(),
+                std::sync::Arc::clone(&arc_indices)
+            ));
+        }
+
+        arc_indices
     }
 
     fn apply_filtered_selection_guard(
@@ -265,19 +302,19 @@ impl<'a> List<'a> {
 
         match key.code {
             KeyCode::Up if !nav_modifiers => {
-                let filtered = self.filtered_indices(state.filter_query());
+                let filtered = self.filtered_indices(state);
                 self.move_selection_in_filtered(state, &filtered, -1)
             }
             KeyCode::Down if !nav_modifiers => {
-                let filtered = self.filtered_indices(state.filter_query());
+                let filtered = self.filtered_indices(state);
                 self.move_selection_in_filtered(state, &filtered, 1)
             }
             KeyCode::Char('k') if !nav_modifiers => {
-                let filtered = self.filtered_indices(state.filter_query());
+                let filtered = self.filtered_indices(state);
                 self.move_selection_in_filtered(state, &filtered, -1)
             }
             KeyCode::Char('j') if !nav_modifiers => {
-                let filtered = self.filtered_indices(state.filter_query());
+                let filtered = self.filtered_indices(state);
                 self.move_selection_in_filtered(state, &filtered, 1)
             }
             KeyCode::Char(' ') if state.multi_select_enabled() => {
@@ -295,7 +332,7 @@ impl<'a> List<'a> {
                 state.filter_query.pop();
                 state.offset = 0;
                 state.scroll_into_view_requested = true;
-                let filtered = self.filtered_indices(state.filter_query());
+                let filtered = self.filtered_indices(state);
                 self.apply_filtered_selection_guard(state, &filtered, true);
                 #[cfg(feature = "tracing")]
                 state.log_selection_change("filter_backspace");
@@ -308,7 +345,7 @@ impl<'a> List<'a> {
                 state.filter_query.clear();
                 state.offset = 0;
                 state.scroll_into_view_requested = true;
-                let filtered = self.filtered_indices(state.filter_query());
+                let filtered = self.filtered_indices(state);
                 self.apply_filtered_selection_guard(state, &filtered, false);
                 #[cfg(feature = "tracing")]
                 state.log_selection_change("filter_clear");
@@ -321,7 +358,7 @@ impl<'a> List<'a> {
                 state.filter_query.push(ch);
                 state.offset = 0;
                 state.scroll_into_view_requested = true;
-                let filtered = self.filtered_indices(state.filter_query());
+                let filtered = self.filtered_indices(state);
                 self.apply_filtered_selection_guard(state, &filtered, true);
                 #[cfg(feature = "tracing")]
                 state.log_selection_change("filter_append");
@@ -353,6 +390,9 @@ pub struct ListState {
     multi_select_enabled: bool,
     /// Set of selected indices when multi-select is enabled.
     multi_selected: BTreeSet<usize>,
+    /// Cached display indices (data_hash, filter_query, indices)
+    #[doc(hidden)]
+    pub cached_display_indices: Option<(u64, String, std::sync::Arc<[usize]>)>,
 }
 
 impl Default for ListState {
@@ -367,6 +407,7 @@ impl Default for ListState {
             filter_query: String::new(),
             multi_select_enabled: false,
             multi_selected: BTreeSet::new(),
+            cached_display_indices: None,
         }
     }
 }
@@ -747,7 +788,7 @@ impl<'a> StatefulWidget for List<'a> {
                     state.hovered = None;
                 }
 
-                let filtered_indices = self.filtered_indices(state.filter_query());
+                let filtered_indices = self.filtered_indices(state);
                 self.apply_filtered_selection_guard(state, &filtered_indices, filter_active);
 
                 if filtered_indices.is_empty() {
@@ -2199,8 +2240,8 @@ mod tests {
         let mut state = ListState::default();
         // Type "veg" → should match only carrot (via marker)
         state.set_filter_query("veg");
-        let filtered = list.filtered_indices(state.filter_query());
-        assert_eq!(filtered, vec![1]); // only carrot
+        let filtered = list.filtered_indices(&mut state);
+        assert_eq!(&*filtered, &[1]); // only carrot
     }
 
     #[test]

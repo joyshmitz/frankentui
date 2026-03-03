@@ -1346,9 +1346,11 @@ mod tests {
             area_width: w,
             area_height: 24,
             constraints_hash: 42,
+            constraints_hash_fx: 42,
             constraints_len: 2,
             direction: Direction::Horizontal,
             intrinsics_hash: None,
+            intrinsics_hash_fx: None,
         }
     }
 

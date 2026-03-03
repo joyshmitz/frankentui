@@ -309,7 +309,6 @@ impl TextInput {
                     self.ime_update_composition(&ime.text);
                     self.ime_commit_composition()
                 } else if !ime.text.is_empty() {
-                    self.delete_selection();
                     self.insert_text(&ime.text);
                     true
                 } else {
@@ -326,7 +325,6 @@ impl TextInput {
 
         match key.code {
             KeyCode::Char(c) if !ctrl => {
-                self.delete_selection();
                 self.insert_char(c);
                 true
             }
@@ -487,6 +485,8 @@ impl TextInput {
     /// - Respects `max_length` (truncating if necessary).
     /// - Efficiently inserts the result in one operation.
     pub fn insert_text(&mut self, text: &str) {
+        self.delete_selection();
+
         let clean_text = Self::sanitize_input_text(text);
 
         if clean_text.is_empty() {
@@ -544,6 +544,8 @@ impl TextInput {
     }
 
     fn insert_char(&mut self, c: char) {
+        self.delete_selection();
+
         // Strict control character filtering to prevent terminal corruption
         if c.is_control() {
             return;

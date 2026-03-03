@@ -636,7 +636,10 @@ impl Flex {
                 (total_available.saturating_sub(used) / 2, None)
             }
             Alignment::SpaceBetween => {
-                let leftover = total_available.saturating_sub(total_items_size);
+                let gap_space = (sizes.len().saturating_sub(1) as u64 * self.gap as u64)
+                    .min(u16::MAX as u64) as u16;
+                let used = total_items_size.saturating_add(gap_space);
+                let leftover = total_available.saturating_sub(used);
                 let slots = sizes.len().saturating_sub(1);
                 if slots > 0 {
                     (0, Some((leftover, slots, 0))) // 0 = Between
@@ -645,7 +648,10 @@ impl Flex {
                 }
             }
             Alignment::SpaceAround => {
-                let leftover = total_available.saturating_sub(total_items_size);
+                let gap_space = (sizes.len().saturating_sub(1) as u64 * self.gap as u64)
+                    .min(u16::MAX as u64) as u16;
+                let used = total_items_size.saturating_add(gap_space);
+                let leftover = total_available.saturating_sub(used);
                 let slots = sizes.len() * 2;
                 if slots > 0 {
                     (0, Some((leftover, slots, 1))) // 1 = Around
@@ -658,28 +664,30 @@ impl Flex {
         let mut accumulated_size = 0;
 
         for (i, &size) in sizes.iter().enumerate() {
+            let explicit_gap_so_far = if i > 0 {
+                (i as u64 * self.gap as u64).min(u16::MAX as u64) as u16
+            } else {
+                0
+            };
+
             let gap_offset = if let Some((leftover, slots, mode)) = use_formula {
                 if mode == 0 {
-                    // Between: (Leftover * i) / slots
+                    // Between: (Leftover * i) / slots + explicit gaps
                     if i == 0 {
                         0
                     } else {
-                        (leftover as u64 * i as u64 / slots as u64) as u16
+                        explicit_gap_so_far.saturating_add((leftover as u64 * i as u64 / slots as u64) as u16)
                     }
                 } else {
-                    // Around: nearest-integer rounding.
+                    // Around: nearest-integer rounding + explicit gaps
                     let numerator = leftover as u64 * (2 * i as u64 + 1);
                     let denominator = slots as u64;
                     let raw = (numerator + (denominator / 2)) / denominator;
-                    raw.min(u64::from(u16::MAX)) as u16
+                    explicit_gap_so_far.saturating_add(raw.min(u64::from(u16::MAX)) as u16)
                 }
             } else {
                 // Fixed gap
-                if i > 0 {
-                    (i as u64 * self.gap as u64).min(u16::MAX as u64) as u16
-                } else {
-                    0
-                }
+                explicit_gap_so_far
             };
 
             let pos = match self.direction {

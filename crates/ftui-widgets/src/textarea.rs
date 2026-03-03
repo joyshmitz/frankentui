@@ -80,8 +80,8 @@ pub struct TextAreaState {
 }
 
 #[derive(Debug, Clone)]
-struct WrappedSlice {
-    text: String,
+struct WrappedSlice<'a> {
+    text: &'a str,
     start_byte: usize,
     start_col: usize,
     width: usize,
@@ -839,10 +839,10 @@ impl TextArea {
         }
     }
 
-    fn wrap_line_slices(line_text: &str, max_width: usize) -> Vec<WrappedSlice> {
+    fn wrap_line_slices<'a>(line_text: &'a str, max_width: usize) -> Vec<WrappedSlice<'a>> {
         if line_text.is_empty() {
             return vec![WrappedSlice {
-                text: String::new(),
+                text: "",
                 start_byte: 0,
                 start_col: 0,
                 width: 0,
@@ -850,27 +850,23 @@ impl TextArea {
         }
 
         let mut slices = Vec::new();
-        let mut current_text = String::new();
         let mut current_width = 0;
         let mut slice_start_byte = 0;
         let mut slice_start_col = 0;
         let mut byte_cursor = 0;
         let mut col_cursor = 0;
 
-        let push_current = |slices: &mut Vec<WrappedSlice>,
-                            text: &mut String,
+        let push_current = |slices: &mut Vec<WrappedSlice<'a>>,
                             width: &mut usize,
                             start_byte: &mut usize,
                             start_col: &mut usize,
                             byte_cursor: usize,
                             col_cursor: usize| {
-            // Push even if empty if it's forced by logic (though usually check width > 0)
-            // But we match original logic:
-            if text.is_empty() && *width == 0 {
+            if byte_cursor == *start_byte && *width == 0 {
                 return;
             }
             slices.push(WrappedSlice {
-                text: std::mem::take(text),
+                text: &line_text[*start_byte..byte_cursor],
                 start_byte: *start_byte,
                 start_col: *start_col,
                 width: *width,
@@ -887,7 +883,6 @@ impl TextArea {
             if max_width > 0 && current_width + seg_width > max_width {
                 push_current(
                     &mut slices,
-                    &mut current_text,
                     &mut current_width,
                     &mut slice_start_byte,
                     &mut slice_start_col,
@@ -904,7 +899,6 @@ impl TextArea {
                     if max_width > 0 && current_width + g_width > max_width && current_width > 0 {
                         push_current(
                             &mut slices,
-                            &mut current_text,
                             &mut current_width,
                             &mut slice_start_byte,
                             &mut slice_start_col,
@@ -913,7 +907,6 @@ impl TextArea {
                         );
                     }
 
-                    current_text.push_str(grapheme);
                     current_width += g_width;
                     byte_cursor += g_len;
                     col_cursor += g_width;
@@ -921,15 +914,14 @@ impl TextArea {
                 continue;
             }
 
-            current_text.push_str(segment);
             current_width += seg_width;
             byte_cursor += seg_len;
             col_cursor += seg_width;
         }
 
-        if !current_text.is_empty() || current_width > 0 || slices.is_empty() {
+        if byte_cursor > slice_start_byte || current_width > 0 || slices.is_empty() {
             slices.push(WrappedSlice {
-                text: current_text,
+                text: &line_text[slice_start_byte..byte_cursor],
                 start_byte: slice_start_byte,
                 start_col: slice_start_col,
                 width: current_width,
