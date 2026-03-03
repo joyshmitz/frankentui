@@ -79,7 +79,9 @@ struct ServerHarness {
 impl Drop for ServerHarness {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
-        let _ = TcpStream::connect(self.endpoint.strip_prefix("http://").unwrap_or_default());
+        if let Ok(stream) = TcpStream::connect(self.endpoint.strip_prefix("http://").unwrap_or_default()) {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
         if let Some(handle) = self.join_handle.take() {
             let _ = handle.join();
         }

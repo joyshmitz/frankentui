@@ -605,26 +605,11 @@ impl TextInput {
             return;
         }
 
-        let graphemes: Vec<&str> = self.value.graphemes(true).collect();
         let old_cursor = self.cursor;
-        let mut pos = old_cursor;
+        // Use standard movement logic to find start of deletion
+        self.move_cursor_word_left(false);
+        let new_cursor = self.cursor;
 
-        // 1. Skip trailing whitespace
-        let mut skipped_whitespace = false;
-        while pos > 0 && Self::get_grapheme_class(graphemes[pos - 1]) == 0 {
-            pos -= 1;
-            skipped_whitespace = true;
-        }
-
-        // 2. If we didn't skip whitespace, delete the token (Word or Punctuation)
-        if !skipped_whitespace && pos > 0 {
-            let target_class = Self::get_grapheme_class(graphemes[pos - 1]);
-            while pos > 0 && Self::get_grapheme_class(graphemes[pos - 1]) == target_class {
-                pos -= 1;
-            }
-        }
-
-        let new_cursor = pos;
         if new_cursor < old_cursor {
             let byte_start = self.grapheme_byte_offset(new_cursor);
             let byte_end = self.grapheme_byte_offset(old_cursor);

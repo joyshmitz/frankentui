@@ -136,7 +136,7 @@ where
 {
     Cmd::task(move || {
         let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
+        let _handle = std::thread::spawn(move || {
             let result = f();
             let _ = tx.send(result);
         });
@@ -160,7 +160,7 @@ where
 {
     Cmd::task_with_spec(TaskSpec::default().with_name(name), move || {
         let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
+        let _handle = std::thread::spawn(move || {
             let result = f();
             let _ = tx.send(result);
         });
@@ -219,7 +219,7 @@ where
         for attempt in 0..=policy.max_retries {
             let (tx, rx) = std::sync::mpsc::channel();
             let f_clone = std::sync::Arc::clone(&f);
-            std::thread::spawn(move || {
+            let _handle = std::thread::spawn(move || {
                 let result = f_clone();
                 let _ = tx.send(result);
             });
