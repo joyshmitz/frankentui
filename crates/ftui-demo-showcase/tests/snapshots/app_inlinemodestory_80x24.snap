@@ -1,24 +1,24 @@
  1: Tour │ 2: Dash │ 3: Shakes │ 4: Code │ 5: Widgets │ 6: Layout │ 7: Forms    
 ╭─────────────────────────────────Inline Mode──────────────────────────────────╮
+│Mode: Inline  |  Compare: OFF  |  Anchor: Bottom  |  UI height: 2  |  Rate: 2/│
+│Status: Live  |  Lines: 60  |  Scrollback preserved in inline mode            │
 │╭Inline Mode Story───────────────────────────────────────────────────────────╮│
-││Mode: Inline  |  Compare: OFF  |  Anchor: Bottom  |  UI height: 2  |  Rate: ││
-││Status: Live  |  Lines: 60  |  Scrollback preserved in inline mode          ││
-││╭Inline Mode Story─────────────────────────────────────────────────────────╮││
-│││000048 [INFO ] io      inline anchor                                      │││
-│││000049 [WARN ] io      budget check                                       │││
-│││000050 [ERROR] io      budget check                                       │││
-│││000051 [DEBUG] layout  budget check                                       │││
-│││000052 [INFO ] layout  budget check                                       │││
-│││000053 [WARN ] layout  budget check                                       │││
-│││000054 [ERROR] core    budget check                                       │││
-│││000055 [DEBUG] core    budget check                                       │││
-│││000056 [INFO ] core    diff pass                                          │││
-│││000057 [WARN ] render  diff pass                                          │││
-│││000058 [ERROR] render  diff pass                                          │││
-│││000059 [DEBUG] render  diff pass                                          │││
-│││ INLINE MODE - SCROLLBACK PRESERVED                                       │││
-│││ Anchor: BOTTOM  |  UI height: 2  |  Log rate: 2/tick                     │││
-││╰──────────────────────────────────────────────────────────────────────────╯││
+││000046 [ERROR] widgets inline anchor                                        ││
+││000047 [DEBUG] widgets inline anchor                                        ││
+││000048 [INFO ] io      inline anchor                                        ││
+││000049 [WARN ] io      budget check                                         ││
+││000050 [ERROR] io      budget check                                         ││
+││000051 [DEBUG] layout  budget check                                         ││
+││000052 [INFO ] layout  budget check                                         ││
+││000053 [WARN ] layout  budget check                                         ││
+││000054 [ERROR] core    budget check                                         ││
+││000055 [DEBUG] core    budget check                                         ││
+││000056 [INFO ] core    diff pass                                            ││
+││000057 [WARN ] render  diff pass                                            ││
+││000058 [ERROR] render  diff pass                                            ││
+││000059 [DEBUG] render  diff pass                                            ││
+││ INLINE MODE - SCROLLBACK PRESERVED                                         ││
+││ Anchor: BOTTOM  |  UI height: 2  |  Log rate: 2/tick                       ││
 │╰────────────────────────────────────────────────────────────────────────────╯│
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Inline Mode [36/43] [h] [cmd] [p] [d]    Tab/Shift+Tab: next/prev    0x0 00:00 
+ Inline Mode [36/45] [h] [cmd] [p] [d]    Tab/Shift+Tab: next/prev    0x0 00:00 

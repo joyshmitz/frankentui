@@ -3,8 +3,8 @@
 │  Darcula  │ │     fg::SECONDARY      │
 │  Lumen Lig│ │     fg::MUTED          │
 │  Nordic Fr│ │     fg::DISABLED       │
-│  High Cont│ │     bg::DEEP           │
-│           │ │     bg::BASE           │
-│           │ │     bg::SURFACE        │
+│  Doom     │ │     bg::DEEP           │
+│  Quake    │ │     bg::BASE           │
+│  Monokai  │ │     bg::SURFACE        │
 ╰───────────╯ ╰────────────────────────╯
 Press E to export theme                 

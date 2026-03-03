@@ -4,17 +4,17 @@
 │Scroll region: yes | Hyperlinks: yes | Clipboard: yes | overrides: none                                               │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭ Capability Matrix ─────────────────────────────────────────────────╮╭ Details ───────────────────────────────────────╮
-│Capability               │Detected │Effective│Fallback              ││Capability: True color (24-bit)                 │
-│True color (24-bit)      │yes      │yes      │enabled               ││Detected: no                                    │
-│256-color palette        │yes      │yes      │enabled               ││Simulated: yes                                  │
-│Synchronized output      │yes      │yes      │enabled               ││Effective: yes                                  │
-│Scroll region (DECSTBM)  │yes      │yes      │enabled               ││Fallback: enabled                               │
-│OSC 8 hyperlinks         │yes      │yes      │enabled               ││Reason: Detected via env heuristics             │
-│Kitty keyboard protocol  │yes      │yes      │enabled               ││                                                │
-│Focus events             │yes      │yes      │enabled               ││                                                │
-│Bracketed paste          │yes      │yes      │enabled               ││                                                │
-│SGR mouse                │yes      │yes      │enabled               ││                                                │
-│OSC 52 clipboard         │yes      │yes      │enabled               ││                                                │
+│Capability                │Detected │Effective│Fallback             ││Capability: True color (24-bit)                 │
+│True color (24-bit)       │yes      │yes      │enabled              ││Detected: no                                    │
+│256-color palette         │yes      │yes      │enabled              ││Simulated: yes                                  │
+│Synchronized output       │yes      │yes      │enabled              ││Effective: yes                                  │
+│Scroll region (DECSTBM)   │yes      │yes      │enabled              ││Fallback: enabled                               │
+│OSC 8 hyperlinks          │yes      │yes      │enabled              ││Reason: Detected via env heuristics             │
+│Kitty keyboard protocol   │yes      │yes      │enabled              ││                                                │
+│Focus events              │yes      │yes      │enabled              ││                                                │
+│Bracketed paste           │yes      │yes      │enabled              ││                                                │
+│SGR mouse                 │yes      │yes      │enabled              ││                                                │
+│OSC 52 clipboard          │yes      │yes      │enabled              ││                                                │
 │                                                                    ││                                                │
 │                                                                    ││                                                │
 │                                                                    ││                                                │
@@ -36,5 +36,5 @@
 │                                                                    ││TERM_PROGRAM=ftui-test                          │
 │                                                                    ││COLORTERM=truecolor                             │
 │                                                                    ││NO_COLOR=no                                     │
-│                                                                    ││MUX: tmux=no screen=no zellij=no                │
+│                                                                    ││MUX: tmux=no screen=no zellij=no wezterm_socket=│
 ╰────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────────────╯

@@ -12,13 +12,13 @@
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                             ││Status:NOMINAL FPS:0     ││
 ││Click → Visual Eff││Click → Data Viz             ││Click → Performance      ││
 │╰──────────────────╯╰─────────────────────────────╯╰─────────────────────────╯│
-│╭Text FX · 2-Up (1/28)╮╭──────────Activity───────────╮╭Markdown · Streaming…╮ │
-││Sample 1 of 3 · 2-Up ││SEV TIME  COMP  MESSAGE      ││▌                    │ │
-││1 · None · S1        ││ INFO  00:02   CPU spike dete││                     │ │
-││2 · FadeIn · S2      ││                             ││                     │ │
-││## GFM Stress · Ledge││                             ││                     │ │
-││e: next set · click →││Click → Action Timeline      ││Click → Markdown     │ │
-│╰─────────────────────╯╰─────────────────────────────╯╰─────────────────────╯ │
-│g:charts c:code e:fx m:md | 1-9:screens | Tab:next | t:theme | ?:help | q:quit│
+│╭Text FX · 2-Up (1│╭──────────Activity───────────│╭Markdown · Streaming… 0%─╮ │
+││Sample 1 of 3 · 2││SEV TIME  COMP  MESSAGE      ││▌                        │ │
+││1 · None · S1    ││ INFO  00:02   CPU spike dete││                         │ │
+││2 · FadeIn · S2  ⋮│                             ⋮│                         │ │
+││                 ││                             ││                         │ │
+││drag panes in das││Click → Action Timeline      ││Click → Markdown         │ │
+│╰─────────────────│╰─────────────────────────────│╰─────────────────────────╯ │
+│g:charts c:code e:fx m:md | drag bottom dividers: resize | 1-9:screens | t:the│
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Dashboard [2/43] [h] [cmd] [p] [d]    Tab/Shift+Tab: next/prev     80x24 00:00 
+ Dashboard [2/45] [h] [cmd] [p] [d]    Tab/Shift+Tab: next/prev     80x24 00:00 

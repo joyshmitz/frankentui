@@ -3,11 +3,11 @@ Type to filter · ↑/↓ navigate · Enter execute · b bench · m cycle
                                              ╭─────────Evidence Ledger─────────╮
                                              │Selected: Go to Log Search       │
                                              │Match: Substring  P=74.3%  BF=   │
-      ┌───── Command Palette ──────┐         │2.89                             │
+      ╭───── Command Palette ──────╮         │2.89                             │
       │>log                        │         │Why this won: Go to Log Search · │
       │> [Navigation] Go to Log Se…│         │                                 │
       │                            │         │MatchType: BF=2.00 (supports) -  │
-      └────────────────────────────┘         │contiguous substring             │
+      ╰────────────────────────────╯         │contiguous substring             │
                                              │Position: BF=1.07 (supports) -   │
                                              │first match at position 6        │
                                              │WordBoundary: BF=1.30 (supports) │

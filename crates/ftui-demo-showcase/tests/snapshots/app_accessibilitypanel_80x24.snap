@@ -16,9 +16,9 @@
 │╰────────────────────────────────────────────────────────────────────────────╯│
 │╭────────────────────────────── WCAG Contrast ───────────────────────────────╮│
 ││Primary on Base    13.6:1 AAA                                               ││
-││Secondary on Base  11.0:1 AAA                                               ││
-││Accent Primary      6.4:1 AA                                                ││
-││Accent Warning     13.1:1 AAA                                               ││
+││Secondary on Base   8.7:1 AAA                                               ││
+││Accent Primary      7.2:1 AAA                                               ││
+││Accent Warning     13.7:1 AAA                                               ││
 │╰────────────────────────────────────────────────────────────────────────────╯│
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Accessibility [37/43] [h] [cmd] [p] [d]   Tab/Shift+Tab: next/prev   0x0 00:00 
+ Accessibility [37/45] [h] [cmd] [p] [d]   Tab/Shift+Tab: next/prev   0x0 00:00 

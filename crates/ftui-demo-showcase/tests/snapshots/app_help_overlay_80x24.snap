@@ -3,22 +3,22 @@
 │FRANKENTUI DASHBOARD                                                          │
 │╭──────Plasma──────╮╭───────Charts · Pulse────────╮╭───Code · Rust (1/28)────╮│
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿╔═════════ ⌨ Keyboard Shortcuts (Esc) ═════════╗rs            ││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿Navigation▃▃▂▂▁▁▄▃▄▂▅▅▅▆▂▄▅▃▆ 46%││use std::{║ollections::Ha││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿[Ctrl+K]                 Open command palett ║              ││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿⣿⣿││NET ▁▁▁▁▁  ▁   ▇▁▁    ▁ █▁ 14││use ftui_c║re::event::Eve││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿ViewOUT ▁▁▁▃▁█  ▁▁ ▁  ▁▁▇    ▁149││Click → Co║e Explorer::Ce││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿[?]                      Toggle this help ov─║──────────────╯│
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿[Esc]                    Dismiss top overlay─║nfo───────────╮│
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿[m / F6]                 Toggle mouse capturM║NAL FPS:0     ││
-││Click → Visual║E[Ctrl+P]                 Toggle performance e║formance      ││
-│╰──────────────║─[Ctrl+I]                 Toggle evidence ins─║──────────────╯│
-│╭Text FX · 2-Up║([Shift+A]                Toggle A11y paneldow║ · Streaming…╮ │
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║ Navigation                                   ║ollections::Ha││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║ [Ctrl+K]                 Open command palett ║              ││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║                                              ║re::event::Eve││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║ View                                         ║e Explorer::Ce││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║ [?]                      Toggle this help ov ║──────────────╯│
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║ [Esc]                    Dismiss top overlay ║nfo───────────╮│
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║ [m / F6]                 Toggle mouse captur ║NAL FPS:0     ││
+││Click → Visual║ [Ctrl+P]                 Toggle performance  ║formance      ││
+│╰──────────────║ [Ctrl+I]                 Toggle evidence ins ║──────────────╯│
+│╭Text FX · 2-Up║ [Shift+A]                Toggle A11y panel   ║treaming… 0%─╮ │
 ││Sample 1 of 3 ║ [F12]                    Toggle debug overla ║             │ │
-││1 · None · S1 ║      ││ INFO  00:02   CPU spike dete││       ║             │ │
-││2 · FadeIn · S║ Editing                             ││       ║             │ │
-││## GFM Stress ║ Ledge││                             ││       ║             │ │
-││e: next set · ╚═══════════Press ? or Esc to close════════════╝Markdown     │ │
-│╰─────────────────────╯╰─────────────────────────────╯╰─────────────────────╯ │
-│g:charts c:code e:fx m:md | 1-9:screens | Tab:next | t:theme | ?:help | q:quit│
+││1 · None · S1 ║                                              ║             │ │
+││2 · FadeIn · S║ Editing                                      ║             │ │
+││              ║                                              ║             │ │
+││drag panes in ╚═══════════Press ? or Esc to close════════════╝down         │ │
+│╰─────────────────│╰─────────────────────────────│╰─────────────────────────╯ │
+│g:charts c:code e:fx m:md | drag bottom dividers: resize | 1-9:screens | t:the│
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Dashboard [2/43] [H] [cmd] [p] [d]    Tab/Shift+Tab: next/prev     80x24 00:00 
+ Dashboard [2/45] [H] [cmd] [p] [d]    Tab/Shift+Tab: next/prev     80x24 00:00 

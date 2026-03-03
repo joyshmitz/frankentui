@@ -1,40 +1,40 @@
-╭Inline Mode Story─────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│Mode: Inline  |  Compare: ON  |  Anchor: Top  |  UI height: 3  |  Rate: 2/tick                                        │
-│Status: Live  |  Lines: 60  |  Scrollback preserved in inline mode                                                    │
-│╭Inline (scrollback preserved)────────────────────────────╮╭Alt-screen (scrollback hidden)───────────────────────────╮│
-││ INLINE MODE - SCROLLBACK PRESERVED                      ││ ALT-SCREEN MODE - SCROLLBACK HIDDEN                     ││
-││ Anchor: TOP  |  UI height: 3  |  Log rate: 2/tick       ││ Full-screen takeover (logs do not persist)              ││
-││                                                         ││000028 [INFO ] widgets cursor sync                       ││
-││000029 [WARN ] widgets cursor sync                       ││000029 [WARN ] widgets cursor sync                       ││
-││000030 [ERROR] io      cursor sync                       ││000030 [ERROR] io      cursor sync                       ││
-││000031 [DEBUG] io      cursor sync                       ││000031 [DEBUG] io      cursor sync                       ││
-││000032 [INFO ] io      cursor sync                       ││000032 [INFO ] io      cursor sync                       ││
-││000033 [WARN ] layout  cursor sync                       ││000033 [WARN ] layout  cursor sync                       ││
-││000034 [ERROR] layout  cursor sync                       ││000034 [ERROR] layout  cursor sync                       ││
-││000035 [DEBUG] layout  scrollback ok                     ││000035 [DEBUG] layout  scrollback ok                     ││
-││000036 [INFO ] core    scrollback ok                     ││000036 [INFO ] core    scrollback ok                     ││
-││000037 [WARN ] core    scrollback ok                     ││000037 [WARN ] core    scrollback ok                     ││
-││000038 [ERROR] core    scrollback ok                     ││000038 [ERROR] core    scrollback ok                     ││
-││000039 [DEBUG] render  scrollback ok                     ││000039 [DEBUG] render  scrollback ok                     ││
-││000040 [INFO ] render  scrollback ok                     ││000040 [INFO ] render  scrollback ok                     ││
-││000041 [WARN ] render  scrollback ok                     ││000041 [WARN ] render  scrollback ok                     ││
-││000042 [ERROR] runtime inline anchor                     ││000042 [ERROR] runtime inline anchor                     ││
-││000043 [DEBUG] runtime inline anchor                     ││000043 [DEBUG] runtime inline anchor                     ││
-││000044 [INFO ] runtime inline anchor                     ││000044 [INFO ] runtime inline anchor                     ││
-││000045 [WARN ] widgets inline anchor                     ││000045 [WARN ] widgets inline anchor                     ││
-││000046 [ERROR] widgets inline anchor                     ││000046 [ERROR] widgets inline anchor                     ││
-││000047 [DEBUG] widgets inline anchor                     ││000047 [DEBUG] widgets inline anchor                     ││
-││000048 [INFO ] io      inline anchor                     ││000048 [INFO ] io      inline anchor                     ││
-││000049 [WARN ] io      budget check                      ││000049 [WARN ] io      budget check                      ││
-││000050 [ERROR] io      budget check                      ││000050 [ERROR] io      budget check                      ││
-││000051 [DEBUG] layout  budget check                      ││000051 [DEBUG] layout  budget check                      ││
-││000052 [INFO ] layout  budget check                      ││000052 [INFO ] layout  budget check                      ││
-││000053 [WARN ] layout  budget check                      ││000053 [WARN ] layout  budget check                      ││
-││000054 [ERROR] core    budget check                      ││000054 [ERROR] core    budget check                      ││
-││000055 [DEBUG] core    budget check                      ││000055 [DEBUG] core    budget check                      ││
-││000056 [INFO ] core    diff pass                         ││000056 [INFO ] core    diff pass                         ││
-││000057 [WARN ] render  diff pass                         ││000057 [WARN ] render  diff pass                         ││
-││000058 [ERROR] render  diff pass                         ││000058 [ERROR] render  diff pass                         ││
-││000059 [DEBUG] render  diff pass                         ││000059 [DEBUG] render  diff pass                         ││
-│╰─────────────────────────────────────────────────────────╯╰─────────────────────────────────────────────────────────╯│
-╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+Mode: Inline  |  Compare: ON  |  Anchor: Top  |  UI height: 3  |  Rate: 2/tick                                          
+Status: Live  |  Lines: 60  |  Scrollback preserved in inline mode                                                      
+╭Inline (scrollback preserved)─────────────────────────────╮╭Alt-screen (scrollback hidden)────────────────────────────╮
+│ INLINE MODE - SCROLLBACK PRESERVED                       ││ ALT-SCREEN MODE - SCROLLBACK HIDDEN                      │
+│ Anchor: TOP  |  UI height: 3  |  Log rate: 2/tick        ││ Full-screen takeover (logs do not persist)               │
+│                                                          ││000026 [ERROR] runtime resize coalesce                    │
+│000027 [DEBUG] widgets resize coalesce                    ││000027 [DEBUG] widgets resize coalesce                    │
+│000028 [INFO ] widgets cursor sync                        ││000028 [INFO ] widgets cursor sync                        │
+│000029 [WARN ] widgets cursor sync                        ││000029 [WARN ] widgets cursor sync                        │
+│000030 [ERROR] io      cursor sync                        ││000030 [ERROR] io      cursor sync                        │
+│000031 [DEBUG] io      cursor sync                        ││000031 [DEBUG] io      cursor sync                        │
+│000032 [INFO ] io      cursor sync                        ││000032 [INFO ] io      cursor sync                        │
+│000033 [WARN ] layout  cursor sync                        ││000033 [WARN ] layout  cursor sync                        │
+│000034 [ERROR] layout  cursor sync                        ││000034 [ERROR] layout  cursor sync                        │
+│000035 [DEBUG] layout  scrollback ok                      ││000035 [DEBUG] layout  scrollback ok                      │
+│000036 [INFO ] core    scrollback ok                      ││000036 [INFO ] core    scrollback ok                      │
+│000037 [WARN ] core    scrollback ok                      ││000037 [WARN ] core    scrollback ok                      │
+│000038 [ERROR] core    scrollback ok                      ││000038 [ERROR] core    scrollback ok                      │
+│000039 [DEBUG] render  scrollback ok                      ││000039 [DEBUG] render  scrollback ok                      │
+│000040 [INFO ] render  scrollback ok                      ││000040 [INFO ] render  scrollback ok                      │
+│000041 [WARN ] render  scrollback ok                      ││000041 [WARN ] render  scrollback ok                      │
+│000042 [ERROR] runtime inline anchor                      ││000042 [ERROR] runtime inline anchor                      │
+│000043 [DEBUG] runtime inline anchor                      ││000043 [DEBUG] runtime inline anchor                      │
+│000044 [INFO ] runtime inline anchor                      ││000044 [INFO ] runtime inline anchor                      │
+│000045 [WARN ] widgets inline anchor                      ││000045 [WARN ] widgets inline anchor                      │
+│000046 [ERROR] widgets inline anchor                      ││000046 [ERROR] widgets inline anchor                      │
+│000047 [DEBUG] widgets inline anchor                      ││000047 [DEBUG] widgets inline anchor                      │
+│000048 [INFO ] io      inline anchor                      ││000048 [INFO ] io      inline anchor                      │
+│000049 [WARN ] io      budget check                       ││000049 [WARN ] io      budget check                       │
+│000050 [ERROR] io      budget check                       ││000050 [ERROR] io      budget check                       │
+│000051 [DEBUG] layout  budget check                       ││000051 [DEBUG] layout  budget check                       │
+│000052 [INFO ] layout  budget check                       ││000052 [INFO ] layout  budget check                       │
+│000053 [WARN ] layout  budget check                       ││000053 [WARN ] layout  budget check                       │
+│000054 [ERROR] core    budget check                       ││000054 [ERROR] core    budget check                       │
+│000055 [DEBUG] core    budget check                       ││000055 [DEBUG] core    budget check                       │
+│000056 [INFO ] core    diff pass                          ││000056 [INFO ] core    diff pass                          │
+│000057 [WARN ] render  diff pass                          ││000057 [WARN ] render  diff pass                          │
+│000058 [ERROR] render  diff pass                          ││000058 [ERROR] render  diff pass                          │
+│000059 [DEBUG] render  diff pass                          ││000059 [DEBUG] render  diff pass                          │
+╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────╯

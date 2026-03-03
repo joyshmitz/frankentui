@@ -7,18 +7,18 @@
 ││Frame 1/50                                   ││Size: 40x15                  ││
 ││                                             ││Changes: 600 cells           ││
 ││                                             ││Memory: 9600 bytes           ││
-││Hello, World!                                ││Checksum: d824a111a221fa16   ││
+││Hello, World!                                ││Checksum: 18f5a12b74525a16   ││
 ││                                             ││Render: 100µs                ││
 ││                                             ││                             ││
-││                                             ││Chain hash: e374497cb34d825d ││
+││                                             ││Chain hash: 48a61a424c087d5d ││
 ││                                             ││Markers: 0                   ││
 ││                                             ││Marked: No                   ││
 ││                                             ││                             ││
 ││                                             ││── Compare ──                ││
 ││                                             ││View: Single                 ││
 ││                                             ││Heatmap: Off                 ││
-││█                                            ││A: #1  d824a111a221fa16      ││
-││                                             ││B: #2  7be607118e6aadca      ││
+││█                                            ││A: #1  18f5a12b74525a16      ││
+││                                             ││B: #2  c5b5eeab873924ca      ││
 │╰─────────────────────────────────────────────╯╰─────────────────────────────╯│
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Time-Travel Studio [31/43] [h] [cmd] [p] [d]Tab/Shift+Tab: next/prev 0x0 00:00 
+ Time-Travel Studio [31/45] [h] [cmd] [p] [d]Tab/Shift+Tab: next/prev 0x0 00:00 

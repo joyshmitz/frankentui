@@ -12,13 +12,13 @@
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                             ││Status:NOMINAL FPS:0     ││
 ││Click → Visual Eff││Click → Data Viz             ││Click → Performance      ││
 │╰──────────────────╯╰────────────────────╔══════════════ A11y ══════════════╗╯│
-│╭Text FX · 2-Up (1/28)╮╭──────────Activit║ Theme: Cyberpunk Aurora          ║ │
-││Sample 1 of 3 · 2-Up ││SEV TIME  COMP  M║ [H] High Contrast: OFF           ║ │
-││1 · None · S1        ││ INFO  00:02   CP║ [M] Reduced Motion: OFF          ║ │
-││2 · FadeIn · S2      ││                 ║ [L] Large Text: OFF              ║ │
-││## GFM Stress · Ledge││                 ║ Press A to close                 ║ │
-││e: next set · click →││Click → Action Ti║                                  ║ │
-│╰─────────────────────╯╰─────────────────╚══════════════════════════════════╝ │
-│g:charts c:code e:fx m:md | 1-9:screens | Tab:next | t:theme | ?:help | q:quit│
+│╭Text FX · 2-Up (1│╭──────────Activity───║ Theme: Cyberpunk Aurora          ║ │
+││Sample 1 of 3 · 2││SEV TIME  COMP  MESSA║ [H] High Contrast: OFF           ║ │
+││1 · None · S1    ││ INFO  00:02   CPU sp║ [M] Reduced Motion: OFF          ║ │
+││2 · FadeIn · S2  ⋮│                     ║ [L] Large Text: OFF              ║ │
+││                 ││                     ║ Press A to close                 ║ │
+││drag panes in das││Click → Action Timeli║                                  ║ │
+│╰─────────────────│╰─────────────────────╚══════════════════════════════════╝ │
+│g:charts c:code e:fx m:md | drag bottom dividers: resize | 1-9:screens | t:the│
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Dashboard [2/43] [h] [cmd] [p] [d]  Mouse: ONTab/Shift+Tab: next/prev0x0 00:00 
+ Dashboard [2/45] [h] [cmd] [p] [d]     Tab/Shift+Tab: next/prev      0x0 00:00 

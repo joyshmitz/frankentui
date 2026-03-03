@@ -12,13 +12,13 @@
 ││ Screen:     Dashboard                        │  ││Status:NOMINAL FPS:0     ││
 ││ Terminal:   80x24                            │  ││Click → Performance      ││
 ││ Samples:    11/120                           │──╯╰─────────────────────────╯│
-││                                              │─────╮╭Markdown · Streaming…╮ │
-││   ▁▂▃▄▄▅▆▇█                                  │     ││▌                    │ │
-│╰──────────────────────────────────────────────╯ dete││                     │ │
-││2 · FadeIn · S2      ││                             ││                     │ │
-││## GFM Stress · Ledge││                             ││                     │ │
-││e: next set · click →││Click → Action Timeline      ││Click → Markdown     │ │
-│╰─────────────────────╯╰─────────────────────────────╯╰─────────────────────╯ │
-│g:charts c:code e:fx m:md | 1-9:screens | Tab:next | t:theme | ?:help | q:quit│
+││                                              │─│╭Markdown · Streaming… 0%─╮ │
+││   ▁▂▃▄▄▅▆▇█                                  │ ││▌                        │ │
+│╰──────────────────────────────────────────────╯e││                         │ │
+││2 · FadeIn · S2  ⋮│                             ⋮│                         │ │
+││                 ││                             ││                         │ │
+││drag panes in das││Click → Action Timeline      ││Click → Markdown         │ │
+│╰─────────────────│╰─────────────────────────────│╰─────────────────────────╯ │
+│g:charts c:code e:fx m:md | drag bottom dividers: resize | 1-9:screens | t:the│
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Dashboard [2/43] [h] [cmd] [P] [d]    Tab/Shift+Tab: next/prev     80x24 00:04 
+ Dashboard [2/45] [h] [cmd] [P] [d]    Tab/Shift+Tab: next/prev     80x24 00:04 

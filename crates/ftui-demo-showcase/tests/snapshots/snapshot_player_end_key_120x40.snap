@@ -5,18 +5,18 @@
 │Frame 50/50                                                           ││Size: 40x15                                   │
 │                                                                      ││Changes: 21 cells                             │
 │                                                                      ││Memory: 9600 bytes                            │
-│                                                                      ││Checksum: 548170b341839d5a                    │
+│                                                                      ││Checksum: aedfb1fe521d8c5a                    │
 │                                                                      ││Render: 590µs                                 │
 │                                                                      ││                                              │
-│                                                                      ││Chain hash: e374497cb34d825d                  │
+│                                                                      ││Chain hash: 48a61a424c087d5d                  │
 │                                                                      ││Markers: 0                                    │
 │                                                                      ││Marked: No                                    │
 │                                                                      ││                                              │
 │                                                                      ││── Compare ──                                 │
 │                                                                      ││View: Single                                  │
 │         FrankenTUI Demo                                              ││Heatmap: Off                                  │
-│                  █                                                   ││A: #1  d824a111a221fa16                       │
-│━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                               ││B: #2  7be607118e6aadca                       │
+│                  █                                                   ││A: #1  18f5a12b74525a16                       │
+│━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                               ││B: #2  c5b5eeab873924ca                       │
 │                                                                      ││Diff: n/a                                     │
 │                                                                      ││                                              │
 │                                                                      ││── Controls ──                                │

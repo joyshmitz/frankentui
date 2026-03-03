@@ -2,11 +2,11 @@
 ╭────────────────────────────────Widget Gallery────────────────────────────────╮
 │▸ A: Inputs │   B: Display │   C: Status │   D: Data Viz │   E: Navigation │  │
 │╭TextInput────╮╭Masked Input─╮╭Command Palette────────╮╭Log Viewer───────────╮│
-││@example.com ││••••••       ││                       ││INFO  boot:          ││
-││             ││             ││                       ││FrankenTUI demo      ││
-│╰─────────────╯╰─────────────╯│                       ││started              ││
-│╭TextArea────────────────────╮│                       ││DEBUG layout:        ││
-││1  FrankenTUI text area     │╰───────────────────────╯│resolved 6         1 ││
+││@example.com ││••••••       ││                       ││DEBUG layout:        ││
+││             ││             ││                       ││resolved 6           ││
+│╰─────────────╯╰─────────────╯│                       ││constraints          ││
+│╭TextArea────────────────────╮│                       ││WARN  io: slow disk  ││
+││1  FrankenTUI text area     │╰───────────────────────╯│detected, using ca 0 ││
 ││2  - Multi-line editing     │╭File Picker────────────╮╰─────────────────────╯│
 ││3  - Soft wrap enabled      ││.                      │╭ProgressBar──────────╮│
 ││4  - Line numbers           ││> ?? benches           ││         0%          ││
@@ -21,4 +21,4 @@
 │╰───────╯╰──────╯╰───────────╯                         ╰─────────────────────╯│
 │*.......                                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Widget Gallery [5/43] [h] [cmd] [p] [d]  Tab/Shift+Tab: next/prev  80x24 00:00 
+ Widget Gallery [5/45] [h] [cmd] [p] [d]  Tab/Shift+Tab: next/prev  80x24 00:00 
