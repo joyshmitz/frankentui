@@ -1273,7 +1273,7 @@ impl<T: RenderItem> StatefulWidget for VirtualizedList<'_, T> {
         // Ensure visible range includes selected item (it must be fully visible if possible)
         if let Some(selected) = state.selected {
             let vis_count = fully_visible_items.max(1);
-            if selected >= state.scroll_offset + vis_count {
+            if selected >= state.scroll_offset.saturating_add(vis_count) {
                 state.scroll_offset = selected.saturating_sub(vis_count.saturating_sub(1));
             } else if selected < state.scroll_offset {
                 state.scroll_offset = selected;

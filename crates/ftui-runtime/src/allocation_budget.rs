@@ -353,6 +353,9 @@ impl AllocationBudget {
     /// Observe an allocation count/byte measurement for the current frame.
     /// Returns `Some(alert)` if a regression is detected.
     pub fn observe(&mut self, x: f64) -> Option<BudgetAlert> {
+        if x.is_nan() {
+            return None;
+        }
         self.frame += 1;
 
         // Maintain running window.

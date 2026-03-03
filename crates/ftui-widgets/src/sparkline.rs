@@ -168,7 +168,7 @@ impl<'a> Sparkline<'a> {
 
     /// Interpolate between two colors based on t (0.0 to 1.0).
     fn lerp_color(low: PackedRgba, high: PackedRgba, t: f64) -> PackedRgba {
-        let t = t.clamp(0.0, 1.0) as f32;
+        let t = if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) } as f32;
         let r = (low.r() as f32 * (1.0 - t) + high.r() as f32 * t).round() as u8;
         let g = (low.g() as f32 * (1.0 - t) + high.g() as f32 * t).round() as u8;
         let b = (low.b() as f32 * (1.0 - t) + high.b() as f32 * t).round() as u8;

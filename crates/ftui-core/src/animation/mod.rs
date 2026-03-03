@@ -138,6 +138,9 @@ impl Fade {
     /// Raw linear progress (before easing), in [0.0, 1.0].
     #[inline]
     pub fn raw_progress(&self) -> f32 {
+        if self.duration.is_zero() {
+            return 1.0;
+        }
         let t = self.elapsed.as_secs_f64() / self.duration.as_secs_f64();
         (t as f32).clamp(0.0, 1.0)
     }
@@ -205,6 +208,9 @@ impl Slide {
     }
 
     fn progress(&self) -> f32 {
+        if self.duration.is_zero() {
+            return 1.0;
+        }
         let t = self.elapsed.as_secs_f64() / self.duration.as_secs_f64();
         (t as f32).clamp(0.0, 1.0)
     }

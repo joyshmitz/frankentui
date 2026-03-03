@@ -319,6 +319,9 @@ impl Timeline {
         if self.events.is_empty() {
             return 1.0;
         }
+        if self.total_duration.is_zero() {
+            return 1.0;
+        }
         let t = self.current_time.as_secs_f64() / self.total_duration.as_secs_f64();
         (t as f32).clamp(0.0, 1.0)
     }

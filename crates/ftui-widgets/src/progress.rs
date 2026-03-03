@@ -37,7 +37,7 @@ impl<'a> ProgressBar<'a> {
     /// Set the progress ratio (clamped to 0.0..=1.0).
     #[must_use]
     pub fn ratio(mut self, ratio: f64) -> Self {
-        self.ratio = ratio.clamp(0.0, 1.0);
+        self.ratio = if ratio.is_nan() { 0.0 } else { ratio.clamp(0.0, 1.0) };
         self
     }
 
@@ -863,7 +863,7 @@ mod tests {
     #[test]
     fn ratio_nan_clamped_to_zero() {
         let pb = ProgressBar::new().ratio(f64::NAN);
-        // NaN.clamp(0.0, 1.0) returns NaN in Rust, but check it doesn't panic
+        // We now safely handle NaN in the ratio setter to avoid clamping panic.
         // The render path uses floor() which handles NaN → 0
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(10, 1, &mut pool);

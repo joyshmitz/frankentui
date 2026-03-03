@@ -842,8 +842,8 @@ impl CommandPalette {
     fn adjust_scroll(&mut self) {
         if self.selected < self.scroll_offset {
             self.scroll_offset = self.selected;
-        } else if self.selected >= self.scroll_offset + self.max_visible {
-            self.scroll_offset = self.selected + 1 - self.max_visible;
+        } else if self.selected >= self.scroll_offset.saturating_add(self.max_visible) {
+            self.scroll_offset = self.selected.saturating_sub(self.max_visible.saturating_sub(1));
         }
     }
 }

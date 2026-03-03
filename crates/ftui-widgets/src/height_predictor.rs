@@ -267,7 +267,8 @@ impl HeightPredictor {
         sorted.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
         let alpha = 1.0 - self.config.coverage;
-        let quantile_idx = ((1.0 - alpha) * sorted.len() as f64).ceil() as usize;
+        let n = sorted.len() as f64;
+        let quantile_idx = ((1.0 - alpha) * (n + 1.0)).ceil() as usize;
         let quantile_idx = quantile_idx.min(sorted.len()).saturating_sub(1);
         let q = sorted[quantile_idx];
 
