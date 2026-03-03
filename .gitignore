@@ -57,8 +57,11 @@ crates/ftui-extras/src/seq_*.py
 # MCP Agent Mail local archive
 .mail_repo/
 
-# One-off test scripts
+# One-off test scripts and scratch files at repo root
 /test.py
+/test_*.py
+/test_*.rs
+/test_*.txt
 
 # Python cache
 __pycache__/
