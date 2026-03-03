@@ -158,6 +158,22 @@ impl FilePickerState {
         }
 
         let new_dir = entry.path.clone();
+
+        // Confinement check: prevent symlinks from escaping the root
+        if let Some(root) = &self.root {
+            if let (Ok(resolved_new), Ok(resolved_root)) = (
+                std::fs::canonicalize(&new_dir),
+                std::fs::canonicalize(root),
+            ) {
+                if !resolved_new.starts_with(&resolved_root) {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "Cannot traverse outside root directory via symlink",
+                    ));
+                }
+            }
+        }
+
         let new_entries = read_directory(&new_dir)?;
 
         self.history.push((self.current_dir.clone(), self.cursor));
@@ -172,11 +188,15 @@ impl FilePickerState {
     ///
     /// Returns `Ok(true)` if navigation succeeded.
     pub fn go_back(&mut self) -> std::io::Result<bool> {
-        // If root is set, prevent going above it
-        if let Some(root) = &self.root
-            && self.current_dir == *root
-        {
-            return Ok(false);
+        // If root is set, prevent going above it using canonicalized paths
+        if let Some(root) = &self.root {
+            let resolved_curr = std::fs::canonicalize(&self.current_dir)
+                .unwrap_or_else(|_| self.current_dir.clone());
+            let resolved_root = std::fs::canonicalize(root)
+                .unwrap_or_else(|_| root.clone());
+            if resolved_curr == resolved_root || !resolved_curr.starts_with(&resolved_root) {
+                return Ok(false);
+            }
         }
 
         if let Some((prev_dir, prev_cursor)) = self.history.pop() {
@@ -190,17 +210,13 @@ impl FilePickerState {
 
         // No history — try parent directory
         if let Some(parent) = self.current_dir.parent().map(|p| p.to_path_buf()) {
-            // Additional check for root in case history was empty but we are at root
             if let Some(root) = &self.root {
-                // If parent is outside root (e.g. root is /a/b, parent is /a), stop.
-                // Or simply: if current_dir IS root, we shouldn't be here (checked above).
-                // But just in case parent logic is tricky:
-                if !parent.starts_with(root) && parent != *root {
-                    // Allow going TO root, but not above.
-                    // If parent == root, it's allowed.
-                    // If parent is above root, blocked.
-                    // But we already checked self.current_dir == *root.
-                    // So we are inside root. Parent should be safe unless we are AT root.
+                let resolved_parent = std::fs::canonicalize(&parent)
+                    .unwrap_or_else(|_| parent.clone());
+                let resolved_root = std::fs::canonicalize(root)
+                    .unwrap_or_else(|_| root.clone());
+                if !resolved_parent.starts_with(&resolved_root) {
+                    return Ok(false); // Block parent traversal outside root
                 }
             }
 
