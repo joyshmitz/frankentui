@@ -345,6 +345,7 @@ impl GraphemePool {
                 // Take the slot to own the string (no clone needed)
                 if let Some(dead_slot) = slot_opt.take() {
                     keys_to_remove.push(dead_slot.text);
+                    self.generations[idx] = self.generations[idx].wrapping_add(1);
                     self.free_list.push(idx as u32);
                 }
             }
