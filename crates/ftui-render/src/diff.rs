@@ -957,8 +957,8 @@ impl ChangeRun {
 
     /// Number of cells in this run.
     #[inline]
-    pub const fn len(&self) -> u16 {
-        self.x1.saturating_sub(self.x0) + 1
+    pub const fn len(&self) -> usize {
+        self.x1.saturating_sub(self.x0) as usize + 1
     }
 
     /// Check if this run is empty (should never happen in practice).
@@ -3917,7 +3917,7 @@ mod tests {
         assert_eq!(run.y, u16::MAX);
         assert_eq!(run.x0, 1);
         assert_eq!(run.x1, u16::MAX);
-        assert_eq!(run.len(), u16::MAX); // 65535 - 1 + 1 = 65535
+        assert_eq!(run.len(), usize::from(u16::MAX)); // 65535 - 1 + 1 = 65535
 
         // Single-cell run at max position
         let run2 = ChangeRun::new(u16::MAX, u16::MAX, u16::MAX);

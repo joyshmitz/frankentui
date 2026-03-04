@@ -9940,7 +9940,7 @@ fn journey_score_bar(score: u8) -> String {
     bar
 }
 
-fn parse_journey_line(trimmed: &str, line: &str, span: Span) -> Option<Statement> {
+fn parse_journey_line(trimmed: &str, _line: &str, span: Span) -> Option<Statement> {
     let lower = trimmed.to_ascii_lowercase();
     // Section header: "section <name>"
     if lower.starts_with("section") {
@@ -10284,7 +10284,7 @@ fn parse_xychart_data_array(s: &str) -> Option<Vec<f64>> {
     Some(vals)
 }
 
-fn parse_timeline_line(trimmed: &str, line: &str, span: Span) -> Option<Statement> {
+fn parse_timeline_line(trimmed: &str, _line: &str, span: Span) -> Option<Statement> {
     let lower = trimmed.to_ascii_lowercase();
     if lower.starts_with("section") {
         let name = trimmed["section".len()..].trim();

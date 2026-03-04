@@ -74,7 +74,6 @@ impl Row {
 pub struct Table<'a> {
     rows: Vec<Row>,
     widths: Vec<Constraint>,
-    intrinsic_col_widths: Vec<u16>,
     header: Option<Row>,
     block: Option<Block<'a>>,
     style: Style,
@@ -102,7 +101,6 @@ impl<'a> Table<'a> {
         Self {
             rows,
             widths,
-            intrinsic_col_widths: Vec::new(),
             header: None,
             block: None,
             style: Style::default(),
