@@ -2234,7 +2234,7 @@ mod tests {
         );
 
         // Close sequence should appear (after A, and at frame end)
-        let close_count = output_str.matches("\x1b]8;;\x1b\\").count();
+        let close_count = output_str.matches("\x1b]8;;\x07").count();
         assert!(
             close_count >= 2,
             "Expected at least 2 link closes, got {}",

@@ -98,18 +98,11 @@ impl<'a> Table<'a> {
     ) -> Self {
         let rows: Vec<Row> = rows.into_iter().collect();
         let widths: Vec<Constraint> = widths.into_iter().collect();
-        let col_count = widths.len();
-
-        let intrinsic_col_widths = if Self::requires_measurement(&widths) {
-            Self::compute_intrinsic_widths(&rows, None, col_count)
-        } else {
-            Vec::new()
-        };
 
         Self {
             rows,
             widths,
-            intrinsic_col_widths,
+            intrinsic_col_widths: Vec::new(),
             header: None,
             block: None,
             style: Style::default(),
@@ -368,6 +361,9 @@ pub struct TableState {
     /// Cached display indices (data_hash, filter, sort_column, sort_ascending, indices)
     #[doc(hidden)]
     pub cached_display_indices: Option<(u64, String, Option<usize>, bool, std::sync::Arc<[usize]>)>,
+    /// Cached intrinsic column widths (data_hash, widths)
+    #[doc(hidden)]
+    pub cached_intrinsic_widths: Option<(u64, std::sync::Arc<[u16]>)>,
 }
 
 impl TableState {
@@ -818,12 +814,34 @@ impl<'a> StatefulWidget for Table<'a> {
             .constraints(self.widths.clone())
             .gap(self.column_spacing);
 
+        let intrinsic_col_widths = if Self::requires_measurement(&self.widths) {
+            if let Some(hash) = self.data_hash {
+                if let Some((cached_hash, ref widths)) = state.cached_intrinsic_widths {
+                    if cached_hash == hash && widths.len() == self.widths.len() {
+                        widths.clone()
+                    } else {
+                        let widths: std::sync::Arc<[u16]> = Self::compute_intrinsic_widths(&self.rows, None, self.widths.len()).into();
+                        state.cached_intrinsic_widths = Some((hash, widths.clone()));
+                        widths
+                    }
+                } else {
+                    let widths: std::sync::Arc<[u16]> = Self::compute_intrinsic_widths(&self.rows, None, self.widths.len()).into();
+                    state.cached_intrinsic_widths = Some((hash, widths.clone()));
+                    widths
+                }
+            } else {
+                Self::compute_intrinsic_widths(&self.rows, None, self.widths.len()).into()
+            }
+        } else {
+            std::sync::Arc::new([])
+        };
+
         // We need a dummy rect with correct width to solve horizontal constraints
         let column_rects = flex.split_with_measurer_stably(
             Rect::new(table_area.x, table_area.y, table_area.width, 1),
             |idx, _| {
                 // Use cached intrinsic widths (rows) and merge with header width
-                let row_width = self.intrinsic_col_widths.get(idx).copied().unwrap_or(0);
+                let row_width = intrinsic_col_widths.get(idx).copied().unwrap_or(0);
                 let header_width = self
                     .header
                     .as_ref()
@@ -1198,14 +1216,7 @@ impl MeasurableWidget for Table<'_> {
             return SizeConstraints::ZERO;
         }
 
-        let fallback;
-        let row_widths = if self.intrinsic_col_widths.len() == col_count {
-            &self.intrinsic_col_widths
-        } else {
-            // Compute rows only (pass None for header) to match intrinsic_col_widths semantics
-            fallback = Self::compute_intrinsic_widths(&self.rows, None, col_count);
-            &fallback
-        };
+        let row_widths = Self::compute_intrinsic_widths(&self.rows, None, col_count);
 
         // Total width = sum of max(row_width, header_width) + column spacing
         let separator_width = if col_count > 1 {

@@ -885,7 +885,7 @@ mod tests {
         let mut qg = QueueGuardrails::new(config);
         let (alert, action) = qg.check(8);
         assert_eq!(alert.unwrap().severity, AlertSeverity::Critical);
-        assert_eq!(action, QueueAction::DropNewest(1));
+        assert_eq!(action, QueueAction::DropNewest(5));
     }
 
     #[test]

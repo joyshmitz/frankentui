@@ -466,19 +466,21 @@ impl DepGraph {
 
     /// Collect all dirty nodes in DFS topological order from roots.
     fn collect_dirty_dfs_preorder(&self) -> Vec<NodeId> {
-        // Find roots: dirty nodes with no dirty parent.
+        // Find roots: dirty nodes with no dirty dependencies.
         let mut roots = Vec::new();
         for (i, node) in self.nodes.iter().enumerate() {
             if node.generation == 0 || !node.is_dirty() {
                 continue;
             }
-            let is_root = if node.parent == NodeId::NONE {
-                true
-            } else {
-                let parent = &self.nodes[node.parent as usize];
-                parent.generation == 0 || !parent.is_dirty()
-            };
-            if is_root {
+            
+            let has_dirty_dependency = self.fwd_adj[i].iter().any(|&dep_id| {
+                let dep_idx = dep_id.0 as usize;
+                dep_idx < self.nodes.len()
+                    && self.nodes[dep_idx].generation != 0
+                    && self.nodes[dep_idx].is_dirty()
+            });
+
+            if !has_dirty_dependency {
                 roots.push(NodeId(i as u32));
             }
         }

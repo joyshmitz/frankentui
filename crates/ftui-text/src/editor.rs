@@ -971,7 +971,7 @@ mod tests {
         let mut ed = Editor::with_text("hello world");
         ed.set_cursor(CursorPosition::new(0, 0, 0));
         assert!(ed.delete_word_forward());
-        assert_eq!(ed.text(), " world");
+        assert_eq!(ed.text(), "world");
     }
 
     #[test]

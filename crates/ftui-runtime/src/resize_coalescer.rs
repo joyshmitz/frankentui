@@ -908,7 +908,7 @@ impl ResizeCoalescer {
         // In heuristic mode, only apply immediately in Steady; burst applies via tick.
         let time_ok = match dt {
             Some(d) => d >= Duration::from_millis(self.current_delay_ms()),
-            None => true, // First event ever, no reason to wait
+            None => false, // First event must be coalesced to establish steady state timing
         };
 
         if time_ok && (self.bocpd.is_some() || self.regime == Regime::Steady) {

@@ -202,19 +202,27 @@ impl BidiSegment {
     /// - For RTL characters, cursor `i` is at visual `visual_pos(i) + 1`.
     /// - For `len` (end of text), position depends on paragraph direction.
     pub fn visual_cursor_pos(&self, logical: usize) -> usize {
-        if logical >= self.chars.len() {
-            return match self.base_direction() {
-                Direction::Ltr => self.chars.len(),
-                Direction::Rtl => 0,
-            };
+        let n = self.chars.len();
+        if logical >= n {
+            if n == 0 {
+                return 0;
+            }
+            let last_l = n - 1;
+            let v = self.visual_pos(last_l);
+            let level = self.levels[last_l];
+            if level.number() % 2 == 1 {
+                return v;
+            } else {
+                return v + 1;
+            }
         }
 
         let v = self.visual_pos(logical);
         let level = self.levels[logical];
-        if level.number().is_multiple_of(2) {
-            v
-        } else {
+        if level.number() % 2 == 1 {
             v + 1
+        } else {
+            v
         }
     }
 
@@ -223,17 +231,30 @@ impl BidiSegment {
     /// This is the inverse of `visual_cursor_pos`.
     pub fn logical_cursor_pos(&self, visual: usize) -> usize {
         let n = self.chars.len();
+        if n == 0 {
+            return 0;
+        }
 
-        // Check exact matches from character sides
-        // 1. Is it the left side of an LTR char?
+        let last_l = n - 1;
+        let last_v = self.visual_pos(last_l);
+        let last_level = self.levels[last_l];
+        if last_level.number() % 2 == 1 {
+            if visual == last_v {
+                return n;
+            }
+        } else {
+            if visual == last_v + 1 {
+                return n;
+            }
+        }
+
         if visual < n {
             let l = self.logical_pos(visual);
-            if self.levels[l].number().is_multiple_of(2) {
+            if self.levels[l].number() % 2 == 0 {
                 return l;
             }
         }
 
-        // 2. Is it the right side of an RTL char?
         if visual > 0 {
             let l_prev = self.logical_pos(visual - 1);
             if self.levels[l_prev].number() % 2 == 1 {
@@ -241,23 +262,7 @@ impl BidiSegment {
             }
         }
 
-        // 3. Fallback for endpoints based on paragraph direction
-        match self.base_direction() {
-            Direction::Ltr => {
-                if visual == n {
-                    n
-                } else {
-                    0
-                }
-            }
-            Direction::Rtl => {
-                if visual == 0 {
-                    n
-                } else {
-                    0
-                }
-            }
-        }
+        0
     }
 
     /// Move cursor one step to the right in visual order.
@@ -952,29 +957,30 @@ mod tests {
             pos = seg.move_right(pos);
         }
         // After 6 right moves from visual 0, we should be at visual 6.
-        assert_eq!(seg.visual_pos(pos), 6);
+        assert_eq!(seg.visual_cursor_pos(pos), 6);
 
         // Move left once.
         pos = seg.move_left(pos);
-        assert_eq!(seg.visual_pos(pos), 5);
+        assert_eq!(seg.visual_cursor_pos(pos), 5);
 
         // Move left all the way to 0.
         for _ in 0..5 {
             pos = seg.move_left(pos);
         }
-        assert_eq!(seg.visual_pos(pos), 0);
+        assert_eq!(seg.visual_cursor_pos(pos), 0);
 
         // At visual 0, moving left should stay at 0.
         let same = seg.move_left(pos);
-        assert_eq!(seg.visual_pos(same), 0);
+        assert_eq!(seg.visual_cursor_pos(same), 0);
     }
 
     #[test]
     fn segment_cursor_at_boundary() {
         // At the rightmost position, move_right should be a no-op.
         let seg = BidiSegment::new("ABC", None);
-        let last = seg.move_right(seg.move_right(0)); // visual pos 2
-        assert_eq!(seg.visual_pos(last), 2);
+        // Move right 3 times to get to the end of length 3 string.
+        let last = seg.move_right(seg.move_right(seg.move_right(0))); 
+        assert_eq!(seg.visual_cursor_pos(last), 3);
         let still_last = seg.move_right(last);
         assert_eq!(still_last, last);
     }

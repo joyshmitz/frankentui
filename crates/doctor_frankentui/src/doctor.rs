@@ -569,7 +569,7 @@ exit 1
         }
 
         let result = super::run_help_check(&script_path, "ok");
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "Result was: {:?}", result);
     }
 
     #[test]

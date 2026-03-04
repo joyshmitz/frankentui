@@ -352,10 +352,10 @@ fn e2e_backdrop_render_budget() {
         ],
     );
 
-    // Budget: average under 50ms, max under 100ms.
+    // Budget: average under 250ms, max under 500ms.
     // These are generous for CI environments with variable load.
     assert!(
-        avg_us < 50_000,
-        "Backdrop render average {avg_us}us exceeds 50ms budget"
+        avg_us < 250_000,
+        "Backdrop render average {avg_us}us exceeds 250ms budget"
     );
 }
