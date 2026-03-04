@@ -237,7 +237,7 @@ fn wrap_paragraph(
         } else {
             // Word fits on a fresh line
             let (fragment, fragment_width) = if options.preserve_indent {
-                (word.as_str(), word_width)
+                (word.as_ref(), word_width)
             } else {
                 let trimmed = word.trim_start();
                 (trimmed, display_width(trimmed))

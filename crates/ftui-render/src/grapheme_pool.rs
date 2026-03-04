@@ -320,8 +320,14 @@ impl GraphemePool {
                 if let Some(id) = cell.content.grapheme_id() {
                     // We access via slot index directly.
                     // Note: id.slot() returns usize.
-                    if let Some(Some(slot)) = self.slots.get_mut(id.slot()) {
-                        slot.refcount = slot.refcount.saturating_add(1);
+                    let slot_idx = id.slot();
+                    if let Some(Some(slot)) = self.slots.get_mut(slot_idx) {
+                        // Only mark if the generation matches, otherwise it's a stale reference
+                        if let Some(&slot_gen) = self.generations.get(slot_idx) {
+                            if slot_gen == id.generation() {
+                                slot.refcount = slot.refcount.saturating_add(1);
+                            }
+                        }
                     }
                 }
             }
