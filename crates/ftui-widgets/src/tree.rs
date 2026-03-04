@@ -710,15 +710,30 @@ impl Widget for Tree {
         let mut current_row = 0;
         let mut is_last = Vec::with_capacity(8);
 
-        let filtered_root = self.search_query.as_deref().and_then(|query| {
-            let query = query.trim();
-            if query.is_empty() {
-                return Some(self.root.clone());
-            }
-            let query_lower = query.to_lowercase();
+        let is_searching = self.search_query.as_deref().is_some_and(|q| !q.trim().is_empty());
+        let filtered_root = if is_searching {
+            let query_lower = self.search_query.as_deref().unwrap().trim().to_lowercase();
             filter_node(&self.root, &query_lower)
-        });
-        let root = filtered_root.as_ref().unwrap_or(&self.root);
+        } else {
+            Some(self.root.clone())
+        };
+
+        if is_searching && filtered_root.is_none() {
+            #[cfg(feature = "tracing")]
+            {
+                let elapsed = render_start.elapsed();
+                let elapsed_us = elapsed.as_micros() as u64;
+                render_span.record("render_duration_us", elapsed_us);
+                tracing::debug!(
+                    render_duration_us = elapsed_us,
+                    "Tree render complete (empty search)"
+                );
+            }
+            return;
+        }
+
+        let root_fallback = self.root.clone();
+        let root = filtered_root.as_ref().unwrap_or(&root_fallback);
 
         if self.show_root {
             self.render_node(root, 0, &mut is_last, area, frame, &mut current_row, deg);
@@ -1137,15 +1152,20 @@ fn flatten_visible(node: &TreeNode, depth: usize, out: &mut Vec<FlatNode>) {
 impl Tree {
     fn flatten(&self) -> Vec<FlatNode> {
         let mut out = Vec::new();
-        let filtered_root = self.search_query.as_deref().and_then(|query| {
-            let query = query.trim();
-            if query.is_empty() {
-                return Some(self.root.clone());
-            }
-            let query_lower = query.to_lowercase();
+        let is_searching = self.search_query.as_deref().is_some_and(|q| !q.trim().is_empty());
+        let filtered_root = if is_searching {
+            let query_lower = self.search_query.as_deref().unwrap().trim().to_lowercase();
             filter_node(&self.root, &query_lower)
-        });
-        let root = filtered_root.as_ref().unwrap_or(&self.root);
+        } else {
+            Some(self.root.clone())
+        };
+
+        if is_searching && filtered_root.is_none() {
+            return out;
+        }
+
+        let root_fallback = self.root.clone();
+        let root = filtered_root.as_ref().unwrap_or(&root_fallback);
         if self.show_root {
             flatten_visible(root, 0, &mut out);
         } else if root.expanded {
@@ -2183,7 +2203,7 @@ mod tests {
     }
 
     #[test]
-    fn tree_search_no_match_falls_back_to_unfiltered() {
+    fn tree_search_no_match_returns_empty() {
         let tree = Tree::new(
             TreeNode::new("root")
                 .child(TreeNode::new("Alpha"))
@@ -2193,8 +2213,8 @@ mod tests {
 
         let flat = tree.flatten();
         // When nothing matches (including root), filter_node returns None,
-        // so flatten falls back to the unfiltered tree.
-        assert_eq!(flat.len(), 3); // root + Alpha + Beta
+        // so flatten should return an empty tree.
+        assert_eq!(flat.len(), 0);
     }
 
     #[test]
