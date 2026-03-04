@@ -299,7 +299,6 @@ fn split_words(text: &str) -> Vec<&str> {
         if is_ws != in_whitespace && current_end > current_start {
             words.push(&text[current_start..current_end]);
             current_start = byte_offset;
-            current_end = byte_offset;
         } else if current_end == current_start {
             current_start = byte_offset;
         }
