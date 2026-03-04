@@ -1075,8 +1075,13 @@ impl TextArea {
                 let prev_width = self.get_prev_char_width();
                 let max_scroll_for_prev = visual_col.saturating_sub(prev_width);
 
-                self.scroll_left
-                    .set(candidate_scroll.min(max_scroll_for_prev));
+                let new_scroll = if vp_width > prev_width {
+                    candidate_scroll.min(max_scroll_for_prev)
+                } else {
+                    candidate_scroll
+                };
+
+                self.scroll_left.set(new_scroll);
             }
             return;
         }

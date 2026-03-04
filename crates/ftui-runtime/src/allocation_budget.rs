@@ -530,7 +530,6 @@ impl BudgetSummary {
     /// Serialize summary to JSONL format.
     #[must_use]
     #[allow(dead_code)]
-    #[allow(dead_code)]
     pub(crate) fn to_jsonl(&self, context: &EvidenceContext, event_idx: u64) -> String {
         let prefix = context.prefix(event_idx);
         format!(
