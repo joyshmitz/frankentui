@@ -132,6 +132,8 @@ fn sustained_overload_progressively_degrades() {
             },
             ..Default::default()
         },
+        // Remove the floor so this test can validate full progressive degradation
+        degradation_floor: DegradationLevel::SkipFrame,
         ..Default::default()
     };
     let mut cascade = DegradationCascade::new(config);

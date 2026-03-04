@@ -681,6 +681,8 @@ mod tests {
     fn min_trigger_level_enforced() {
         let config = CascadeConfig {
             min_trigger_level: DegradationLevel::NoStyling,
+            // Floor must be >= min_trigger_level for the jump to work
+            degradation_floor: DegradationLevel::NoStyling,
             ..Default::default()
         };
         let mut cascade = DegradationCascade::new(config);

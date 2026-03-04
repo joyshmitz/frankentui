@@ -743,13 +743,21 @@ impl TextInput {
         let graphemes: Vec<&str> = self.value.graphemes(true).collect();
         let mut pos = self.cursor;
 
-        // 1. Skip separators (whitespace + punctuation)
-        while pos > 0 && Self::get_grapheme_class(graphemes[pos - 1]) != 1 {
+        // 1. Skip spaces backwards
+        while pos > 0 && Self::get_grapheme_class(graphemes[pos - 1]) == 0 {
             pos -= 1;
         }
 
-        // 2. Skip the previous word
-        while pos > 0 && Self::get_grapheme_class(graphemes[pos - 1]) == 1 {
+        if pos == 0 {
+            self.cursor = 0;
+            return;
+        }
+
+        // 2. Identify the target class (Word or Punctuation)
+        let target = Self::get_grapheme_class(graphemes[pos - 1]);
+
+        // 3. Skip backwards as long as the class matches
+        while pos > 0 && Self::get_grapheme_class(graphemes[pos - 1]) == target {
             pos -= 1;
         }
 
@@ -771,17 +779,22 @@ impl TextInput {
         }
 
         let mut pos = self.cursor;
+        let current_class = Self::get_grapheme_class(graphemes[pos]);
 
-        // 1. Skip the current word if we're inside one.
-        if Self::get_grapheme_class(graphemes[pos]) == 1 {
-            while pos < max && Self::get_grapheme_class(graphemes[pos]) == 1 {
+        if current_class == 0 {
+            // If on space, just skip spaces to the next word/punct
+            while pos < max && Self::get_grapheme_class(graphemes[pos]) == 0 {
                 pos += 1;
             }
-        }
-
-        // 2. Skip separators (whitespace + punctuation) to land at next word.
-        while pos < max && Self::get_grapheme_class(graphemes[pos]) != 1 {
-            pos += 1;
+        } else {
+            // Skip the current word/punct block
+            while pos < max && Self::get_grapheme_class(graphemes[pos]) == current_class {
+                pos += 1;
+            }
+            // Then skip trailing spaces
+            while pos < max && Self::get_grapheme_class(graphemes[pos]) == 0 {
+                pos += 1;
+            }
         }
 
         self.cursor = pos;

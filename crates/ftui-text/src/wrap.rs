@@ -286,24 +286,31 @@ fn wrap_long_word(
 ///
 /// Splits on whitespace boundaries, keeping whitespace-only segments
 /// separate from non-whitespace segments.
-fn split_words(text: &str) -> Vec<String> {
+fn split_words(text: &str) -> Vec<&str> {
     let mut words = Vec::new();
-    let mut current = String::new();
+    let mut current_start = 0;
+    let mut current_end = 0;
     let mut in_whitespace = false;
+    let mut byte_offset = 0;
 
     for grapheme in text.graphemes(true) {
         let is_ws = grapheme.chars().all(is_breaking_whitespace);
 
-        if is_ws != in_whitespace && !current.is_empty() {
-            words.push(std::mem::take(&mut current));
+        if is_ws != in_whitespace && current_end > current_start {
+            words.push(&text[current_start..current_end]);
+            current_start = byte_offset;
+            current_end = byte_offset;
+        } else if current_end == current_start {
+            current_start = byte_offset;
         }
 
-        current.push_str(grapheme);
+        current_end = byte_offset + grapheme.len();
         in_whitespace = is_ws;
+        byte_offset += grapheme.len();
     }
 
-    if !current.is_empty() {
-        words.push(current);
+    if current_end > current_start {
+        words.push(&text[current_start..current_end]);
     }
 
     words
@@ -670,75 +677,62 @@ struct KpWord<'a> {
 /// - Adjacent whitespace segments are merged into `space`.
 fn kp_tokenize(text: &str) -> Vec<KpWord<'_>> {
     let mut words = Vec::new();
-    let raw_segments = text.split_word_bounds();
-
-    let mut current_content: Option<Cow<'_, str>> = None;
+    let mut content_start = 0;
+    let mut content_end = 0;
     let mut current_content_width = 0;
+    let mut byte_offset = 0;
 
-    for seg in raw_segments {
+    for seg in text.split_word_bounds() {
         let is_space = seg.chars().all(is_breaking_whitespace);
         let width = display_width(seg);
 
         if is_space {
-            // Space finishes the current word.
-            // If no content, it attaches to the previous word's space (if any),
-            // or starts a new "empty" word if we are at start of text.
-            if let Some(content) = current_content.take() {
+            if content_end > content_start {
+                let content = &text[content_start..content_end];
                 words.push(KpWord {
-                    content,
+                    content: Cow::Borrowed(content),
                     space: Cow::Borrowed(seg),
                     content_width: current_content_width,
                     space_width: width,
                 });
+                content_start = byte_offset + seg.len();
+                content_end = content_start;
                 current_content_width = 0;
             } else if let Some(last) = words.last_mut() {
                 // Append to previous word's space
-                match &mut last.space {
-                    Cow::Borrowed(s) => {
-                        let mut new = String::with_capacity(s.len() + seg.len());
-                        new.push_str(s);
-                        new.push_str(seg);
-                        last.space = Cow::Owned(new);
-                    }
-                    Cow::Owned(s) => s.push_str(seg),
+                if let Cow::Borrowed(s) = last.space {
+                    let start = byte_offset - s.len();
+                    let end = byte_offset + seg.len();
+                    last.space = Cow::Borrowed(&text[start..end]);
                 }
                 last.space_width += width;
+                content_start = byte_offset + seg.len();
+                content_end = content_start;
             } else {
-                // Leading whitespace (no previous word)
                 words.push(KpWord {
                     content: Cow::Borrowed(""),
                     space: Cow::Borrowed(seg),
                     content_width: 0,
                     space_width: width,
                 });
+                content_start = byte_offset + seg.len();
+                content_end = content_start;
             }
         } else {
-            // Content segment.
-            match current_content {
-                None => {
-                    current_content = Some(Cow::Borrowed(seg));
-                    current_content_width = width;
-                }
-                Some(Cow::Borrowed(s)) => {
-                    // Merge segments -> promote to Owned
-                    let mut new = String::with_capacity(s.len() + seg.len());
-                    new.push_str(s);
-                    new.push_str(seg);
-                    current_content = Some(Cow::Owned(new));
-                    current_content_width += width;
-                }
-                Some(Cow::Owned(ref mut s)) => {
-                    s.push_str(seg);
-                    current_content_width += width;
-                }
+            if content_start == content_end {
+                content_start = byte_offset;
             }
+            content_end = byte_offset + seg.len();
+            current_content_width += width;
         }
+
+        byte_offset += seg.len();
     }
 
-    // Flush remaining content
-    if let Some(content) = current_content {
+    if content_end > content_start {
+        let content = &text[content_start..content_end];
         words.push(KpWord {
-            content,
+            content: Cow::Borrowed(content),
             space: Cow::Borrowed(""),
             content_width: current_content_width,
             space_width: 0,

@@ -2928,7 +2928,16 @@ mod tests {
             );
 
             // Deterministic replay contract: same scenario -> same decisions/telemetry.
-            let mut ctrl_replay = fast_controller(16);
+            let mut ctrl_replay = BudgetController::new(BudgetControllerConfig {
+                target: Duration::from_millis(16),
+                eprocess: EProcessConfig {
+                    warmup_frames: 0,
+                    ..Default::default()
+                },
+                cooldown_frames: 0,
+                degradation_floor: DegradationLevel::SkipFrame,
+                ..Default::default()
+            });
             let replay_logs = run_campaign(&mut ctrl_replay, &phases);
             assert_eq!(
                 logs.len(),
