@@ -240,7 +240,7 @@ impl<'a> List<'a> {
         }
 
         if state.multi_select_enabled {
-            state.multi_selected.retain(|idx| filtered.contains(idx));
+            state.multi_selected.retain(|idx| filtered.binary_search(idx).is_ok());
         }
     }
 
@@ -817,7 +817,7 @@ impl<'a> StatefulWidget for List<'a> {
                     state.offset = state.offset.min(max_offset);
 
                     if let Some(hovered) = state.hovered
-                        && !filtered_indices.contains(&hovered)
+                        && filtered_indices.binary_search(&hovered).is_err()
                     {
                         state.hovered = None;
                     }
