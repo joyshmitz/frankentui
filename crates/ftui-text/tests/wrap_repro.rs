@@ -35,7 +35,7 @@ fn test_wrap_word_indentation() {
     let text = "   foo";
     // Standard wrap
     let lines = wrap_text(text, 10, WrapMode::Word);
-    assert_eq!(lines, vec!["   foo"]); // Default preserves indent? No, default `preserve_indent` is false in `wrap_text`.
+    assert_eq!(lines, vec!["foo"]); // Default preserve_indent is false in wrap_text.
 
     // Wait, `wrap_text` uses default options.
     // `WrapOptions::default()` has `preserve_indent: false`.

@@ -1518,10 +1518,16 @@ mod tests {
         // "|hello, world"
 
         input.move_cursor_word_right(false);
+        assert_eq!(input.cursor(), 5); // "hello|, world"
+
+        input.move_cursor_word_right(false);
         assert_eq!(input.cursor(), 7); // "hello, |world"
+        
+        input.move_cursor_word_right(false);
+        assert_eq!(input.cursor(), 12); // "hello, world|"
 
         input.move_cursor_word_left(false);
-        assert_eq!(input.cursor(), 0); // "|hello, world"
+        assert_eq!(input.cursor(), 7); // "hello, |world"
     }
 
     #[test]
@@ -1531,13 +1537,9 @@ mod tests {
         input.delete_word_back();
         assert_eq!(input.value(), "hello "); // Deleted "world"
 
-        // "hello |" — word-left skips space then stops
+        // "hello |" — word-left skips space and deletes the preceding word
         input.delete_word_back();
-        assert_eq!(input.value(), "hello"); // Deleted " "
-
-        // "hello|" — word-left deletes "hello"
-        input.delete_word_back();
-        assert_eq!(input.value(), ""); // Deleted "hello"
+        assert_eq!(input.value(), ""); // Deleted "hello "
     }
 
     #[test]
@@ -2306,7 +2308,9 @@ mod scroll_edge_tests {
         let event = Event::Paste(ftui_core::event::PasteEvent::new("de", false));
         input.handle_event(&event);
 
-        assert_eq!(input.value(), "ac");
-        assert_eq!(input.cursor(), 1);
+        // Oversized pastes replace nothing and leave selection intact.
+        assert_eq!(input.value(), "abc");
+        assert_eq!(input.cursor(), 2);
+        assert_eq!(input.selection_anchor, Some(1));
     }
 }

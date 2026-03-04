@@ -275,6 +275,17 @@ impl FlakeDetector {
     /// The residual should be the difference between observed latency
     /// and expected latency, ideally normalized.
     pub fn observe(&mut self, residual: f64) -> FlakeDecision {
+        if residual.is_nan() {
+            return FlakeDecision {
+                is_flaky: false,
+                e_value: self.e_cumulative,
+                threshold: self.config.threshold(),
+                observation_count: self.observation_count,
+                variance_estimate: self.current_sigma().powi(2),
+                warmed_up: self.observation_count >= self.config.min_observations,
+            };
+        }
+
         self.observation_count += 1;
 
         // Update variance estimate

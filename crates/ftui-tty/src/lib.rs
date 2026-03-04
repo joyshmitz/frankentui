@@ -2860,8 +2860,8 @@ mod tests {
 
         let first = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
-            x: 500,
-            y: 400,
+            x: 700,
+            y: 500,
             modifiers: Modifiers::NONE,
         });
         let _ = src.normalize_event(first);
@@ -2918,8 +2918,8 @@ mod tests {
 
         let first = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
-            x: 500,
-            y: 400,
+            x: 700,
+            y: 500,
             modifiers: Modifiers::NONE,
         });
         let normalized_first = src.normalize_event(first);

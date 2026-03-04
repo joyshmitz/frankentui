@@ -1135,7 +1135,7 @@ impl Toast {
     /// - `Tab`: Cycle focus through action buttons (round-robin).
     /// - `Enter`: Invoke the focused action. Returns `ToastEvent::Action(id)`.
     pub fn handle_key(&mut self, key: KeyEvent) -> ToastEvent {
-        if !self.is_visible() {
+        if !self.is_visible() || self.state.dismissed {
             return ToastEvent::None;
         }
 

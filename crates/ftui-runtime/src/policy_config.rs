@@ -132,6 +132,13 @@ impl PolicyConfig {
             errors.push("conformal.min_samples must be > 0".into());
         }
 
+        if self.cascade.min_trigger_level > self.cascade.max_degradation {
+            errors.push(format!(
+                "cascade.min_trigger_level ({:?}) cannot be strictly greater than cascade.max_degradation ({:?})",
+                self.cascade.min_trigger_level, self.cascade.max_degradation
+            ));
+        }
+
         if self.conformal.window_size == 0 {
             errors.push("conformal.window_size must be > 0".into());
         }
@@ -849,6 +856,15 @@ mod tests {
         policy.conformal.alpha = 0.0;
         let errors = policy.validate();
         assert!(errors.iter().any(|e| e.contains("conformal.alpha")));
+    }
+
+    #[test]
+    fn validate_catches_invalid_cascade_levels() {
+        let mut policy = PolicyConfig::default();
+        policy.cascade.min_trigger_level = ftui_render::budget::DegradationLevel::SkipFrame;
+        policy.cascade.max_degradation = ftui_render::budget::DegradationLevel::SimpleBorders;
+        let errors = policy.validate();
+        assert!(errors.iter().any(|e| e.contains("cascade.min_trigger_level")));
     }
 
     #[test]

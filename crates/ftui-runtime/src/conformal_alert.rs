@@ -161,11 +161,14 @@ impl CalibrationStats {
         }
     }
 
-    fn update(&mut self, x: f64) {
+    fn update(&mut self, value: f64) {
+        if value.is_nan() {
+            return;
+        }
         self.n += 1;
-        let delta = x - self.mean;
+        let delta = value - self.mean;
         self.mean += delta / self.n as f64;
-        let delta2 = x - self.mean;
+        let delta2 = value - self.mean;
         self.m2 += delta * delta2;
     }
 
@@ -245,6 +248,8 @@ pub enum AlertReason {
     InCooldown,
     /// No alert: insufficient calibration data.
     InsufficientCalibration,
+    /// No alert: invalid observation (e.g. NaN).
+    InvalidObservation,
 }
 
 /// Decision returned after observing a new value.
@@ -381,6 +386,10 @@ impl ConformalAlert {
     pub fn observe(&mut self, value: f64) -> AlertDecision {
         self.observation_count += 1;
         self.observations_since_alert += 1;
+
+        if value.is_nan() {
+            return self.no_alert_decision(value, AlertReason::InvalidObservation);
+        }
 
         // Check cooldown
         if self.in_cooldown && self.observations_since_alert <= self.config.alert_cooldown {
