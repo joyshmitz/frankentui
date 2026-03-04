@@ -349,6 +349,14 @@ pub struct BudgetControllerConfig {
     pub upgrade_threshold: f64,
     /// Cooldown frames between level changes.
     pub cooldown_frames: u32,
+    /// Minimum quality floor: the controller will never degrade past this level.
+    ///
+    /// Default: `DegradationLevel::SimpleBorders` — preserves readable text
+    /// content while still allowing border simplification.
+    ///
+    /// Setting this to `DegradationLevel::Full` disables all degradation.
+    /// Setting this to `DegradationLevel::SkipFrame` effectively removes the floor.
+    pub degradation_floor: DegradationLevel,
 }
 
 impl Default for BudgetControllerConfig {
@@ -360,6 +368,7 @@ impl Default for BudgetControllerConfig {
             degrade_threshold: 0.3,
             upgrade_threshold: 0.2,
             cooldown_frames: 3,
+            degradation_floor: DegradationLevel::SimpleBorders,
         }
     }
 }
@@ -540,7 +549,9 @@ impl BudgetController {
             evidence_threshold = 1.0 / self.config.eprocess.alpha;
             evidence_margin = self.eprocess.e_value - evidence_threshold;
 
-            if self.current_level.is_max() {
+            if self.current_level.is_max()
+                || self.current_level >= self.config.degradation_floor
+            {
                 reason = BudgetDecisionReason::AtMaxDegradation;
             } else if self.eprocess.should_degrade(&self.config.eprocess) {
                 decision = BudgetDecision::Degrade;
@@ -578,7 +589,13 @@ impl BudgetController {
                 self.transition_seq = self.transition_seq.saturating_add(1);
                 self.last_transition_correlation_id =
                     (self.transition_seq << 32) ^ u64::from(self.eprocess.frames_observed);
-                self.current_level = self.current_level.next();
+                let next = self.current_level.next();
+                // Clamp to degradation floor: never degrade past the configured minimum quality.
+                self.current_level = if next > self.config.degradation_floor {
+                    self.config.degradation_floor
+                } else {
+                    next
+                };
                 self.frames_since_change = 0;
 
                 #[cfg(feature = "tracing")]
@@ -2795,13 +2812,24 @@ mod tests {
             // 1) burst overload
             // 2) sustained overload
             // 3) recovery/underload
+            //
+            // This test validates full-range degradation, so remove the floor.
             let phases: [(&str, usize, Duration); 3] = [
                 ("burst_overload", 24, Duration::from_millis(28)),
                 ("sustained_overload", 80, Duration::from_millis(52)),
                 ("recovery_underload", 140, Duration::from_millis(8)),
             ];
 
-            let mut ctrl = fast_controller(16);
+            let mut ctrl = BudgetController::new(BudgetControllerConfig {
+                target: Duration::from_millis(16),
+                eprocess: EProcessConfig {
+                    warmup_frames: 0,
+                    ..Default::default()
+                },
+                cooldown_frames: 0,
+                degradation_floor: DegradationLevel::SkipFrame,
+                ..Default::default()
+            });
             let logs = run_campaign(&mut ctrl, &phases);
             assert!(!logs.is_empty(), "campaign logs must be non-empty");
 
@@ -4075,6 +4103,8 @@ mod tests {
                     ..Default::default()
                 },
                 cooldown_frames: 0,
+                // Remove the floor so we can test reaching SkipFrame
+                degradation_floor: DegradationLevel::SkipFrame,
                 ..Default::default()
             });
 

@@ -235,6 +235,7 @@ impl PolicyConfig {
             recovery_threshold: self.cascade.recovery_threshold,
             max_degradation: self.cascade.max_degradation,
             min_trigger_level: self.cascade.min_trigger_level,
+            degradation_floor: self.cascade.degradation_floor,
         }
     }
 
@@ -423,6 +424,19 @@ pub struct CascadePolicyConfig {
         )
     )]
     pub min_trigger_level: DegradationLevel,
+    /// Minimum quality floor: the cascade will never degrade past this level.
+    ///
+    /// Default: `SimpleBorders` — preserves readable text content, preventing
+    /// escalation to `EssentialOnly`, `Skeleton`, or `SkipFrame` after
+    /// transient focus/resize spikes.
+    #[cfg_attr(
+        feature = "policy-config",
+        serde(
+            serialize_with = "serialize_degradation_level",
+            deserialize_with = "deserialize_degradation_level"
+        )
+    )]
+    pub degradation_floor: DegradationLevel,
 }
 
 impl Default for CascadePolicyConfig {
@@ -431,6 +445,7 @@ impl Default for CascadePolicyConfig {
             recovery_threshold: 10,
             max_degradation: DegradationLevel::SkipFrame,
             min_trigger_level: DegradationLevel::SimpleBorders,
+            degradation_floor: DegradationLevel::SimpleBorders,
         }
     }
 }
@@ -779,6 +794,7 @@ mod tests {
         assert_eq!(cascade.recovery_threshold, expected_cc.recovery_threshold);
         assert_eq!(cascade.max_degradation, expected_cc.max_degradation);
         assert_eq!(cascade.min_trigger_level, expected_cc.min_trigger_level);
+        assert_eq!(cascade.degradation_floor, expected_cc.degradation_floor);
 
         // PID
         let pid = policy.to_pid_gains();

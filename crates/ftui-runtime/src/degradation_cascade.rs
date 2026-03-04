@@ -59,6 +59,17 @@ pub struct CascadeConfig {
     /// If the current level is below this, jump directly to it.
     /// Default: `DegradationLevel::SimpleBorders` (gradual).
     pub min_trigger_level: DegradationLevel,
+
+    /// Minimum quality floor: the cascade will never degrade past this level.
+    ///
+    /// Default: `DegradationLevel::SimpleBorders` — preserves readable text
+    /// content, preventing escalation to `EssentialOnly`, `Skeleton`, or
+    /// `SkipFrame` after transient focus/resize spikes.
+    ///
+    /// This is distinct from `max_degradation` which caps the absolute worst
+    /// level. The floor is a safety net that prevents content-suppressing
+    /// degradation regardless of how bad the frame budget looks.
+    pub degradation_floor: DegradationLevel,
 }
 
 impl Default for CascadeConfig {
@@ -68,6 +79,7 @@ impl Default for CascadeConfig {
             recovery_threshold: 10,
             max_degradation: DegradationLevel::SkipFrame,
             min_trigger_level: DegradationLevel::SimpleBorders,
+            degradation_floor: DegradationLevel::SimpleBorders,
         }
     }
 }
@@ -208,13 +220,21 @@ impl DegradationCascade {
         let prediction = self.guard.predict_p99(budget_us, key);
 
         let decision = if prediction.exceeds_budget {
-            // Degrade (if not at max)
-            if self.current_level < self.config.max_degradation {
+            // Degrade (if not at max and not already at degradation floor)
+            if self.current_level < self.config.max_degradation
+                && self.current_level < self.config.degradation_floor
+            {
                 self.current_level = self.current_level.next();
 
                 // Jump to minimum trigger level if below it
                 if self.current_level < self.config.min_trigger_level {
                     self.current_level = self.config.min_trigger_level;
+                }
+
+                // Clamp to degradation floor: never degrade past the configured
+                // minimum quality level.
+                if self.current_level > self.config.degradation_floor {
+                    self.current_level = self.config.degradation_floor;
                 }
 
                 self.recovery_streak = 0;
