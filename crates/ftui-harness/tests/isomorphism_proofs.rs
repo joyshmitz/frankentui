@@ -859,7 +859,7 @@ fn proof_runs_cover_all_changes() {
     let changes = diff.changes();
 
     // Count total cells covered by runs
-    let run_cells: usize = runs.iter().map(|r| r.len() as usize).sum();
+    let run_cells: usize = runs.iter().map(|r| r.len()).sum();
 
     assert_eq!(
         run_cells,

@@ -209,11 +209,11 @@ fn wrap_paragraph(
             continue;
         }
 
-        let word_width = display_width(&word);
+        let word_width = display_width(word);
 
         // If word fits on current line
         if *current_width + word_width <= options.width {
-            current_line.push_str(&word);
+            current_line.push_str(word);
             *current_width += word_width;
             continue;
         }
@@ -236,15 +236,15 @@ fn wrap_paragraph(
         if word_width > options.width {
             if char_fallback {
                 // Break the long word into pieces
-                wrap_long_word(&word, options, lines, current_line, current_width);
+                wrap_long_word(word, options, lines, current_line, current_width);
             } else {
                 // Just put the long word on its own line
-                lines.push(finalize_line(&word, options));
+                lines.push(finalize_line(word, options));
             }
         } else {
             // Word fits on a fresh line
             let (fragment, fragment_width) = if options.preserve_indent {
-                (word.as_ref(), word_width)
+                (word, word_width)
             } else {
                 let trimmed = word.trim_start();
                 (trimmed, display_width(trimmed))

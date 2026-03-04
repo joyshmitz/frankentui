@@ -222,19 +222,19 @@ impl BidiSegment {
 
         if visual >= n {
             let l_l = self.logical_pos(n - 1);
-            return if self.levels[l_l].number() % 2 == 0 { l_l + 1 } else { l_l };
+            return if self.levels[l_l].number().is_multiple_of(2) { l_l + 1 } else { l_l };
         }
 
         if visual == 0 {
             let l_r = self.logical_pos(0);
-            return if self.levels[l_r].number() % 2 == 0 { l_r } else { l_r + 1 };
+            return if self.levels[l_r].number().is_multiple_of(2) { l_r } else { l_r + 1 };
         }
 
         let l_l = self.logical_pos(visual - 1);
         let l_r = self.logical_pos(visual);
 
-        let left_is_ltr = self.levels[l_l].number() % 2 == 0;
-        let right_is_ltr = self.levels[l_r].number() % 2 == 0;
+        let left_is_ltr = self.levels[l_l].number().is_multiple_of(2);
+        let right_is_ltr = self.levels[l_r].number().is_multiple_of(2);
 
         let cand_left = if left_is_ltr { l_l + 1 } else { l_l };
         let cand_right = if right_is_ltr { l_r } else { l_r + 1 };

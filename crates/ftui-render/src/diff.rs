@@ -1810,7 +1810,7 @@ mod tests {
         }
 
         // Invariant 2: total cells in runs == diff.len()
-        let total_cells: usize = runs.iter().map(|r| usize::from(r.len())).sum();
+        let total_cells: usize = runs.iter().map(|r| r.len()).sum();
         assert_eq!(
             total_cells,
             diff.len(),

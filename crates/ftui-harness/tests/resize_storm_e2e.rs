@@ -879,7 +879,7 @@ fn e2e_diff_correctness_across_sizes() {
 
         // Self-diff should be empty (idempotence)
         let self_diff = BufferDiff::compute(&buf1, &buf2);
-        let change_count: usize = self_diff.runs().iter().map(|r| r.len() as usize).sum();
+        let change_count: usize = self_diff.runs().iter().map(|r| r.len()).sum();
 
         // Same content → zero changes (both render identical content at same size)
         assert_eq!(

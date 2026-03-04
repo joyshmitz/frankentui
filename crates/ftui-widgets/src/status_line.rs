@@ -293,7 +293,7 @@ impl Widget for StatusLine<'_> {
 
         // Calculate positions
         let left_x = area.x;
-        let right_x = area.right().saturating_sub(right_width as u16);
+        let right_x = area.right().saturating_sub(right_width as u16).max(area.x);
         let available_center = width.saturating_sub(left_width).saturating_sub(right_width);
         let center_target_width = if center_width > 0 && center_spacers > 0 {
             available_center
@@ -324,7 +324,7 @@ impl Widget for StatusLine<'_> {
         }
 
         // Render right items
-        if !self.right.is_empty() && right_x >= area.x {
+        if !self.right.is_empty() {
             self.render_items(frame, &self.right, right_x, area.y, area.right(), style);
         }
     }

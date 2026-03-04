@@ -160,12 +160,12 @@ impl<'a> List<'a> {
     fn filtered_indices(&self, state: &mut ListState) -> std::sync::Arc<[usize]> {
         let query_str = state.filter_query();
         
-        if let Some(hash) = self.data_hash {
-            if let Some((cached_hash, ref cached_query, ref indices)) = state.cached_display_indices {
-                if cached_hash == hash && cached_query == query_str {
-                    return std::sync::Arc::clone(indices);
-                }
-            }
+        if let Some(hash) = self.data_hash
+            && let Some((cached_hash, ref cached_query, ref indices)) = state.cached_display_indices
+            && cached_hash == hash
+            && cached_query == query_str
+        {
+            return std::sync::Arc::clone(indices);
         }
 
         let query = query_str.trim();

@@ -237,7 +237,7 @@ mod cost_model {
 
         // Prefix sum of changed cell counts for O(1) segment cost.
         for (i, run) in row_runs.iter().enumerate() {
-            scratch.prefix_cells[i + 1] = scratch.prefix_cells[i] + run.len() as usize;
+            scratch.prefix_cells[i + 1] = scratch.prefix_cells[i] + run.len();
         }
 
         // DP over segments: dp[j] is min cost to emit runs[0..=j].

@@ -3331,7 +3331,7 @@ impl StyledText {
                 let dist = (dx * dx + dy * dy).sqrt();
                 // Max distance is from center to corner
                 let max_dist = (0.5_f64.powi(2) * aspect * aspect + 0.5_f64.powi(2)).sqrt();
-                let normalized = clamp_f64((dist / max_dist), 0.0, 1.0);
+                let normalized = clamp_f64(dist / max_dist, 0.0, 1.0);
                 gradient.sample(normalized)
             }
 
@@ -3465,7 +3465,7 @@ impl StyledText {
                 };
 
                 // Red shifts negative direction, Blue shifts positive
-                let red_boost = clamp_f64((-shift), -50.0, 50.0);
+                let red_boost = clamp_f64(-shift, -50.0, 50.0);
                 let blue_boost = clamp_f64(shift, -50.0, 50.0);
 
                 PackedRgba::rgb(
@@ -3624,7 +3624,7 @@ impl StyledText {
                         (corner_dx * corner_dx + corner_dy * corner_dy).sqrt()
                     };
                     let normalized = if max_dist > 0.0 {
-                        clamp_f64((dist / max_dist), 0.0, 1.0)
+                        clamp_f64(dist / max_dist, 0.0, 1.0)
                     } else {
                         0.0
                     };
@@ -3689,7 +3689,7 @@ impl StyledText {
                         Direction::Up | Direction::Down => distance * effective_offset * 30.0,
                     };
 
-                    let red_boost = clamp_f64((-shift), -50.0, 50.0);
+                    let red_boost = clamp_f64(-shift, -50.0, 50.0);
                     let blue_boost = clamp_f64(shift, -50.0, 50.0);
 
                     color = PackedRgba::rgb(
@@ -4108,7 +4108,7 @@ impl StyledText {
                         }
                     } else {
                         // Smooth slide-in animation
-                        let progress = clamp_f64(((revealed_chars - char_reveal_time) / 0.3), 0.0, 1.0);
+                        let progress = clamp_f64((revealed_chars - char_reveal_time) / 0.3, 0.0, 1.0);
                         let eased = self.easing.apply(progress);
                         let remaining = ((1.0 - eased) * 3.0).round() as i16;
 
@@ -5114,7 +5114,7 @@ impl EffectSequence {
             .sum::<f64>()
             + self.steps[self.current_step].duration_secs * self.step_progress;
 
-        clamp_f64((elapsed_duration / total_duration), 0.0, 1.0)
+        clamp_f64(elapsed_duration / total_duration, 0.0, 1.0)
     }
 
     /// Check if the sequence has completed.
@@ -5609,7 +5609,7 @@ mod tests {
         let dy: f64 = t_y - center.1;
         let distance = (dx * dx + dy * dy).sqrt();
         let max_distance = (0.5_f64.powi(2) * aspect * aspect + 0.5_f64.powi(2)).sqrt();
-        let t = clamp_f64((distance / max_distance), 0.0, 1.0);
+        let t = clamp_f64(distance / max_distance, 0.0, 1.0);
 
         let color = gradient.sample(t);
 
@@ -5633,7 +5633,7 @@ mod tests {
         let dy: f64 = t_y - center.1;
         let distance = (dx * dx + dy * dy).sqrt();
         let max_distance = (0.5_f64.powi(2) * aspect * aspect + 0.5_f64.powi(2)).sqrt();
-        let t = clamp_f64((distance / max_distance), 0.0, 1.0);
+        let t = clamp_f64(distance / max_distance, 0.0, 1.0);
 
         let color = gradient.sample(t);
 
@@ -9877,7 +9877,7 @@ impl StyledMultiLine {
                         (corner_dx * corner_dx + corner_dy * corner_dy).sqrt()
                     };
                     let normalized = if max_dist > 0.0 {
-                        clamp_f64((dist / max_dist), 0.0, 1.0)
+                        clamp_f64(dist / max_dist, 0.0, 1.0)
                     } else {
                         0.0
                     };

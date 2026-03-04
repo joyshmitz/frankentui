@@ -160,18 +160,17 @@ impl FilePickerState {
         let new_dir = entry.path.clone();
 
         // Confinement check: prevent symlinks from escaping the root
-        if let Some(root) = &self.root {
-            if let (Ok(resolved_new), Ok(resolved_root)) = (
+        if let Some(root) = &self.root
+            && let (Ok(resolved_new), Ok(resolved_root)) = (
                 std::fs::canonicalize(&new_dir),
                 std::fs::canonicalize(root),
-            ) {
-                if !resolved_new.starts_with(&resolved_root) {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        "Cannot traverse outside root directory via symlink",
-                    ));
-                }
-            }
+            )
+            && !resolved_new.starts_with(&resolved_root)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Cannot traverse outside root directory via symlink",
+            ));
         }
 
         let new_entries = read_directory(&new_dir)?;

@@ -188,23 +188,20 @@ impl<'a> Table<'a> {
     }
 
     fn filtered_and_sorted_indices(&self, state: &mut TableState) -> std::sync::Arc<[usize]> {
-        if let Some(hash) = self.data_hash {
-            if let Some((
+        if let Some(hash) = self.data_hash
+            && let Some((
                 cached_hash,
                 cached_filter,
                 cached_sort_col,
                 cached_sort_asc,
                 indices,
             )) = &state.cached_display_indices
-            {
-                if *cached_hash == hash
-                    && *cached_filter == state.filter
-                    && *cached_sort_col == state.sort_column
-                    && *cached_sort_asc == state.sort_ascending
-                {
-                    return std::sync::Arc::clone(indices);
-                }
-            }
+            && *cached_hash == hash
+            && *cached_filter == state.filter
+            && *cached_sort_col == state.sort_column
+            && *cached_sort_asc == state.sort_ascending
+        {
+            return std::sync::Arc::clone(indices);
         }
 
         let mut indices: Vec<usize> = (0..self.rows.len()).collect();
@@ -333,6 +330,8 @@ impl<'a> Widget for Table<'a> {
     }
 }
 
+pub type CachedTableDisplayIndices = (u64, String, Option<usize>, bool, std::sync::Arc<[usize]>);
+
 /// Mutable state for a [`Table`] widget.
 #[derive(Debug, Clone, Default)]
 pub struct TableState {
@@ -358,7 +357,7 @@ pub struct TableState {
     coherence: ftui_layout::CoherenceCache,
     /// Cached display indices (data_hash, filter, sort_column, sort_ascending, indices)
     #[doc(hidden)]
-    pub cached_display_indices: Option<(u64, String, Option<usize>, bool, std::sync::Arc<[usize]>)>,
+    pub cached_display_indices: Option<CachedTableDisplayIndices>,
     /// Cached intrinsic column widths (data_hash, widths)
     #[doc(hidden)]
     pub cached_intrinsic_widths: Option<(u64, std::sync::Arc<[u16]>)>,
@@ -814,14 +813,11 @@ impl<'a> StatefulWidget for Table<'a> {
 
         let intrinsic_col_widths = if Self::requires_measurement(&self.widths) {
             if let Some(hash) = self.data_hash {
-                if let Some((cached_hash, ref widths)) = state.cached_intrinsic_widths {
-                    if cached_hash == hash && widths.len() == self.widths.len() {
-                        widths.clone()
-                    } else {
-                        let widths: std::sync::Arc<[u16]> = Self::compute_intrinsic_widths(&self.rows, None, self.widths.len()).into();
-                        state.cached_intrinsic_widths = Some((hash, widths.clone()));
-                        widths
-                    }
+                if let Some((cached_hash, ref widths)) = state.cached_intrinsic_widths
+                    && cached_hash == hash
+                    && widths.len() == self.widths.len()
+                {
+                    widths.clone()
                 } else {
                     let widths: std::sync::Arc<[u16]> = Self::compute_intrinsic_widths(&self.rows, None, self.widths.len()).into();
                     state.cached_intrinsic_widths = Some((hash, widths.clone()));

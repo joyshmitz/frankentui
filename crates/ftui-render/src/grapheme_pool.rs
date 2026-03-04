@@ -323,10 +323,10 @@ impl GraphemePool {
                     let slot_idx = id.slot();
                     if let Some(Some(slot)) = self.slots.get_mut(slot_idx) {
                         // Only mark if the generation matches, otherwise it's a stale reference
-                        if let Some(&slot_gen) = self.generations.get(slot_idx) {
-                            if slot_gen == id.generation() {
-                                slot.refcount = slot.refcount.saturating_add(1);
-                            }
+                        if let Some(&slot_gen) = self.generations.get(slot_idx)
+                            && slot_gen == id.generation()
+                        {
+                            slot.refcount = slot.refcount.saturating_add(1);
                         }
                     }
                 }
