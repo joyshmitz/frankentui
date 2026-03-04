@@ -503,14 +503,14 @@ impl BocpdDetector {
         config.mu_steady_ms = config.mu_steady_ms.max(1.0);
         config.mu_burst_ms = config.mu_burst_ms.max(1.0);
         config.hazard_lambda = config.hazard_lambda.max(1.0);
-        config.min_observation_ms = config.min_observation_ms.max(0.1);
-        config.max_observation_ms = config.max_observation_ms.max(config.min_observation_ms);
-        config.steady_threshold = config.steady_threshold.clamp(0.0, 1.0);
-        config.burst_threshold = config.burst_threshold.clamp(0.0, 1.0);
+        config.min_observation_ms = if config.min_observation_ms.is_nan() { 0.1 } else { config.min_observation_ms.max(0.1) };
+        config.max_observation_ms = if config.max_observation_ms.is_nan() { config.min_observation_ms } else { config.max_observation_ms.max(config.min_observation_ms) };
+        config.steady_threshold = if config.steady_threshold.is_nan() { 0.3 } else { config.steady_threshold.clamp(0.0, 1.0) };
+        config.burst_threshold = if config.burst_threshold.is_nan() { 0.7 } else { config.burst_threshold.clamp(0.0, 1.0) };
         if config.burst_threshold < config.steady_threshold {
             std::mem::swap(&mut config.steady_threshold, &mut config.burst_threshold);
         }
-        config.burst_prior = config.burst_prior.clamp(0.001, 0.999);
+        config.burst_prior = if config.burst_prior.is_nan() { 0.1 } else { config.burst_prior.clamp(0.001, 0.999) };
 
         let k = config.max_run_length;
 
@@ -792,7 +792,11 @@ impl BocpdDetector {
         let posterior_odds = prior_odds * likelihood_ratio;
         
         // Clamp to prevent total float lock-in, but the transition prior does the heavy lifting now
-        self.p_burst = (posterior_odds / (1.0 + posterior_odds)).clamp(0.001, 0.999);
+        let mut p_burst_raw = posterior_odds / (1.0 + posterior_odds);
+        if p_burst_raw.is_nan() {
+            p_burst_raw = if posterior_odds.is_infinite() { 1.0 } else { 0.5 };
+        }
+        self.p_burst = p_burst_raw.clamp(0.001, 0.999);
 
         // Update run-length distribution
         // The predictive likelihood for RL update is the mixture of regimes:

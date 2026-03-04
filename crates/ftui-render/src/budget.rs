@@ -139,6 +139,9 @@ impl PidState {
     ///
     /// Returns the control signal `u_t`.
     fn update(&mut self, error: f64, gains: &PidGains) -> f64 {
+        if error.is_nan() {
+            return 0.0;
+        }
         // Integral with anti-windup clamping
         self.integral = (self.integral + error).clamp(-gains.integral_max, gains.integral_max);
 
@@ -288,11 +291,12 @@ impl EProcessState {
         // Since r_t is already standardized, σ in the exponent is 1.0.
         let lambda = config.lambda;
         let log_factor = lambda * residual - lambda * lambda / 2.0;
-        self.e_value *= log_factor.exp();
-
-        // Clamp to avoid numerical issues (but preserve the supermartingale property
-        // by allowing it to grow large or shrink small).
-        self.e_value = self.e_value.clamp(1e-10, 1e10);
+        if !log_factor.is_nan() {
+            self.e_value *= log_factor.exp();
+            // Clamp to avoid numerical issues (but preserve the supermartingale property
+            // by allowing it to grow large or shrink small).
+            self.e_value = self.e_value.clamp(1e-10, 1e10);
+        }
 
         self.e_value
     }

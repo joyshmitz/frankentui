@@ -277,6 +277,7 @@ impl AllocLeakDetector {
         let lambda = self.config.lambda;
         let log_factor = lambda * residual - (lambda * lambda) / 2.0;
         // Clamp to prevent overflow.
+        let log_factor = if log_factor.is_nan() { 0.0 } else { log_factor };
         let factor = log_factor.clamp(-10.0, 10.0).exp();
         self.e_value *= factor;
 
