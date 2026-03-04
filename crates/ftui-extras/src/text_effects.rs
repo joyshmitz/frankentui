@@ -43,13 +43,18 @@ use ftui_render::frame::Frame;
 use ftui_text::{display_width, grapheme_count, grapheme_width, graphemes};
 use ftui_widgets::Widget;
 
+#[inline]
+fn clamp_f64(val: f64, min: f64, max: f64) -> f64 {
+    if val.is_nan() { min } else { val.clamp(min, max) }
+}
+
 // =============================================================================
 // Color Utilities
 // =============================================================================
 
 /// Interpolate between two colors.
 pub fn lerp_color(a: PackedRgba, b: PackedRgba, t: f64) -> PackedRgba {
-    let t = t.clamp(0.0, 1.0);
+    let t = clamp_f64(t, 0.0, 1.0);
     let r = (a.r() as f64 + (b.r() as f64 - a.r() as f64) * t) as u8;
     let g = (a.g() as f64 + (b.g() as f64 - a.g() as f64) * t) as u8;
     let b_val = (a.b() as f64 + (b.b() as f64 - a.b() as f64) * t) as u8;
@@ -58,7 +63,7 @@ pub fn lerp_color(a: PackedRgba, b: PackedRgba, t: f64) -> PackedRgba {
 
 /// Apply alpha/brightness to a color.
 pub fn apply_alpha(color: PackedRgba, alpha: f64) -> PackedRgba {
-    let alpha = alpha.clamp(0.0, 1.0);
+    let alpha = clamp_f64(alpha, 0.0, 1.0);
     PackedRgba::rgb(
         (color.r() as f64 * alpha) as u8,
         (color.g() as f64 * alpha) as u8,
@@ -139,7 +144,7 @@ fn simple_hash(mut x: u64) -> u64 {
 #[inline]
 pub fn breathing_curve(t: f64, asymmetry: f64) -> f64 {
     let t = t.rem_euclid(1.0);
-    let asymmetry = asymmetry.clamp(0.0, 1.0);
+    let asymmetry = clamp_f64(asymmetry, 0.0, 1.0);
 
     // Rise duration: 30% at symmetric, down to 10% at max asymmetry
     let rise_duration = 0.3 - asymmetry * 0.2;
@@ -172,7 +177,7 @@ pub fn organic_char_phase_offset(char_idx: usize, seed: u64, phase_variation: f6
         .wrapping_mul(2654435761)
         .wrapping_add(char_idx as u64 * 2246822519);
     let frac = (hash % 10000) as f64 / 10000.0;
-    frac * phase_variation.clamp(0.0, 1.0)
+    frac * clamp_f64(phase_variation, 0.0, 1.0)
 }
 
 // =============================================================================
@@ -216,7 +221,7 @@ impl OkLab {
     #[must_use]
     #[inline]
     pub fn lerp(self, other: Self, t: f64) -> Self {
-        let t = t.clamp(0.0, 1.0);
+        let t = clamp_f64(t, 0.0, 1.0);
         Self {
             l: self.l + (other.l - self.l) * t,
             a: self.a + (other.a - self.a) * t,
@@ -305,9 +310,9 @@ pub fn oklab_to_rgb(lab: OkLab) -> PackedRgba {
     let b = -0.004_196_09 * l - 0.703_418_61 * m + 1.707_614_70 * s;
 
     // Linear RGB to sRGB with gamut clamping
-    let r_srgb = (linear_to_srgb(r.clamp(0.0, 1.0)) * 255.0).round() as u8;
-    let g_srgb = (linear_to_srgb(g.clamp(0.0, 1.0)) * 255.0).round() as u8;
-    let b_srgb = (linear_to_srgb(b.clamp(0.0, 1.0)) * 255.0).round() as u8;
+    let r_srgb = (linear_to_srgb(clamp_f64(r, 0.0, 1.0)) * 255.0).round() as u8;
+    let g_srgb = (linear_to_srgb(clamp_f64(g, 0.0, 1.0)) * 255.0).round() as u8;
+    let b_srgb = (linear_to_srgb(clamp_f64(b, 0.0, 1.0)) * 255.0).round() as u8;
 
     PackedRgba::rgb(r_srgb, g_srgb, b_srgb)
 }
@@ -503,7 +508,7 @@ impl ColorGradient {
 
     /// Sample the gradient at position t (0.0 to 1.0).
     pub fn sample(&self, t: f64) -> PackedRgba {
-        let t = t.clamp(0.0, 1.0);
+        let t = clamp_f64(t, 0.0, 1.0);
 
         if self.stops.is_empty() {
             return PackedRgba::rgb(255, 255, 255);
@@ -534,7 +539,7 @@ impl ColorGradient {
     /// Optimized sample using binary search for stop lookup.
     /// O(log n) instead of O(n) for gradients with many stops.
     pub fn sample_fast(&self, t: f64) -> PackedRgba {
-        let t = t.clamp(0.0, 1.0);
+        let t = clamp_f64(t, 0.0, 1.0);
 
         if self.stops.is_empty() {
             return PackedRgba::rgb(255, 255, 255);
@@ -579,7 +584,7 @@ impl ColorGradient {
     ///
     /// Performance: ~3-5% overhead vs linear RGB sampling.
     pub fn sample_oklab(&self, t: f64) -> PackedRgba {
-        let t = t.clamp(0.0, 1.0);
+        let t = clamp_f64(t, 0.0, 1.0);
 
         if self.stops.is_empty() {
             return PackedRgba::rgb(255, 255, 255);
@@ -610,7 +615,7 @@ impl ColorGradient {
     /// Optimized OkLab sample using binary search for stop lookup.
     /// O(log n) instead of O(n) for gradients with many stops.
     pub fn sample_fast_oklab(&self, t: f64) -> PackedRgba {
-        let t = t.clamp(0.0, 1.0);
+        let t = clamp_f64(t, 0.0, 1.0);
 
         if self.stops.is_empty() {
             return PackedRgba::rgb(255, 255, 255);
@@ -767,7 +772,7 @@ impl GradientLut {
         if self.colors.is_empty() {
             return PackedRgba::rgb(255, 255, 255);
         }
-        let t = t.clamp(0.0, 1.0);
+        let t = clamp_f64(t, 0.0, 1.0);
         let index = (t * (self.count.saturating_sub(1)) as f64).round() as usize;
         self.sample(index)
     }
@@ -796,7 +801,7 @@ impl GradientLut {
 #[inline]
 fn lerp_color_fast(a: PackedRgba, b: PackedRgba, t: f64) -> PackedRgba {
     // Use fixed-point with 16-bit precision
-    let t_fixed = (t.clamp(0.0, 1.0) * 65536.0) as u32;
+    let t_fixed = (clamp_f64(t, 0.0, 1.0) * 65536.0) as u32;
     let one_minus_t = 65536 - t_fixed;
 
     let r = ((a.r() as u32 * one_minus_t + b.r() as u32 * t_fixed) >> 16) as u8;
@@ -1097,7 +1102,7 @@ impl Easing {
     /// # Performance
     /// < 100ns per call (pure math, no allocations).
     pub fn apply(&self, t: f64) -> f64 {
-        let t = t.clamp(0.0, 1.0);
+        let t = clamp_f64(t, 0.0, 1.0);
 
         match self {
             Self::Linear => t,
@@ -1534,7 +1539,7 @@ impl Shadow {
 
     /// Set the shadow opacity (0.0-1.0).
     pub fn opacity(mut self, opacity: f64) -> Self {
-        self.opacity = opacity.clamp(0.0, 1.0);
+        self.opacity = clamp_f64(opacity, 0.0, 1.0);
         self
     }
 
@@ -1625,7 +1630,7 @@ impl GlowConfig {
 
     /// Set the glow intensity (0.0-1.0).
     pub fn intensity(mut self, intensity: f64) -> Self {
-        self.intensity = intensity.clamp(0.0, 1.0);
+        self.intensity = clamp_f64(intensity, 0.0, 1.0);
         self
     }
 
@@ -1637,7 +1642,7 @@ impl GlowConfig {
 
     /// Set the opacity falloff per layer (0.1-0.9).
     pub fn falloff(mut self, falloff: f64) -> Self {
-        self.falloff = falloff.clamp(0.1, 0.9);
+        self.falloff = clamp_f64(falloff, 0.1, 0.9);
         self
     }
 
@@ -1996,7 +2001,7 @@ impl RevealMode {
         if total == 0 {
             return true;
         }
-        let progress = if progress.is_nan() { 0.0 } else { progress.clamp(0.0, 1.0) };
+        let progress = if progress.is_nan() { 0.0 } else { clamp_f64(progress, 0.0, 1.0) };
         if progress >= 1.0 {
             return true;
         }
@@ -2110,7 +2115,7 @@ impl DissolveMode {
     /// Closer particles use larger characters.
     pub fn particle_char(distance: f64) -> char {
         const PARTICLES: [char; 4] = ['·', '∙', '•', '*'];
-        let idx = (distance.clamp(0.0, 1.0) * 3.0) as usize;
+        let idx = (clamp_f64(distance, 0.0, 1.0) * 3.0) as usize;
         PARTICLES[idx.min(3)]
     }
 }
@@ -3312,7 +3317,7 @@ impl StyledText {
                 let projected = t * cos_a + 0.5 * sin_a;
                 // Normalize to 0-1 range (diagonal spans -sqrt(2)/2 to sqrt(2)/2)
                 let normalized = (projected + FRAC_1_SQRT_2) / SQRT_2;
-                gradient.sample(normalized.clamp(0.0, 1.0))
+                gradient.sample(clamp_f64(normalized, 0.0, 1.0))
             }
 
             // For single-line text, radial uses horizontal position and centered y
@@ -3326,7 +3331,7 @@ impl StyledText {
                 let dist = (dx * dx + dy * dy).sqrt();
                 // Max distance is from center to corner
                 let max_dist = (0.5_f64.powi(2) * aspect * aspect + 0.5_f64.powi(2)).sqrt();
-                let normalized = (dist / max_dist).clamp(0.0, 1.0);
+                let normalized = clamp_f64((dist / max_dist), 0.0, 1.0);
                 gradient.sample(normalized)
             }
 
@@ -3409,7 +3414,7 @@ impl StyledText {
                     }
                 } else {
                     // Soft edge with gradient
-                    let edge_width = softness.clamp(0.0, 1.0);
+                    let edge_width = clamp_f64(*softness, 0.0, 1.0);
                     let edge_start = progress - edge_width / 2.0;
                     let edge_end = progress + edge_width / 2.0;
 
@@ -3460,8 +3465,8 @@ impl StyledText {
                 };
 
                 // Red shifts negative direction, Blue shifts positive
-                let red_boost = (-shift).clamp(-50.0, 50.0);
-                let blue_boost = shift.clamp(-50.0, 50.0);
+                let red_boost = clamp_f64((-shift), -50.0, 50.0);
+                let blue_boost = clamp_f64(shift, -50.0, 50.0);
 
                 PackedRgba::rgb(
                     (base.r() as i16 + red_boost as i16).clamp(0, 255) as u8,
@@ -3603,7 +3608,7 @@ impl StyledText {
                     let sin_a = angle_rad.sin();
                     let projected = t_x * cos_a + t_y * sin_a;
                     let normalized = (projected + FRAC_1_SQRT_2) / SQRT_2;
-                    color = gradient.sample(normalized.clamp(0.0, 1.0));
+                    color = gradient.sample(clamp_f64(normalized, 0.0, 1.0));
                 }
                 TextEffect::RadialGradient {
                     gradient,
@@ -3619,7 +3624,7 @@ impl StyledText {
                         (corner_dx * corner_dx + corner_dy * corner_dy).sqrt()
                     };
                     let normalized = if max_dist > 0.0 {
-                        (dist / max_dist).clamp(0.0, 1.0)
+                        clamp_f64((dist / max_dist), 0.0, 1.0)
                     } else {
                         0.0
                     };
@@ -3684,8 +3689,8 @@ impl StyledText {
                         Direction::Up | Direction::Down => distance * effective_offset * 30.0,
                     };
 
-                    let red_boost = (-shift).clamp(-50.0, 50.0);
-                    let blue_boost = shift.clamp(-50.0, 50.0);
+                    let red_boost = clamp_f64((-shift), -50.0, 50.0);
+                    let blue_boost = clamp_f64(shift, -50.0, 50.0);
 
                     color = PackedRgba::rgb(
                         (color.r() as i16 + red_boost as i16).clamp(0, 255) as u8,
@@ -4103,7 +4108,7 @@ impl StyledText {
                         }
                     } else {
                         // Smooth slide-in animation
-                        let progress = ((revealed_chars - char_reveal_time) / 0.3).clamp(0.0, 1.0);
+                        let progress = clamp_f64(((revealed_chars - char_reveal_time) / 0.3), 0.0, 1.0);
                         let eased = self.easing.apply(progress);
                         let remaining = ((1.0 - eased) * 3.0).round() as i16;
 
@@ -4581,7 +4586,7 @@ impl TransitionOverlay {
     /// Set progress (0.0 = invisible, 0.5 = peak, 1.0 = invisible).
     #[must_use]
     pub fn progress(mut self, progress: f64) -> Self {
-        self.progress = progress.clamp(0.0, 1.0);
+        self.progress = clamp_f64(progress, 0.0, 1.0);
         self
     }
 
@@ -4758,7 +4763,7 @@ impl TransitionState {
 
     /// Set transition speed.
     pub fn set_speed(&mut self, speed: f64) {
-        self.speed = speed.clamp(0.01, 0.5);
+        self.speed = clamp_f64(speed, 0.01, 0.5);
     }
 
     /// Update the transition (call every tick).
@@ -5109,7 +5114,7 @@ impl EffectSequence {
             .sum::<f64>()
             + self.steps[self.current_step].duration_secs * self.step_progress;
 
-        (elapsed_duration / total_duration).clamp(0.0, 1.0)
+        clamp_f64((elapsed_duration / total_duration), 0.0, 1.0)
     }
 
     /// Check if the sequence has completed.
@@ -5604,7 +5609,7 @@ mod tests {
         let dy: f64 = t_y - center.1;
         let distance = (dx * dx + dy * dy).sqrt();
         let max_distance = (0.5_f64.powi(2) * aspect * aspect + 0.5_f64.powi(2)).sqrt();
-        let t = (distance / max_distance).clamp(0.0, 1.0);
+        let t = clamp_f64((distance / max_distance), 0.0, 1.0);
 
         let color = gradient.sample(t);
 
@@ -5628,7 +5633,7 @@ mod tests {
         let dy: f64 = t_y - center.1;
         let distance = (dx * dx + dy * dy).sqrt();
         let max_distance = (0.5_f64.powi(2) * aspect * aspect + 0.5_f64.powi(2)).sqrt();
-        let t = (distance / max_distance).clamp(0.0, 1.0);
+        let t = clamp_f64((distance / max_distance), 0.0, 1.0);
 
         let color = gradient.sample(t);
 
@@ -9632,7 +9637,7 @@ impl Default for Reflection {
 impl Reflection {
     /// Compute the number of reflected rows given a source height.
     pub fn reflected_rows(&self, source_height: usize) -> usize {
-        let max_rows = (source_height as f64 * self.height_ratio.clamp(0.0, 1.0)).ceil() as usize;
+        let max_rows = (source_height as f64 * clamp_f64(self.height_ratio, 0.0, 1.0)).ceil() as usize;
         max_rows.min(source_height)
     }
 }
@@ -9855,7 +9860,7 @@ impl StyledMultiLine {
                     let projected = t_x * cos_a + t_y * sin_a;
                     // Normalize to 0-1 range
                     let normalized = (projected + FRAC_1_SQRT_2) / SQRT_2;
-                    color = gradient.sample(normalized.clamp(0.0, 1.0));
+                    color = gradient.sample(clamp_f64(normalized, 0.0, 1.0));
                 }
                 TextEffect::RadialGradient {
                     gradient,
@@ -9872,7 +9877,7 @@ impl StyledMultiLine {
                         (corner_dx * corner_dx + corner_dy * corner_dy).sqrt()
                     };
                     let normalized = if max_dist > 0.0 {
-                        (dist / max_dist).clamp(0.0, 1.0)
+                        clamp_f64((dist / max_dist), 0.0, 1.0)
                     } else {
                         0.0
                     };
@@ -10169,7 +10174,7 @@ impl SparkleField {
     pub fn new(density: f64) -> Self {
         Self {
             sparkles: Vec::new(),
-            density: density.clamp(0.0, 1.0),
+            density: clamp_f64(density, 0.0, 1.0),
         }
     }
 

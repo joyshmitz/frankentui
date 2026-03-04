@@ -203,27 +203,12 @@ impl BidiSegment {
     /// - For `len` (end of text), position depends on paragraph direction.
     pub fn visual_cursor_pos(&self, logical: usize) -> usize {
         let n = self.chars.len();
-        if logical >= n {
-            if n == 0 {
-                return 0;
-            }
-            let last_l = n - 1;
-            let v = self.visual_pos(last_l);
-            let level = self.levels[last_l];
-            if level.number() % 2 == 1 {
+        for v in 0..=n {
+            if self.logical_cursor_pos(v) == logical {
                 return v;
-            } else {
-                return v + 1;
             }
         }
-
-        let v = self.visual_pos(logical);
-        let level = self.levels[logical];
-        if level.number() % 2 == 1 {
-            v + 1
-        } else {
-            v
-        }
+        0
     }
 
     /// Get the logical cursor position for a visual insertion point `0..=len`.
@@ -235,34 +220,36 @@ impl BidiSegment {
             return 0;
         }
 
-        let last_l = n - 1;
-        let last_v = self.visual_pos(last_l);
-        let last_level = self.levels[last_l];
-        if last_level.number() % 2 == 1 {
-            if visual == last_v {
-                return n;
-            }
+        if visual >= n {
+            let l_l = self.logical_pos(n - 1);
+            return if self.levels[l_l].number() % 2 == 0 { l_l + 1 } else { l_l };
+        }
+
+        if visual == 0 {
+            let l_r = self.logical_pos(0);
+            return if self.levels[l_r].number() % 2 == 0 { l_r } else { l_r + 1 };
+        }
+
+        let l_l = self.logical_pos(visual - 1);
+        let l_r = self.logical_pos(visual);
+
+        let left_is_ltr = self.levels[l_l].number() % 2 == 0;
+        let right_is_ltr = self.levels[l_r].number() % 2 == 0;
+
+        let cand_left = if left_is_ltr { l_l + 1 } else { l_l };
+        let cand_right = if right_is_ltr { l_r } else { l_r + 1 };
+
+        if cand_left == cand_right {
+            return cand_left;
+        }
+
+        // At a direction boundary, favor the run that matches the paragraph direction.
+        let base_is_ltr = self.base_direction() == Direction::Ltr;
+        if left_is_ltr == base_is_ltr {
+            cand_left
         } else {
-            if visual == last_v + 1 {
-                return n;
-            }
+            cand_right
         }
-
-        if visual < n {
-            let l = self.logical_pos(visual);
-            if self.levels[l].number() % 2 == 0 {
-                return l;
-            }
-        }
-
-        if visual > 0 {
-            let l_prev = self.logical_pos(visual - 1);
-            if self.levels[l_prev].number() % 2 == 1 {
-                return l_prev;
-            }
-        }
-
-        0
     }
 
     /// Move cursor one step to the right in visual order.

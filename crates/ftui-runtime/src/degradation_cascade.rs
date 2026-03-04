@@ -231,10 +231,13 @@ impl DegradationCascade {
                     self.current_level = self.config.min_trigger_level;
                 }
 
-                // Clamp to degradation floor: never degrade past the configured
-                // minimum quality level.
+                // Clamp to degradation limits: never degrade past the configured
+                // minimum quality level or maximum degradation level.
                 if self.current_level > self.config.degradation_floor {
                     self.current_level = self.config.degradation_floor;
+                }
+                if self.current_level > self.config.max_degradation {
+                    self.current_level = self.config.max_degradation;
                 }
 
                 self.recovery_streak = 0;
