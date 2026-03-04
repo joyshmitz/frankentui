@@ -176,14 +176,21 @@ impl<T: Clone + PartialEq + 'static> TwoWayBinding<T> {
 
         let syncing = Rc::new(Cell::new(false));
 
+        struct ReentrancyGuard<'a>(&'a Cell<bool>);
+        impl<'a> Drop for ReentrancyGuard<'a> {
+            fn drop(&mut self) {
+                self.0.set(false);
+            }
+        }
+
         // a → b
         let b_clone = b.clone();
         let guard_ab = Rc::clone(&syncing);
         let sub_ab = a.subscribe(move |val| {
             if !guard_ab.get() {
                 guard_ab.set(true);
+                let _guard = ReentrancyGuard(&guard_ab);
                 b_clone.set(val.clone());
-                guard_ab.set(false);
             }
         });
 
@@ -193,8 +200,8 @@ impl<T: Clone + PartialEq + 'static> TwoWayBinding<T> {
         let sub_ba = b.subscribe(move |val| {
             if !guard_ba.get() {
                 guard_ba.set(true);
+                let _guard = ReentrancyGuard(&guard_ba);
                 a_clone.set(val.clone());
-                guard_ba.set(false);
             }
         });
 
