@@ -455,23 +455,20 @@ fn barycenter_sweep_forward(
     order_positions_into(&rank_order[r - 1], graph.n, pos_buf);
     let prev_pos = &*pos_buf;
 
-    let scored: Vec<(usize, f64)> = rank_order[r]
-        .iter()
-        .map(|&v| {
-            let bc = barycenter(prev_pos, &graph.rev[v]);
-            (v, bc)
-        })
-        .collect();
+    scratch.scored_buf.clear();
+    scratch.scored_buf.extend(rank_order[r].iter().map(|&v| {
+        let bc = barycenter(prev_pos, &graph.rev[v]);
+        (v, bc)
+    }));
 
     update_cluster_barycenters(
-        &scored,
+        &scratch.scored_buf,
         cluster_map,
         &mut scratch.cluster_sums,
         &mut scratch.cluster_bary,
     );
 
-    let mut sorted = scored;
-    sorted.sort_by(|a, b| {
+    scratch.scored_buf.sort_by(|a, b| {
         cluster_sort_key(a.0, a.1, cluster_map, &scratch.cluster_bary)
             .partial_cmp(&cluster_sort_key(
                 b.0,
@@ -483,7 +480,8 @@ fn barycenter_sweep_forward(
             .then_with(|| graph.node_ids[a.0].cmp(&graph.node_ids[b.0]))
     });
 
-    rank_order[r] = sorted.into_iter().map(|(v, _)| v).collect();
+    rank_order[r].clear();
+    rank_order[r].extend(scratch.scored_buf.iter().map(|(v, _)| *v));
 }
 
 /// One pass of barycenter ordering: reorder rank `r` based on rank `r+1`.
@@ -501,23 +499,20 @@ fn barycenter_sweep_backward(
     order_positions_into(&rank_order[r + 1], graph.n, pos_buf);
     let next_pos = &*pos_buf;
 
-    let scored: Vec<(usize, f64)> = rank_order[r]
-        .iter()
-        .map(|&v| {
-            let bc = barycenter(next_pos, &graph.adj[v]);
-            (v, bc)
-        })
-        .collect();
+    scratch.scored_buf.clear();
+    scratch.scored_buf.extend(rank_order[r].iter().map(|&v| {
+        let bc = barycenter(next_pos, &graph.adj[v]);
+        (v, bc)
+    }));
 
     update_cluster_barycenters(
-        &scored,
+        &scratch.scored_buf,
         cluster_map,
         &mut scratch.cluster_sums,
         &mut scratch.cluster_bary,
     );
 
-    let mut sorted = scored;
-    sorted.sort_by(|a, b| {
+    scratch.scored_buf.sort_by(|a, b| {
         cluster_sort_key(a.0, a.1, cluster_map, &scratch.cluster_bary)
             .partial_cmp(&cluster_sort_key(
                 b.0,
@@ -529,7 +524,8 @@ fn barycenter_sweep_backward(
             .then_with(|| graph.node_ids[a.0].cmp(&graph.node_ids[b.0]))
     });
 
-    rank_order[r] = sorted.into_iter().map(|(v, _)| v).collect();
+    rank_order[r].clear();
+    rank_order[r].extend(scratch.scored_buf.iter().map(|(v, _)| *v));
 }
 
 /// Compute barycenter for each cluster from its members' barycenters.
@@ -589,6 +585,7 @@ struct MermaidCrossingScratch {
     fenwick_tree: Vec<usize>,
     cluster_sums: std::collections::HashMap<usize, (f64, usize)>,
     cluster_bary: std::collections::HashMap<usize, f64>,
+    scored_buf: Vec<(usize, f64)>,
 }
 
 impl MermaidCrossingScratch {
@@ -600,6 +597,7 @@ impl MermaidCrossingScratch {
             fenwick_tree: Vec::new(),
             cluster_sums: std::collections::HashMap::new(),
             cluster_bary: std::collections::HashMap::new(),
+            scored_buf: Vec::with_capacity(n),
         }
     }
 }

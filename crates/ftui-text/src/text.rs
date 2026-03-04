@@ -179,12 +179,12 @@ impl<'a> Span<'a> {
     #[inline]
     #[must_use]
     pub fn into_segment(self) -> Segment<'a> {
-        // Segments don't support links yet, so we ignore it.
-        // TODO: Add link support to Segment if needed for lower-level handling.
-        match self.style {
+        let mut seg = match self.style {
             Some(style) => Segment::styled(self.content, style),
             None => Segment::text(self.content),
-        }
+        };
+        seg.link = self.link;
+        seg
     }
 
     /// Convert to an owned span.
@@ -215,7 +215,7 @@ impl<'a> From<Segment<'a>> for Span<'a> {
         Self {
             content: seg.text,
             style: seg.style,
-            link: None,
+            link: seg.link,
         }
     }
 }

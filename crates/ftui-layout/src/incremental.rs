@@ -196,9 +196,10 @@ impl IncrementalLayout {
     /// Remove a node and evict its cache entry.
     pub fn remove_node(&mut self, id: NodeId) {
         self.cache.remove(&id);
-        // If there's a parent, mark it dirty (layout changed).
+        // If there's a parent, mark it and all ancestors dirty (layout changed),
+        // because removing a node affects intrinsic sizes (FitContent) all the way up.
         if let Some(parent) = self.graph.parent(id) {
-            self.graph.mark_dirty(parent);
+            self.mark_dirty_with_ancestors(parent);
         }
         self.graph.remove_node(id);
     }

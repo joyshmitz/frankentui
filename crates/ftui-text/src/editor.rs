@@ -698,12 +698,19 @@ impl Editor {
         &mut self,
         f: impl FnOnce(&CursorNavigator<'_>, CursorPosition) -> CursorPosition,
     ) {
+        let nav = CursorNavigator::new(&self.rope);
+        let new_head = f(&nav, self.cursor);
+        self.extend_selection_to(new_head);
+    }
+
+    /// Extend selection to a specific cursor position.
+    pub fn extend_selection_to(&mut self, new_head: CursorPosition) {
         let anchor = match self.selection {
             Some(sel) => sel.anchor,
             None => self.cursor,
         };
         let nav = CursorNavigator::new(&self.rope);
-        let new_head = f(&nav, self.cursor);
+        let new_head = nav.clamp(new_head);
         self.cursor = new_head;
         self.selection = Some(Selection {
             anchor,

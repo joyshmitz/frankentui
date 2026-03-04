@@ -202,6 +202,13 @@ fn wrap_paragraph(
     current_width: &mut usize,
 ) {
     for word in split_words(text) {
+        let is_whitespace_only = word.trim().is_empty();
+
+        // Skip leading whitespace on new lines if not preserving indent
+        if *current_width == 0 && is_whitespace_only && !options.preserve_indent {
+            continue;
+        }
+
         let word_width = display_width(&word);
 
         // If word fits on current line
@@ -220,7 +227,7 @@ fn wrap_paragraph(
             // If the word causing the wrap is just whitespace:
             // - If preserve_indent is false, discard it (standard behavior).
             // - If preserve_indent is true, keep it (it becomes indentation for the next line).
-            if word.trim().is_empty() && !options.preserve_indent {
+            if is_whitespace_only && !options.preserve_indent {
                 continue;
             }
         }

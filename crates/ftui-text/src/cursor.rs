@@ -310,21 +310,33 @@ fn grapheme_class(g: &str) -> GraphemeClass {
 }
 
 fn move_word_left_in_line(text: &str, grapheme_idx: usize) -> usize {
-    let graphemes: Vec<&str> = graphemes(text).collect();
-    let mut pos = grapheme_idx.min(graphemes.len());
-    if pos == 0 {
+    if grapheme_idx == 0 {
         return 0;
     }
-    while pos > 0 && grapheme_class(graphemes[pos - 1]) == GraphemeClass::Space {
-        pos = pos.saturating_sub(1);
+    
+    let byte_offset = grapheme_byte_offset(text, grapheme_idx);
+    let before_cursor = &text[..byte_offset];
+    let mut pos = grapheme_idx;
+
+    let mut iter = before_cursor.graphemes(true).rev();
+
+    while let Some(g) = iter.next() {
+        if grapheme_class(g) == GraphemeClass::Space {
+            pos = pos.saturating_sub(1);
+        } else {
+            pos = pos.saturating_sub(1);
+            let target = grapheme_class(g);
+            for g_next in iter {
+                if grapheme_class(g_next) == target {
+                    pos = pos.saturating_sub(1);
+                } else {
+                    break;
+                }
+            }
+            break;
+        }
     }
-    if pos == 0 {
-        return 0;
-    }
-    let target = grapheme_class(graphemes[pos - 1]);
-    while pos > 0 && grapheme_class(graphemes[pos - 1]) == target {
-        pos = pos.saturating_sub(1);
-    }
+
     pos
 }
 

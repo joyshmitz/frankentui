@@ -740,25 +740,27 @@ impl TextInput {
             return;
         }
 
-        let graphemes: Vec<&str> = self.value.graphemes(true).collect();
+        let byte_offset = self.grapheme_byte_offset(self.cursor);
+        let before_cursor = &self.value[..byte_offset];
         let mut pos = self.cursor;
 
-        // 1. Skip spaces backwards
-        while pos > 0 && Self::get_grapheme_class(graphemes[pos - 1]) == 0 {
-            pos -= 1;
-        }
+        let mut iter = before_cursor.graphemes(true).rev();
 
-        if pos == 0 {
-            self.cursor = 0;
-            return;
-        }
-
-        // 2. Identify the target class (Word or Punctuation)
-        let target = Self::get_grapheme_class(graphemes[pos - 1]);
-
-        // 3. Skip backwards as long as the class matches
-        while pos > 0 && Self::get_grapheme_class(graphemes[pos - 1]) == target {
-            pos -= 1;
+        while let Some(g) = iter.next() {
+            if Self::get_grapheme_class(g) == 0 {
+                pos = pos.saturating_sub(1);
+            } else {
+                pos = pos.saturating_sub(1);
+                let target = Self::get_grapheme_class(g);
+                for g_next in iter {
+                    if Self::get_grapheme_class(g_next) == target {
+                        pos = pos.saturating_sub(1);
+                    } else {
+                        break;
+                    }
+                }
+                break;
+            }
         }
 
         self.cursor = pos;
@@ -771,29 +773,33 @@ impl TextInput {
             self.selection_anchor = None;
         }
 
-        let graphemes: Vec<&str> = self.value.graphemes(true).collect();
-        let max = graphemes.len();
-
-        if self.cursor >= max {
-            return;
+        let mut iter = self.value.graphemes(true).peekable();
+        for _ in 0..self.cursor {
+            iter.next();
         }
 
         let mut pos = self.cursor;
-        let current_class = Self::get_grapheme_class(graphemes[pos]);
 
-        if current_class == 0 {
-            // If on space, just skip spaces to the next word/punct
-            while pos < max && Self::get_grapheme_class(graphemes[pos]) == 0 {
-                pos += 1;
+        if let Some(&g) = iter.peek() {
+            let start_class = Self::get_grapheme_class(g);
+            if start_class != 0 {
+                while let Some(&next_g) = iter.peek() {
+                    if Self::get_grapheme_class(next_g) == start_class {
+                        iter.next();
+                        pos += 1;
+                    } else {
+                        break;
+                    }
+                }
             }
-        } else {
-            // Skip the current word/punct block
-            while pos < max && Self::get_grapheme_class(graphemes[pos]) == current_class {
+        }
+
+        while let Some(&g) = iter.peek() {
+            if Self::get_grapheme_class(g) == 0 {
+                iter.next();
                 pos += 1;
-            }
-            // Then skip trailing spaces
-            while pos < max && Self::get_grapheme_class(graphemes[pos]) == 0 {
-                pos += 1;
+            } else {
+                break;
             }
         }
 

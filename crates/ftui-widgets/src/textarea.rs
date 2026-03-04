@@ -211,10 +211,14 @@ impl TextArea {
             KeyCode::PageUp => {
                 let page = self.last_viewport_height.get().max(1);
                 if self.soft_wrap {
-                    self.move_cursor_visual_up(page);
+                    self.move_cursor_visual_up(page, shift);
                 } else {
                     for _ in 0..page {
-                        self.editor.move_up();
+                        if shift {
+                            self.editor.select_up();
+                        } else {
+                            self.editor.move_up();
+                        }
                     }
                 }
                 self.ensure_cursor_visible();
@@ -223,10 +227,14 @@ impl TextArea {
             KeyCode::PageDown => {
                 let page = self.last_viewport_height.get().max(1);
                 if self.soft_wrap {
-                    self.move_cursor_visual_down(page);
+                    self.move_cursor_visual_down(page, shift);
                 } else {
                     for _ in 0..page {
-                        self.editor.move_down();
+                        if shift {
+                            self.editor.select_down();
+                        } else {
+                            self.editor.move_down();
+                        }
                     }
                 }
                 self.ensure_cursor_visible();
@@ -475,7 +483,7 @@ impl TextArea {
     /// Move cursor up.
     pub fn move_up(&mut self) {
         if self.soft_wrap {
-            self.move_cursor_visual_up(1);
+            self.move_cursor_visual_up(1, false);
         } else {
             self.editor.move_up();
         }
@@ -485,7 +493,7 @@ impl TextArea {
     /// Move cursor down.
     pub fn move_down(&mut self) {
         if self.soft_wrap {
-            self.move_cursor_visual_down(1);
+            self.move_cursor_visual_down(1, false);
         } else {
             self.editor.move_down();
         }
@@ -540,11 +548,15 @@ impl TextArea {
         self.ensure_cursor_visible();
     }
 
-    fn move_cursor_visual_down(&mut self, count: usize) {
+    fn move_cursor_visual_down(&mut self, count: usize, extend_selection: bool) {
         let width = self.last_viewport_width.get();
         if width == 0 {
             for _ in 0..count {
-                self.editor.move_down();
+                if extend_selection {
+                    self.editor.select_down();
+                } else {
+                    self.editor.move_down();
+                }
             }
             return;
         }
@@ -624,14 +636,22 @@ impl TextArea {
             cursor = nav.from_byte_index(final_byte);
         }
 
-        self.editor.set_cursor(cursor);
+        if extend_selection {
+            self.editor.extend_selection_to(cursor);
+        } else {
+            self.editor.set_cursor(cursor);
+        }
     }
 
-    fn move_cursor_visual_up(&mut self, count: usize) {
+    fn move_cursor_visual_up(&mut self, count: usize, extend_selection: bool) {
         let width = self.last_viewport_width.get();
         if width == 0 {
             for _ in 0..count {
-                self.editor.move_up();
+                if extend_selection {
+                    self.editor.select_up();
+                } else {
+                    self.editor.move_up();
+                }
             }
             return;
         }
@@ -708,7 +728,11 @@ impl TextArea {
             cursor = nav.from_byte_index(final_byte);
         }
 
-        self.editor.set_cursor(cursor);
+        if extend_selection {
+            self.editor.extend_selection_to(cursor);
+        } else {
+            self.editor.set_cursor(cursor);
+        }
     }
 
     // ── Selection ──────────────────────────────────────────────────
@@ -727,13 +751,21 @@ impl TextArea {
 
     /// Extend selection up.
     pub fn select_up(&mut self) {
-        self.editor.select_up();
+        if self.soft_wrap {
+            self.move_cursor_visual_up(1, true);
+        } else {
+            self.editor.select_up();
+        }
         self.ensure_cursor_visible();
     }
 
     /// Extend selection down.
     pub fn select_down(&mut self) {
-        self.editor.select_down();
+        if self.soft_wrap {
+            self.move_cursor_visual_down(1, true);
+        } else {
+            self.editor.select_down();
+        }
         self.ensure_cursor_visible();
     }
 

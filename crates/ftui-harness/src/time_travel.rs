@@ -337,14 +337,17 @@ impl TimeTravel {
                 let f0 = &self.snapshots[0];
                 let f1 = &self.snapshots[1];
 
-                // Reconstruct the state at frame 1
-                let mut buf = Buffer::new(f0.width, f0.height);
-                f0.apply_to(&mut buf);
-                f1.apply_to(&mut buf);
+                // If dimensions differ, f1 is already a Full snapshot, so no rebase needed.
+                if f0.width == f1.width && f0.height == f1.height {
+                    // Reconstruct the state at frame 1
+                    let mut buf = Buffer::new(f0.width, f0.height);
+                    f0.apply_to(&mut buf);
+                    f1.apply_to(&mut buf);
 
-                // Create a full snapshot from that state
-                let f1_full = CompressedFrame::full(&buf).with_cursor(f1.cursor);
-                self.snapshots[1] = f1_full;
+                    // Create a full snapshot from that state
+                    let f1_full = CompressedFrame::full(&buf).with_cursor(f1.cursor);
+                    self.snapshots[1] = f1_full;
+                }
             }
 
             self.snapshots.pop_front();

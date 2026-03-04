@@ -841,7 +841,7 @@ impl<'a> StatefulWidget for Table<'a> {
 
         // Render header
         if let Some(header) = &self.header {
-            if header.height > max_y.saturating_sub(y) {
+            if y >= max_y {
                 frame.buffer.pop_scissor();
                 return;
             }

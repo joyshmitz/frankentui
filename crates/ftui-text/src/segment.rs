@@ -86,6 +86,8 @@ pub struct Segment<'a> {
     pub text: Cow<'a, str>,
     /// Optional style applied to this segment.
     pub style: Option<Style>,
+    /// Optional hyperlink URL (OSC 8).
+    pub link: Option<Cow<'a, str>>,
     /// Optional control codes (stack-allocated for common cases).
     pub control: Option<SmallVec<[ControlCode; 2]>>,
 }
@@ -98,6 +100,7 @@ impl<'a> Segment<'a> {
         Self {
             text: s.into(),
             style: None,
+            link: None,
             control: None,
         }
     }
@@ -109,6 +112,7 @@ impl<'a> Segment<'a> {
         Self {
             text: s.into(),
             style: Some(style),
+            link: None,
             control: None,
         }
     }
@@ -122,6 +126,7 @@ impl<'a> Segment<'a> {
         Self {
             text: Cow::Borrowed(""),
             style: None,
+            link: None,
             control: Some(codes),
         }
     }
@@ -140,6 +145,7 @@ impl<'a> Segment<'a> {
         Self {
             text: Cow::Borrowed(""),
             style: None,
+            link: None,
             control: None,
         }
     }
@@ -238,6 +244,7 @@ impl<'a> Segment<'a> {
                 Self {
                     text: Cow::Borrowed(""),
                     style: self.style,
+                    link: self.link.clone(),
                     control: None,
                 },
                 self.clone(),
@@ -251,6 +258,7 @@ impl<'a> Segment<'a> {
                 Self {
                     text: Cow::Borrowed(""),
                     style: self.style,
+                    link: self.link.clone(),
                     control: None,
                 },
             );
@@ -266,11 +274,13 @@ impl<'a> Segment<'a> {
             Self {
                 text: Cow::Owned(left_text.to_string()),
                 style: self.style,
+                link: self.link.clone(),
                 control: None,
             },
             Self {
                 text: Cow::Owned(right_text.to_string()),
                 style: self.style,
+                link: self.link.clone(),
                 control: None,
             },
         )
@@ -291,6 +301,7 @@ impl<'a> Segment<'a> {
             text: Cow::Owned(self.text.into_owned()),
             style: self.style,
             control: self.control,
+            link: self.link.map(|l| std::borrow::Cow::Owned(l.into_owned())),
         }
     }
 
@@ -632,6 +643,7 @@ pub fn split_into_lines<'a>(segments: impl IntoIterator<Item = Segment<'a>>) -> 
                             text: Cow::Owned((*part).to_string()),
                             style: segment.style,
                             control: None,
+                            link: segment.link.clone(),
                         });
                     }
                     // Push line after each newline (but not after the last part)
