@@ -569,7 +569,10 @@ mod tests {
         let after = METRICS
             .counter(BuiltinCounter::TraceCompatFailuresTotal)
             .get();
-        assert!(after > before, "counter should increment on incompatibility");
+        assert!(
+            after > before,
+            "counter should increment on incompatibility"
+        );
     }
 
     #[test]

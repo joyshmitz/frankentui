@@ -34,6 +34,7 @@
 
 #![forbid(unsafe_code)]
 
+use crate::cancellation::{CancellationSource, CancellationToken};
 use crate::program::{Cmd, TaskSpec};
 use web_time::Duration;
 
@@ -121,33 +122,35 @@ impl RetryPolicy {
     }
 }
 
-/// Create a [`Cmd::Task`] that enforces a timeout.
+/// Create a [`Cmd::Task`] that enforces a cooperative timeout.
 ///
-/// If the closure does not complete within `timeout`, the task thread
-/// continues running but its result is discarded. The `on_timeout` message
-/// is sent instead.
-///
-/// Note: Rust does not support preemptive thread cancellation. The closure
-/// continues executing but its result is ignored after the deadline.
+/// The worker closure receives a [`CancellationToken`] and must honor it for
+/// timely timeout teardown. On timeout, the runtime requests cancellation and
+/// returns `on_timeout`; any late worker result is discarded.
 pub fn task_with_timeout<M, F>(timeout: Duration, f: F, on_timeout: M) -> Cmd<M>
 where
     M: Send + 'static,
-    F: FnOnce() -> M + Send + 'static,
+    F: FnOnce(CancellationToken) -> M + Send + 'static,
 {
     Cmd::task(move || {
+        let source = CancellationSource::new();
+        let token = source.token();
         let (tx, rx) = std::sync::mpsc::channel();
         let _handle = std::thread::spawn(move || {
-            let result = f();
+            let result = f(token);
             let _ = tx.send(result);
         });
         match rx.recv_timeout(timeout) {
             Ok(msg) => msg,
-            Err(_) => on_timeout,
+            Err(_) => {
+                source.cancel();
+                on_timeout
+            }
         }
     })
 }
 
-/// Create a [`Cmd::Task`] with a named spec and timeout.
+/// Create a [`Cmd::Task`] with a named spec and cooperative timeout.
 pub fn task_with_timeout_named<M, F>(
     name: impl Into<String>,
     timeout: Duration,
@@ -156,17 +159,22 @@ pub fn task_with_timeout_named<M, F>(
 ) -> Cmd<M>
 where
     M: Send + 'static,
-    F: FnOnce() -> M + Send + 'static,
+    F: FnOnce(CancellationToken) -> M + Send + 'static,
 {
     Cmd::task_with_spec(TaskSpec::default().with_name(name), move || {
+        let source = CancellationSource::new();
+        let token = source.token();
         let (tx, rx) = std::sync::mpsc::channel();
         let _handle = std::thread::spawn(move || {
-            let result = f();
+            let result = f(token);
             let _ = tx.send(result);
         });
         match rx.recv_timeout(timeout) {
             Ok(msg) => msg,
-            Err(_) => on_timeout,
+            Err(_) => {
+                source.cancel();
+                on_timeout
+            }
         }
     })
 }
@@ -201,8 +209,9 @@ where
 
 /// Create a [`Cmd::Task`] with both retry and timeout.
 ///
-/// Each individual attempt is bounded by `per_attempt_timeout`. The total
-/// number of attempts is governed by the retry policy.
+/// Each individual attempt is bounded by `per_attempt_timeout`. The worker
+/// receives a [`CancellationToken`] and must honor it for timely timeout
+/// teardown. The total number of attempts is governed by the retry policy.
 pub fn task_with_retry_and_timeout<M, F>(
     policy: RetryPolicy,
     per_attempt_timeout: Duration,
@@ -210,17 +219,19 @@ pub fn task_with_retry_and_timeout<M, F>(
     on_exhaust: fn(String) -> M,
 ) -> Cmd<M>
 where
-    M: Send + 'static + Clone,
-    F: Fn() -> Result<M, String> + Send + Sync + 'static,
+    M: Send + 'static,
+    F: Fn(CancellationToken) -> Result<M, String> + Send + Sync + 'static,
 {
     Cmd::task(move || {
         let f = std::sync::Arc::new(f);
         let mut last_err = String::new();
         for attempt in 0..=policy.max_retries {
+            let source = CancellationSource::new();
+            let token = source.token();
             let (tx, rx) = std::sync::mpsc::channel();
             let f_clone = std::sync::Arc::clone(&f);
             let _handle = std::thread::spawn(move || {
-                let result = f_clone();
+                let result = f_clone(token);
                 let _ = tx.send(result);
             });
             match rx.recv_timeout(per_attempt_timeout) {
@@ -229,6 +240,7 @@ where
                     last_err = e;
                 }
                 Err(_) => {
+                    source.cancel();
                     last_err = "timeout".into();
                 }
             }
@@ -403,8 +415,93 @@ mod tests {
             Timeout,
         }
 
-        let cmd = task_with_timeout(Duration::from_secs(1), || Msg::Result(42), Msg::Timeout);
+        let cmd = task_with_timeout(
+            Duration::from_secs(1),
+            |_token| Msg::Result(42),
+            Msg::Timeout,
+        );
         assert_eq!(cmd.type_name(), "Task");
+    }
+
+    #[test]
+    fn task_with_timeout_requests_cancellation_on_timeout() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        #[derive(Debug, PartialEq)]
+        enum Msg {
+            Finished,
+            Timeout,
+        }
+
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_exited = Arc::new(AtomicBool::new(false));
+        let cancelled_flag = Arc::clone(&cancelled);
+        let exited_flag = Arc::clone(&worker_exited);
+
+        let cmd = task_with_timeout(
+            Duration::from_millis(10),
+            move |token| {
+                cancelled_flag.store(token.wait_timeout(Duration::from_secs(1)), Ordering::SeqCst);
+                exited_flag.store(true, Ordering::SeqCst);
+                Msg::Finished
+            },
+            Msg::Timeout,
+        );
+
+        let result = match cmd {
+            Cmd::Task(_, task) => task(),
+            other => panic!("expected Task, got {other:?}"),
+        };
+
+        assert_eq!(result, Msg::Timeout);
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(cancelled.load(Ordering::SeqCst));
+        assert!(worker_exited.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn task_with_retry_and_timeout_cancels_each_timed_out_attempt() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        #[derive(Debug, PartialEq)]
+        enum Msg {
+            Exhausted(String),
+        }
+
+        fn on_exhaust(err: String) -> Msg {
+            Msg::Exhausted(err)
+        }
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let cancelled = Arc::new(AtomicUsize::new(0));
+        let attempts_flag = Arc::clone(&attempts);
+        let cancelled_flag = Arc::clone(&cancelled);
+        let policy = RetryPolicy::new(1, BackoffStrategy::Fixed { delay_ms: 0 });
+
+        let cmd = task_with_retry_and_timeout(
+            policy,
+            Duration::from_millis(10),
+            move |token| {
+                attempts_flag.fetch_add(1, Ordering::SeqCst);
+                if token.wait_timeout(Duration::from_secs(1)) {
+                    cancelled_flag.fetch_add(1, Ordering::SeqCst);
+                }
+                Err("cancelled".to_owned())
+            },
+            on_exhaust,
+        );
+
+        let result = match cmd {
+            Cmd::Task(_, task) => task(),
+            other => panic!("expected Task, got {other:?}"),
+        };
+
+        assert_eq!(result, Msg::Exhausted("timeout".to_owned()));
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(cancelled.load(Ordering::SeqCst), 2);
     }
 
     #[test]

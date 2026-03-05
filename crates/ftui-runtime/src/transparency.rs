@@ -354,7 +354,11 @@ mod tests {
     #[test]
     fn disclosure_level_0() {
         let d = sample_decision(2.0, (0.7, 0.95), 0.1, 0.5);
-        let disc = disclose(&d, DecisionDomain::DiffStrategy, DisclosureLevel::TrafficLight);
+        let disc = disclose(
+            &d,
+            DecisionDomain::DiffStrategy,
+            DisclosureLevel::TrafficLight,
+        );
         assert_eq!(disc.signal, TrafficLight::Green);
         assert!(disc.explanation.is_none());
         assert!(disc.evidence_terms.is_none());
@@ -364,7 +368,11 @@ mod tests {
     #[test]
     fn disclosure_level_1() {
         let d = sample_decision(2.0, (0.7, 0.95), 0.1, 0.5);
-        let disc = disclose(&d, DecisionDomain::DiffStrategy, DisclosureLevel::PlainEnglish);
+        let disc = disclose(
+            &d,
+            DecisionDomain::DiffStrategy,
+            DisclosureLevel::PlainEnglish,
+        );
         assert!(disc.explanation.is_some());
         let expl = disc.explanation.unwrap();
         assert!(expl.contains("Diff strategy"));
@@ -375,7 +383,11 @@ mod tests {
     #[test]
     fn disclosure_level_2() {
         let d = sample_decision(2.0, (0.7, 0.95), 0.1, 0.5);
-        let disc = disclose(&d, DecisionDomain::DiffStrategy, DisclosureLevel::EvidenceTerms);
+        let disc = disclose(
+            &d,
+            DecisionDomain::DiffStrategy,
+            DisclosureLevel::EvidenceTerms,
+        );
         let terms = disc.evidence_terms.unwrap();
         assert_eq!(terms.len(), 3);
         assert_eq!(terms[0].label, "change_rate");
@@ -387,7 +399,11 @@ mod tests {
     #[test]
     fn disclosure_level_3() {
         let d = sample_decision(2.0, (0.7, 0.95), 0.1, 0.5);
-        let disc = disclose(&d, DecisionDomain::DiffStrategy, DisclosureLevel::FullBayesian);
+        let disc = disclose(
+            &d,
+            DecisionDomain::DiffStrategy,
+            DisclosureLevel::FullBayesian,
+        );
         let details = disc.bayesian_details.unwrap();
         assert!((details.log_posterior - 2.0).abs() < 1e-10);
         assert!((details.expected_loss - 0.1).abs() < 1e-10);
@@ -417,7 +433,11 @@ mod tests {
     #[test]
     fn display_formats_correctly() {
         let d = sample_decision(2.0, (0.7, 0.95), 0.1, 0.5);
-        let disc = disclose(&d, DecisionDomain::DiffStrategy, DisclosureLevel::FullBayesian);
+        let disc = disclose(
+            &d,
+            DecisionDomain::DiffStrategy,
+            DisclosureLevel::FullBayesian,
+        );
         let output = disc.to_string();
         assert!(output.contains("[OK]"));
         assert!(output.contains("full_redraw"));
@@ -428,7 +448,11 @@ mod tests {
     #[test]
     fn loss_avoided_in_explanation() {
         let d = sample_decision(2.0, (0.7, 0.95), 0.1, 0.5);
-        let disc = disclose(&d, DecisionDomain::DiffStrategy, DisclosureLevel::PlainEnglish);
+        let disc = disclose(
+            &d,
+            DecisionDomain::DiffStrategy,
+            DisclosureLevel::PlainEnglish,
+        );
         let expl = disc.explanation.unwrap();
         assert!(expl.contains("saving"), "should mention savings: {expl}");
     }
@@ -436,7 +460,11 @@ mod tests {
     #[test]
     fn no_savings_when_margin_tiny() {
         let d = sample_decision(2.0, (0.7, 0.95), 0.1, 0.105);
-        let disc = disclose(&d, DecisionDomain::DiffStrategy, DisclosureLevel::PlainEnglish);
+        let disc = disclose(
+            &d,
+            DecisionDomain::DiffStrategy,
+            DisclosureLevel::PlainEnglish,
+        );
         let expl = disc.explanation.unwrap();
         assert!(
             !expl.contains("saving"),

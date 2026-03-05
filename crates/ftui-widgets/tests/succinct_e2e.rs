@@ -136,7 +136,10 @@ fn e2e_viewport_resize() {
         let last_visible_px = scroll_px + viewport_h;
         let last_row = ef_scroll_to_row(&ef, last_visible_px);
         let expected_last = dense_scroll_to_row(&sums, last_visible_px);
-        assert_eq!(last_row, expected_last, "last row at viewport_h={viewport_h}");
+        assert_eq!(
+            last_row, expected_last,
+            "last row at viewport_h={viewport_h}"
+        );
 
         let visible_count = last_row.saturating_sub(first_row);
 
@@ -210,8 +213,8 @@ fn e2e_threshold_crossover() {
         let ef = EliasFano::encode(&sums);
 
         // Verify every access matches
-        for i in 0..n {
-            assert_eq!(ef.access(i), sums[i], "access mismatch at i={i}, n={n}");
+        for (i, &sum) in sums.iter().enumerate() {
+            assert_eq!(ef.access(i), sum, "access mismatch at i={i}, n={n}");
         }
 
         // Verify rank at boundaries
@@ -243,12 +246,8 @@ fn e2e_louds_tree_navigation() {
     // 10 sections, each has 100 items = 5551 nodes
     let mut degrees = Vec::new();
     degrees.push(5); // root
-    for _ in 0..5 {
-        degrees.push(10); // panel
-    }
-    for _ in 0..50 {
-        degrees.push(100); // section
-    }
+    degrees.extend(std::iter::repeat_n(10, 5)); // panel
+    degrees.extend(std::iter::repeat_n(100, 50)); // section
     // All remaining nodes are leaves
     let total_children: usize = degrees.iter().sum();
     let total_nodes = total_children + 1; // root + all children
@@ -307,7 +306,8 @@ fn e2e_roundtrip_bitwise_identical() {
         // Reconstruct from EF
         let reconstructed: Vec<u64> = (0..n).map(|i| ef.access(i)).collect();
         assert_eq!(
-            &reconstructed, &sums,
+            &reconstructed,
+            &sums,
             "round-trip failed at n={n}: first diff at {:?}",
             reconstructed
                 .iter()
@@ -339,8 +339,8 @@ fn e2e_degenerate_inputs() {
     let same_sums: Vec<u64> = (1..=1000).map(|i| i * 20).collect();
     let ef_same = EliasFano::encode(&same_sums);
     assert_eq!(ef_same.len(), 1000);
-    for i in 0..1000 {
-        assert_eq!(ef_same.access(i), same_sums[i]);
+    for (i, &sum) in same_sums.iter().enumerate() {
+        assert_eq!(ef_same.access(i), sum);
     }
     Evidence {
         test: "degenerate_same_height",
@@ -372,8 +372,8 @@ fn e2e_degenerate_inputs() {
     let max_sums = vec![0u64, u64::MAX / 4, u64::MAX / 2];
     let ef_max = EliasFano::encode(&max_sums);
     assert_eq!(ef_max.len(), 3);
-    for i in 0..3 {
-        assert_eq!(ef_max.access(i), max_sums[i]);
+    for (i, &sum) in max_sums.iter().enumerate() {
+        assert_eq!(ef_max.access(i), sum);
     }
     Evidence {
         test: "degenerate_max_height",

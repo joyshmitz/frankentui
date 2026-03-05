@@ -724,8 +724,7 @@ use ftui_layout::egraph::{self, SaturationConfig};
 /// Standard Flex.split for comparison baseline.
 fn flex_solve(constraints: &[Constraint], total: u16) -> Vec<u16> {
     let area = Rect::from_size(total, 1);
-    let flex = Flex::horizontal()
-        .constraints(constraints.to_vec());
+    let flex = Flex::horizontal().constraints(constraints.to_vec());
     flex.split(area).iter().map(|r| r.width).collect()
 }
 
@@ -753,10 +752,12 @@ fn bench_egraph_vs_standard(c: &mut Criterion) {
 
     // Scenario 3: deeply nested (simulated as 100 constraints)
     let deep: Vec<Constraint> = (0..100)
-        .map(|i| if i % 2 == 0 {
-            Constraint::Ratio(1, 100)
-        } else {
-            Constraint::Min(1)
+        .map(|i| {
+            if i % 2 == 0 {
+                Constraint::Ratio(1, 100)
+            } else {
+                Constraint::Min(1)
+            }
         })
         .collect();
 
@@ -792,9 +793,7 @@ fn bench_egraph_vs_standard(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("flex_split", name),
             &(constraints, total),
-            |b, &(constraints, total)| {
-                b.iter(|| black_box(flex_solve(constraints, total)))
-            },
+            |b, &(constraints, total)| b.iter(|| black_box(flex_solve(constraints, total))),
         );
 
         // Benchmark: E-graph solve_layout
@@ -830,9 +829,7 @@ fn bench_egraph_saturation_scaling(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("solve", n),
             &constraints,
-            |b, constraints| {
-                b.iter(|| black_box(egraph::solve_layout(constraints, 1000, &config)))
-            },
+            |b, constraints| b.iter(|| black_box(egraph::solve_layout(constraints, 1000, &config))),
         );
     }
 
@@ -864,9 +861,7 @@ fn bench_egraph_budget_impact(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("budget", budget),
             &constraints,
-            |b, constraints| {
-                b.iter(|| black_box(egraph::solve_layout(constraints, 1000, &config)))
-            },
+            |b, constraints| b.iter(|| black_box(egraph::solve_layout(constraints, 1000, &config))),
         );
     }
 

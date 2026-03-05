@@ -132,7 +132,14 @@ fn s3fifo_layout_cache_warmup_and_steady_state() {
     // Capacity 200: small=20, main=180. Working set = 6 screens × 15 widgets = 90 keys.
     // Items must be accessed before eviction from small to get promoted to main.
     let mut cache: S3Fifo<u64, Vec<u16>> = S3Fifo::new(200);
-    let screens = ["dashboard", "settings", "help", "dataviz", "palette", "controls"];
+    let screens = [
+        "dashboard",
+        "settings",
+        "help",
+        "dataviz",
+        "palette",
+        "controls",
+    ];
     let widgets_per_screen = 15;
 
     // Phase 1: Warm-up — insert + immediately access each screen's widgets.
@@ -340,7 +347,10 @@ fn s3fifo_correctness_cached_vs_uncached() {
             assert_eq!(cached, expected, "First access mismatch for {screen}:{w}");
 
             // Second access: cache hit
-            let cached2 = cache.get(&key).expect("should hit on second access").clone();
+            let cached2 = cache
+                .get(&key)
+                .expect("should hit on second access")
+                .clone();
             assert_eq!(cached2, expected, "Second access mismatch for {screen}:{w}");
         }
 
@@ -475,8 +485,14 @@ fn s3fifo_scan_resistance_e2e() {
 fn s3fifo_multi_screen_render_simulation() {
     let mut cache: S3Fifo<u64, Vec<u16>> = S3Fifo::new(300);
     let screens = [
-        "dashboard", "settings", "help", "dataviz",
-        "palette", "controls", "widgets", "tree_view",
+        "dashboard",
+        "settings",
+        "help",
+        "dataviz",
+        "palette",
+        "controls",
+        "widgets",
+        "tree_view",
     ];
     let widgets_per_screen = 25;
     let frames_per_screen = 10;

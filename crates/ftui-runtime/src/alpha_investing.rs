@@ -190,11 +190,7 @@ impl AlphaInvestor {
     /// Test with a custom investment amount (overrides `investment_fraction`).
     ///
     /// `custom_alpha` is clamped to `[0, current_wealth]`.
-    pub fn test_with_investment(
-        &mut self,
-        p_value: f64,
-        custom_alpha: Option<f64>,
-    ) -> TestOutcome {
+    pub fn test_with_investment(&mut self, p_value: f64, custom_alpha: Option<f64>) -> TestOutcome {
         let p = p_value.clamp(0.0, 1.0);
 
         // Check if we have enough wealth to test.

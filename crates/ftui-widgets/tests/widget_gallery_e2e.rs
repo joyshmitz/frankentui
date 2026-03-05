@@ -100,8 +100,7 @@ fn make_table() -> (Table<'static>, TableState) {
         Constraint::Percentage(20.0),
         Constraint::Percentage(40.0),
     ];
-    let table = Table::new(rows, widths)
-        .header(Row::new(["Name", "Age", "Department"]));
+    let table = Table::new(rows, widths).header(Row::new(["Name", "Age", "Department"]));
     let mut state = TableState::default();
     state.selected = Some(0);
     (table, state)
@@ -134,10 +133,7 @@ fn make_tree() -> Tree {
             .with_children(vec![
                 TreeNode::new("src")
                     .with_expanded(true)
-                    .with_children(vec![
-                        TreeNode::new("main.rs"),
-                        TreeNode::new("lib.rs"),
-                    ]),
+                    .with_children(vec![TreeNode::new("main.rs"), TreeNode::new("lib.rs")]),
                 TreeNode::new("Cargo.toml"),
                 TreeNode::new("README.md"),
             ]),
@@ -340,11 +336,7 @@ fn gallery_text_input_renders_value() {
         }
         let mut pool = GraphemePool::new();
         let mut frame = make_frame(&mut pool, w, h, DegradationLevel::Full);
-        Widget::render(
-            &make_text_input(),
-            Rect::new(0, 0, w, 1.min(h)),
-            &mut frame,
-        );
+        Widget::render(&make_text_input(), Rect::new(0, 0, w, 1.min(h)), &mut frame);
         assert!(
             contains_in_frame(&frame, "Hello"),
             "TextInput value missing at {name} ({w}x{h})"
@@ -374,12 +366,7 @@ fn gallery_table_renders_header() {
         let mut pool = GraphemePool::new();
         let mut frame = make_frame(&mut pool, w, h, DegradationLevel::Full);
         let (table, mut state) = make_table();
-        StatefulWidget::render(
-            &table,
-            Rect::new(0, 0, w, h),
-            &mut frame,
-            &mut state,
-        );
+        StatefulWidget::render(&table, Rect::new(0, 0, w, h), &mut frame, &mut state);
         assert!(
             contains_in_frame(&frame, "Name"),
             "Table header missing at {name} ({w}x{h})"
@@ -393,12 +380,7 @@ fn gallery_list_renders_items() {
         let mut pool = GraphemePool::new();
         let mut frame = make_frame(&mut pool, w, h, DegradationLevel::Full);
         let (list, mut state) = make_list();
-        StatefulWidget::render(
-            &list,
-            Rect::new(0, 0, w, h),
-            &mut frame,
-            &mut state,
-        );
+        StatefulWidget::render(&list, Rect::new(0, 0, w, h), &mut frame, &mut state);
         assert!(
             contains_in_frame(&frame, "Alpha"),
             "List first item missing at {name} ({w}x{h})"
@@ -415,12 +397,7 @@ fn gallery_tabs_renders_labels() {
         let mut pool = GraphemePool::new();
         let mut frame = make_frame(&mut pool, w, h, DegradationLevel::Full);
         let (tabs, mut state) = make_tabs();
-        StatefulWidget::render(
-            &tabs,
-            Rect::new(0, 0, w, 1.min(h)),
-            &mut frame,
-            &mut state,
-        );
+        StatefulWidget::render(&tabs, Rect::new(0, 0, w, 1.min(h)), &mut frame, &mut state);
         assert!(
             contains_in_frame(&frame, "Home"),
             "Tabs first label missing at {name} ({w}x{h})"

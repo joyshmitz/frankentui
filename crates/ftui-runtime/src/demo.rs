@@ -82,7 +82,11 @@ pub enum DemoParseError {
     /// Missing required field.
     MissingField { demo_id: String, field: String },
     /// Invalid value.
-    InvalidValue { demo_id: String, field: String, reason: String },
+    InvalidValue {
+        demo_id: String,
+        field: String,
+        reason: String,
+    },
     /// Duplicate demo_id.
     DuplicateId(String),
     /// No demos found.
@@ -97,7 +101,11 @@ impl std::fmt::Display for DemoParseError {
             Self::MissingField { demo_id, field } => {
                 write!(f, "demo '{demo_id}': missing required field '{field}'")
             }
-            Self::InvalidValue { demo_id, field, reason } => {
+            Self::InvalidValue {
+                demo_id,
+                field,
+                reason,
+            } => {
                 write!(f, "demo '{demo_id}': invalid '{field}': {reason}")
             }
             Self::DuplicateId(id) => write!(f, "duplicate demo_id: '{id}'"),
@@ -267,10 +275,7 @@ pub fn parse_demo_yaml(yaml: &str) -> Result<Vec<DemoDefinition>, Vec<DemoParseE
                 } else if trimmed.starts_with("contains:") {
                     let val = trimmed.strip_prefix("contains:").unwrap().trim();
                     if let Some(inner) = val.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-                        step.contains = inner
-                            .split(',')
-                            .map(|s| unquote(s.trim()))
-                            .collect();
+                        step.contains = inner.split(',').map(|s| unquote(s.trim())).collect();
                     } else {
                         in_contains = true;
                         step.contains.clear();
@@ -601,12 +606,21 @@ demos:
 
         assert!(matches!(&steps[0], DemoStep::Render { widget, seed, .. }
             if widget == "block" && *seed == Some(42)));
-        assert!(matches!(&steps[1], DemoStep::Resize { width: 120, height: 40, .. }));
+        assert!(matches!(
+            &steps[1],
+            DemoStep::Resize {
+                width: 120,
+                height: 40,
+                ..
+            }
+        ));
         assert!(matches!(&steps[2], DemoStep::AssertChecksum { .. }));
         assert!(matches!(&steps[3], DemoStep::AssertContent { contains, .. }
             if contains == &["hello", "world"]));
-        assert!(matches!(&steps[4], DemoStep::MeasureTiming { metric, max_us, .. }
-            if metric == "render_frame_us" && *max_us == Some(4000)));
+        assert!(
+            matches!(&steps[4], DemoStep::MeasureTiming { metric, max_us, .. }
+            if metric == "render_frame_us" && *max_us == Some(4000))
+        );
     }
 
     #[test]
@@ -635,7 +649,11 @@ demos:
         description: "r"
 "#;
         let errors = parse_demo_yaml(yaml).unwrap_err();
-        assert!(errors.iter().any(|e| matches!(e, DemoParseError::DuplicateId(id) if id == "dup")));
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, DemoParseError::DuplicateId(id) if id == "dup"))
+        );
     }
 
     #[test]

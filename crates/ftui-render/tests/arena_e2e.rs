@@ -17,7 +17,7 @@ use ftui_render::buffer::Buffer;
 use ftui_render::cell::Cell;
 use ftui_render::frame::Frame;
 use ftui_render::frame_guardrails::{
-    buffer_memory_bytes, FrameGuardrails, GuardrailsConfig, MemoryBudgetConfig,
+    FrameGuardrails, GuardrailsConfig, MemoryBudgetConfig, buffer_memory_bytes,
 };
 use ftui_render::grapheme_pool::GraphemePool;
 use serde::Serialize;

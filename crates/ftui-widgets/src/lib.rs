@@ -134,13 +134,15 @@ pub mod borders;
 pub mod cached;
 pub mod columns;
 pub mod command_palette;
-/// Galaxy-brain decision card widget with progressive-disclosure transparency.
-pub mod decision_card;
 pub mod constraint_overlay;
 #[cfg(feature = "debug-overlay")]
 pub mod debug_overlay;
+/// Galaxy-brain decision card widget with progressive-disclosure transparency.
+pub mod decision_card;
 /// Drag-and-drop protocol: [`Draggable`](drag::Draggable) sources, [`DropTarget`](drag::DropTarget) targets, and [`DragPayload`](drag::DragPayload).
 pub mod drag;
+/// Drift-triggered fallback visualization with per-domain confidence sparklines.
+pub mod drift_visualization;
 /// Elias-Fano encoding for monotone integer sequences (succinct prefix sums).
 pub mod elias_fano;
 pub mod emoji;
@@ -168,8 +170,8 @@ pub mod layout;
 pub mod layout_debugger;
 pub mod list;
 pub mod log_ring;
-pub mod louds;
 pub mod log_viewer;
+pub mod louds;
 /// Intrinsic sizing support for content-aware layout.
 pub mod measurable;
 /// Measure cache for memoizing widget measure results.
@@ -215,12 +217,12 @@ pub use badge::Badge;
 pub use cached::{CacheKey, CachedWidget, CachedWidgetState, FnKey, HashKey, NoCacheKey};
 pub use columns::{Column, Columns};
 pub use constraint_overlay::{ConstraintOverlay, ConstraintOverlayStyle};
-pub use decision_card::DecisionCard;
 #[cfg(feature = "debug-overlay")]
 pub use debug_overlay::{
     DebugOverlay, DebugOverlayOptions, DebugOverlayState, DebugOverlayStateful,
     DebugOverlayStatefulState,
 };
+pub use decision_card::DecisionCard;
 pub use group::Group;
 pub use help_registry::{HelpContent, HelpId, HelpRegistry, Keybinding};
 pub use history_panel::{HistoryEntry, HistoryPanel, HistoryPanelMode};

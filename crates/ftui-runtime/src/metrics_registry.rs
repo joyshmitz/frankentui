@@ -111,9 +111,8 @@ pub struct Histogram {
 }
 
 const HISTOGRAM_BUCKET_COUNT: usize = 10;
-const HISTOGRAM_BOUNDS: [u64; HISTOGRAM_BUCKET_COUNT - 1] = [
-    50, 100, 250, 500, 1_000, 2_000, 4_000, 8_000, 16_000,
-];
+const HISTOGRAM_BOUNDS: [u64; HISTOGRAM_BUCKET_COUNT - 1] =
+    [50, 100, 250, 500, 1_000, 2_000, 4_000, 8_000, 16_000];
 
 impl Histogram {
     const fn new() -> Self {
@@ -359,7 +358,9 @@ impl BuiltinHistogram {
             Self::DiffStrategyDurationUs => "Diff strategy computation duration in microseconds.",
             Self::LayoutComputeDurationUs => "Layout computation duration in microseconds.",
             Self::WidgetRenderDurationUs => "Widget render duration in microseconds.",
-            Self::ConformalIntervalWidthUs => "Conformal prediction interval width in microseconds.",
+            Self::ConformalIntervalWidthUs => {
+                "Conformal prediction interval width in microseconds."
+            }
             Self::AnimationDurationMs => "Animation duration in milliseconds.",
         }
     }
@@ -430,9 +431,7 @@ impl MetricsRegistry {
             let help = variant.help();
             fmt::write(
                 out,
-                format_args!(
-                    "# HELP {name} {help}\n# TYPE {name} counter\n{name} {val}\n",
-                ),
+                format_args!("# HELP {name} {help}\n# TYPE {name} counter\n{name} {val}\n",),
             )
             .ok();
         }
@@ -444,9 +443,7 @@ impl MetricsRegistry {
             let help = variant.help();
             fmt::write(
                 out,
-                format_args!(
-                    "# HELP {name} {help}\n# TYPE {name} gauge\n{name} {val}\n",
-                ),
+                format_args!("# HELP {name} {help}\n# TYPE {name} gauge\n{name} {val}\n",),
             )
             .ok();
         }
@@ -611,8 +608,7 @@ mod tests {
             1
         );
         assert_eq!(
-            reg.histogram(BuiltinHistogram::RenderFrameDurationUs)
-                .sum(),
+            reg.histogram(BuiltinHistogram::RenderFrameDurationUs).sum(),
             1500
         );
     }
@@ -672,8 +668,7 @@ mod tests {
         assert_eq!(reg.counter(BuiltinCounter::AnsiMalformedTotal).get(), 0);
         assert_eq!(reg.gauge(BuiltinGauge::EProcessWealth).get(), 0);
         assert_eq!(
-            reg.histogram(BuiltinHistogram::AnimationDurationMs)
-                .count(),
+            reg.histogram(BuiltinHistogram::AnimationDurationMs).count(),
             0
         );
     }

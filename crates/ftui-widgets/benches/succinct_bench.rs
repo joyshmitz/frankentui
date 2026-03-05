@@ -240,7 +240,10 @@ fn bench_ef_memory(c: &mut Criterion) {
 
         // Use throughput to report memory in the benchmark output
         group.bench_with_input(
-            BenchmarkId::new(format!("ef={ef_bytes}B_dense={dense_bytes}B_ratio={ratio:.2}"), n),
+            BenchmarkId::new(
+                format!("ef={ef_bytes}B_dense={dense_bytes}B_ratio={ratio:.2}"),
+                n,
+            ),
             &ef,
             |b, ef| {
                 b.iter(|| black_box(ef.size_in_bytes()));
@@ -314,37 +317,29 @@ fn bench_louds_navigation(c: &mut Criterion) {
             },
         );
 
-        group.bench_with_input(
-            BenchmarkId::new("louds_is_leaf", total),
-            &nodes,
-            |b, ns| {
-                b.iter(|| {
-                    let mut count = 0usize;
-                    for &v in ns {
-                        if louds.is_leaf(v) {
-                            count += 1;
-                        }
+        group.bench_with_input(BenchmarkId::new("louds_is_leaf", total), &nodes, |b, ns| {
+            b.iter(|| {
+                let mut count = 0usize;
+                for &v in ns {
+                    if louds.is_leaf(v) {
+                        count += 1;
                     }
-                    black_box(count)
-                });
-            },
-        );
+                }
+                black_box(count)
+            });
+        });
 
-        group.bench_with_input(
-            BenchmarkId::new("dense_is_leaf", total),
-            &nodes,
-            |b, ns| {
-                b.iter(|| {
-                    let mut count = 0usize;
-                    for &v in ns {
-                        if dense.is_leaf(v) {
-                            count += 1;
-                        }
+        group.bench_with_input(BenchmarkId::new("dense_is_leaf", total), &nodes, |b, ns| {
+            b.iter(|| {
+                let mut count = 0usize;
+                for &v in ns {
+                    if dense.is_leaf(v) {
+                        count += 1;
                     }
-                    black_box(count)
-                });
-            },
-        );
+                }
+                black_box(count)
+            });
+        });
     }
 
     group.finish();

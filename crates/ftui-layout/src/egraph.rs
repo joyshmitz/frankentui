@@ -94,11 +94,7 @@ pub enum Expr {
     /// Multiplication: `a * b`.
     Mul(Id, Id),
     /// Clamp value between min and max.
-    Clamp {
-        min: Id,
-        max: Id,
-        val: Id,
-    },
+    Clamp { min: Id, max: Id, val: Id },
     /// Horizontal flex container with children.
     HFlex(Vec<Id>),
     /// Vertical flex container with children.
@@ -274,9 +270,8 @@ impl EGraph {
 
         // Deduplicate merges
         merges.sort_by_key(|&(a, b)| (self.find(a).0, self.find(b).0));
-        merges.dedup_by(|a, b| {
-            self.find(a.0) == self.find(b.0) && self.find(a.1) == self.find(b.1)
-        });
+        merges
+            .dedup_by(|a, b| self.find(a.0) == self.find(b.0) && self.find(a.1) == self.find(b.1));
 
         let count = merges
             .iter()
@@ -492,10 +487,7 @@ impl EGraph {
         match expr {
             Expr::Num(_) => 1,
             Expr::Var(_) => 2,
-            Expr::Add(_, _)
-            | Expr::Sub(_, _)
-            | Expr::Max(_, _)
-            | Expr::Min(_, _) => 3,
+            Expr::Add(_, _) | Expr::Sub(_, _) | Expr::Max(_, _) | Expr::Min(_, _) => 3,
             Expr::Mul(_, _) | Expr::Div(_, _) => 4,
             Expr::Fill(_) => 3,
             Expr::Clamp { .. } => 5,
@@ -591,7 +583,7 @@ impl Default for SaturationConfig {
         Self {
             node_budget: 10_000,
             iteration_limit: 100,
-            time_limit_us: 5_000, // 5ms
+            time_limit_us: 5_000,           // 5ms
             memory_limit: 10 * 1024 * 1024, // 10MB
         }
     }
@@ -697,17 +689,37 @@ impl EGraph {
         for _ in 0..config.iteration_limit {
             // Check node budget
             if self.node_count() >= config.node_budget {
-                return make_result(self, total_rewrites, iterations, false, GuardTriggered::NodeBudget);
+                return make_result(
+                    self,
+                    total_rewrites,
+                    iterations,
+                    false,
+                    GuardTriggered::NodeBudget,
+                );
             }
 
             // Check time limit
-            if config.time_limit_us > 0 && start.elapsed().as_micros() as u64 >= config.time_limit_us {
-                return make_result(self, total_rewrites, iterations, false, GuardTriggered::Timeout);
+            if config.time_limit_us > 0
+                && start.elapsed().as_micros() as u64 >= config.time_limit_us
+            {
+                return make_result(
+                    self,
+                    total_rewrites,
+                    iterations,
+                    false,
+                    GuardTriggered::Timeout,
+                );
             }
 
             // Check memory limit
             if config.memory_limit > 0 && self.memory_usage() >= config.memory_limit {
-                return make_result(self, total_rewrites, iterations, false, GuardTriggered::Memory);
+                return make_result(
+                    self,
+                    total_rewrites,
+                    iterations,
+                    false,
+                    GuardTriggered::Memory,
+                );
             }
 
             let applied = self.apply_rules_once();
@@ -721,16 +733,24 @@ impl EGraph {
         }
 
         self.last_apply_count = total_rewrites;
-        make_result(self, total_rewrites, iterations, false, GuardTriggered::IterationLimit)
+        make_result(
+            self,
+            total_rewrites,
+            iterations,
+            false,
+            GuardTriggered::IterationLimit,
+        )
     }
 
     /// Estimated memory usage in bytes.
     pub fn memory_usage(&self) -> usize {
         let parents = self.parents.capacity() * std::mem::size_of::<u32>();
         let ranks = self.ranks.capacity();
-        let nodes: usize = self.nodes.iter().map(|v| {
-            v.capacity() * std::mem::size_of::<Expr>()
-        }).sum();
+        let nodes: usize = self
+            .nodes
+            .iter()
+            .map(|v| v.capacity() * std::mem::size_of::<Expr>())
+            .sum();
         let nodes_vec = self.nodes.capacity() * std::mem::size_of::<Vec<Expr>>();
         let memo = self.memo.capacity() * (std::mem::size_of::<Expr>() + std::mem::size_of::<Id>());
         parents + ranks + nodes + nodes_vec + memo
@@ -967,10 +987,7 @@ mod tests {
             val,
         });
         g.apply_rules();
-        assert!(
-            g.equiv(clamped, val),
-            "Clamp(0, MAX, x) should equal x"
-        );
+        assert!(g.equiv(clamped, val), "Clamp(0, MAX, x) should equal x");
     }
 
     // ── Extraction ────────────────────────────────────────────────
@@ -1112,9 +1129,7 @@ mod tests {
     fn typical_layout_size() {
         // Simulate encoding a typical 5-widget horizontal layout
         let mut g = EGraph::new();
-        let widgets: Vec<_> = (0..5)
-            .map(|i| g.add(Expr::Var(NodeId(i))))
-            .collect();
+        let widgets: Vec<_> = (0..5).map(|i| g.add(Expr::Var(NodeId(i)))).collect();
         let _flex = encode_flex(&mut g, &widgets, true);
         // With 5 vars + 1 flex = 6 nodes
         assert!(g.node_count() <= 10, "small layout should be compact");
@@ -1124,9 +1139,7 @@ mod tests {
     fn medium_layout_size() {
         // 100-widget layout
         let mut g = EGraph::new();
-        let widgets: Vec<_> = (0..100)
-            .map(|i| g.add(Expr::Var(NodeId(i))))
-            .collect();
+        let widgets: Vec<_> = (0..100).map(|i| g.add(Expr::Var(NodeId(i)))).collect();
         let _flex = encode_flex(&mut g, &widgets, true);
         assert!(g.node_count() <= 200);
     }
@@ -1194,10 +1207,7 @@ mod tests {
             val,
         });
         g.apply_rules();
-        assert!(
-            g.equiv(clamped, bound),
-            "Clamp(x, x, _) should equal x"
-        );
+        assert!(g.equiv(clamped, bound), "Clamp(x, x, _) should equal x");
     }
 
     #[test]
@@ -1205,11 +1215,7 @@ mod tests {
         let mut g = EGraph::new();
         let min = g.add(Expr::Num(10));
         let max = g.add(Expr::Num(100));
-        let clamped = g.add(Expr::Clamp {
-            min,
-            max,
-            val: min,
-        });
+        let clamped = g.add(Expr::Clamp { min, max, val: min });
         g.apply_rules();
         assert!(
             g.equiv(clamped, min),
@@ -1372,11 +1378,7 @@ mod tests {
         }
         g.saturate(&SaturationConfig::default());
         let mem = g.memory_usage();
-        assert!(
-            mem < 10 * 1024 * 1024,
-            "memory {} exceeds 10MB budget",
-            mem
-        );
+        assert!(mem < 10 * 1024 * 1024, "memory {} exceeds 10MB budget", mem);
     }
 
     // ── solve_layout ─────────────────────────────────────────────
@@ -1496,17 +1498,25 @@ mod tests {
     fn random_constraints_never_oom_or_hang() {
         // Simulate diverse constraint combos — guards must always hold
         let constraint_sets: Vec<Vec<crate::Constraint>> = vec![
-            (0..1000).map(|i| crate::Constraint::Fixed(i as u16)).collect(),
+            (0..1000)
+                .map(|i| crate::Constraint::Fixed(i as u16))
+                .collect(),
             (0..500).map(|_| crate::Constraint::Fill).collect(),
-            (0..200).map(|i| crate::Constraint::Percentage(i as f32 * 0.5)).collect(),
-            (0..100).map(|i| crate::Constraint::Ratio(i + 1, 100)).collect(),
+            (0..200)
+                .map(|i| crate::Constraint::Percentage(i as f32 * 0.5))
+                .collect(),
+            (0..100)
+                .map(|i| crate::Constraint::Ratio(i + 1, 100))
+                .collect(),
             (0..300).map(|i| crate::Constraint::Min(i as u16)).collect(),
             (0..300).map(|i| crate::Constraint::Max(i as u16)).collect(),
             // Pathological: all FitContentBounded
-            (0..500).map(|i| crate::Constraint::FitContentBounded {
-                min: i as u16,
-                max: i as u16 + 100,
-            }).collect(),
+            (0..500)
+                .map(|i| crate::Constraint::FitContentBounded {
+                    min: i as u16,
+                    max: i as u16 + 100,
+                })
+                .collect(),
         ];
 
         let config = SaturationConfig {
@@ -1609,8 +1619,14 @@ mod tests {
 
         assert_eq!(sizes1, sizes2, "sizes must be deterministic");
         assert_eq!(r1.rewrites, r2.rewrites, "rewrites must be deterministic");
-        assert_eq!(r1.iterations, r2.iterations, "iterations must be deterministic");
-        assert_eq!(r1.node_count, r2.node_count, "node_count must be deterministic");
+        assert_eq!(
+            r1.iterations, r2.iterations,
+            "iterations must be deterministic"
+        );
+        assert_eq!(
+            r1.node_count, r2.node_count,
+            "node_count must be deterministic"
+        );
         assert_eq!(r1.guard, r2.guard, "guard must be deterministic");
     }
 

@@ -30,9 +30,7 @@ use crate::{Widget, apply_style, draw_text_span, set_style_area};
 use ftui_core::geometry::Rect;
 use ftui_render::cell::{Cell, PackedRgba};
 use ftui_render::frame::Frame;
-use ftui_runtime::transparency::{
-    Disclosure, DisclosureLevel, EvidenceDirection, TrafficLight,
-};
+use ftui_runtime::transparency::{Disclosure, DisclosureLevel, EvidenceDirection, TrafficLight};
 use ftui_style::Style;
 
 /// Traffic-light color palette.
@@ -142,12 +140,16 @@ impl<'a> DecisionCard<'a> {
 
         // Top edge
         for x in area.x..area.right() {
-            frame.buffer.set_fast(x, area.y, border_cell(set.horizontal));
+            frame
+                .buffer
+                .set_fast(x, area.y, border_cell(set.horizontal));
         }
         // Bottom edge
         let bottom_y = area.bottom().saturating_sub(1);
         for x in area.x..area.right() {
-            frame.buffer.set_fast(x, bottom_y, border_cell(set.horizontal));
+            frame
+                .buffer
+                .set_fast(x, bottom_y, border_cell(set.horizontal));
         }
         // Left edge
         for y in area.y..area.bottom() {
@@ -159,10 +161,18 @@ impl<'a> DecisionCard<'a> {
             frame.buffer.set_fast(right_x, y, border_cell(set.vertical));
         }
         // Corners
-        frame.buffer.set_fast(area.x, area.y, border_cell(set.top_left));
-        frame.buffer.set_fast(right_x, area.y, border_cell(set.top_right));
-        frame.buffer.set_fast(area.x, bottom_y, border_cell(set.bottom_left));
-        frame.buffer.set_fast(right_x, bottom_y, border_cell(set.bottom_right));
+        frame
+            .buffer
+            .set_fast(area.x, area.y, border_cell(set.top_left));
+        frame
+            .buffer
+            .set_fast(right_x, area.y, border_cell(set.top_right));
+        frame
+            .buffer
+            .set_fast(area.x, bottom_y, border_cell(set.bottom_left));
+        frame
+            .buffer
+            .set_fast(right_x, bottom_y, border_cell(set.bottom_right));
     }
 
     fn render_signal_row(&self, x: u16, y: u16, max_x: u16, frame: &mut Frame) {
@@ -174,7 +184,14 @@ impl<'a> DecisionCard<'a> {
         let mut cx = draw_text_span(frame, x, y, &badge_text, badge_style, max_x);
 
         // Action label after badge
-        cx = draw_text_span(frame, cx + 1, y, &self.disclosure.action_label, self.title_style, max_x);
+        cx = draw_text_span(
+            frame,
+            cx + 1,
+            y,
+            &self.disclosure.action_label,
+            self.title_style,
+            max_x,
+        );
         let _ = cx;
     }
 
@@ -185,13 +202,7 @@ impl<'a> DecisionCard<'a> {
         }
     }
 
-    fn render_evidence(
-        &self,
-        x: u16,
-        mut y: u16,
-        max_x: u16,
-        frame: &mut Frame,
-    ) -> u16 {
+    fn render_evidence(&self, x: u16, mut y: u16, max_x: u16, frame: &mut Frame) -> u16 {
         let terms = match self.disclosure.evidence_terms {
             Some(ref t) if !t.is_empty() => t,
             _ => return y,
@@ -383,8 +394,14 @@ mod tests {
         let mut frame = Frame::new(40, 5, &mut pool);
         DecisionCard::new(&disc).render(Rect::new(0, 0, 40, 5), &mut frame);
         let row1 = extract_row(&frame, 1, 40);
-        assert!(row1.contains("OK"), "should contain traffic light label: {row1}");
-        assert!(row1.contains("full_redraw"), "should contain action: {row1}");
+        assert!(
+            row1.contains("OK"),
+            "should contain traffic light label: {row1}"
+        );
+        assert!(
+            row1.contains("full_redraw"),
+            "should contain action: {row1}"
+        );
     }
 
     #[test]

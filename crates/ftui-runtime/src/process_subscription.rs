@@ -39,7 +39,7 @@
 use crate::subscription::{StopSignal, SubId, Subscription};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::io::BufRead;
+use std::io::{BufRead, Read};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use web_time::Duration;
@@ -149,6 +149,26 @@ impl<M: Send + 'static> Subscription<M> for ProcessSubscription<M> {
     }
 
     fn run(&self, sender: mpsc::Sender<M>, stop: StopSignal) {
+        fn forward_lines<R, M>(
+            reader: std::io::BufReader<R>,
+            sender: mpsc::Sender<M>,
+            make_msg: impl Fn(String) -> M,
+        ) where
+            R: Read,
+            M: Send + 'static,
+        {
+            for line in reader.lines() {
+                match line {
+                    Ok(line) => {
+                        if sender.send(make_msg(line)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
+
         let mut cmd = Command::new(&self.program);
         cmd.args(&self.args)
             .stdout(Stdio::piped())
@@ -171,80 +191,34 @@ impl<M: Send + 'static> Subscription<M> for ProcessSubscription<M> {
         };
 
         let deadline = self.timeout.map(|t| web_time::Instant::now() + t);
-
-        // Capture stdout in a reader thread
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
-        let sender_stdout = sender.clone();
         let make_msg_ref = &self.make_msg;
+        let poll_interval = Duration::from_millis(50);
 
-        // Read stdout line-by-line
-        if let Some(stdout) = stdout {
-            let reader = std::io::BufReader::new(stdout);
-            let stop_clone = stop.clone();
-            let sender_clone = sender_stdout;
-            let poll_interval = Duration::from_millis(50);
+        std::thread::scope(|s| {
+            let stdout_handle = stdout.map(|stdout| {
+                let sender_out = sender.clone();
+                s.spawn(move || {
+                    forward_lines(std::io::BufReader::new(stdout), sender_out, |line| {
+                        (make_msg_ref)(ProcessEvent::Stdout(line))
+                    });
+                })
+            });
+            let stderr_handle = stderr.map(|stderr| {
+                let sender_err = sender.clone();
+                s.spawn(move || {
+                    forward_lines(std::io::BufReader::new(stderr), sender_err, |line| {
+                        (make_msg_ref)(ProcessEvent::Stderr(line))
+                    });
+                })
+            });
 
-            // We read in the current thread (subscription runs on its own thread)
-            // and check stop signal between lines
-            std::thread::scope(|s| {
-                let stderr_handle = stderr.map(|stderr| {
-                    let sender_err = sender.clone();
-                    s.spawn(move || {
-                        let reader = std::io::BufReader::new(stderr);
-                        for line in reader.lines() {
-                            match line {
-                                Ok(l) => {
-                                    if sender_err
-                                        .send((make_msg_ref)(ProcessEvent::Stderr(l)))
-                                        .is_err()
-                                    {
-                                        break;
-                                    }
-                                }
-                                Err(_) => break,
-                            }
-                        }
-                    })
-                });
-
-                // Read stdout
-                for line in reader.lines() {
-                    if stop_clone.is_stopped() {
-                        break;
-                    }
-                    if let Some(dl) = deadline
-                        && web_time::Instant::now() >= dl
-                    {
-                        let _ = sender_clone.send((make_msg_ref)(ProcessEvent::Killed));
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        return;
-                    }
-                    match line {
-                        Ok(l) => {
-                            if sender_clone
-                                .send((make_msg_ref)(ProcessEvent::Stdout(l)))
-                                .is_err()
-                            {
-                                break;
-                            }
-                        }
-                        Err(_) => break,
-                    }
-                }
-
-                // Wait for stderr thread
-                if let Some(handle) = stderr_handle {
-                    let _ = handle.join();
-                }
-
-                // Check if stopped or timed out — kill the process
-                if stop_clone.is_stopped() {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let _ = sender_clone.send((make_msg_ref)(ProcessEvent::Killed));
-                    return;
+            let final_event = loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => break ProcessEvent::Exited(status.code().unwrap_or(-1)),
+                    Ok(None) => {}
+                    Err(e) => break ProcessEvent::Error(format!("wait error: {e}")),
                 }
 
                 if let Some(dl) = deadline
@@ -252,50 +226,25 @@ impl<M: Send + 'static> Subscription<M> for ProcessSubscription<M> {
                 {
                     let _ = child.kill();
                     let _ = child.wait();
-                    let _ = sender_clone.send((make_msg_ref)(ProcessEvent::Killed));
-                    return;
+                    break ProcessEvent::Killed;
                 }
 
-                // Wait for child to exit naturally (with periodic stop checks)
-                loop {
-                    match child.try_wait() {
-                        Ok(Some(status)) => {
-                            let code = status.code().unwrap_or(-1);
-                            let _ = sender_clone.send((make_msg_ref)(ProcessEvent::Exited(code)));
-                            return;
-                        }
-                        Ok(None) => {
-                            if stop_clone.is_stopped() {
-                                let _ = child.kill();
-                                let _ = child.wait();
-                                let _ = sender_clone.send((make_msg_ref)(ProcessEvent::Killed));
-                                return;
-                            }
-                            if let Some(dl) = deadline
-                                && web_time::Instant::now() >= dl
-                            {
-                                let _ = child.kill();
-                                let _ = child.wait();
-                                let _ = sender_clone.send((make_msg_ref)(ProcessEvent::Killed));
-                                return;
-                            }
-                            if stop_clone.wait_timeout(poll_interval) {
-                                let _ = child.kill();
-                                let _ = child.wait();
-                                let _ = sender_clone.send((make_msg_ref)(ProcessEvent::Killed));
-                                return;
-                            }
-                        }
-                        Err(e) => {
-                            let _ = sender_clone.send((make_msg_ref)(ProcessEvent::Error(
-                                format!("wait error: {e}"),
-                            )));
-                            return;
-                        }
-                    }
+                if stop.wait_timeout(poll_interval) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break ProcessEvent::Killed;
                 }
-            });
-        }
+            };
+
+            if let Some(handle) = stdout_handle {
+                let _ = handle.join();
+            }
+            if let Some(handle) = stderr_handle {
+                let _ = handle.join();
+            }
+
+            let _ = sender.send((make_msg_ref)(final_event));
+        });
     }
 }
 
@@ -412,6 +361,7 @@ mod tests {
         let sub = ProcessSubscription::new("sleep", TestMsg::Proc).arg("60");
         let (tx, rx) = stdmpsc::channel();
         let (signal, trigger) = StopSignal::new();
+        let start = web_time::Instant::now();
 
         let handle = thread::spawn(move || {
             sub.run(tx, signal);
@@ -421,6 +371,10 @@ mod tests {
         thread::sleep(Duration::from_millis(100));
         trigger.stop();
         handle.join().unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "stop should kill a quiet process promptly"
+        );
 
         let msgs: Vec<TestMsg> = rx.try_iter().collect();
         let has_killed = msgs
@@ -436,12 +390,17 @@ mod tests {
             .timeout(Duration::from_millis(100));
         let (tx, rx) = stdmpsc::channel();
         let (signal, _trigger) = StopSignal::new();
+        let start = web_time::Instant::now();
 
         let handle = thread::spawn(move || {
             sub.run(tx, signal);
         });
 
         handle.join().unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "timeout should kill a quiet process promptly"
+        );
         let msgs: Vec<TestMsg> = rx.try_iter().collect();
         let has_killed = msgs
             .iter()

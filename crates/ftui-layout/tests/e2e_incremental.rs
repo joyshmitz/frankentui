@@ -12,9 +12,9 @@
 //! ```
 
 use ftui_core::geometry::Rect;
+use ftui_layout::Rects;
 use ftui_layout::dep_graph::{CycleError, DepGraph, InputKind, NodeId};
 use ftui_layout::incremental::IncrementalLayout;
-use ftui_layout::Rects;
 use serde_json::json;
 use std::collections::HashSet;
 use std::io::Write as _;

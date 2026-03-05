@@ -32,8 +32,8 @@ impl GenericRepr for ListState {
     fn from_repr(repr: Self::Repr) -> Self {
         Self {
             selected: repr.0.value,
-            offset: repr.1 .0.value,
-            item_count: repr.1 .1 .0.value,
+            offset: repr.1.0.value,
+            item_count: repr.1.1.0.value,
         }
     }
 }
@@ -67,9 +67,9 @@ impl GenericRepr for TableState {
     fn from_repr(repr: Self::Repr) -> Self {
         Self {
             row: repr.0.value,
-            col: repr.1 .0.value,
-            sort_col: repr.1 .1 .0.value,
-            sort_asc: repr.1 .1 .1 .0.value,
+            col: repr.1.0.value,
+            sort_col: repr.1.1.0.value,
+            sort_asc: repr.1.1.1.0.value,
         }
     }
 }
@@ -114,8 +114,8 @@ impl GenericRepr for EditorState {
     fn from_repr(repr: Self::Repr) -> Self {
         Self {
             cursor_row: repr.0.value,
-            cursor_col: repr.1 .0.value,
-            modified: repr.1 .1 .0.value,
+            cursor_col: repr.1.0.value,
+            modified: repr.1.1.0.value,
         }
     }
 }
@@ -169,8 +169,8 @@ impl GenericRepr for ScrollbarState {
     fn from_repr(repr: Self::Repr) -> Self {
         Self {
             position: repr.0.value,
-            viewport: repr.1 .0.value,
-            content: repr.1 .1 .0.value,
+            viewport: repr.1.0.value,
+            content: repr.1.1.0.value,
         }
     }
 }
@@ -348,7 +348,10 @@ fn e2e_identical_states_empty_diff() {
         item_count: 100,
     };
     let diff = generic_diff(&state, &state);
-    assert!(diff.is_empty(), "identical states should produce empty diff");
+    assert!(
+        diff.is_empty(),
+        "identical states should produce empty diff"
+    );
     assert_eq!(diff.change_count(), 0);
 
     let patched = generic_patch(&state, &diff);
@@ -426,10 +429,7 @@ fn e2e_all_tree_transitions() {
         for new in &variants {
             let diff = generic_diff(old, new);
             let patched = generic_patch(old, &diff);
-            assert_eq!(
-                &patched, new,
-                "roundtrip failed for {old:?} -> {new:?}"
-            );
+            assert_eq!(&patched, new, "roundtrip failed for {old:?} -> {new:?}");
         }
     }
 }
@@ -510,14 +510,32 @@ fn e2e_all_widget_states_roundtrip() {
         roundtrip_test(
             "ListState",
             "initial_to_scrolled",
-            &ListState { selected: 0, offset: 0, item_count: 100 },
-            &ListState { selected: 20, offset: 15, item_count: 100 },
+            &ListState {
+                selected: 0,
+                offset: 0,
+                item_count: 100,
+            },
+            &ListState {
+                selected: 20,
+                offset: 15,
+                item_count: 100,
+            },
         ),
         roundtrip_test(
             "TableState",
             "navigate_sort",
-            &TableState { row: 0, col: 0, sort_col: 0, sort_asc: true },
-            &TableState { row: 50, col: 5, sort_col: 3, sort_asc: false },
+            &TableState {
+                row: 0,
+                col: 0,
+                sort_col: 0,
+                sort_asc: true,
+            },
+            &TableState {
+                row: 50,
+                col: 5,
+                sort_col: 3,
+                sort_asc: false,
+            },
         ),
         roundtrip_test(
             "TabsState",
@@ -528,8 +546,16 @@ fn e2e_all_widget_states_roundtrip() {
         roundtrip_test(
             "EditorState",
             "typing",
-            &EditorState { cursor_row: 0, cursor_col: 0, modified: false },
-            &EditorState { cursor_row: 10, cursor_col: 25, modified: true },
+            &EditorState {
+                cursor_row: 0,
+                cursor_col: 0,
+                modified: false,
+            },
+            &EditorState {
+                cursor_row: 10,
+                cursor_col: 25,
+                modified: true,
+            },
         ),
         roundtrip_test(
             "TreeNodeState",
@@ -540,14 +566,26 @@ fn e2e_all_widget_states_roundtrip() {
         roundtrip_test(
             "ScrollbarState",
             "scroll",
-            &ScrollbarState { position: 0, viewport: 20, content: 200 },
-            &ScrollbarState { position: 180, viewport: 20, content: 200 },
+            &ScrollbarState {
+                position: 0,
+                viewport: 20,
+                content: 200,
+            },
+            &ScrollbarState {
+                position: 180,
+                viewport: 20,
+                content: 200,
+            },
         ),
     ];
 
     // Verify ALL round-trips succeeded
     for ev in &evidence {
-        assert!(ev.roundtrip_match, "failed for {}/{}", ev.widget_type, ev.scenario);
+        assert!(
+            ev.roundtrip_match,
+            "failed for {}/{}",
+            ev.widget_type, ev.scenario
+        );
     }
 
     // Emit JSONL

@@ -42,8 +42,8 @@
 pub mod cache;
 pub mod debug;
 pub mod dep_graph;
-pub mod egraph;
 pub mod direction;
+pub mod egraph;
 pub mod grid;
 pub mod incremental;
 pub mod pane;

@@ -132,12 +132,26 @@ pub(crate) struct RunningSubscription {
     thread: Option<thread::JoinHandle<()>>,
 }
 
+const SUBSCRIPTION_STOP_JOIN_TIMEOUT: Duration = Duration::from_millis(250);
+const SUBSCRIPTION_STOP_JOIN_POLL: Duration = Duration::from_millis(5);
+
 impl RunningSubscription {
-    /// Stop the subscription and join its thread.
+    /// Stop the subscription and join its thread if it exits promptly.
     pub(crate) fn stop(mut self) {
         self.trigger.stop();
         if let Some(handle) = self.thread.take() {
-            // Give the thread a moment to finish, but don't block forever
+            let start = Instant::now();
+            while !handle.is_finished() {
+                if start.elapsed() >= SUBSCRIPTION_STOP_JOIN_TIMEOUT {
+                    tracing::warn!(
+                        sub_id = self.id,
+                        timeout_ms = SUBSCRIPTION_STOP_JOIN_TIMEOUT.as_millis() as u64,
+                        "Subscription did not stop within timeout; detaching thread"
+                    );
+                    return;
+                }
+                thread::sleep(SUBSCRIPTION_STOP_JOIN_POLL);
+            }
             let _ = handle.join();
         }
     }
@@ -947,6 +961,36 @@ mod tests {
         };
 
         running.stop();
+        assert!(completed.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn running_subscription_stop_times_out_for_uncooperative_thread() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let completed = std::sync::Arc::new(AtomicBool::new(false));
+        let completed_clone = completed.clone();
+
+        let (_signal, trigger) = StopSignal::new();
+        let thread = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(500));
+            completed_clone.store(true, Ordering::SeqCst);
+        });
+
+        let running = RunningSubscription {
+            id: 7,
+            trigger,
+            thread: Some(thread),
+        };
+
+        let start = Instant::now();
+        running.stop();
+        assert!(
+            start.elapsed() < Duration::from_millis(400),
+            "stop() should not block behind an uncooperative subscription thread"
+        );
+
+        thread::sleep(Duration::from_millis(550));
         assert!(completed.load(Ordering::SeqCst));
     }
 

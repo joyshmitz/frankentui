@@ -37,6 +37,7 @@ pub mod headless;
 pub mod link_registry;
 pub mod presenter;
 
+pub mod quotient_filter;
 pub mod roaring_bitmap;
 pub mod sanitize;
 pub mod spatial_hit_index;

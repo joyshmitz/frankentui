@@ -308,10 +308,7 @@ mod tests {
     }
 
     fn start_lens() -> FieldLens<impl Fn(&Line) -> Point, impl Fn(&mut Line, Point)> {
-        field_lens(
-            |l: &Line| l.start.clone(),
-            |l: &mut Line, p| l.start = p,
-        )
+        field_lens(|l: &Line| l.start.clone(), |l: &mut Line, p| l.start = p)
     }
 
     fn end_lens() -> FieldLens<impl Fn(&Line) -> Point, impl Fn(&mut Line, Point)> {

@@ -38,8 +38,8 @@ pub mod conformal_stages;
 pub mod cost_model;
 pub mod debug_trace;
 pub mod decision_core;
-pub mod demo;
 pub mod degradation_cascade;
+pub mod demo;
 pub mod diff_evidence;
 pub mod effect_system;
 pub mod eprocess_throttle;
@@ -48,12 +48,12 @@ pub mod event_trace;
 pub mod evidence_bridges;
 pub mod evidence_sink;
 pub mod evidence_telemetry;
-pub mod flat_combine;
 pub mod flake_detector;
-pub mod lens;
+pub mod flat_combine;
 pub mod input_fairness;
 pub mod input_macro;
 pub mod ivm;
+pub mod lens;
 pub mod locale;
 pub mod log_sink;
 pub mod metrics_registry;
@@ -66,13 +66,13 @@ pub mod queueing_scheduler;
 pub mod render_thread;
 pub mod render_trace;
 pub mod resize_coalescer;
-pub mod reversible;
 pub mod resize_sla;
 pub mod retry;
-pub mod slo;
+pub mod reversible;
 pub mod rough_path;
 pub mod schema_compat;
 pub mod simulator;
+pub mod slo;
 pub mod state_persistence;
 #[cfg(feature = "stdio-capture")]
 pub mod stdio_capture;
@@ -176,18 +176,11 @@ pub use decision_core::{
     Action as DecisionAction, Decision, DecisionCore, Outcome as DecisionOutcome, Posterior,
     State as DecisionState, argmin_expected_loss, second_best_loss,
 };
-pub use demo::{
-    DemoDefinition, DemoParseError, DemoStep, parse_demo_yaml, validate_demos,
-};
-pub use schema_compat::{
-    CompatCheckResult, Compatibility, MatrixEntry, SchemaKind, check_evidence_compat,
-    check_event_trace_compat, check_golden_trace_compat, check_render_trace_compat,
-    check_schema_compat, default_compatibility_matrix, run_compatibility_matrix,
-};
 pub use degradation_cascade::{
     CascadeConfig, CascadeDecision, CascadeEvidence, CascadeTelemetry, DegradationCascade,
     PreRenderResult,
 };
+pub use demo::{DemoDefinition, DemoParseError, DemoStep, parse_demo_yaml, validate_demos};
 pub use effect_system::{
     effects_command_total, effects_executed_total, effects_subscription_total,
     record_command_effect, record_subscription_start, record_subscription_stop,
@@ -207,7 +200,7 @@ pub use flat_combine::{CombinerStats, FlatCombiner};
 pub use lens::{AtIndex, Composed, Fst, Identity, Lens, Prism, Snd, SomePrism, at_index, compose};
 pub use metrics_registry::{
     BuiltinCounter, BuiltinGauge, BuiltinHistogram, Counter as MetricsCounter,
-    Gauge as MetricsGauge, Histogram as MetricsHistogram, MetricsRegistry, METRICS,
+    Gauge as MetricsGauge, Histogram as MetricsHistogram, METRICS, MetricsRegistry,
 };
 pub use policy_config::{
     BocpdPolicyConfig, CascadePolicyConfig, ConformalPolicyConfig, EProcessBudgetPolicyConfig,
@@ -216,15 +209,20 @@ pub use policy_config::{
 };
 pub use policy_registry::{PolicyRegistry, PolicyRegistryError, PolicySwitchEvent};
 pub use reactive::{BatchScope, Binding, BindingScope, Computed, Observable, TwoWayBinding};
-pub use reversible::{
-    AddOp, InsertOp, Journal, MulOp, PushOp, RemoveOp, Reversible, Sequence, SetOp, SwapOp, XorOp,
-};
 pub use resize_coalescer::{
     CoalesceAction, CoalescerConfig, CoalescerStats, CycleTimePercentiles, DecisionLog,
     DecisionSummary, Regime, ResizeCoalescer,
 };
 pub use resize_sla::{
     ResizeEvidence, ResizeSlaMonitor, SlaConfig, SlaLogEntry, SlaSummary, make_sla_hooks,
+};
+pub use reversible::{
+    AddOp, InsertOp, Journal, MulOp, PushOp, RemoveOp, Reversible, Sequence, SetOp, SwapOp, XorOp,
+};
+pub use schema_compat::{
+    CompatCheckResult, Compatibility, MatrixEntry, SchemaKind, check_event_trace_compat,
+    check_evidence_compat, check_golden_trace_compat, check_render_trace_compat,
+    check_schema_compat, default_compatibility_matrix, run_compatibility_matrix,
 };
 pub use slo::{
     BreachResult, BreachSeverity, MetricSlo, MetricType, SafeModeDecision, SloSchema,

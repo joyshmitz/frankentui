@@ -5,7 +5,7 @@
 //! Run:
 //!   cargo test -p ftui-runtime --test demo_yaml_validation
 
-use ftui_runtime::demo::{parse_demo_yaml, validate_demos, DemoStep};
+use ftui_runtime::demo::{DemoStep, parse_demo_yaml, validate_demos};
 
 // ============================================================================
 // Load the real demo.yaml from project root
@@ -157,7 +157,9 @@ fn demo_yaml_has_widget_gallery() {
 fn demo_yaml_has_decision_card() {
     let demos = parse_demo_yaml(load_demo_yaml()).unwrap();
     assert!(
-        demos.iter().any(|d| d.demo_id == "galaxy_brain_decision_card"),
+        demos
+            .iter()
+            .any(|d| d.demo_id == "galaxy_brain_decision_card"),
         "demo.yaml should include 'galaxy_brain_decision_card' demo"
     );
 }
@@ -198,8 +200,12 @@ fn demo_yaml_uses_all_step_types() {
     let demos = parse_demo_yaml(load_demo_yaml()).unwrap();
     let all_steps: Vec<&DemoStep> = demos.iter().flat_map(|d| &d.steps).collect();
 
-    let has_render = all_steps.iter().any(|s| matches!(s, DemoStep::Render { .. }));
-    let has_resize = all_steps.iter().any(|s| matches!(s, DemoStep::Resize { .. }));
+    let has_render = all_steps
+        .iter()
+        .any(|s| matches!(s, DemoStep::Render { .. }));
+    let has_resize = all_steps
+        .iter()
+        .any(|s| matches!(s, DemoStep::Resize { .. }));
     let has_checksum = all_steps
         .iter()
         .any(|s| matches!(s, DemoStep::AssertChecksum { .. }));
@@ -212,9 +218,18 @@ fn demo_yaml_uses_all_step_types() {
 
     assert!(has_render, "demo.yaml should use 'render' step type");
     assert!(has_resize, "demo.yaml should use 'resize' step type");
-    assert!(has_checksum, "demo.yaml should use 'assert_checksum' step type");
-    assert!(has_content, "demo.yaml should use 'assert_content' step type");
-    assert!(has_timing, "demo.yaml should use 'measure_timing' step type");
+    assert!(
+        has_checksum,
+        "demo.yaml should use 'assert_checksum' step type"
+    );
+    assert!(
+        has_content,
+        "demo.yaml should use 'assert_content' step type"
+    );
+    assert!(
+        has_timing,
+        "demo.yaml should use 'measure_timing' step type"
+    );
 }
 
 // ============================================================================
@@ -225,11 +240,7 @@ fn demo_yaml_uses_all_step_types() {
 fn demo_yaml_all_demos_have_tags() {
     let demos = parse_demo_yaml(load_demo_yaml()).unwrap();
     for demo in &demos {
-        assert!(
-            !demo.tags.is_empty(),
-            "demo '{}' has no tags",
-            demo.demo_id
-        );
+        assert!(!demo.tags.is_empty(), "demo '{}' has no tags", demo.demo_id);
     }
 }
 

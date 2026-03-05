@@ -6,8 +6,8 @@
 //!   cargo test -p ftui-runtime --test slo_yaml_validation
 
 use ftui_runtime::slo::{
-    check_breach, check_safe_mode, parse_slo_yaml, run_slo_check, BreachSeverity, MetricType,
-    SafeModeDecision,
+    BreachSeverity, MetricType, SafeModeDecision, check_breach, check_safe_mode, parse_slo_yaml,
+    run_slo_check,
 };
 
 // ============================================================================
@@ -57,10 +57,7 @@ fn slo_yaml_has_data_plane_metrics() {
     ];
 
     for prefix in &data_plane_prefixes {
-        let found = schema
-            .metrics
-            .keys()
-            .any(|k| k.starts_with(prefix));
+        let found = schema.metrics.keys().any(|k| k.starts_with(prefix));
         assert!(
             found,
             "slo.yaml should define data-plane metric with prefix '{prefix}'"
@@ -82,10 +79,7 @@ fn slo_yaml_has_decision_plane_metrics() {
     ];
 
     for prefix in &decision_plane_prefixes {
-        let found = schema
-            .metrics
-            .keys()
-            .any(|k| k.starts_with(prefix));
+        let found = schema.metrics.keys().any(|k| k.starts_with(prefix));
         assert!(
             found,
             "slo.yaml should define decision-plane metric with prefix '{prefix}'"
@@ -469,7 +463,10 @@ fn slo_yaml_parse_is_deterministic() {
 
     assert_eq!(schema1.regression_threshold, schema2.regression_threshold);
     assert_eq!(schema1.noise_tolerance, schema2.noise_tolerance);
-    assert_eq!(schema1.safe_mode_breach_count, schema2.safe_mode_breach_count);
+    assert_eq!(
+        schema1.safe_mode_breach_count,
+        schema2.safe_mode_breach_count
+    );
     assert_eq!(schema1.metrics.len(), schema2.metrics.len());
 
     for (name, slo1) in &schema1.metrics {

@@ -9,8 +9,8 @@
 //!   cargo test -p ftui-runtime --test schema_compat_matrix
 
 use ftui_runtime::schema_compat::{
-    check_schema_compat, default_compatibility_matrix, run_compatibility_matrix, Compatibility,
-    SchemaKind,
+    Compatibility, SchemaKind, check_schema_compat, default_compatibility_matrix,
+    run_compatibility_matrix,
 };
 
 // ============================================================================
@@ -165,13 +165,19 @@ fn golden_trace_v2_backward() {
 #[test]
 fn telemetry_older_major_forward() {
     let result = check_schema_compat(SchemaKind::Telemetry, "0.9.0");
-    assert!(result.is_compatible(), "older major version should be forward-compatible");
+    assert!(
+        result.is_compatible(),
+        "older major version should be forward-compatible"
+    );
 }
 
 #[test]
 fn telemetry_newer_major_backward() {
     let result = check_schema_compat(SchemaKind::Telemetry, "2.0.0");
-    assert!(!result.is_compatible(), "newer major version should be incompatible");
+    assert!(
+        !result.is_compatible(),
+        "newer major version should be incompatible"
+    );
 }
 
 #[test]

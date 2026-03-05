@@ -33,8 +33,8 @@
 //! assert_eq!(len, 2);
 //! ```
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Statistics for monitoring flat combining performance.
 #[derive(Debug, Clone, Default)]
@@ -167,10 +167,7 @@ impl<S> FlatCombiner<S> {
     /// and a closure that executes all pending operations. This allows
     /// wrapping the batch with setup/teardown logic (e.g., marking a
     /// dirty flag, snapshotting state).
-    pub fn combine_with<R>(
-        &self,
-        around: impl FnOnce(&mut S, &dyn Fn(&mut S)) -> R,
-    ) -> (usize, R) {
+    pub fn combine_with<R>(&self, around: impl FnOnce(&mut S, &dyn Fn(&mut S)) -> R) -> (usize, R) {
         let ops: Vec<BoxedOp<S>> = {
             let mut queue = self.queue.lock().unwrap_or_else(|e| e.into_inner());
             std::mem::take(&mut *queue)
@@ -206,10 +203,7 @@ impl<S> FlatCombiner<S> {
 
     /// Number of operations currently in the publication queue.
     pub fn pending_count(&self) -> usize {
-        self.queue
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .len()
+        self.queue.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 
     /// Current generation counter. Incremented after each combine pass.
@@ -219,10 +213,7 @@ impl<S> FlatCombiner<S> {
 
     /// Get a snapshot of current performance statistics.
     pub fn stats(&self) -> CombinerStats {
-        self.stats
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        self.stats.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Reset statistics counters.

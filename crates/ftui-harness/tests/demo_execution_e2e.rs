@@ -15,7 +15,7 @@ use ftui_core::geometry::Rect;
 use ftui_layout::Constraint;
 use ftui_render::frame::Frame;
 use ftui_render::grapheme_pool::GraphemePool;
-use ftui_runtime::demo::{parse_demo_yaml, DemoDefinition, DemoStep};
+use ftui_runtime::demo::{DemoDefinition, DemoStep, parse_demo_yaml};
 use ftui_widgets::block::Block;
 use ftui_widgets::borders::Borders;
 use ftui_widgets::input::TextInput;
@@ -90,7 +90,9 @@ fn render_widget<'a>(widget_name: &str, pool: &'a mut GraphemePool, w: u16, h: u
             Widget::render(&block, area, &mut frame);
         }
         "paragraph" => {
-            let para = Paragraph::new("Hello from FrankenTUI! This is a paragraph with styled text and automatic wrapping.");
+            let para = Paragraph::new(
+                "Hello from FrankenTUI! This is a paragraph with styled text and automatic wrapping.",
+            );
             Widget::render(&para, area, &mut frame);
         }
         "list" => {
@@ -114,8 +116,7 @@ fn render_widget<'a>(widget_name: &str, pool: &'a mut GraphemePool, w: u16, h: u
                 Constraint::Percentage(30.0),
                 Constraint::Percentage(30.0),
             ];
-            let table = Table::new(rows, widths)
-                .header(Row::new(["Name", "Age", "Dept"]));
+            let table = Table::new(rows, widths).header(Row::new(["Name", "Age", "Dept"]));
             let mut state = TableState::default();
             StatefulWidget::render(&table, area, &mut frame, &mut state);
         }
@@ -154,8 +155,7 @@ fn render_widget<'a>(widget_name: &str, pool: &'a mut GraphemePool, w: u16, h: u
                     .with_expanded(true)
                     .with_children(vec![
                         TreeNode::new("Child 1"),
-                        TreeNode::new("Child 2")
-                            .with_children(vec![TreeNode::new("Grandchild")]),
+                        TreeNode::new("Child 2").with_children(vec![TreeNode::new("Grandchild")]),
                     ]),
             );
             Widget::render(&tree, area, &mut frame);
@@ -228,20 +228,26 @@ fn execute_demo(demo: &DemoDefinition) -> DemoResult {
                 let checksum = compute_checksum(&frame);
                 checksums.push(format!("{description}: {checksum}"));
             }
-            DemoStep::AssertContent { contains, description } => {
+            DemoStep::AssertContent {
+                contains,
+                description,
+            } => {
                 // Content assertions are checked at the demo level, not per-widget
                 // We render a dashboard frame to check for content
                 let mut pool = GraphemePool::new();
                 let frame = render_widget("dashboard", &mut pool, current_w, current_h);
                 for needle in contains {
                     if !frame_contains(&frame, needle) {
-                        content_failures.push(format!(
-                            "{description}: expected '{needle}' not found"
-                        ));
+                        content_failures
+                            .push(format!("{description}: expected '{needle}' not found"));
                     }
                 }
             }
-            DemoStep::MeasureTiming { description, max_us, .. } => {
+            DemoStep::MeasureTiming {
+                description,
+                max_us,
+                ..
+            } => {
                 let mut pool = GraphemePool::new();
                 let timing_start = Instant::now();
                 let _frame = render_widget("dashboard", &mut pool, current_w, current_h);
@@ -368,7 +374,12 @@ fn deterministic_replay_produces_identical_checksums() {
         "checksum count should be identical across runs"
     );
 
-    for (i, (c1, c2)) in result1.checksums.iter().zip(result2.checksums.iter()).enumerate() {
+    for (i, (c1, c2)) in result1
+        .checksums
+        .iter()
+        .zip(result2.checksums.iter())
+        .enumerate()
+    {
         assert_eq!(c1, c2, "checksum {i} differs between runs");
     }
 }

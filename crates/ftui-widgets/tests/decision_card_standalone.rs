@@ -17,8 +17,8 @@ use ftui_runtime::transparency::{
     TrafficLight,
 };
 use ftui_runtime::unified_evidence::DecisionDomain;
-use ftui_widgets::decision_card::DecisionCard;
 use ftui_widgets::Widget;
+use ftui_widgets::decision_card::DecisionCard;
 
 // ============================================================================
 // Helpers
@@ -168,10 +168,7 @@ fn standalone_level1_adds_explanation() {
     DecisionCard::new(&disc).render(Rect::new(0, 0, 70, 6), &mut frame);
 
     let rows = all_rows(&frame);
-    assert!(
-        contains_any(&rows, "OK"),
-        "Level 1 still shows badge"
-    );
+    assert!(contains_any(&rows, "OK"), "Level 1 still shows badge");
     assert!(
         contains_any(&rows, "Diff strategy"),
         "Level 1 should show explanation: {rows:?}"
@@ -203,7 +200,10 @@ fn standalone_level2_adds_evidence_terms() {
     DecisionCard::new(&disc).render(Rect::new(0, 0, 70, 12), &mut frame);
 
     let rows = all_rows(&frame);
-    assert!(contains_any(&rows, "WARN"), "Level 2 should show WARN for yellow");
+    assert!(
+        contains_any(&rows, "WARN"),
+        "Level 2 should show WARN for yellow"
+    );
     assert!(
         contains_any(&rows, "Evidence:"),
         "Level 2 should show evidence header: {rows:?}"
@@ -246,7 +246,10 @@ fn standalone_level3_adds_bayesian_details() {
     card.render(Rect::new(0, 0, 70, min_h.max(12)), &mut frame);
 
     let rows = all_rows(&frame);
-    assert!(contains_any(&rows, "ALERT"), "Level 3 should show ALERT for red");
+    assert!(
+        contains_any(&rows, "ALERT"),
+        "Level 3 should show ALERT for red"
+    );
     assert!(
         contains_any(&rows, "log_post"),
         "Level 3 should show log-posterior: {rows:?}"
@@ -281,7 +284,9 @@ fn standalone_external_evidence_injection() {
         level: DisclosureLevel::EvidenceTerms,
         signal: TrafficLight::Green,
         action_label: "custom_action".to_string(),
-        explanation: Some("Palette scoring: chose 'custom_action' with high confidence.".to_string()),
+        explanation: Some(
+            "Palette scoring: chose 'custom_action' with high confidence.".to_string(),
+        ),
         evidence_terms: Some(vec![
             DisclosureEvidence {
                 label: "user_preference",
@@ -333,11 +338,7 @@ fn standalone_all_domains_render() {
     ];
 
     for &domain in &domains {
-        let disc = build_disclosure(
-            DisclosureLevel::PlainEnglish,
-            TrafficLight::Green,
-            domain,
-        );
+        let disc = build_disclosure(DisclosureLevel::PlainEnglish, TrafficLight::Green, domain);
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(70, 6, &mut pool);
         DecisionCard::new(&disc).render(Rect::new(0, 0, 70, 6), &mut frame);
@@ -400,8 +401,8 @@ fn standalone_degenerate_areas_safe() {
         (0, 0),
         (1, 1),
         (2, 2),
-        (3, 3),   // Below min 4x3
-        (4, 3),   // Exact minimum
+        (3, 3), // Below min 4x3
+        (4, 3), // Exact minimum
         (5, 3),
         (100, 1), // Wide but too short
         (1, 100), // Tall but too narrow

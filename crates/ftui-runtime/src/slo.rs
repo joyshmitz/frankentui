@@ -191,9 +191,19 @@ pub fn parse_slo_yaml(yaml: &str) -> Result<SloSchema, Vec<SloSchemaError>> {
         }
 
         if let Some(value) = trimmed.strip_prefix("regression_threshold:") {
-            parse_threshold(value.trim(), "regression_threshold", &mut schema.regression_threshold, &mut errors);
+            parse_threshold(
+                value.trim(),
+                "regression_threshold",
+                &mut schema.regression_threshold,
+                &mut errors,
+            );
         } else if let Some(value) = trimmed.strip_prefix("noise_tolerance:") {
-            parse_threshold(value.trim(), "noise_tolerance", &mut schema.noise_tolerance, &mut errors);
+            parse_threshold(
+                value.trim(),
+                "noise_tolerance",
+                &mut schema.noise_tolerance,
+                &mut errors,
+            );
         } else if let Some(value) = trimmed.strip_prefix("safe_mode_breach_count:") {
             match value.trim().parse::<usize>() {
                 Ok(v) if v > 0 => schema.safe_mode_breach_count = v,
@@ -207,7 +217,12 @@ pub fn parse_slo_yaml(yaml: &str) -> Result<SloSchema, Vec<SloSchemaError>> {
                 }),
             }
         } else if let Some(value) = trimmed.strip_prefix("safe_mode_error_rate:") {
-            parse_threshold(value.trim(), "safe_mode_error_rate", &mut schema.safe_mode_error_rate, &mut errors);
+            parse_threshold(
+                value.trim(),
+                "safe_mode_error_rate",
+                &mut schema.safe_mode_error_rate,
+                &mut errors,
+            );
         } else if trimmed == "metrics:" {
             in_metrics = true;
         } else if in_metrics
@@ -570,7 +585,11 @@ metrics:
     fn reject_duplicate_metric() {
         let yaml = "regression_threshold: 0.10\nnoise_tolerance: 0.05\nmetrics:\n  m:\n    metric_type: latency\n  m:\n    metric_type: latency\n";
         let errors = parse_slo_yaml(yaml).unwrap_err();
-        assert!(errors.iter().any(|e| matches!(e, SloSchemaError::DuplicateMetric(_))));
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, SloSchemaError::DuplicateMetric(_)))
+        );
     }
 
     #[test]
@@ -578,12 +597,15 @@ metrics:
         let schema = SloSchema {
             metrics: {
                 let mut m = HashMap::new();
-                m.insert("p99".into(), MetricSlo {
-                    metric_type: MetricType::Latency,
-                    max_value: Some(500.0),
-                    max_ratio: Some(1.15),
-                    safe_mode_trigger: false,
-                });
+                m.insert(
+                    "p99".into(),
+                    MetricSlo {
+                        metric_type: MetricType::Latency,
+                        max_value: Some(500.0),
+                        max_ratio: Some(1.15),
+                        safe_mode_trigger: false,
+                    },
+                );
                 m
             },
             ..SloSchema::default()
@@ -597,12 +619,15 @@ metrics:
         let schema = SloSchema {
             metrics: {
                 let mut m = HashMap::new();
-                m.insert("p99".into(), MetricSlo {
-                    metric_type: MetricType::Latency,
-                    max_value: Some(1000.0),
-                    max_ratio: Some(1.10),
-                    safe_mode_trigger: false,
-                });
+                m.insert(
+                    "p99".into(),
+                    MetricSlo {
+                        metric_type: MetricType::Latency,
+                        max_value: Some(1000.0),
+                        max_ratio: Some(1.10),
+                        safe_mode_trigger: false,
+                    },
+                );
                 m
             },
             ..SloSchema::default()
@@ -616,12 +641,15 @@ metrics:
         let schema = SloSchema {
             metrics: {
                 let mut m = HashMap::new();
-                m.insert("p99".into(), MetricSlo {
-                    metric_type: MetricType::Latency,
-                    max_value: Some(500.0),
-                    max_ratio: Some(1.15),
-                    safe_mode_trigger: false,
-                });
+                m.insert(
+                    "p99".into(),
+                    MetricSlo {
+                        metric_type: MetricType::Latency,
+                        max_value: Some(500.0),
+                        max_ratio: Some(1.15),
+                        safe_mode_trigger: false,
+                    },
+                );
                 m
             },
             ..SloSchema::default()
@@ -692,7 +720,9 @@ metrics:
             },
         ];
         let decision = check_safe_mode(&breaches, &schema);
-        assert!(matches!(decision, SafeModeDecision::Triggered(ref r) if r.contains("simultaneous")));
+        assert!(
+            matches!(decision, SafeModeDecision::Triggered(ref r) if r.contains("simultaneous"))
+        );
     }
 
     #[test]
@@ -730,12 +760,15 @@ metrics:
         let schema = SloSchema {
             metrics: {
                 let mut m = HashMap::new();
-                m.insert("p99".into(), MetricSlo {
-                    metric_type: MetricType::Latency,
-                    max_value: Some(500.0),
-                    max_ratio: Some(1.15),
-                    safe_mode_trigger: false,
-                });
+                m.insert(
+                    "p99".into(),
+                    MetricSlo {
+                        metric_type: MetricType::Latency,
+                        max_value: Some(500.0),
+                        max_ratio: Some(1.15),
+                        safe_mode_trigger: false,
+                    },
+                );
                 m
             },
             ..SloSchema::default()
@@ -774,9 +807,18 @@ metrics:
     max_value: 0.01
 "#;
         let schema = parse_slo_yaml(yaml).unwrap();
-        assert_eq!(schema.metrics.get("lat").unwrap().metric_type, MetricType::Latency);
-        assert_eq!(schema.metrics.get("mem").unwrap().metric_type, MetricType::Memory);
-        assert_eq!(schema.metrics.get("err").unwrap().metric_type, MetricType::ErrorRate);
+        assert_eq!(
+            schema.metrics.get("lat").unwrap().metric_type,
+            MetricType::Latency
+        );
+        assert_eq!(
+            schema.metrics.get("mem").unwrap().metric_type,
+            MetricType::Memory
+        );
+        assert_eq!(
+            schema.metrics.get("err").unwrap().metric_type,
+            MetricType::ErrorRate
+        );
     }
 
     #[test]

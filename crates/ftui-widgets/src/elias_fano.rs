@@ -165,7 +165,11 @@ impl EliasFano {
     ///
     /// Panics if `index >= self.len()`.
     pub fn access(&self, index: usize) -> u64 {
-        assert!(index < self.n, "index {index} out of bounds (len={})", self.n);
+        assert!(
+            index < self.n,
+            "index {index} out of bounds (len={})",
+            self.n
+        );
 
         let low = if self.low_width > 0 {
             get_bits(
@@ -843,10 +847,7 @@ mod tests {
         let ef = EliasFano::encode(&sums);
         let dense = sums.len() * 8;
         let ef_size = ef.size_in_bytes();
-        assert!(
-            ef_size < dense,
-            "1K: EF={ef_size}B < dense={dense}B"
-        );
+        assert!(ef_size < dense, "1K: EF={ef_size}B < dense={dense}B");
     }
 
     #[test]
@@ -855,10 +856,7 @@ mod tests {
         let ef = EliasFano::encode(&sums);
         let dense = sums.len() * 8;
         let ef_size = ef.size_in_bytes();
-        assert!(
-            ef_size < dense,
-            "10K: EF={ef_size}B < dense={dense}B"
-        );
+        assert!(ef_size < dense, "10K: EF={ef_size}B < dense={dense}B");
     }
 
     #[test]
@@ -867,10 +865,7 @@ mod tests {
         let ef = EliasFano::encode(&sums);
         let dense = sums.len() * 8;
         let ef_size = ef.size_in_bytes();
-        assert!(
-            ef_size < dense,
-            "100K: EF={ef_size}B < dense={dense}B"
-        );
+        assert!(ef_size < dense, "100K: EF={ef_size}B < dense={dense}B");
     }
 
     #[test]
@@ -879,10 +874,7 @@ mod tests {
         let ef = EliasFano::encode(&sums);
         let dense = sums.len() * 8;
         let ef_size = ef.size_in_bytes();
-        assert!(
-            ef_size < dense,
-            "1M: EF={ef_size}B < dense={dense}B"
-        );
+        assert!(ef_size < dense, "1M: EF={ef_size}B < dense={dense}B");
     }
 
     #[test]

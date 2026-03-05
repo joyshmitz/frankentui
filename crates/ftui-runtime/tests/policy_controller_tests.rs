@@ -277,7 +277,11 @@ fn validation_rejects_nan_values() {
     let mut config = PolicyConfig::default();
     config.conformal.alpha = f64::NAN;
     let errors = config.validate();
-    assert!(errors.iter().any(|e| e.contains("conformal.alpha") && e.contains("finite")));
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("conformal.alpha") && e.contains("finite"))
+    );
 }
 
 #[test]
@@ -285,7 +289,11 @@ fn validation_rejects_inf_values() {
     let mut config = PolicyConfig::default();
     config.pid.kp = f64::INFINITY;
     let errors = config.validate();
-    assert!(errors.iter().any(|e| e.contains("pid.kp") && e.contains("finite")));
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("pid.kp") && e.contains("finite"))
+    );
 }
 
 #[test]
@@ -293,7 +301,11 @@ fn validation_rejects_zero_ledger_capacity() {
     let mut config = PolicyConfig::default();
     config.evidence.ledger_capacity = 0;
     let errors = config.validate();
-    assert!(errors.iter().any(|e| e.contains("evidence.ledger_capacity")));
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("evidence.ledger_capacity"))
+    );
 }
 
 #[test]
@@ -309,9 +321,11 @@ fn validation_rejects_negative_frame_guard_budget() {
     let mut config = PolicyConfig::default();
     config.frame_guard.fallback_budget_us = -1.0;
     let errors = config.validate();
-    assert!(errors
-        .iter()
-        .any(|e| e.contains("frame_guard.fallback_budget_us")));
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("frame_guard.fallback_budget_us"))
+    );
 }
 
 #[test]
@@ -319,9 +333,7 @@ fn validation_rejects_eprocess_budget_alpha_out_of_range() {
     let mut config = PolicyConfig::default();
     config.eprocess_budget.alpha = 1.5;
     let errors = config.validate();
-    assert!(errors
-        .iter()
-        .any(|e| e.contains("eprocess_budget.alpha")));
+    assert!(errors.iter().any(|e| e.contains("eprocess_budget.alpha")));
 }
 
 #[test]
@@ -329,9 +341,7 @@ fn validation_rejects_eprocess_throttle_alpha_out_of_range() {
     let mut config = PolicyConfig::default();
     config.eprocess_throttle.alpha = 0.0;
     let errors = config.validate();
-    assert!(errors
-        .iter()
-        .any(|e| e.contains("eprocess_throttle.alpha")));
+    assert!(errors.iter().any(|e| e.contains("eprocess_throttle.alpha")));
 }
 
 #[test]
@@ -365,14 +375,20 @@ fn validation_multiple_errors() {
     config.pid.kp = -1.0;
     config.evidence.ledger_capacity = 0;
     let errors = config.validate();
-    assert!(errors.len() >= 3, "should collect multiple errors: {errors:?}");
+    assert!(
+        errors.len() >= 3,
+        "should collect multiple errors: {errors:?}"
+    );
 }
 
 #[test]
 fn default_config_is_valid() {
     let config = PolicyConfig::default();
     let errors = config.validate();
-    assert!(errors.is_empty(), "default config should be valid: {errors:?}");
+    assert!(
+        errors.is_empty(),
+        "default config should be valid: {errors:?}"
+    );
 }
 
 // ============================================================================
@@ -409,7 +425,9 @@ fn registry_concurrent_reads_during_rapid_switches() {
         for thread_id in 0..2 {
             let reg = Arc::clone(&reg);
             s.spawn(move || {
-                let names = ["standard", "policy_0", "policy_1", "policy_2", "policy_3", "policy_4"];
+                let names = [
+                    "standard", "policy_0", "policy_1", "policy_2", "policy_3", "policy_4",
+                ];
                 for i in 0..200 {
                     let name = names[(i + thread_id) % names.len()];
                     let _ = reg.set_active(name);
@@ -608,7 +626,10 @@ fn registry_default_policy_matches_default_config() {
     assert!((active.conformal.alpha - default.conformal.alpha).abs() < f64::EPSILON);
     assert_eq!(active.conformal.min_samples, default.conformal.min_samples);
     assert!((active.pid.kp - default.pid.kp).abs() < f64::EPSILON);
-    assert_eq!(active.evidence.ledger_capacity, default.evidence.ledger_capacity);
+    assert_eq!(
+        active.evidence.ledger_capacity,
+        default.evidence.ledger_capacity
+    );
 }
 
 // ============================================================================
@@ -643,7 +664,8 @@ fn switch_event_increments_id() {
 #[test]
 fn switch_event_jsonl_format() {
     let reg = PolicyRegistry::new();
-    reg.register("test_policy", PolicyConfig::default()).unwrap();
+    reg.register("test_policy", PolicyConfig::default())
+        .unwrap();
 
     let event = reg.set_active("test_policy").unwrap();
     let jsonl = event.to_jsonl();

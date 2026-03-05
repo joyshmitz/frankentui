@@ -158,11 +158,7 @@ impl PolicyRegistry {
     ///
     /// Overwrites any existing policy with the same name (except `"standard"`
     /// which is protected).
-    pub fn register(
-        &self,
-        name: &str,
-        config: PolicyConfig,
-    ) -> Result<(), PolicyRegistryError> {
+    pub fn register(&self, name: &str, config: PolicyConfig) -> Result<(), PolicyRegistryError> {
         if name == STANDARD_POLICY {
             return Err(PolicyRegistryError::StandardPolicyProtected);
         }
@@ -243,8 +239,7 @@ impl PolicyRegistry {
 
     /// Total number of policy switches performed.
     pub fn switch_count(&self) -> u64 {
-        self.switch_count
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.switch_count.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 

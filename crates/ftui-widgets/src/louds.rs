@@ -261,7 +261,10 @@ impl LoudsTree {
     pub fn children(&self, v: usize) -> ChildIter<'_> {
         assert!(v < self.n, "node {v} out of bounds (n={})", self.n);
         let first = self.first_child(v);
-        ChildIter { tree: self, next: first }
+        ChildIter {
+            tree: self,
+            next: first,
+        }
     }
 
     /// Subtree size rooted at node `v` (including `v` itself).

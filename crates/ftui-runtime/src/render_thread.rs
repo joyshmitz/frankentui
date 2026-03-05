@@ -61,7 +61,7 @@ pub enum OutMsg {
 }
 
 pub struct RenderThread {
-    sender: mpsc::SyncSender<OutMsg>,
+    sender: Option<mpsc::SyncSender<OutMsg>>,
     handle: Option<JoinHandle<()>>,
     error_rx: mpsc::Receiver<io::Error>,
 }
@@ -79,18 +79,24 @@ impl RenderThread {
             })?;
 
         Ok(Self {
-            sender: tx,
+            sender: Some(tx),
             handle: Some(handle),
             error_rx: err_rx,
         })
     }
 
     pub fn send(&self, msg: OutMsg) -> Result<(), mpsc::SendError<OutMsg>> {
-        self.sender.send(msg)
+        match &self.sender {
+            Some(sender) => sender.send(msg),
+            None => Err(mpsc::SendError(msg)),
+        }
     }
 
     pub fn try_send(&self, msg: OutMsg) -> Result<(), mpsc::TrySendError<OutMsg>> {
-        self.sender.try_send(msg)
+        match &self.sender {
+            Some(sender) => sender.try_send(msg),
+            None => Err(mpsc::TrySendError::Disconnected(msg)),
+        }
     }
 
     pub fn check_error(&self) -> Option<io::Error> {
@@ -98,7 +104,11 @@ impl RenderThread {
     }
 
     pub fn shutdown(mut self) {
-        let _ = self.sender.send(OutMsg::Shutdown);
+        self.shutdown_inner();
+    }
+
+    fn shutdown_inner(&mut self) {
+        request_shutdown_and_disconnect(&mut self.sender);
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
@@ -107,11 +117,22 @@ impl RenderThread {
 
 impl Drop for RenderThread {
     fn drop(&mut self) {
-        let _ = self.sender.send(OutMsg::Shutdown);
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
+        self.shutdown_inner();
     }
+}
+
+/// Best-effort shutdown for the bounded outbound queue.
+///
+/// If the queue has capacity we enqueue a `Shutdown` message so the render loop
+/// can observe an orderly stop. If the queue is full or already disconnected,
+/// we still drop the sender immediately so the receiver will exit once it drains
+/// any queued work instead of deadlocking the caller on a blocking send.
+fn request_shutdown_and_disconnect(sender: &mut Option<mpsc::SyncSender<OutMsg>>) {
+    let Some(sender) = sender.take() else {
+        return;
+    };
+
+    let _ = sender.try_send(OutMsg::Shutdown);
 }
 
 fn render_loop<W: Write + Send>(
@@ -128,7 +149,10 @@ fn render_loop<W: Write + Send>(
         loop_count += 1;
         let first = match rx.recv() {
             Ok(msg) => msg,
-            Err(_) => return,
+            Err(_) => {
+                let _ = writer.flush();
+                return;
+            }
         };
 
         logs.clear();
@@ -518,8 +542,8 @@ mod tests {
     #[test]
     fn send_after_shutdown_returns_err() {
         let (writer, _tw) = test_writer();
-        let rt = RenderThread::start(writer).unwrap();
-        let _ = rt.sender.send(OutMsg::Shutdown);
+        let mut rt = RenderThread::start(writer).unwrap();
+        request_shutdown_and_disconnect(&mut rt.sender);
         // Wait for render thread to exit
         std::thread::sleep(Duration::from_millis(100));
         // Now sending should fail (disconnected)
@@ -612,5 +636,36 @@ mod tests {
         std::thread::sleep(Duration::from_millis(100));
         assert!(rt.check_error().is_none());
         rt.shutdown();
+    }
+
+    #[test]
+    fn shutdown_helper_enqueues_shutdown_when_channel_has_capacity() {
+        let (tx, rx) = mpsc::sync_channel::<OutMsg>(1);
+        let mut sender = Some(tx);
+
+        request_shutdown_and_disconnect(&mut sender);
+
+        assert!(sender.is_none());
+        assert!(matches!(rx.recv().unwrap(), OutMsg::Shutdown));
+        assert!(
+            rx.recv().is_err(),
+            "sender should be disconnected after shutdown"
+        );
+    }
+
+    #[test]
+    fn shutdown_helper_disconnects_without_blocking_when_channel_is_full() {
+        let (tx, rx) = mpsc::sync_channel::<OutMsg>(1);
+        tx.send(OutMsg::Log(b"queued".to_vec())).unwrap();
+        let mut sender = Some(tx);
+
+        request_shutdown_and_disconnect(&mut sender);
+
+        assert!(sender.is_none());
+        assert!(matches!(rx.recv().unwrap(), OutMsg::Log(bytes) if bytes == b"queued".to_vec()));
+        assert!(
+            rx.recv().is_err(),
+            "full-channel shutdown fallback should disconnect once queued work drains"
+        );
     }
 }
