@@ -93,6 +93,17 @@ impl FrameArena {
         self.bump.alloc_str(s)
     }
 
+    /// Format a string directly into the arena, avoiding an intermediate heap `String`.
+    ///
+    /// This is the arena equivalent of `format!()`. The formatted text is
+    /// written into a bump-backed string and returned as an arena-allocated `&str`.
+    pub fn alloc_fmt(&self, args: std::fmt::Arguments<'_>) -> &str {
+        use core::fmt::Write;
+        let mut s = bumpalo::collections::String::new_in(&self.bump);
+        s.write_fmt(args).expect("formatting into arena string");
+        s.into_bump_str()
+    }
+
     /// Allocate a copy of a slice in the arena.
     ///
     /// Returns a reference to the arena-allocated copy of `slice`.
@@ -188,6 +199,46 @@ mod tests {
         fn drop(&mut self) {
             self.drops.set(self.drops.get() + 1);
         }
+    }
+
+    #[test]
+    fn alloc_fmt_formats_into_arena() {
+        let arena = FrameArena::new(4096);
+        let s = arena.alloc_fmt(format_args!("hello {} {}", 42, "world"));
+        assert_eq!(s, "hello 42 world");
+    }
+
+    #[test]
+    fn alloc_iter_collects_to_arena() {
+        let arena = FrameArena::new(4096);
+        let data: Vec<u32> = (0..10).collect();
+        let slice = arena.alloc_iter(data.iter().copied());
+        assert_eq!(slice, &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    }
+
+    #[test]
+    fn alloc_iter_empty() {
+        let arena = FrameArena::new(4096);
+        let slice: &mut [u8] = arena.alloc_iter(std::iter::empty());
+        assert!(slice.is_empty());
+    }
+
+    #[test]
+    fn new_vec_push_and_read() {
+        let arena = FrameArena::new(4096);
+        let mut v = arena.new_vec::<u32>();
+        v.push(1);
+        v.push(2);
+        v.push(3);
+        assert_eq!(v.as_slice(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn new_vec_with_capacity_preallocates() {
+        let arena = FrameArena::new(4096);
+        let v = arena.new_vec_with_capacity::<u64>(100);
+        assert!(v.capacity() >= 100);
+        assert!(v.is_empty());
     }
 
     #[test]

@@ -948,7 +948,15 @@ impl Widget for TextInput {
             crate::set_style_area(&mut frame.buffer, area, self.style);
         }
 
-        let graphemes: Vec<&str> = self.value.graphemes(true).collect();
+        // Use arena allocation when available to avoid per-frame heap churn.
+        let arena = frame.arena;
+        let graphemes_heap;
+        let graphemes: &[&str] = if let Some(a) = arena {
+            a.alloc_iter(self.value.graphemes(true))
+        } else {
+            graphemes_heap = self.value.graphemes(true).collect::<Vec<_>>();
+            &graphemes_heap
+        };
         let show_placeholder =
             self.value.is_empty() && self.ime_composition.is_none() && !self.placeholder.is_empty();
 

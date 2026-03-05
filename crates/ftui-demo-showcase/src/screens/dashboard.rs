@@ -3922,10 +3922,56 @@ impl Dashboard {
             return;
         }
 
-        let cpu_data: Vec<f64> = self.simulated_data.cpu_history.iter().copied().collect();
-        let mem_data: Vec<f64> = self.simulated_data.memory_history.iter().copied().collect();
-        let net_in_data: Vec<f64> = self.simulated_data.network_in.iter().copied().collect();
-        let net_out_data: Vec<f64> = self.simulated_data.network_out.iter().copied().collect();
+        // Use arena to avoid per-frame heap allocations for sparkline data.
+        let arena = frame.arena;
+        let cpu_heap;
+        let mem_heap;
+        let net_in_heap;
+        let net_out_heap;
+        let cpu_data: &[f64] = if let Some(a) = arena {
+            a.alloc_iter(self.simulated_data.cpu_history.iter().copied())
+        } else {
+            cpu_heap = self
+                .simulated_data
+                .cpu_history
+                .iter()
+                .copied()
+                .collect::<Vec<_>>();
+            &cpu_heap
+        };
+        let mem_data: &[f64] = if let Some(a) = arena {
+            a.alloc_iter(self.simulated_data.memory_history.iter().copied())
+        } else {
+            mem_heap = self
+                .simulated_data
+                .memory_history
+                .iter()
+                .copied()
+                .collect::<Vec<_>>();
+            &mem_heap
+        };
+        let net_in_data: &[f64] = if let Some(a) = arena {
+            a.alloc_iter(self.simulated_data.network_in.iter().copied())
+        } else {
+            net_in_heap = self
+                .simulated_data
+                .network_in
+                .iter()
+                .copied()
+                .collect::<Vec<_>>();
+            &net_in_heap
+        };
+        let net_out_data: &[f64] = if let Some(a) = arena {
+            a.alloc_iter(self.simulated_data.network_out.iter().copied())
+        } else {
+            net_out_heap = self
+                .simulated_data
+                .network_out
+                .iter()
+                .copied()
+                .collect::<Vec<_>>();
+            &net_out_heap
+        };
 
         let cpu_last = cpu_data.last().copied().unwrap_or(0.0);
         let mem_last = mem_data.last().copied().unwrap_or(0.0);
@@ -3945,7 +3991,7 @@ impl Dashboard {
                 rows[0],
                 "CPU",
                 Self::format_percent(cpu_last),
-                &cpu_data,
+                cpu_data,
                 theme::accent::PRIMARY.into(),
                 (
                     theme::accent::PRIMARY.into(),
@@ -3957,7 +4003,7 @@ impl Dashboard {
                 rows[1],
                 "MEM",
                 Self::format_percent(mem_last),
-                &mem_data,
+                mem_data,
                 theme::accent::SUCCESS.into(),
                 (
                     theme::accent::SUCCESS.into(),
@@ -3969,7 +4015,7 @@ impl Dashboard {
                 rows[2],
                 "NET",
                 Self::format_rate((net_in_last + net_out_last) * 0.5),
-                &net_in_data,
+                net_in_data,
                 theme::accent::WARNING.into(),
                 (
                     theme::accent::WARNING.into(),
@@ -3994,7 +4040,7 @@ impl Dashboard {
             rows[0],
             "CPU",
             Self::format_percent(cpu_last),
-            &cpu_data,
+            cpu_data,
             theme::accent::PRIMARY.into(),
             (
                 theme::accent::PRIMARY.into(),
@@ -4006,7 +4052,7 @@ impl Dashboard {
             rows[1],
             "MEM",
             Self::format_percent(mem_last),
-            &mem_data,
+            mem_data,
             theme::accent::SUCCESS.into(),
             (
                 theme::accent::SUCCESS.into(),
@@ -4018,7 +4064,7 @@ impl Dashboard {
             rows[2],
             "NET",
             Self::format_rate(net_in_last),
-            &net_in_data,
+            net_in_data,
             theme::accent::WARNING.into(),
             (
                 theme::accent::WARNING.into(),
@@ -4030,7 +4076,7 @@ impl Dashboard {
             rows[3],
             "OUT",
             Self::format_rate(net_out_last),
-            &net_out_data,
+            net_out_data,
             theme::accent::SECONDARY.into(),
             (
                 theme::accent::SECONDARY.into(),
@@ -4514,11 +4560,23 @@ impl Dashboard {
     }
 
     fn render_minimal_sparkline(&self, frame: &mut Frame, area: Rect) {
-        let data: Vec<f64> = self.simulated_data.cpu_history.iter().copied().collect();
+        let arena = frame.arena;
+        let data_heap;
+        let data: &[f64] = if let Some(a) = arena {
+            a.alloc_iter(self.simulated_data.cpu_history.iter().copied())
+        } else {
+            data_heap = self
+                .simulated_data
+                .cpu_history
+                .iter()
+                .copied()
+                .collect::<Vec<_>>();
+            &data_heap
+        };
         if data.is_empty() {
             return;
         }
-        Sparkline::new(&data)
+        Sparkline::new(data)
             .style(Style::new().fg(theme::accent::PRIMARY))
             .gradient(
                 theme::accent::PRIMARY.into(),
@@ -5930,7 +5988,19 @@ impl Dashboard {
                 .constraints([Constraint::Fixed(1), Constraint::Fixed(1)])
                 .split(right_rows[0]);
 
-            let cpu_data: Vec<f64> = self.simulated_data.cpu_history.iter().copied().collect();
+            let arena = frame.arena;
+            let cpu_heap;
+            let cpu_data: &[f64] = if let Some(a) = arena {
+                a.alloc_iter(self.simulated_data.cpu_history.iter().copied())
+            } else {
+                cpu_heap = self
+                    .simulated_data
+                    .cpu_history
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>();
+                &cpu_heap
+            };
             if !spark_rows[0].is_empty() && !cpu_data.is_empty() {
                 let label_w = 4.min(spark_rows[0].width);
                 Paragraph::new("CPU ")
@@ -5946,7 +6016,7 @@ impl Dashboard {
                     1,
                 );
                 if !spark_area.is_empty() {
-                    Sparkline::new(&cpu_data)
+                    Sparkline::new(cpu_data)
                         .style(Style::new().fg(theme::accent::PRIMARY))
                         .render(spark_area, frame);
                 }
@@ -5970,9 +6040,19 @@ impl Dashboard {
                     1,
                 );
                 if !spark_area.is_empty() {
-                    let mem_data: Vec<f64> =
-                        self.simulated_data.memory_history.iter().copied().collect();
-                    Sparkline::new(&mem_data)
+                    let mem_heap;
+                    let mem_data: &[f64] = if let Some(a) = arena {
+                        a.alloc_iter(self.simulated_data.memory_history.iter().copied())
+                    } else {
+                        mem_heap = self
+                            .simulated_data
+                            .memory_history
+                            .iter()
+                            .copied()
+                            .collect::<Vec<_>>();
+                        &mem_heap
+                    };
+                    Sparkline::new(mem_data)
                         .style(Style::new().fg(theme::accent::SUCCESS))
                         .render(spark_area, frame);
                 }
