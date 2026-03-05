@@ -67,6 +67,7 @@ pub mod resize_coalescer;
 pub mod reversible;
 pub mod resize_sla;
 pub mod retry;
+pub mod slo;
 pub mod rough_path;
 pub mod simulator;
 pub mod state_persistence;
@@ -212,6 +213,10 @@ pub use resize_coalescer::{
 };
 pub use resize_sla::{
     ResizeEvidence, ResizeSlaMonitor, SlaConfig, SlaLogEntry, SlaSummary, make_sla_hooks,
+};
+pub use slo::{
+    BreachResult, BreachSeverity, MetricSlo, MetricType, SafeModeDecision, SloSchema,
+    SloSchemaError, check_breach, check_safe_mode, emit_slo_check, parse_slo_yaml, run_slo_check,
 };
 pub use undo::{
     CommandBatch, CommandError, CommandMetadata, CommandResult, CommandSource, HistoryConfig,
