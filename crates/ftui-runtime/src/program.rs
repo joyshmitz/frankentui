@@ -3901,10 +3901,12 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
 
         if let Some(signal) = termination_signal {
             clear_termination_signal();
-            return Err(io::Error::new(
+            let err = io::Error::new(
                 io::ErrorKind::Interrupted,
                 SignalTerminationError { signal },
-            ));
+            );
+            debug_assert_eq!(signal_termination_from_error(&err), Some(signal));
+            return Err(err);
         }
 
         Ok(())
@@ -4509,7 +4511,8 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
                 degradation = self.budget.degradation().as_str(),
                 "frame skipped: budget exhausted before render"
             );
-            self.dirty = false;
+            // Keep dirty=true: the UI update was never presented, so a
+            // future frame must still pick it up.
             return Ok(());
         }
 
@@ -4664,7 +4667,13 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             frame_time_us,
             conformal_prediction.as_ref(),
         );
-        self.dirty = false;
+
+        // Only clear dirty when the frame was actually presented.
+        // If present was skipped (budget exhausted after render), the UI
+        // update was never shown and must be retried on the next frame.
+        if presented {
+            self.dirty = false;
+        }
 
         Ok(())
     }
@@ -8377,9 +8386,12 @@ mod tests {
         };
 
         let mut program = headless_program_with_config(TestModel { value: 0 }, config);
+        program.dirty = true;
         program.render_frame().expect("render frame");
 
-        assert!(!program.dirty);
+        // Dirty state is preserved when frame is skipped — the UI update
+        // was never presented and must be retried.
+        assert!(program.dirty);
         assert_eq!(program.frame_idx, 1);
     }
 
