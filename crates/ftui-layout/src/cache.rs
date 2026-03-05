@@ -134,10 +134,22 @@ impl LayoutCacheKey {
             std::mem::discriminant(c).hash(&mut h1);
             std::mem::discriminant(c).hash(&mut h2);
             match c {
-                Constraint::Fixed(v) => { v.hash(&mut h1); v.hash(&mut h2); }
-                Constraint::Percentage(p) => { p.to_bits().hash(&mut h1); p.to_bits().hash(&mut h2); }
-                Constraint::Min(v) => { v.hash(&mut h1); v.hash(&mut h2); }
-                Constraint::Max(v) => { v.hash(&mut h1); v.hash(&mut h2); }
+                Constraint::Fixed(v) => {
+                    v.hash(&mut h1);
+                    v.hash(&mut h2);
+                }
+                Constraint::Percentage(p) => {
+                    p.to_bits().hash(&mut h1);
+                    p.to_bits().hash(&mut h2);
+                }
+                Constraint::Min(v) => {
+                    v.hash(&mut h1);
+                    v.hash(&mut h2);
+                }
+                Constraint::Max(v) => {
+                    v.hash(&mut h1);
+                    v.hash(&mut h2);
+                }
                 Constraint::Ratio(n, d) => {
                     fn gcd(mut a: u32, mut b: u32) -> u32 {
                         while b != 0 {

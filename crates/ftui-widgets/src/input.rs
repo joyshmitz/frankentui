@@ -1524,7 +1524,7 @@ mod tests {
 
         input.move_cursor_word_right(false);
         assert_eq!(input.cursor(), 7); // "hello, |world"
-        
+
         input.move_cursor_word_right(false);
         assert_eq!(input.cursor(), 12); // "hello, world|"
 

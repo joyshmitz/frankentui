@@ -1,4 +1,4 @@
-use ftui_text::wrap::{wrap_text, WrapMode};
+use ftui_text::wrap::{WrapMode, wrap_text};
 fn main() {
     let text = "123 \u{00A0}\u{00A0}\u{00A0}foo"; // note: \u{00A0} and foo are grouped
     let lines = wrap_text(text, 6, WrapMode::Word);

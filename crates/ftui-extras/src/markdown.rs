@@ -574,7 +574,12 @@ fn apply_latex_fallbacks(text: &str) -> String {
                 let denominator = &result[num_end + 2..num_end + 2 + denom_end];
                 let replacement = format!("{numerator}/{denominator}");
                 let full_end = num_end + 3 + denom_end;
-                result = format!("{}{}{}", &result[..abs_start], replacement, &result[full_end..]);
+                result = format!(
+                    "{}{}{}",
+                    &result[..abs_start],
+                    replacement,
+                    &result[full_end..]
+                );
                 search_start = abs_start + replacement.len();
                 continue;
             }

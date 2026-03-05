@@ -288,7 +288,9 @@ fn apply_web_sweep_deterministic_profile(program: &mut StepProgram<AppModel>, sc
 fn run_web_sweep(cols: u16, rows: u16, dpr: f32) -> Vec<WebSweepRecord> {
     let mut program = StepProgram::new(AppModel::new(), cols, rows);
     program.init().unwrap();
-    program.model_mut().enable_deterministic_mode_for_test(TICK_MS, TICK_MS);
+    program
+        .model_mut()
+        .enable_deterministic_mode_for_test(TICK_MS, TICK_MS);
 
     let mut records = Vec::new();
     let mut ts_ms = 0_u64;
@@ -373,7 +375,9 @@ fn run_web_sweep(cols: u16, rows: u16, dpr: f32) -> Vec<WebSweepRecord> {
 fn run_web_sweep_soak(cols: u16, rows: u16, dpr: f32, cycles: usize, tick_ms: u64) -> WebSweepSoak {
     let mut program = StepProgram::new(AppModel::new(), cols, rows);
     program.init().unwrap();
-    program.model_mut().enable_deterministic_mode_for_test(TICK_MS, TICK_MS);
+    program
+        .model_mut()
+        .enable_deterministic_mode_for_test(TICK_MS, TICK_MS);
 
     let mut records = Vec::new();
     let mut ts_ms = 0_u64;

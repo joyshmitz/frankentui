@@ -161,10 +161,8 @@ impl FilePickerState {
 
         // Confinement check: prevent symlinks from escaping the root
         if let Some(root) = &self.root
-            && let (Ok(resolved_new), Ok(resolved_root)) = (
-                std::fs::canonicalize(&new_dir),
-                std::fs::canonicalize(root),
-            )
+            && let (Ok(resolved_new), Ok(resolved_root)) =
+                (std::fs::canonicalize(&new_dir), std::fs::canonicalize(root))
             && !resolved_new.starts_with(&resolved_root)
         {
             return Err(std::io::Error::new(
@@ -191,8 +189,7 @@ impl FilePickerState {
         if let Some(root) = &self.root {
             let resolved_curr = std::fs::canonicalize(&self.current_dir)
                 .unwrap_or_else(|_| self.current_dir.clone());
-            let resolved_root = std::fs::canonicalize(root)
-                .unwrap_or_else(|_| root.clone());
+            let resolved_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.clone());
             if resolved_curr == resolved_root || !resolved_curr.starts_with(&resolved_root) {
                 return Ok(false);
             }
@@ -210,10 +207,9 @@ impl FilePickerState {
         // No history — try parent directory
         if let Some(parent) = self.current_dir.parent().map(|p| p.to_path_buf()) {
             if let Some(root) = &self.root {
-                let resolved_parent = std::fs::canonicalize(&parent)
-                    .unwrap_or_else(|_| parent.clone());
-                let resolved_root = std::fs::canonicalize(root)
-                    .unwrap_or_else(|_| root.clone());
+                let resolved_parent =
+                    std::fs::canonicalize(&parent).unwrap_or_else(|_| parent.clone());
+                let resolved_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.clone());
                 if !resolved_parent.starts_with(&resolved_root) {
                     return Ok(false); // Block parent traversal outside root
                 }

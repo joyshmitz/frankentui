@@ -45,7 +45,11 @@ use ftui_widgets::Widget;
 
 #[inline]
 fn clamp_f64(val: f64, min: f64, max: f64) -> f64 {
-    if val.is_nan() { min } else { val.clamp(min, max) }
+    if val.is_nan() {
+        min
+    } else {
+        val.clamp(min, max)
+    }
 }
 
 // =============================================================================
@@ -2001,7 +2005,11 @@ impl RevealMode {
         if total == 0 {
             return true;
         }
-        let progress = if progress.is_nan() { 0.0 } else { clamp_f64(progress, 0.0, 1.0) };
+        let progress = if progress.is_nan() {
+            0.0
+        } else {
+            clamp_f64(progress, 0.0, 1.0)
+        };
         if progress >= 1.0 {
             return true;
         }
@@ -4122,7 +4130,8 @@ impl StyledText {
                         }
                     } else {
                         // Smooth slide-in animation
-                        let progress = clamp_f64((revealed_chars - char_reveal_time) / 0.3, 0.0, 1.0);
+                        let progress =
+                            clamp_f64((revealed_chars - char_reveal_time) / 0.3, 0.0, 1.0);
                         let eased = self.easing.apply(progress);
                         let remaining = ((1.0 - eased) * 3.0).round() as i16;
 
@@ -9651,7 +9660,8 @@ impl Default for Reflection {
 impl Reflection {
     /// Compute the number of reflected rows given a source height.
     pub fn reflected_rows(&self, source_height: usize) -> usize {
-        let max_rows = (source_height as f64 * clamp_f64(self.height_ratio, 0.0, 1.0)).ceil() as usize;
+        let max_rows =
+            (source_height as f64 * clamp_f64(self.height_ratio, 0.0, 1.0)).ceil() as usize;
         max_rows.min(source_height)
     }
 }

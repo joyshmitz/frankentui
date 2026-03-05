@@ -2076,7 +2076,10 @@ mod tests {
 
     #[test]
     fn compatibility_notes_cover_prior_versions() {
-        let versions: Vec<&str> = ATLAS_COMPAT_NOTES.iter().map(|(version, _)| *version).collect();
+        let versions: Vec<&str> = ATLAS_COMPAT_NOTES
+            .iter()
+            .map(|(version, _)| *version)
+            .collect();
         assert!(versions.contains(&"mapping-atlas-v2"));
         assert!(versions.contains(&"mapping-atlas-v1"));
     }

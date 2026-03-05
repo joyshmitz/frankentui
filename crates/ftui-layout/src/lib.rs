@@ -676,7 +676,8 @@ impl Flex {
                     if i == 0 {
                         0
                     } else {
-                        explicit_gap_so_far.saturating_add((leftover as u64 * i as u64 / slots as u64) as u16)
+                        explicit_gap_so_far
+                            .saturating_add((leftover as u64 * i as u64 / slots as u64) as u16)
                     }
                 } else {
                     // Around: nearest-integer rounding + explicit gaps

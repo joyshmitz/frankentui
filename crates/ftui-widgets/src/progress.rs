@@ -37,7 +37,11 @@ impl<'a> ProgressBar<'a> {
     /// Set the progress ratio (clamped to 0.0..=1.0).
     #[must_use]
     pub fn ratio(mut self, ratio: f64) -> Self {
-        self.ratio = if ratio.is_nan() { 0.0 } else { ratio.clamp(0.0, 1.0) };
+        self.ratio = if ratio.is_nan() {
+            0.0
+        } else {
+            ratio.clamp(0.0, 1.0)
+        };
         self
     }
 

@@ -377,15 +377,43 @@ impl VoiSampler {
     pub fn new_at(config: VoiConfig, now: Instant) -> Self {
         let mut cfg = config;
 
-        let prior_alpha = if cfg.prior_alpha.is_nan() { EPS } else { cfg.prior_alpha.max(EPS) };
-        let prior_beta = if cfg.prior_beta.is_nan() { EPS } else { cfg.prior_beta.max(EPS) };
-        let mu_0 = if cfg.mu_0.is_nan() { 0.5 } else { cfg.mu_0.clamp(MU_0_MIN, MU_0_MAX) };
+        let prior_alpha = if cfg.prior_alpha.is_nan() {
+            EPS
+        } else {
+            cfg.prior_alpha.max(EPS)
+        };
+        let prior_beta = if cfg.prior_beta.is_nan() {
+            EPS
+        } else {
+            cfg.prior_beta.max(EPS)
+        };
+        let mu_0 = if cfg.mu_0.is_nan() {
+            0.5
+        } else {
+            cfg.mu_0.clamp(MU_0_MIN, MU_0_MAX)
+        };
         let lambda_max = (1.0 / (1.0 - mu_0)) - LAMBDA_EPS;
-        let lambda = if cfg.lambda.is_nan() { LAMBDA_EPS } else { cfg.lambda.clamp(LAMBDA_EPS, lambda_max) };
+        let lambda = if cfg.lambda.is_nan() {
+            LAMBDA_EPS
+        } else {
+            cfg.lambda.clamp(LAMBDA_EPS, lambda_max)
+        };
 
-        cfg.value_scale = if cfg.value_scale.is_nan() { EPS } else { cfg.value_scale.max(EPS) };
-        cfg.boundary_weight = if cfg.boundary_weight.is_nan() { 0.0 } else { cfg.boundary_weight.max(0.0) };
-        cfg.sample_cost = if cfg.sample_cost.is_nan() { EPS } else { cfg.sample_cost.max(EPS) };
+        cfg.value_scale = if cfg.value_scale.is_nan() {
+            EPS
+        } else {
+            cfg.value_scale.max(EPS)
+        };
+        cfg.boundary_weight = if cfg.boundary_weight.is_nan() {
+            0.0
+        } else {
+            cfg.boundary_weight.max(0.0)
+        };
+        cfg.sample_cost = if cfg.sample_cost.is_nan() {
+            EPS
+        } else {
+            cfg.sample_cost.max(EPS)
+        };
         cfg.max_log_entries = cfg.max_log_entries.max(1);
 
         let e_threshold = 1.0 / cfg.alpha.max(EPS);

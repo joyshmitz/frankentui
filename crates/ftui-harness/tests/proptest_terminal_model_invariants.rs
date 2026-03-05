@@ -15,8 +15,8 @@
 //! 11. screen_text() never exceeds width * height characters
 //! 12. row_text() length never exceeds width
 
-use ftui_harness::terminal_model::TerminalModel;
 use ftui_harness::proptest_support::{arb_byte_stream, arb_terminal_dimensions};
+use ftui_harness::terminal_model::TerminalModel;
 use proptest::prelude::*;
 
 // ═════════════════════════════════════════════════════════════════════════

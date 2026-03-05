@@ -710,7 +710,10 @@ impl Widget for Tree {
         let mut current_row = 0;
         let mut is_last = Vec::with_capacity(8);
 
-        let search_query = self.search_query.as_deref().filter(|q| !q.trim().is_empty());
+        let search_query = self
+            .search_query
+            .as_deref()
+            .filter(|q| !q.trim().is_empty());
         let is_searching = search_query.is_some();
         let filtered_root = if let Some(q) = search_query {
             let query_lower = q.trim().to_lowercase();
@@ -1153,7 +1156,10 @@ fn flatten_visible(node: &TreeNode, depth: usize, out: &mut Vec<FlatNode>) {
 impl Tree {
     fn flatten(&self) -> Vec<FlatNode> {
         let mut out = Vec::new();
-        let search_query = self.search_query.as_deref().filter(|q| !q.trim().is_empty());
+        let search_query = self
+            .search_query
+            .as_deref()
+            .filter(|q| !q.trim().is_empty());
         let is_searching = search_query.is_some();
         let filtered_root = if let Some(q) = search_query {
             let query_lower = q.trim().to_lowercase();

@@ -51,6 +51,10 @@ mod tests {
         // Midpoint 4.0.
         // Shifted left by 1 pixel.
 
-        assert!((midpoint - 5.0).abs() <= 0.5, "Items should be roughly centered in SpaceAround (was {})", midpoint);
+        assert!(
+            (midpoint - 5.0).abs() <= 0.5,
+            "Items should be roughly centered in SpaceAround (was {})",
+            midpoint
+        );
     }
 }

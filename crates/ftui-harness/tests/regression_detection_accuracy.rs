@@ -334,8 +334,8 @@ where
 fn ensure_global_trace_level() {
     static INIT: std::sync::Once = std::sync::Once::new();
     INIT.call_once(|| {
-        let subscriber = tracing_subscriber::registry()
-            .with(tracing_subscriber::filter::LevelFilter::TRACE);
+        let subscriber =
+            tracing_subscriber::registry().with(tracing_subscriber::filter::LevelFilter::TRACE);
         let _ = tracing::subscriber::set_global_default(subscriber);
     });
 }

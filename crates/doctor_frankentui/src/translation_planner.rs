@@ -393,7 +393,12 @@ fn enumerate_segments(ir: &MigrationIr) -> Vec<IrSegment> {
 
     // Capabilities.
     let mut seen_caps = BTreeSet::new();
-    for cap in ir.capabilities.required.iter().chain(ir.capabilities.optional.iter()) {
+    for cap in ir
+        .capabilities
+        .required
+        .iter()
+        .chain(ir.capabilities.optional.iter())
+    {
         let cap_name = format!("{cap:?}");
         if !seen_caps.insert(cap_name.clone()) {
             continue;
@@ -1481,7 +1486,8 @@ mod tests {
 
     #[test]
     fn optional_capability_segments_are_enumerated() {
-        let mut builder = IrBuilder::new("test-optional-cap".to_string(), "planner-tests".to_string());
+        let mut builder =
+            IrBuilder::new("test-optional-cap".to_string(), "planner-tests".to_string());
         builder.optional_capability(Capability::ProcessSpawn);
         let ir = builder.build();
         let model = test_model();

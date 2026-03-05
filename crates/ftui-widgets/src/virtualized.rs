@@ -535,7 +535,7 @@ impl HeightCache {
             return;
         }
         let mut local = idx - self.base_offset;
-        
+
         // If the jump is so large that we'd drain the entire current cache anyway,
         // reset the window to avoid a huge allocation of Nones.
         if local + 1 >= self.cache.len() + self.capacity {
@@ -543,7 +543,7 @@ impl HeightCache {
             self.cache.clear();
             local = idx - self.base_offset;
         }
-        
+
         if local >= self.cache.len() {
             self.cache.resize(local + 1, None);
         }

@@ -370,7 +370,7 @@ impl Draw for Buffer {
             for x in clipped.x..clipped.right() {
                 let idx = self.index_unchecked(x, y);
                 let cell = self.cell_mut_unchecked(idx);
-                
+
                 if let Some(fg_color) = fg {
                     if opacity < 1.0 {
                         cell.fg = fg_color.with_opacity(opacity);

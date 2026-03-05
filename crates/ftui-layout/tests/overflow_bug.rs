@@ -1,6 +1,6 @@
-use ftui_layout::grid::Grid;
-use ftui_layout::Constraint;
 use ftui_core::geometry::Rect;
+use ftui_layout::Constraint;
+use ftui_layout::grid::Grid;
 
 #[test]
 fn test_grid_gap_overflow() {
@@ -13,7 +13,7 @@ fn test_grid_gap_overflow() {
     let area = Rect::new(0, 0, 1, 1);
     let layout = grid.split(area);
     let cell = layout.cell(1, 1);
-    
+
     assert!(
         cell.x <= area.right() && cell.y <= area.bottom(),
         "Cell {cell:?} is outside area {area:?}"

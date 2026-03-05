@@ -1046,11 +1046,7 @@ impl<W: Write> Presenter<W> {
                     } else if cha <= cup {
                         ansi::cha(&mut self.writer, x)?;
                     } else {
-                        ansi::cup(
-                            &mut self.writer,
-                            actual_y,
-                            x,
-                        )?;
+                        ansi::cup(&mut self.writer, actual_y, x)?;
                     }
                 } else if x < cx {
                     // Backward
@@ -1064,11 +1060,7 @@ impl<W: Write> Presenter<W> {
                     } else if cub <= cup {
                         ansi::cub(&mut self.writer, dx)?;
                     } else {
-                        ansi::cup(
-                            &mut self.writer,
-                            actual_y,
-                            x,
-                        )?;
+                        ansi::cup(&mut self.writer, actual_y, x)?;
                     }
                 } else {
                     // Same column (should have been caught by early check, but for safety)
@@ -1076,19 +1068,11 @@ impl<W: Write> Presenter<W> {
             } else {
                 // Unknown x, same row (unlikely but possible if we only tracked y?)
                 // Fallback to absolute
-                ansi::cup(
-                    &mut self.writer,
-                    actual_y,
-                    x,
-                )?;
+                ansi::cup(&mut self.writer, actual_y, x)?;
             }
         } else {
             // Different row: CUP is the only option
-            ansi::cup(
-                &mut self.writer,
-                actual_y,
-                x,
-            )?;
+            ansi::cup(&mut self.writer, actual_y, x)?;
         }
 
         self.cursor_x = Some(x);

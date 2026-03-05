@@ -634,7 +634,7 @@ fn knuth_plass_badness(slack: i64, width: usize, is_last_line: bool) -> u64 {
     if width == 0 {
         return if slack == 0 { 0 } else { BADNESS_INF };
     }
-    
+
     let ratio = slack as f64 / width as f64;
     (ratio * ratio * ratio * BADNESS_SCALE as f64) as u64
 }

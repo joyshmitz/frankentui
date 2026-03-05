@@ -129,7 +129,9 @@ where
             self.hits += 1;
             let idx = loc.idx();
             // SAFETY: indices in `index` are guaranteed to be valid and occupied.
-            let entry = self.entries[idx].as_mut().expect("S3Fifo invariant violated: valid index required");
+            let entry = self.entries[idx]
+                .as_mut()
+                .expect("S3Fifo invariant violated: valid index required");
             entry.freq = entry.freq.saturating_add(1).min(3);
             Some(&entry.value)
         } else {
@@ -143,7 +145,9 @@ where
         // If key already exists, update in place.
         if let Some(loc) = self.index.get(&key) {
             let idx = loc.idx();
-            let entry = self.entries[idx].as_mut().expect("S3Fifo invariant violated: valid index required");
+            let entry = self.entries[idx]
+                .as_mut()
+                .expect("S3Fifo invariant violated: valid index required");
             let old = std::mem::replace(&mut entry.value, value);
             entry.freq = entry.freq.saturating_add(1).min(3);
             return Some(old);
@@ -281,14 +285,24 @@ where
         while self.small.len() >= self.small_cap {
             if let Some(idx) = self.small.pop_front() {
                 // Check freq - minimize borrow scope
-                let freq = self.entries[idx].as_ref().expect("S3Fifo invariant violated: valid index required").freq;
+                let freq = self.entries[idx]
+                    .as_ref()
+                    .expect("S3Fifo invariant violated: valid index required")
+                    .freq;
 
                 if freq > 0 {
                     // Promote to main.
-                    self.entries[idx].as_mut().expect("S3Fifo invariant violated: valid index required").freq = 0;
+                    self.entries[idx]
+                        .as_mut()
+                        .expect("S3Fifo invariant violated: valid index required")
+                        .freq = 0;
 
                     // Clone key for index update (must do before evict_main which borrows self)
-                    let key = self.entries[idx].as_ref().expect("S3Fifo invariant violated: valid index required").key.clone();
+                    let key = self.entries[idx]
+                        .as_ref()
+                        .expect("S3Fifo invariant violated: valid index required")
+                        .key
+                        .clone();
 
                     self.evict_main_if_full();
 
@@ -297,7 +311,9 @@ where
                 } else {
                     // Evict to ghost.
                     // Extract entry to reuse key and avoid clone
-                    let entry = self.entries[idx].take().expect("S3Fifo invariant violated: valid index required");
+                    let entry = self.entries[idx]
+                        .take()
+                        .expect("S3Fifo invariant violated: valid index required");
                     self.free_indices.push(idx);
 
                     self.index.remove(&entry.key);
@@ -315,15 +331,23 @@ where
     fn evict_main_if_full(&mut self) {
         while self.main.len() >= self.main_cap {
             if let Some(idx) = self.main.pop_front() {
-                let freq = self.entries[idx].as_ref().expect("S3Fifo invariant violated: valid index required").freq;
+                let freq = self.entries[idx]
+                    .as_ref()
+                    .expect("S3Fifo invariant violated: valid index required")
+                    .freq;
 
                 if freq > 0 {
                     // Give second chance
-                    self.entries[idx].as_mut().expect("S3Fifo invariant violated: valid index required").freq -= 1;
+                    self.entries[idx]
+                        .as_mut()
+                        .expect("S3Fifo invariant violated: valid index required")
+                        .freq -= 1;
                     self.main.push_back(idx);
                 } else {
                     // Evict
-                    let entry = self.entries[idx].take().expect("S3Fifo invariant violated: valid index required");
+                    let entry = self.entries[idx]
+                        .take()
+                        .expect("S3Fifo invariant violated: valid index required");
                     self.free_indices.push(idx);
                     self.index.remove(&entry.key);
                 }

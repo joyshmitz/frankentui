@@ -503,14 +503,34 @@ impl BocpdDetector {
         config.mu_steady_ms = config.mu_steady_ms.max(1.0);
         config.mu_burst_ms = config.mu_burst_ms.max(1.0);
         config.hazard_lambda = config.hazard_lambda.max(1.0);
-        config.min_observation_ms = if config.min_observation_ms.is_nan() { 0.1 } else { config.min_observation_ms.max(0.1) };
-        config.max_observation_ms = if config.max_observation_ms.is_nan() { config.min_observation_ms } else { config.max_observation_ms.max(config.min_observation_ms) };
-        config.steady_threshold = if config.steady_threshold.is_nan() { 0.3 } else { config.steady_threshold.clamp(0.0, 1.0) };
-        config.burst_threshold = if config.burst_threshold.is_nan() { 0.7 } else { config.burst_threshold.clamp(0.0, 1.0) };
+        config.min_observation_ms = if config.min_observation_ms.is_nan() {
+            0.1
+        } else {
+            config.min_observation_ms.max(0.1)
+        };
+        config.max_observation_ms = if config.max_observation_ms.is_nan() {
+            config.min_observation_ms
+        } else {
+            config.max_observation_ms.max(config.min_observation_ms)
+        };
+        config.steady_threshold = if config.steady_threshold.is_nan() {
+            0.3
+        } else {
+            config.steady_threshold.clamp(0.0, 1.0)
+        };
+        config.burst_threshold = if config.burst_threshold.is_nan() {
+            0.7
+        } else {
+            config.burst_threshold.clamp(0.0, 1.0)
+        };
         if config.burst_threshold < config.steady_threshold {
             std::mem::swap(&mut config.steady_threshold, &mut config.burst_threshold);
         }
-        config.burst_prior = if config.burst_prior.is_nan() { 0.1 } else { config.burst_prior.clamp(0.001, 0.999) };
+        config.burst_prior = if config.burst_prior.is_nan() {
+            0.1
+        } else {
+            config.burst_prior.clamp(0.001, 0.999)
+        };
 
         let k = config.max_run_length;
 
@@ -768,8 +788,9 @@ impl BocpdDetector {
         let pred_burst = self.exponential_pdf(x, self.lambda_burst);
 
         // Compute log-likelihood ratio exactly to avoid underflow
-        let log_lr = self.lambda_burst.ln() - self.lambda_burst * x
-                   - (self.lambda_steady.ln() - self.lambda_steady * x);
+        let log_lr = self.lambda_burst.ln()
+            - self.lambda_burst * x
+            - (self.lambda_steady.ln() - self.lambda_steady * x);
 
         // Compute Bayes factor for the observation (instantaneous)
         let log_bf = log_lr * std::f64::consts::LOG10_E;
@@ -784,17 +805,22 @@ impl BocpdDetector {
 
         // Update regime probability using a Hidden Markov Model (HMM) step
         // 1. Transition prior: incorporate hazard rate (chance of switching regime)
-        let prior_burst = self.p_burst * (1.0 - self.hazard) + self.config.burst_prior * self.hazard;
+        let prior_burst =
+            self.p_burst * (1.0 - self.hazard) + self.config.burst_prior * self.hazard;
 
         // 2. Bayesian update with new observation
         let prior_odds = prior_burst / (1.0 - prior_burst).max(1e-10);
         let likelihood_ratio = log_lr.exp();
         let posterior_odds = prior_odds * likelihood_ratio;
-        
+
         // Clamp to prevent total float lock-in, but the transition prior does the heavy lifting now
         let mut p_burst_raw = posterior_odds / (1.0 + posterior_odds);
         if p_burst_raw.is_nan() {
-            p_burst_raw = if posterior_odds.is_infinite() { 1.0 } else { 0.5 };
+            p_burst_raw = if posterior_odds.is_infinite() {
+                1.0
+            } else {
+                0.5
+            };
         }
         self.p_burst = p_burst_raw.clamp(0.001, 0.999);
 

@@ -441,8 +441,11 @@ impl BracketedPaste {
 
     #[must_use]
     fn contains_delimiter(text: &[u8]) -> bool {
-        text.windows(Self::START.len()).any(|window| window == Self::START)
-            || text.windows(Self::END.len()).any(|window| window == Self::END)
+        text.windows(Self::START.len())
+            .any(|window| window == Self::START)
+            || text
+                .windows(Self::END.len())
+                .any(|window| window == Self::END)
     }
 }
 

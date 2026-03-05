@@ -549,9 +549,7 @@ impl BudgetController {
             evidence_threshold = 1.0 / self.config.eprocess.alpha;
             evidence_margin = self.eprocess.e_value - evidence_threshold;
 
-            if self.current_level.is_max()
-                || self.current_level >= self.config.degradation_floor
-            {
+            if self.current_level.is_max() || self.current_level >= self.config.degradation_floor {
                 reason = BudgetDecisionReason::AtMaxDegradation;
             } else if self.eprocess.should_degrade(&self.config.eprocess) {
                 decision = BudgetDecision::Degrade;

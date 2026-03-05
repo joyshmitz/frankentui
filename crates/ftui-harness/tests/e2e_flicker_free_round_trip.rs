@@ -31,8 +31,8 @@ use tracing_subscriber::registry::LookupSpan;
 fn ensure_global_trace_level() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
-        let subscriber = tracing_subscriber::registry()
-            .with(tracing_subscriber::filter::LevelFilter::TRACE);
+        let subscriber =
+            tracing_subscriber::registry().with(tracing_subscriber::filter::LevelFilter::TRACE);
         let _ = tracing::subscriber::set_global_default(subscriber);
     });
 }
@@ -637,7 +637,11 @@ fn full_e2e_lifecycle_sync_fallback_resize() {
             .filter(|s| s.name == "render.sync_bracket")
             .collect();
         if sync_spans.is_empty() {
-            println!("Spans for phase {}: {:?}", name, spans.iter().map(|s| &s.name).collect::<Vec<_>>());
+            println!(
+                "Spans for phase {}: {:?}",
+                name,
+                spans.iter().map(|s| &s.name).collect::<Vec<_>>()
+            );
         }
         assert!(
             !sync_spans.is_empty(),

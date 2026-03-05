@@ -786,7 +786,9 @@ impl GenericTokenizer {
 
                 if !is_bracketed {
                     // C macros (#define) or decorators (@Override)
-                    while pos < bytes.len() && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'_') {
+                    while pos < bytes.len()
+                        && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'_')
+                    {
                         pos += 1;
                     }
                 }
@@ -5319,7 +5321,10 @@ fn main() {
     fn haskell_multiline_block_comment() {
         let t = haskell_tokenizer();
         let (_, state) = t.tokenize_line("x {- start", LineState::Normal);
-        assert!(matches!(state, LineState::InComment(CommentKind::Nested(1))));
+        assert!(matches!(
+            state,
+            LineState::InComment(CommentKind::Nested(1))
+        ));
         let (_, state2) = t.tokenize_line("end -} y", state);
         assert_eq!(state2, LineState::Normal);
     }

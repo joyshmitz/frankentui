@@ -159,7 +159,7 @@ impl<'a> List<'a> {
 
     fn filtered_indices(&self, state: &mut ListState) -> std::sync::Arc<[usize]> {
         let query_str = state.filter_query();
-        
+
         if let Some(hash) = self.data_hash
             && let Some((cached_hash, ref cached_query, ref indices)) = state.cached_display_indices
             && cached_hash == hash
@@ -208,7 +208,7 @@ impl<'a> List<'a> {
             state.cached_display_indices = Some((
                 hash,
                 query_str.to_string(),
-                std::sync::Arc::clone(&arc_indices)
+                std::sync::Arc::clone(&arc_indices),
             ));
         }
 
@@ -240,7 +240,9 @@ impl<'a> List<'a> {
         }
 
         if state.multi_select_enabled {
-            state.multi_selected.retain(|idx| filtered.binary_search(idx).is_ok());
+            state
+                .multi_selected
+                .retain(|idx| filtered.binary_search(idx).is_ok());
         }
     }
 

@@ -472,7 +472,7 @@ impl DepGraph {
             if node.generation == 0 || !node.is_dirty() {
                 continue;
             }
-            
+
             let has_dirty_dependency = self.fwd_adj[i].iter().any(|&dep_id| {
                 let dep_idx = dep_id.0 as usize;
                 dep_idx < self.nodes.len()
@@ -496,7 +496,7 @@ impl DepGraph {
         for root in roots.into_iter().rev() {
             self.dfs_postorder(root, &mut result, &mut visited);
         }
-        
+
         result.reverse();
         result
     }
@@ -525,14 +525,14 @@ impl DepGraph {
             })
             .copied()
             .collect();
-            
+
         children.sort(); // Deterministic.
-        
+
         // Iterate children in reverse for the post-order topological sort
         for child in children.into_iter().rev() {
             self.dfs_postorder(child, result, visited);
         }
-        
+
         result.push(id);
     }
 

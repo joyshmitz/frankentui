@@ -864,7 +864,11 @@ mod tests {
         policy.cascade.min_trigger_level = ftui_render::budget::DegradationLevel::SkipFrame;
         policy.cascade.max_degradation = ftui_render::budget::DegradationLevel::SimpleBorders;
         let errors = policy.validate();
-        assert!(errors.iter().any(|e| e.contains("cascade.min_trigger_level")));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("cascade.min_trigger_level"))
+        );
     }
 
     #[test]

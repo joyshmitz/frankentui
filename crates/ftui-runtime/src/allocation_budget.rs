@@ -353,7 +353,11 @@ impl AllocationBudget {
     /// Observe an allocation count/byte measurement for the current frame.
     /// Returns `Some(alert)` if a regression is detected.
     pub fn observe(&mut self, x: f64) -> Option<BudgetAlert> {
-        if !x.is_finite() || !self.config.mu_0.is_finite() || !self.config.cusum_k.is_finite() || !self.config.cusum_h.is_finite() {
+        if !x.is_finite()
+            || !self.config.mu_0.is_finite()
+            || !self.config.cusum_k.is_finite()
+            || !self.config.cusum_h.is_finite()
+        {
             return None;
         }
         self.frame += 1;

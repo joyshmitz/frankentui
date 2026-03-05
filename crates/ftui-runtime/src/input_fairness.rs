@@ -476,8 +476,8 @@ impl InputFairnessGuard {
         // classes and should still trigger intervention.
         // We only intervene if the unfairness is at the expense of input
         // (i.e. resize_time_us > input_time_us).
-        if has_pending_input 
-            && jain + FAIRNESS_THRESHOLD_EPSILON < self.config.fairness_threshold 
+        if has_pending_input
+            && jain + FAIRNESS_THRESHOLD_EPSILON < self.config.fairness_threshold
             && self.resize_time_us > self.input_time_us
         {
             return InterventionReason::FairnessIndex;
