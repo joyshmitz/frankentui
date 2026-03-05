@@ -217,8 +217,8 @@ impl<T: Clone + PartialEq + 'static> Observable<T> {
             return;
         }
 
-        // Clone the value once for all callbacks.
-        let value = self.inner.borrow().value.clone();
+        // Borrow the value during callbacks to prevent re-entrant mutations.
+        let inner = self.inner.borrow();
         let propagation_start = Instant::now();
         let _span = info_span!(
             "bloodstream.delta",
@@ -230,7 +230,7 @@ impl<T: Clone + PartialEq + 'static> Observable<T> {
 
         // Fire immediately.
         for cb in &callbacks {
-            cb(&value);
+            cb(&inner.value);
         }
 
         let duration_us = propagation_start.elapsed().as_micros() as u64;

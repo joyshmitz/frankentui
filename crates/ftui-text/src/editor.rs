@@ -34,6 +34,7 @@ use crate::rope::Rope;
 enum EditOp {
     Insert { byte_offset: usize, text: String },
     Delete { byte_offset: usize, text: String },
+    Replace { byte_offset: usize, deleted: String, inserted: String },
 }
 
 impl EditOp {
@@ -47,6 +48,19 @@ impl EditOp {
                 byte_offset: *byte_offset,
                 text: text.clone(),
             },
+            Self::Replace { byte_offset, deleted, inserted } => Self::Replace {
+                byte_offset: *byte_offset,
+                deleted: inserted.clone(),
+                inserted: deleted.clone(),
+            },
+        }
+    }
+
+    fn byte_len(&self) -> usize {
+        match self {
+            Self::Insert { text, .. } => text.len(),
+            Self::Delete { text, .. } => text.len(),
+            Self::Replace { deleted, inserted, .. } => deleted.len() + inserted.len(),
         }
     }
 }
@@ -250,22 +264,37 @@ impl Editor {
             return;
         }
 
-        self.delete_selection_inner();
-        let nav = CursorNavigator::new(&self.rope);
-        let byte_idx = nav.to_byte_index(self.cursor);
-        let char_idx = self.rope.byte_to_char(byte_idx);
+        if let Some((start_byte, deleted)) = self.extract_selection() {
+            let char_idx = self.rope.byte_to_char(start_byte);
+            
+            self.push_undo(EditOp::Replace {
+                byte_offset: start_byte,
+                deleted,
+                inserted: sanitized.clone(),
+            });
 
-        self.push_undo(EditOp::Insert {
-            byte_offset: byte_idx,
-            text: sanitized.clone(),
-        });
+            self.rope.insert(char_idx, &sanitized);
+            
+            let new_byte_idx = start_byte + sanitized.len();
+            let nav = CursorNavigator::new(&self.rope);
+            self.cursor = nav.from_byte_index(new_byte_idx);
+        } else {
+            let nav = CursorNavigator::new(&self.rope);
+            let byte_idx = nav.to_byte_index(self.cursor);
+            let char_idx = self.rope.byte_to_char(byte_idx);
 
-        self.rope.insert(char_idx, &sanitized);
+            self.push_undo(EditOp::Insert {
+                byte_offset: byte_idx,
+                text: sanitized.clone(),
+            });
 
-        // Move cursor to end of inserted text
-        let new_byte_idx = byte_idx + sanitized.len();
-        let nav = CursorNavigator::new(&self.rope);
-        self.cursor = nav.from_byte_index(new_byte_idx);
+            self.rope.insert(char_idx, &sanitized);
+
+            // Move cursor to end of inserted text
+            let new_byte_idx = byte_idx + sanitized.len();
+            let nav = CursorNavigator::new(&self.rope);
+            self.cursor = nav.from_byte_index(new_byte_idx);
+        }
     }
 
     /// Insert a newline at the cursor position.
@@ -525,6 +554,12 @@ impl Editor {
                 let end_char = self.rope.byte_to_char(*byte_offset + text.len());
                 self.rope.remove(start_char..end_char);
             }
+            EditOp::Replace { byte_offset, deleted, inserted } => {
+                let start_char = self.rope.byte_to_char(*byte_offset);
+                let end_char = self.rope.byte_to_char(*byte_offset + deleted.len());
+                self.rope.remove(start_char..end_char);
+                self.rope.insert(start_char, inserted);
+            }
         }
     }
 
@@ -532,13 +567,12 @@ impl Editor {
     // Selection helpers
     // ====================================================================
 
-    /// Delete the current selection if active. Returns true if something was deleted.
-    fn delete_selection_inner(&mut self) -> bool {
-        let Some(sel) = self.selection.take() else {
-            return false;
-        };
+    /// Delete the current selection if active, returning the deleted text and byte offset.
+    /// If nothing was deleted, returns `None`. Does NOT push to the undo stack.
+    fn extract_selection(&mut self) -> Option<(usize, String)> {
+        let sel = self.selection.take()?;
         if sel.is_empty() {
-            return false;
+            return None;
         }
         let nav = CursorNavigator::new(&self.rope);
         let (start_byte, end_byte) = sel.byte_range(&nav);
@@ -546,15 +580,24 @@ impl Editor {
         let end_char = self.rope.byte_to_char(end_byte);
         let deleted = self.rope.slice(start_char..end_char).into_owned();
 
-        self.push_undo(EditOp::Delete {
-            byte_offset: start_byte,
-            text: deleted,
-        });
-
         self.rope.remove(start_char..end_char);
         let nav = CursorNavigator::new(&self.rope);
         self.cursor = nav.from_byte_index(start_byte);
-        true
+        
+        Some((start_byte, deleted))
+    }
+
+    /// Delete the current selection if active. Returns true if something was deleted.
+    fn delete_selection_inner(&mut self) -> bool {
+        if let Some((start_byte, deleted)) = self.extract_selection() {
+            self.push_undo(EditOp::Delete {
+                byte_offset: start_byte,
+                text: deleted,
+            });
+            true
+        } else {
+            false
+        }
     }
 
     // ====================================================================
@@ -746,14 +789,7 @@ impl Editor {
     }
 }
 
-impl EditOp {
-    fn byte_len(&self) -> usize {
-        match self {
-            Self::Insert { text, .. } => text.len(),
-            Self::Delete { text, .. } => text.len(),
-        }
-    }
-}
+
 
 #[cfg(test)]
 mod tests {
@@ -1426,15 +1462,12 @@ mod tests {
         }
         ed.insert_text("universe");
         assert_eq!(ed.text(), "hello universe");
-        // insert_text with selection creates 2 undo entries: delete + insert
-        // So we need 2 undos to fully restore
-        ed.undo(); // undoes the insert
-        assert_eq!(ed.text(), "hello ");
-        ed.undo(); // undoes the selection delete
+        
+        // Atomic Replace: 1 undo restores the deleted text and removes inserted
+        ed.undo();
         assert_eq!(ed.text(), "hello world");
-        // And 2 redos to restore
-        ed.redo();
-        assert_eq!(ed.text(), "hello ");
+        
+        // 1 redo reapplies the edit
         ed.redo();
         assert_eq!(ed.text(), "hello universe");
     }

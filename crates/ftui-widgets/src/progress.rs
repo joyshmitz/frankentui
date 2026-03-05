@@ -435,10 +435,10 @@ impl Widget for MiniBar {
         };
 
         if render_percent {
-            let available = area.width.saturating_sub(percent_width);
-            if available == 0 {
-                render_percent = false;
+            if area.width <= percent_width {
+                bar_width = 0;
             } else {
+                let available = area.width - percent_width;
                 bar_width = bar_width.min(available as usize);
             }
         }
