@@ -707,14 +707,14 @@ impl Flex {
                 Direction::Horizontal => Rect {
                     x: pos,
                     y: area.y,
-                    width: size,
+                    width: size.min(area.right().saturating_sub(pos)),
                     height: area.height,
                 },
                 Direction::Vertical => Rect {
                     x: area.x,
                     y: pos,
                     width: area.width,
-                    height: size,
+                    height: size.min(area.bottom().saturating_sub(pos)),
                 },
             };
             rects.push(rect);

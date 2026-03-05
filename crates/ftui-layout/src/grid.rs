@@ -114,7 +114,7 @@ pub struct GridLayout {
     row_gap: u16,
     /// Gap between columns.
     col_gap: u16,
-    /// The bounding area.
+    /// The bounding area of the grid.
     bounds: Rect,
 }
 

@@ -631,18 +631,9 @@ fn knuth_plass_badness(slack: i64, width: usize, is_last_line: bool) -> u64 {
     if width == 0 {
         return if slack == 0 { 0 } else { BADNESS_INF };
     }
-    // badness = (slack/width)^3 * BADNESS_SCALE
-    // Use integer arithmetic to avoid floating point:
-    // (slack^3 * BADNESS_SCALE) / width^3
-    let s = slack as u64;
-    let w = width as u64;
-    // Prevent overflow: compute in stages
-    let s3 = s.saturating_mul(s).saturating_mul(s);
-    let w3 = w.saturating_mul(w).saturating_mul(w);
-    if w3 == 0 {
-        return BADNESS_INF;
-    }
-    s3.saturating_mul(BADNESS_SCALE) / w3
+    
+    let ratio = slack as f64 / width as f64;
+    (ratio * ratio * ratio * BADNESS_SCALE as f64) as u64
 }
 
 /// Check if a character is a breaking whitespace (candidate for wrapping).
