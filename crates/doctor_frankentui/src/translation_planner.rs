@@ -15,7 +15,7 @@
 //!   `ExtendFtui`, the planner emits a [`CapabilityGapTicket`] for
 //!   downstream triage.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -25,8 +25,8 @@ use crate::mapping_atlas::{
     MappingCategory, MappingEntry, RemediationStrategy, build_atlas, lookup,
 };
 use crate::migration_ir::{
-    EffectKind, EventKind, IrNodeId, LayoutKind, MigrationIr, StateScope, TokenCategory,
-    ViewNodeKind,
+    Capability, EffectKind, EventKind, IrNodeId, LayoutKind, MigrationIr, StateScope,
+    TokenCategory, ViewNodeKind,
 };
 use crate::semantic_contract::{
     BayesianPosterior, ConfidenceModel, ExpectedLossResult, MigrationDecision,
@@ -236,6 +236,11 @@ impl Default for PlannerConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct PlannerContext {
+    process_spawn_available: bool,
+}
+
 // ── Public API ─────────────────────────────────────────────────────────
 
 /// Build a translation plan from the IR and its enrichment inputs.
@@ -254,6 +259,7 @@ pub fn plan_translation(
     config: &PlannerConfig,
 ) -> TranslationPlan {
     let atlas = build_atlas();
+    let context = planner_context(ir);
 
     // Step 1: enumerate segments.
     let segments = enumerate_segments(ir);
@@ -271,6 +277,7 @@ pub fn plan_translation(
             intents,
             effects,
             config,
+            &context,
             &mut gap_tickets,
         );
         decisions.push(decision);
@@ -290,6 +297,14 @@ pub fn plan_translation(
         decisions,
         gap_tickets,
         stats,
+    }
+}
+
+fn planner_context(ir: &MigrationIr) -> PlannerContext {
+    let process_spawn_available = ir.capabilities.required.contains(&Capability::ProcessSpawn)
+        || ir.capabilities.optional.contains(&Capability::ProcessSpawn);
+    PlannerContext {
+        process_spawn_available,
     }
 }
 
@@ -377,11 +392,16 @@ fn enumerate_segments(ir: &MigrationIr) -> Vec<IrSegment> {
     }
 
     // Capabilities.
-    for cap in &ir.capabilities.required {
+    let mut seen_caps = BTreeSet::new();
+    for cap in ir.capabilities.required.iter().chain(ir.capabilities.optional.iter()) {
+        let cap_name = format!("{cap:?}");
+        if !seen_caps.insert(cap_name.clone()) {
+            continue;
+        }
         let sig = format!("Capability::{cap:?}");
         segments.push(IrSegment {
-            id: IrNodeId(format!("ir-cap-{}", format!("{cap:?}").to_lowercase())),
-            name: format!("{cap:?}"),
+            id: IrNodeId(format!("ir-cap-{}", cap_name.to_lowercase())),
+            name: cap_name,
             category: SegmentCategory::Capability,
             mapping_signature: sig,
         });
@@ -480,10 +500,13 @@ fn plan_segment(
     intents: Option<&IntentInferenceResult>,
     effects: Option<&CanonicalEffectModel>,
     config: &PlannerConfig,
+    context: &PlannerContext,
     gap_tickets: &mut Vec<CapabilityGapTicket>,
 ) -> StrategyDecision {
+    let use_process_fallback = should_use_process_fallback(segment, context);
+
     // Compute base evidence counts from the mapping quality.
-    let (successes, failures) = mapping_evidence(mapping);
+    let (successes, failures) = mapping_evidence(mapping, use_process_fallback);
 
     // Apply enrichment signals.
     let (intent_boost, effect_boost) = compute_enrichment_boosts(segment, intents, effects, config);
@@ -497,7 +520,8 @@ fn plan_segment(
     let gate = expected_loss.decision;
 
     // Build candidate strategies.
-    let (chosen, alternatives) = select_strategy(segment, mapping, &posterior, config);
+    let (chosen, alternatives) =
+        select_strategy(segment, mapping, &posterior, config, use_process_fallback);
 
     // Composite confidence = posterior mean weighted by strategy quality.
     let confidence = compute_composite_confidence(&chosen, &posterior, effect_boost);
@@ -561,7 +585,7 @@ fn plan_segment(
         });
     }
 
-    let rationale = build_rationale(segment, mapping, &posterior, gate);
+    let rationale = build_rationale(segment, mapping, &posterior, gate, use_process_fallback);
 
     StrategyDecision {
         segment: segment.clone(),
@@ -576,7 +600,13 @@ fn plan_segment(
 }
 
 /// Convert atlas evidence into Bayesian success/failure counts.
-fn mapping_evidence(mapping: Option<&MappingEntry>) -> (u32, u32) {
+fn mapping_evidence(mapping: Option<&MappingEntry>, use_process_fallback: bool) -> (u32, u32) {
+    if use_process_fallback {
+        // Degraded path: process effects can still translate via Cmd::task fallback,
+        // but with less certainty than native process-subscription support.
+        return (10, 3);
+    }
+
     match mapping {
         Some(entry) => {
             let base_successes: u32 = match entry.policy {
@@ -631,7 +661,39 @@ fn select_strategy(
     mapping: Option<&MappingEntry>,
     posterior: &BayesianPosterior,
     _config: &PlannerConfig,
+    use_process_fallback: bool,
 ) -> (TranslationStrategy, Vec<RankedAlternative>) {
+    if use_process_fallback {
+        let fallback = TranslationStrategy {
+            id: format!("{}-in-process-fallback", segment.mapping_signature),
+            description: format!(
+                "Translate {} using bounded in-process task fallback",
+                segment.name
+            ),
+            handling_class: TransformationHandlingClass::Approximate,
+            risk: TransformationRiskLevel::Medium,
+            target_construct: "Cmd::task(...) bounded in-process worker".to_string(),
+            target_crate: "ftui-runtime".to_string(),
+            automatable: true,
+            remediation: RemediationStrategy {
+                approach: "Process spawn capability missing; emit Cmd::task fallback and avoid external process dependency".to_string(),
+                automatable: true,
+                effort: crate::mapping_atlas::EffortLevel::Medium,
+            },
+        };
+
+        let mut alternatives = Vec::new();
+        if let Some(entry) = mapping {
+            alternatives.push(RankedAlternative {
+                strategy: strategy_from_mapping(entry, &segment.mapping_signature),
+                score: posterior.mean * 0.6,
+                rejection_reason:
+                    "Requires process spawn capability which is not declared by the IR".to_string(),
+            });
+        }
+        return (fallback, alternatives);
+    }
+
     match mapping {
         Some(entry) => {
             let primary = strategy_from_mapping(entry, &segment.mapping_signature);
@@ -680,6 +742,10 @@ fn select_strategy(
     }
 }
 
+fn should_use_process_fallback(segment: &IrSegment, context: &PlannerContext) -> bool {
+    segment.mapping_signature == "EffectKind::Process" && !context.process_spawn_available
+}
+
 fn strategy_from_mapping(entry: &MappingEntry, signature: &str) -> TranslationStrategy {
     TranslationStrategy {
         id: format!("{}-auto", signature),
@@ -726,6 +792,7 @@ fn build_rationale(
     mapping: Option<&MappingEntry>,
     posterior: &BayesianPosterior,
     gate: MigrationDecision,
+    use_process_fallback: bool,
 ) -> String {
     let mapping_desc = match mapping {
         Some(entry) => format!(
@@ -734,6 +801,12 @@ fn build_rationale(
         ),
         None => "No atlas mapping found".to_string(),
     };
+    let precondition_note = if use_process_fallback {
+        " Process precondition not met; selected Cmd::task fallback."
+    } else {
+        ""
+    };
+
     format!(
         "Segment {} ({}): {}. Posterior mean={:.3} [CI: {:.3}–{:.3}]. Gate: {:?}.",
         segment.id.0,
@@ -743,7 +816,7 @@ fn build_rationale(
         posterior.credible_lower,
         posterior.credible_upper,
         gate
-    )
+    ) + precondition_note
 }
 
 // ── Statistics ──────────────────────────────────────────────────────────
@@ -886,6 +959,27 @@ mod tests {
             writes: BTreeSet::new(),
             provenance: test_provenance(),
         });
+        builder.build()
+    }
+
+    fn ir_with_process_effect(process_spawn_available: bool) -> MigrationIr {
+        let mut builder = IrBuilder::new(
+            "test-planner-process".to_string(),
+            "planner-process-tests".to_string(),
+        );
+        builder.add_effect(EffectDecl {
+            id: IrNodeId("ir-eff-process".to_string()),
+            name: "workerLoop".to_string(),
+            kind: EffectKind::Process,
+            dependencies: BTreeSet::new(),
+            has_cleanup: true,
+            reads: BTreeSet::new(),
+            writes: BTreeSet::new(),
+            provenance: test_provenance(),
+        });
+        if process_spawn_available {
+            builder.require_capability(Capability::ProcessSpawn);
+        }
         builder.build()
     }
 
@@ -1383,5 +1477,69 @@ mod tests {
 
         assert!(cats.contains("View"), "Missing View segments");
         assert!(cats.contains("Style"), "Missing Style segments");
+    }
+
+    #[test]
+    fn optional_capability_segments_are_enumerated() {
+        let mut builder = IrBuilder::new("test-optional-cap".to_string(), "planner-tests".to_string());
+        builder.optional_capability(Capability::ProcessSpawn);
+        let ir = builder.build();
+        let model = test_model();
+        let plan = plan_translation_simple(&ir, &model);
+
+        assert!(
+            plan.decisions
+                .iter()
+                .any(|d| d.segment.mapping_signature == "Capability::ProcessSpawn"),
+            "Optional capabilities should be planned as capability segments"
+        );
+    }
+
+    #[test]
+    fn process_effect_uses_subscription_path_when_capability_present() {
+        let ir = ir_with_process_effect(true);
+        let model = test_model();
+        let plan = plan_translation_simple(&ir, &model);
+
+        let decision = plan
+            .decisions
+            .iter()
+            .find(|d| d.segment.mapping_signature == "EffectKind::Process")
+            .expect("Process effect decision must exist");
+
+        assert!(
+            decision.chosen.id.ends_with("-auto"),
+            "Expected direct atlas path when process capability is present"
+        );
+        assert!(
+            !decision.rationale.contains("Process precondition not met"),
+            "Precondition note should not appear when capability is present"
+        );
+    }
+
+    #[test]
+    fn process_effect_falls_back_when_process_capability_missing() {
+        let ir = ir_with_process_effect(false);
+        let model = test_model();
+        let plan = plan_translation_simple(&ir, &model);
+
+        let decision = plan
+            .decisions
+            .iter()
+            .find(|d| d.segment.mapping_signature == "EffectKind::Process")
+            .expect("Process effect decision must exist");
+
+        assert!(
+            decision.chosen.id.ends_with("-in-process-fallback"),
+            "Expected in-process fallback strategy without ProcessSpawn capability"
+        );
+        assert_eq!(
+            decision.chosen.handling_class,
+            TransformationHandlingClass::Approximate
+        );
+        assert!(
+            decision.rationale.contains("Process precondition not met"),
+            "Fallback rationale should document precondition mismatch"
+        );
     }
 }

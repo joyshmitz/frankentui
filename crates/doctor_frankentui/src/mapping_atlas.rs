@@ -23,10 +23,22 @@ use crate::semantic_contract::{TransformationHandlingClass, TransformationRiskLe
 // ── Atlas Version ───────────────────────────────────────────────────────
 
 /// Current atlas schema version.
-pub const ATLAS_VERSION: &str = "mapping-atlas-v2";
+pub const ATLAS_VERSION: &str = "mapping-atlas-v3";
 
 /// Previous atlas versions compatible with this one.
-pub const ATLAS_COMPAT: &[&str] = &["mapping-atlas-v1"];
+pub const ATLAS_COMPAT: &[&str] = &["mapping-atlas-v2", "mapping-atlas-v1"];
+
+/// Compatibility notes for previous atlas versions.
+pub const ATLAS_COMPAT_NOTES: &[(&str, &str)] = &[
+    (
+        "mapping-atlas-v2",
+        "EffectKind::Process now maps to ProcessSubscription/Cmd::task fallback and legacy process gaps can auto-resolve.",
+    ),
+    (
+        "mapping-atlas-v1",
+        "v1 style/layout signatures remain loadable through v2+v3 compatibility shims.",
+    ),
+];
 
 // ── Core Types ──────────────────────────────────────────────────────────
 
@@ -933,13 +945,14 @@ fn build_effect_mappings() -> BTreeMap<String, MappingEntry> {
         sig_effect(EffectKind::Process),
         MappingEntry {
             source_signature: sig_effect(EffectKind::Process),
-            policy: TransformationHandlingClass::ExtendFtui,
-            risk: TransformationRiskLevel::High,
+            policy: TransformationHandlingClass::Approximate,
+            risk: TransformationRiskLevel::Medium,
             target: FtuiTarget {
-                construct: "Custom Subscription with process spawn".into(),
+                construct: "ProcessSubscription<M> (or Cmd::task fallback)".into(),
                 crate_name: "ftui-runtime".into(),
-                description: "Worker/child process → Subscription that spawns and monitors process"
-                    .into(),
+                description:
+                    "Worker/child process → ProcessSubscription when spawn is available, otherwise Cmd::task fallback"
+                        .into(),
             },
             preconditions: vec![Precondition {
                 condition: "Process spawn is available in target environment".into(),
@@ -951,10 +964,10 @@ fn build_effect_mappings() -> BTreeMap<String, MappingEntry> {
                 impact: "Must replace with std::process::Command or thread".into(),
             }],
             remediation: RemediationStrategy {
-                approach: "Replace Worker with std::process::Command wrapped in Subscription"
-                    .into(),
-                automatable: false,
-                effort: EffortLevel::High,
+                approach:
+                    "Prefer ProcessSubscription::new(...); if unavailable, map to bounded Cmd::task in-process worker".into(),
+                automatable: true,
+                effort: EffortLevel::Medium,
             },
             category: MappingCategory::Effect,
         },
@@ -2049,15 +2062,23 @@ mod tests {
     }
 
     #[test]
-    fn version_is_v2() {
-        assert_eq!(ATLAS_VERSION, "mapping-atlas-v2");
+    fn version_is_v3() {
+        assert_eq!(ATLAS_VERSION, "mapping-atlas-v3");
     }
 
     #[test]
-    fn v1_is_compatible() {
+    fn v1_and_v2_are_compatible() {
         assert!(is_compatible("mapping-atlas-v1"));
         assert!(is_compatible("mapping-atlas-v2"));
+        assert!(is_compatible("mapping-atlas-v3"));
         assert!(!is_compatible("mapping-atlas-v99"));
+    }
+
+    #[test]
+    fn compatibility_notes_cover_prior_versions() {
+        let versions: Vec<&str> = ATLAS_COMPAT_NOTES.iter().map(|(version, _)| *version).collect();
+        assert!(versions.contains(&"mapping-atlas-v2"));
+        assert!(versions.contains(&"mapping-atlas-v1"));
     }
 
     #[test]
@@ -2133,11 +2154,15 @@ mod tests {
         let atlas = build_atlas();
         let gaps = vec![
             "StyleProp::TextTransform".to_string(), // now Exact → resolved
+            "EffectKind::Process".to_string(),      // now Approximate → resolved
             "StyleToken::Animation".to_string(),    // ExtendFtui → improved
             "NonExistent::Thing".to_string(),       // not in atlas → remaining
         ];
         let result = reevaluate_gaps(&atlas, &gaps);
-        assert_eq!(result.resolved, vec!["StyleProp::TextTransform"]);
+        assert_eq!(
+            result.resolved,
+            vec!["StyleProp::TextTransform", "EffectKind::Process"]
+        );
         assert_eq!(result.improved, vec!["StyleToken::Animation"]);
         assert_eq!(result.remaining, vec!["NonExistent::Thing"]);
     }
@@ -2152,13 +2177,13 @@ mod tests {
     }
 
     #[test]
-    fn atlas_total_entries_increased_in_v2() {
+    fn atlas_total_entries_is_stable_in_v3() {
         let atlas = build_atlas();
         let stats = atlas_stats(&atlas);
-        // v1 had 46 entries; v2 adds 10 (4 token cats + 6 style props)
+        // v1 had 46 entries; v2 added 10 (4 token cats + 6 style props), v3 keeps those.
         assert!(
             stats.total >= 56,
-            "Expected at least 56 entries in v2, got {}",
+            "Expected at least 56 entries in v3, got {}",
             stats.total
         );
     }

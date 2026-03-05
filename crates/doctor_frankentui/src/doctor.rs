@@ -568,7 +568,17 @@ exit 1
             fs::set_permissions(&script_path, perms).expect("set permissions");
         }
 
-        let result = super::run_help_check(&script_path, "ok");
+        let mut result = super::run_help_check(&script_path, "ok");
+        for _ in 0..5 {
+            if let Err(e) = &result
+                && (e.to_string().contains("Text file busy") || e.to_string().contains("26"))
+            {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                result = super::run_help_check(&script_path, "ok");
+                continue;
+            }
+            break;
+        }
         assert!(result.is_ok(), "Result was: {:?}", result);
     }
 
@@ -591,8 +601,18 @@ exit 1
             fs::set_permissions(&script_path, perms).expect("set permissions");
         }
 
-        let error =
-            super::run_help_check(&script_path, "capture").expect_err("help check should fail");
+        let mut result = super::run_help_check(&script_path, "capture");
+        for _ in 0..5 {
+            if let Err(e) = &result
+                && (e.to_string().contains("Text file busy") || e.to_string().contains("26"))
+            {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                result = super::run_help_check(&script_path, "capture");
+                continue;
+            }
+            break;
+        }
+        let error = result.expect_err("help check should fail");
         let message = error.to_string();
         assert!(
             message.contains("help check failed for command: capture"),
