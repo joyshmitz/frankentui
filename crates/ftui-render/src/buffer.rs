@@ -981,22 +981,26 @@ impl Buffer {
     ///
     /// Unlike [`set`](Self::set), this does not automatically write
     /// continuation cells for multi-width content; callers that build wide
-    /// glyphs manually must still populate the tail cells themselves. It does,
-    /// however, preserve overlap/orphan-tail cleanup so overwriting an
-    /// existing wide glyph cannot leave stale continuation cells behind.
+    /// glyphs manually must still populate the tail cells themselves. For
+    /// single-width and continuation writes, it still preserves
+    /// overlap/orphan-tail cleanup so stale continuation cells are not left
+    /// behind. Raw wide-head writes remain strictly local so callers can
+    /// manage continuation ownership explicitly.
     /// Does nothing if coordinates are out of bounds.
     #[inline]
     pub fn set_raw(&mut self, x: u16, y: u16, cell: Cell) {
         if let Some(idx) = self.index(x, y) {
-            let mut span_start = x;
-            let mut span_end = x.saturating_add(1);
-            if let Some(span) = self.cleanup_overlap(x, y, &cell) {
-                span_start = span_start.min(span.x0);
-                span_end = span_end.max(span.x1);
+            let mut span = DirtySpan::new(x, x.saturating_add(1));
+            let raw_wide_head = cell.content.width() > 1 && !cell.is_continuation();
+
+            if !raw_wide_head && let Some(cleanup_span) = self.cleanup_overlap(x, y, &cell) {
+                span = DirtySpan::new(span.x0.min(cleanup_span.x0), span.x1.max(cleanup_span.x1));
             }
             self.cells[idx] = cell;
-            self.mark_dirty_span(y, span_start, span_end);
-            self.cleanup_orphaned_tails(x.saturating_add(1), y);
+            self.mark_dirty_span(y, span.x0, span.x1);
+            if !raw_wide_head {
+                self.cleanup_orphaned_tails(x.saturating_add(1), y);
+            }
         }
     }
 
@@ -2214,6 +2218,26 @@ mod tests {
         );
         let spans = buf.dirty_span_row(0).expect("dirty span row").spans();
         assert_eq!(spans, &[DirtySpan::new(0, 2)]);
+    }
+
+    #[test]
+    fn set_raw_wide_head_preserves_manual_tail_cells() {
+        let mut buf = Buffer::new(10, 1);
+
+        buf.set_raw(0, 0, Cell::from_char('中'));
+        buf.set_raw(1, 0, Cell::CONTINUATION);
+        assert!(buf.get(1, 0).unwrap().is_continuation());
+        buf.clear_dirty();
+
+        buf.set_raw(0, 0, Cell::from_char('日'));
+
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('日'));
+        assert!(
+            buf.get(1, 0).unwrap().is_continuation(),
+            "set_raw wide-head replacement should not clear caller-managed tails"
+        );
+        let spans = buf.dirty_span_row(0).expect("dirty span row").spans();
+        assert_eq!(spans, &[DirtySpan::new(0, 1)]);
     }
 
     #[test]

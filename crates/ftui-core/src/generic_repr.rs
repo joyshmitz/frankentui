@@ -220,7 +220,7 @@ impl<A, B> GenericRepr for (A, B) {
         Product(self.0, Product(self.1, Unit))
     }
     fn from_repr(repr: Self::Repr) -> Self {
-        (repr.0, repr.1 .0)
+        (repr.0, repr.1.0)
     }
 }
 
@@ -230,7 +230,7 @@ impl<A, B, C> GenericRepr for (A, B, C) {
         Product(self.0, Product(self.1, Product(self.2, Unit)))
     }
     fn from_repr(repr: Self::Repr) -> Self {
-        (repr.0, repr.1 .0, repr.1 .1 .0)
+        (repr.0, repr.1.0, repr.1.1.0)
     }
 }
 
@@ -293,7 +293,7 @@ mod tests {
         fn from_repr(repr: Self::Repr) -> Self {
             Point {
                 x: repr.0.value,
-                y: repr.1 .0.value,
+                y: repr.1.0.value,
             }
         }
     }
@@ -309,7 +309,10 @@ mod tests {
     impl GenericRepr for Color {
         type Repr = Sum<
             Variant<Unit>,
-            Sum<Variant<Unit>, Sum<Variant<Unit>, Sum<Variant<Product<u8, Product<u8, Product<u8, Unit>>>>, Void>>>,
+            Sum<
+                Variant<Unit>,
+                Sum<Variant<Unit>, Sum<Variant<Product<u8, Product<u8, Product<u8, Unit>>>>, Void>>,
+            >,
         >;
 
         fn into_repr(self) -> Self::Repr {
@@ -329,7 +332,7 @@ mod tests {
                 Sum::Right(Sum::Left(_)) => Color::Green,
                 Sum::Right(Sum::Right(Sum::Left(_))) => Color::Blue,
                 Sum::Right(Sum::Right(Sum::Right(Sum::Left(v)))) => {
-                    Color::Custom(v.value.0, v.value.1 .0, v.value.1 .1 .0)
+                    Color::Custom(v.value.0, v.value.1.0, v.value.1.1.0)
                 }
                 Sum::Right(Sum::Right(Sum::Right(Sum::Right(v)))) => match v {},
             }
@@ -483,8 +486,8 @@ mod tests {
         let repr = p.into_repr();
         assert_eq!(repr.0.name, "x");
         assert_eq!(repr.0.value, 3.0);
-        assert_eq!(repr.1 .0.name, "y");
-        assert_eq!(repr.1 .0.value, 4.0);
+        assert_eq!(repr.1.0.name, "y");
+        assert_eq!(repr.1.0.value, 4.0);
     }
 
     #[test]

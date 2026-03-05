@@ -298,13 +298,13 @@ fn install_termination_signal_hook() {
                         std::process::exit(128 + signal);
                     }
 
-                    ftui_core::terminal_session::record_pending_termination_signal(signal);
+                    ftui_core::shutdown_signal::record_pending_termination_signal(signal);
                     best_effort_termination_cleanup();
                     let deadline = std::time::Instant::now()
                         .checked_add(SIGNAL_SHUTDOWN_GRACE)
                         .unwrap_or_else(std::time::Instant::now);
                     loop {
-                        if ftui_core::terminal_session::pending_termination_signal().is_none() {
+                        if ftui_core::shutdown_signal::pending_termination_signal().is_none() {
                             break;
                         }
                         if std::time::Instant::now() >= deadline {

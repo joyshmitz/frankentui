@@ -190,10 +190,7 @@ impl<H: Diff, T: Diff> Diff for Product<H, T> {
 
 impl<H: Patch, T: Patch> Patch for Product<H, T> {
     fn patch(old: &Self, diff: &Self::Diff) -> Self {
-        Product(
-            H::patch(&old.0, &diff.head),
-            T::patch(&old.1, &diff.tail),
-        )
+        Product(H::patch(&old.0, &diff.head), T::patch(&old.1, &diff.tail))
     }
 }
 
@@ -405,7 +402,7 @@ mod tests {
         fn from_repr(repr: Self::Repr) -> Self {
             Point {
                 x: repr.0.value,
-                y: repr.1 .0.value,
+                y: repr.1.0.value,
             }
         }
     }
@@ -439,7 +436,7 @@ mod tests {
                 Sum::Left(_) => Color::Red,
                 Sum::Right(Sum::Left(_)) => Color::Green,
                 Sum::Right(Sum::Right(Sum::Left(v))) => {
-                    Color::Custom(v.value.0, v.value.1 .0, v.value.1 .1 .0)
+                    Color::Custom(v.value.0, v.value.1.0, v.value.1.1.0)
                 }
                 Sum::Right(Sum::Right(Sum::Right(v))) => match v {},
             }
@@ -635,11 +632,7 @@ mod tests {
 
     #[test]
     fn color_patch_roundtrip_all() {
-        let variants = [
-            Color::Red,
-            Color::Green,
-            Color::Custom(10, 20, 30),
-        ];
+        let variants = [Color::Red, Color::Green, Color::Custom(10, 20, 30)];
         for old in &variants {
             for new in &variants {
                 let d = generic_diff(old, new);

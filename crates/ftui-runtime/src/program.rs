@@ -92,9 +92,21 @@ use ftui_render::frame::{Frame, HitData, HitId, HitRegion, WidgetBudget, WidgetS
 use ftui_render::frame_guardrails::{FrameGuardrails, GuardrailsConfig};
 use ftui_render::sanitize::sanitize;
 use std::collections::HashMap;
-use std::error::Error as _;
 use std::io::{self, Stdout, Write};
 use std::sync::Arc;
+
+/// Check for pending termination signal. Returns `None` when crossterm is not
+/// enabled (headless / wasm builds don't install signal handlers).
+#[inline]
+fn check_termination_signal() -> Option<i32> {
+    ftui_core::shutdown_signal::pending_termination_signal()
+}
+
+/// Clear the pending termination signal.
+#[inline]
+fn clear_termination_signal() {
+    ftui_core::shutdown_signal::clear_pending_termination_signal();
+}
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use tracing::{debug, debug_span, info, info_span, trace};
@@ -3692,13 +3704,12 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
         // Initial render
         self.render_frame()?;
 
-        let mut termination_signal = ftui_core::terminal_session::pending_termination_signal();
+        let mut termination_signal = check_termination_signal();
 
         // Main loop
         let mut loop_count: u64 = 0;
         while self.running {
-            termination_signal =
-                termination_signal.or_else(ftui_core::terminal_session::pending_termination_signal);
+            termination_signal = termination_signal.or_else(check_termination_signal);
             if termination_signal.is_some() {
                 self.running = false;
                 break;
@@ -3715,8 +3726,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
 
             // Poll for events with timeout
             let poll_result = self.events.poll_event(timeout)?;
-            termination_signal =
-                termination_signal.or_else(ftui_core::terminal_session::pending_termination_signal);
+            termination_signal = termination_signal.or_else(check_termination_signal);
             if termination_signal.is_some() {
                 self.running = false;
                 break;
@@ -3724,8 +3734,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             if poll_result {
                 self.drain_ready_events()?;
             }
-            termination_signal =
-                termination_signal.or_else(ftui_core::terminal_session::pending_termination_signal);
+            termination_signal = termination_signal.or_else(check_termination_signal);
             if termination_signal.is_some() {
                 self.running = false;
                 break;
@@ -3739,8 +3748,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             self.reap_finished_tasks();
 
             self.process_resize_coalescer()?;
-            termination_signal =
-                termination_signal.or_else(ftui_core::terminal_session::pending_termination_signal);
+            termination_signal = termination_signal.or_else(check_termination_signal);
             if termination_signal.is_some() {
                 self.running = false;
                 break;
@@ -3854,8 +3862,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
 
             // Detect locale changes outside the event loop.
             self.check_locale_change();
-            termination_signal =
-                termination_signal.or_else(ftui_core::terminal_session::pending_termination_signal);
+            termination_signal = termination_signal.or_else(check_termination_signal);
             if termination_signal.is_some() {
                 self.running = false;
                 break;
@@ -3893,8 +3900,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
         self.reap_finished_tasks();
 
         if let Some(signal) = termination_signal {
-            #[cfg(feature = "crossterm-compat")]
-            ftui_core::terminal_session::clear_pending_termination_signal();
+            clear_termination_signal();
             return Err(io::Error::new(
                 io::ErrorKind::Interrupted,
                 SignalTerminationError { signal },
@@ -7931,8 +7937,7 @@ mod tests {
     where
         M::Message: Send + 'static,
     {
-        #[cfg(feature = "crossterm-compat")]
-        ftui_core::terminal_session::clear_pending_termination_signal();
+        clear_termination_signal();
         let capabilities = TerminalCapabilities::basic();
         let mut writer = TerminalWriter::with_diff_config(
             Vec::new(),
@@ -8253,15 +8258,12 @@ mod tests {
             ProgramConfig::default(),
         );
 
-        ftui_core::terminal_session::record_pending_termination_signal(2);
+        ftui_core::shutdown_signal::record_pending_termination_signal(2);
         let err = program.run().expect_err("signal should stop runtime");
 
         assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
         assert_eq!(signal_termination_from_error(&err), Some(2));
-        assert_eq!(
-            ftui_core::terminal_session::pending_termination_signal(),
-            None
-        );
+        assert_eq!(check_termination_signal(), None);
     }
 
     #[test]

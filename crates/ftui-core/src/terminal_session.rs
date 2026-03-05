@@ -79,7 +79,7 @@ use std::cell::Cell;
 use std::env;
 use std::io::{self, Write};
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::event::Event;
@@ -99,7 +99,6 @@ static IO_WRITE_DURATION_SUM_US: AtomicU64 = AtomicU64::new(0);
 static IO_WRITE_COUNT: AtomicU64 = AtomicU64::new(0);
 static IO_FLUSH_DURATION_SUM_US: AtomicU64 = AtomicU64::new(0);
 static IO_FLUSH_COUNT: AtomicU64 = AtomicU64::new(0);
-static PENDING_TERMINATION_SIGNAL: AtomicI32 = AtomicI32::new(0);
 thread_local! {
     static PANIC_CLEANUP_SUPPRESS_DEPTH: Cell<u32> = const { Cell::new(0) };
 }
@@ -131,36 +130,13 @@ pub fn terminal_io_flush_stats() -> (u64, u64) {
     )
 }
 
-/// Record that a termination signal was intercepted and graceful shutdown is required.
-///
-/// The first pending signal wins until the runtime explicitly clears it after
-/// finishing teardown.
-pub fn record_pending_termination_signal(signal: i32) {
-    let _ =
-        PENDING_TERMINATION_SIGNAL.compare_exchange(0, signal, Ordering::SeqCst, Ordering::SeqCst);
-}
-
-/// Inspect the currently pending termination signal, if any.
-#[must_use]
-pub fn pending_termination_signal() -> Option<i32> {
-    match PENDING_TERMINATION_SIGNAL.load(Ordering::SeqCst) {
-        0 => None,
-        signal => Some(signal),
-    }
-}
-
-/// Clear any pending graceful-termination request.
-pub fn clear_pending_termination_signal() {
-    PENDING_TERMINATION_SIGNAL.store(0, Ordering::SeqCst);
-}
-
 fn wait_for_shutdown_ack() -> bool {
     let deadline = std::time::Instant::now()
         .checked_add(SIGNAL_SHUTDOWN_GRACE)
         .unwrap_or_else(std::time::Instant::now);
 
     loop {
-        if pending_termination_signal().is_none() {
+        if crate::shutdown_signal::pending_termination_signal().is_none() {
             return true;
         }
         if std::time::Instant::now() >= deadline {
@@ -1141,7 +1117,7 @@ impl SignalGuard {
                     SIGINT | SIGTERM | SIGHUP | SIGQUIT => {
                         #[cfg(feature = "tracing")]
                         tracing::warn!("termination signal received, cleaning up");
-                        record_pending_termination_signal(signal);
+                        crate::shutdown_signal::record_pending_termination_signal(signal);
                         best_effort_cleanup();
                         if !wait_for_shutdown_ack() {
                             std::process::exit(128 + signal);
@@ -2307,17 +2283,23 @@ mod tests {
 
     #[test]
     fn pending_termination_signal_round_trip() {
-        super::clear_pending_termination_signal();
-        assert_eq!(super::pending_termination_signal(), None);
+        crate::shutdown_signal::clear_pending_termination_signal();
+        assert_eq!(crate::shutdown_signal::pending_termination_signal(), None);
 
-        super::record_pending_termination_signal(2);
-        assert_eq!(super::pending_termination_signal(), Some(2));
+        crate::shutdown_signal::record_pending_termination_signal(2);
+        assert_eq!(
+            crate::shutdown_signal::pending_termination_signal(),
+            Some(2)
+        );
 
         // First signal wins until explicitly cleared.
-        super::record_pending_termination_signal(15);
-        assert_eq!(super::pending_termination_signal(), Some(2));
+        crate::shutdown_signal::record_pending_termination_signal(15);
+        assert_eq!(
+            crate::shutdown_signal::pending_termination_signal(),
+            Some(2)
+        );
 
-        super::clear_pending_termination_signal();
-        assert_eq!(super::pending_termination_signal(), None);
+        crate::shutdown_signal::clear_pending_termination_signal();
+        assert_eq!(crate::shutdown_signal::pending_termination_signal(), None);
     }
 }

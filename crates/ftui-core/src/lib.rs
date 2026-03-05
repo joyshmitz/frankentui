@@ -56,6 +56,45 @@ where
     f()
 }
 
+pub mod shutdown_signal {
+    //! Process-wide graceful-termination signal state shared by runtime and backends.
+    //!
+    //! Signal handlers record the first pending termination signal here. The
+    //! runtime polls it, performs graceful teardown, then clears it to
+    //! acknowledge completion back to the signal thread.
+
+    use std::sync::atomic::{AtomicI32, Ordering};
+
+    static PENDING_TERMINATION_SIGNAL: AtomicI32 = AtomicI32::new(0);
+
+    /// Record that a termination signal was intercepted and graceful shutdown is required.
+    ///
+    /// The first pending signal wins until the runtime explicitly clears it
+    /// after finishing teardown.
+    pub fn record_pending_termination_signal(signal: i32) {
+        let _ = PENDING_TERMINATION_SIGNAL.compare_exchange(
+            0,
+            signal,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    }
+
+    /// Inspect the currently pending termination signal, if any.
+    #[must_use]
+    pub fn pending_termination_signal() -> Option<i32> {
+        match PENDING_TERMINATION_SIGNAL.load(Ordering::SeqCst) {
+            0 => None,
+            signal => Some(signal),
+        }
+    }
+
+    /// Clear any pending graceful-termination request.
+    pub fn clear_pending_termination_signal() {
+        PENDING_TERMINATION_SIGNAL.store(0, Ordering::SeqCst);
+    }
+}
+
 #[cfg(feature = "caps-probe")]
 pub mod caps_probe;
 

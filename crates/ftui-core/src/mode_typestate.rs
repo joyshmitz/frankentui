@@ -205,9 +205,7 @@ impl TerminalMode<{ RAW | ALT_SCREEN }> {
     }
 
     /// Enable bracketed paste.
-    pub fn enable_bracketed_paste(
-        self,
-    ) -> TerminalMode<{ RAW | ALT_SCREEN | BRACKETED_PASTE }> {
+    pub fn enable_bracketed_paste(self) -> TerminalMode<{ RAW | ALT_SCREEN | BRACKETED_PASTE }> {
         TerminalMode {
             _phantom: PhantomData,
         }
@@ -255,9 +253,7 @@ impl TerminalMode<{ RAW | ALT_SCREEN | MOUSE }> {
     }
 
     /// Enable focus events (adding to existing modes).
-    pub fn enable_focus_events(
-        self,
-    ) -> TerminalMode<{ RAW | ALT_SCREEN | MOUSE | FOCUS_EVENTS }> {
+    pub fn enable_focus_events(self) -> TerminalMode<{ RAW | ALT_SCREEN | MOUSE | FOCUS_EVENTS }> {
         TerminalMode {
             _phantom: PhantomData,
         }
@@ -282,9 +278,7 @@ impl TerminalMode<{ RAW | ALT_SCREEN | BRACKETED_PASTE }> {
     }
 
     /// Enable mouse capture.
-    pub fn enable_mouse(
-        self,
-    ) -> TerminalMode<{ RAW | ALT_SCREEN | MOUSE | BRACKETED_PASTE }> {
+    pub fn enable_mouse(self) -> TerminalMode<{ RAW | ALT_SCREEN | MOUSE | BRACKETED_PASTE }> {
         TerminalMode {
             _phantom: PhantomData,
         }
@@ -368,10 +362,7 @@ impl ModeBuilder {
 
     /// Add alternate screen (requires raw).
     pub fn alt_screen(mut self) -> Self {
-        assert!(
-            self.flags & RAW != 0,
-            "alternate screen requires raw mode"
-        );
+        assert!(self.flags & RAW != 0, "alternate screen requires raw mode");
         self.flags |= ALT_SCREEN;
         self
     }
@@ -548,7 +539,10 @@ mod tests {
 
     #[test]
     fn tui_full_constant() {
-        assert_eq!(TUI_FULL, RAW | ALT_SCREEN | MOUSE | BRACKETED_PASTE | FOCUS_EVENTS);
+        assert_eq!(
+            TUI_FULL,
+            RAW | ALT_SCREEN | MOUSE | BRACKETED_PASTE | FOCUS_EVENTS
+        );
     }
 
     // ── Debug formatting ────────────────────────────────────────────
@@ -590,11 +584,7 @@ mod tests {
 
     #[test]
     fn builder_basic() {
-        let flags = ModeBuilder::new()
-            .raw()
-            .alt_screen()
-            .mouse()
-            .flags();
+        let flags = ModeBuilder::new().raw().alt_screen().mouse().flags();
         assert_eq!(flags, RAW | ALT_SCREEN | MOUSE);
     }
 
