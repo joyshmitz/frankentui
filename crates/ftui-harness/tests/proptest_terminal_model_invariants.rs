@@ -16,13 +16,8 @@
 //! 12. row_text() length never exceeds width
 
 use ftui_harness::terminal_model::TerminalModel;
+use ftui_harness::proptest_support::{arb_byte_stream, arb_terminal_dimensions};
 use proptest::prelude::*;
-
-// ── Helpers ──────────────────────────────────────────────────────────
-
-fn arb_dimensions() -> impl Strategy<Value = (u16, u16)> {
-    (1u16..=200, 1u16..=100)
-}
 
 // ═════════════════════════════════════════════════════════════════════════
 // 1. Never panics on arbitrary input
@@ -33,7 +28,7 @@ proptest! {
     fn never_panics(
         width in 1u16..=80,
         height in 1u16..=40,
-        bytes in proptest::collection::vec(any::<u8>(), 0..=500),
+        bytes in arb_byte_stream(500),
     ) {
         let mut model = TerminalModel::new(width, height);
         model.feed(&bytes);
@@ -52,7 +47,7 @@ proptest! {
     fn cursor_in_bounds(
         width in 1u16..=80,
         height in 1u16..=40,
-        bytes in proptest::collection::vec(any::<u8>(), 0..=300),
+        bytes in arb_byte_stream(300),
     ) {
         let mut model = TerminalModel::new(width, height);
         model.feed(&bytes);
@@ -76,7 +71,7 @@ proptest! {
 
 proptest! {
     #[test]
-    fn dimensions_match((width, height) in arb_dimensions()) {
+    fn dimensions_match((width, height) in arb_terminal_dimensions(200, 100)) {
         let model = TerminalModel::new(width, height);
         prop_assert_eq!(model.width(), width);
         prop_assert_eq!(model.height(), height);
@@ -90,7 +85,7 @@ proptest! {
 proptest! {
     #[test]
     fn deterministic(
-        bytes in proptest::collection::vec(any::<u8>(), 0..=200),
+        bytes in arb_byte_stream(200),
     ) {
         let mut a = TerminalModel::new(80, 24);
         let mut b = TerminalModel::new(80, 24);
@@ -107,7 +102,7 @@ proptest! {
 
 proptest! {
     #[test]
-    fn empty_feed_noop((width, height) in arb_dimensions()) {
+    fn empty_feed_noop((width, height) in arb_terminal_dimensions(200, 100)) {
         let mut model = TerminalModel::new(width, height);
         let text_before = model.screen_text();
         let cursor_before = model.cursor();
@@ -192,7 +187,7 @@ proptest! {
 proptest! {
     #[test]
     fn chunked_matches_single(
-        bytes in proptest::collection::vec(any::<u8>(), 1..=200),
+        bytes in arb_byte_stream(200).prop_filter("non-empty", |bytes| !bytes.is_empty()),
         split in 0usize..=200,
     ) {
         let split = split.min(bytes.len());
@@ -218,7 +213,7 @@ proptest! {
     fn row_text_bounded(
         width in 1u16..=80,
         height in 1u16..=24,
-        bytes in proptest::collection::vec(any::<u8>(), 0..=300),
+        bytes in arb_byte_stream(300),
     ) {
         let mut model = TerminalModel::new(width, height);
         model.feed(&bytes);
@@ -244,7 +239,7 @@ proptest! {
     fn char_at_in_bounds(
         width in 1u16..=80,
         height in 1u16..=24,
-        bytes in proptest::collection::vec(any::<u8>(), 0..=100),
+        bytes in arb_byte_stream(100),
         x in 0u16..80,
         y in 0u16..24,
     ) {

@@ -115,7 +115,7 @@ pub enum Constraint {
     /// Size to fit content using widget's preferred size from [`LayoutSizeHint`].
     ///
     /// When used with [`Flex::split_with_measurer`], the measurer callback provides
-    /// the size hints. Falls back to Fill behavior if no measurer is provided.
+    /// the size hints. Defaults to zero size if no measurer is provided.
     FitContent,
     /// Fit content but clamp to explicit bounds.
     ///
@@ -1232,7 +1232,7 @@ fn redistribute_overflow(floors: &[u16], total: u16) -> Vec<u16> {
     let mut overflow = current_sum - total_u64;
 
     while overflow > 0 {
-        let max_val = *result.iter().max().unwrap();
+        let max_val = *result.iter().max().unwrap_or(&0);
         if max_val == 0 {
             break;
         }

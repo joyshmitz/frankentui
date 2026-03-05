@@ -745,54 +745,54 @@ impl<'a> StatefulWidget for Table<'a> {
         }
 
         // Ensure visible range includes selected item
-        if let Some(selected) = state.selected {
-            if let Some(selected_display_idx) = display_indices.iter().position(|&idx| idx == selected) {
-                if selected_display_idx < state.offset {
-                    state.offset = selected_display_idx;
-                } else {
-                    // Check if selected is visible; if not, scroll down
-                    let mut current_y = rows_top;
-                    let max_y = rows_max_y;
-                    let mut last_visible = state.offset;
+        if let Some(selected) = state.selected
+            && let Some(selected_display_idx) = display_indices.iter().position(|&idx| idx == selected)
+        {
+            if selected_display_idx < state.offset {
+                state.offset = selected_display_idx;
+            } else {
+                // Check if selected is visible; if not, scroll down
+                let mut current_y = rows_top;
+                let max_y = rows_max_y;
+                let mut last_visible = state.offset;
 
-                    for (i, &row_idx) in display_indices.iter().enumerate().skip(state.offset) {
-                        let row = &self.rows[row_idx];
-                        if row.height > max_y.saturating_sub(current_y) {
+                for (i, &row_idx) in display_indices.iter().enumerate().skip(state.offset) {
+                    let row = &self.rows[row_idx];
+                    if row.height > max_y.saturating_sub(current_y) {
+                        break;
+                    }
+                    current_y = current_y
+                        .saturating_add(row.height)
+                        .saturating_add(row.bottom_margin);
+                    last_visible = i;
+                }
+
+                if selected_display_idx > last_visible {
+                    let mut new_offset = selected_display_idx;
+                    let mut accumulated_height: u16 = 0;
+                    let available_height = rows_height;
+
+                    for i in (0..=selected_display_idx).rev() {
+                        let row = &self.rows[display_indices[i]];
+                        let total_row_height = if i == selected_display_idx {
+                            row.height
+                        } else {
+                            row.height.saturating_add(row.bottom_margin)
+                        };
+
+                        if total_row_height > available_height.saturating_sub(accumulated_height) {
+                            if i == selected_display_idx {
+                                new_offset = selected_display_idx;
+                            } else {
+                                new_offset = i + 1;
+                            }
                             break;
                         }
-                        current_y = current_y
-                            .saturating_add(row.height)
-                            .saturating_add(row.bottom_margin);
-                        last_visible = i;
+
+                        accumulated_height = accumulated_height.saturating_add(total_row_height);
+                        new_offset = i;
                     }
-
-                    if selected_display_idx > last_visible {
-                        let mut new_offset = selected_display_idx;
-                        let mut accumulated_height: u16 = 0;
-                        let available_height = rows_height;
-
-                        for i in (0..=selected_display_idx).rev() {
-                            let row = &self.rows[display_indices[i]];
-                            let total_row_height = if i == selected_display_idx {
-                                row.height
-                            } else {
-                                row.height.saturating_add(row.bottom_margin)
-                            };
-
-                            if total_row_height > available_height.saturating_sub(accumulated_height) {
-                                if i == selected_display_idx {
-                                    new_offset = selected_display_idx;
-                                } else {
-                                    new_offset = i + 1;
-                                }
-                                break;
-                            }
-
-                            accumulated_height = accumulated_height.saturating_add(total_row_height);
-                            new_offset = i;
-                        }
-                        state.offset = new_offset;
-                    }
+                    state.offset = new_offset;
                 }
             }
         }

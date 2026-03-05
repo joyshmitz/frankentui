@@ -267,9 +267,11 @@ impl TextInput {
                 if had_selection {
                     let clean_text = Self::sanitize_input_text(&paste.text);
                     if let Some(max) = self.max_length {
-                        let selection_len = {
-                            let (start, end) = self.selection_range(self.selection_anchor.unwrap());
+                        let selection_len = if let Some(anchor) = self.selection_anchor {
+                            let (start, end) = self.selection_range(anchor);
                             end.saturating_sub(start)
+                        } else {
+                            0
                         };
                         let available =
                             max.saturating_sub(self.grapheme_count().saturating_sub(selection_len));

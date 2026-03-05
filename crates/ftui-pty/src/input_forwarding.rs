@@ -417,9 +417,18 @@ impl BracketedPaste {
     }
 
     /// Wrap text for paste, adding markers if enabled.
+    ///
+    /// Safety fallback:
+    /// If the payload already contains bracketed-paste delimiters, we
+    /// degrade to raw passthrough for this paste operation. This avoids
+    /// delimiter-injection ambiguity (`ESC [ 200~` / `ESC [ 201~`) while
+    /// preserving payload bytes exactly.
     #[must_use]
     pub fn wrap(&self, text: &[u8]) -> Vec<u8> {
         if self.enabled {
+            if Self::contains_delimiter(text) {
+                return text.to_vec();
+            }
             let mut result = Vec::with_capacity(Self::START.len() + text.len() + Self::END.len());
             result.extend_from_slice(Self::START);
             result.extend_from_slice(text);
@@ -428,6 +437,12 @@ impl BracketedPaste {
         } else {
             text.to_vec()
         }
+    }
+
+    #[must_use]
+    fn contains_delimiter(text: &[u8]) -> bool {
+        text.windows(Self::START.len()).any(|window| window == Self::START)
+            || text.windows(Self::END.len()).any(|window| window == Self::END)
     }
 }
 
@@ -691,6 +706,26 @@ mod tests {
     }
 
     #[test]
+    fn test_bracketed_paste_falls_back_to_raw_when_payload_contains_end_delimiter() {
+        let mut bp = BracketedPaste::new();
+        bp.enable();
+
+        let payload = b"prefix\x1b[201~suffix";
+        let wrapped = bp.wrap(payload);
+        assert_eq!(wrapped, payload);
+    }
+
+    #[test]
+    fn test_bracketed_paste_falls_back_to_raw_when_payload_contains_start_delimiter() {
+        let mut bp = BracketedPaste::new();
+        bp.enable();
+
+        let payload = b"prefix\x1b[200~suffix";
+        let wrapped = bp.wrap(payload);
+        assert_eq!(wrapped, payload);
+    }
+
+    #[test]
     fn test_input_forwarder() {
         let mut buffer = Vec::new();
 
@@ -729,6 +764,20 @@ mod tests {
 
         let expected = [BracketedPaste::START, b"text", BracketedPaste::END].concat();
         assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn test_input_forwarder_bracketed_paste_uses_raw_fallback_for_delimiter_payload() {
+        let mut buffer = Vec::new();
+        let payload = "alpha\u{1b}[201~omega";
+
+        {
+            let mut forwarder = InputForwarder::new(&mut buffer);
+            forwarder.set_bracketed_paste(true);
+            forwarder.forward_paste(payload).unwrap();
+        }
+
+        assert_eq!(buffer, payload.as_bytes());
     }
 
     #[test]

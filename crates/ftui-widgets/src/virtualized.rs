@@ -279,9 +279,9 @@ impl<T> Virtualized<T> {
         } else {
             self.len().saturating_sub(1)
         };
-        // Use saturating_add_signed to safely handle negative deltas and usize bounds
-        let new_offset = self
-            .scroll_offset
+        // Clamp current offset BEFORE adding delta, so lazy MAX doesn't swallow negative deltas
+        let clamped_current = self.scroll_offset.min(max_offset);
+        let new_offset = clamped_current
             .saturating_add_signed(delta as isize)
             .min(max_offset);
         self.scroll_offset = new_offset;
@@ -919,9 +919,9 @@ impl VirtualizedListState {
         } else {
             total_items.saturating_sub(1)
         };
-        // Use saturating_add_signed to safely handle negative deltas and usize bounds
-        let new_offset = self
-            .scroll_offset
+        // Clamp current offset BEFORE adding delta, so lazy MAX doesn't swallow negative deltas
+        let clamped_current = self.scroll_offset.min(max_offset);
+        let new_offset = clamped_current
             .saturating_add_signed(delta as isize)
             .min(max_offset);
         self.scroll_offset = new_offset;

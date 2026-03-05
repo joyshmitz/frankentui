@@ -245,12 +245,11 @@ impl Buffer {
     /// All cells are initialized to the default (empty cell with white
     /// foreground and transparent background).
     ///
-    /// # Panics
-    ///
-    /// Panics if width or height is 0.
+    /// Dimensions are clamped to a minimum of 1x1 to prevent panics during
+    /// extreme window resizes.
     pub fn new(width: u16, height: u16) -> Self {
-        assert!(width > 0, "buffer width must be > 0");
-        assert!(height > 0, "buffer height must be > 0");
+        let width = width.max(1);
+        let height = height.max(1);
 
         let size = width as usize * height as usize;
         let cells = vec![Cell::default(); size];
@@ -1454,10 +1453,7 @@ impl DoubleBuffer {
     /// Create a double buffer with the given dimensions.
     ///
     /// Both buffers are initialized to default (empty) cells.
-    ///
-    /// # Panics
-    ///
-    /// Panics if width or height is 0.
+    /// Dimensions are clamped to a minimum of 1x1.
     pub fn new(width: u16, height: u16) -> Self {
         Self {
             buffers: [Buffer::new(width, height), Buffer::new(width, height)],
@@ -1538,10 +1534,7 @@ impl AdaptiveDoubleBuffer {
     /// Create a new adaptive buffer with the given logical dimensions.
     ///
     /// Initial capacity is set with growth headroom applied.
-    ///
-    /// # Panics
-    ///
-    /// Panics if width or height is 0.
+    /// Dimensions are clamped to a minimum of 1x1.
     pub fn new(width: u16, height: u16) -> Self {
         let (cap_w, cap_h) = Self::compute_capacity(width, height);
         Self {

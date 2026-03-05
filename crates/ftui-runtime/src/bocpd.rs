@@ -767,12 +767,12 @@ impl BocpdDetector {
         let pred_steady = self.exponential_pdf(x, self.lambda_steady);
         let pred_burst = self.exponential_pdf(x, self.lambda_burst);
 
+        // Compute log-likelihood ratio exactly to avoid underflow
+        let log_lr = self.lambda_burst.ln() - self.lambda_burst * x
+                   - (self.lambda_steady.ln() - self.lambda_steady * x);
+
         // Compute Bayes factor for the observation (instantaneous)
-        let log_bf = if pred_steady > 0.0 && pred_burst > 0.0 {
-            (pred_burst / pred_steady).log10()
-        } else {
-            0.0
-        };
+        let log_bf = log_lr * std::f64::consts::LOG10_E;
 
         // ==== Update Run-Length Posteriors ====
         // We maintain a single run-length distribution that marginalizes over regimes.
@@ -788,7 +788,7 @@ impl BocpdDetector {
 
         // 2. Bayesian update with new observation
         let prior_odds = prior_burst / (1.0 - prior_burst).max(1e-10);
-        let likelihood_ratio = pred_burst / pred_steady.max(1e-10);
+        let likelihood_ratio = log_lr.exp();
         let posterior_odds = prior_odds * likelihood_ratio;
         
         // Clamp to prevent total float lock-in, but the transition prior does the heavy lifting now

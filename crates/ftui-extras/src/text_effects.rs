@@ -2010,7 +2010,7 @@ impl RevealMode {
         }
 
         match self {
-            RevealMode::LeftToRight | RevealMode::ByLine => {
+            RevealMode::LeftToRight => {
                 let visible_count = (progress * total as f64).ceil() as usize;
                 idx < visible_count
             }
@@ -2053,7 +2053,7 @@ impl RevealMode {
                 // Find which word this character belongs to
                 let mut word_idx = 0;
                 let mut in_word = false;
-                for (i, grapheme) in graphemes(text).enumerate() {
+                for (i, grapheme) in ftui_text::graphemes(text).enumerate() {
                     let is_ws = grapheme.chars().all(|c| c.is_whitespace());
                     if is_ws {
                         if in_word {
@@ -2073,6 +2073,20 @@ impl RevealMode {
                 let word_count = text.split_whitespace().count().max(1);
                 let visible_words = (progress * word_count as f64).ceil() as usize;
                 word_idx < visible_words
+            }
+            RevealMode::ByLine => {
+                let mut line_idx = 0;
+                for (i, grapheme) in ftui_text::graphemes(text).enumerate() {
+                    if i == idx {
+                        break;
+                    }
+                    if grapheme.contains('\n') {
+                        line_idx += 1;
+                    }
+                }
+                let line_count = text.split('\n').count().max(1);
+                let visible_lines = (progress * line_count as f64).ceil() as usize;
+                line_idx < visible_lines
             }
         }
     }

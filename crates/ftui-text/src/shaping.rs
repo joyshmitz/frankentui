@@ -285,7 +285,6 @@ impl ShapedRun {
 /// | `font_id`      | Font face identity                             |
 /// | `size_256ths`  | Font size in 1/256th point units               |
 /// | `features`     | Active OpenType features                       |
-/// | `generation`   | Cache generation (invalidation epoch)          |
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShapingKey {
     /// FxHash of the text content.
@@ -304,8 +303,6 @@ pub struct ShapingKey {
     pub size_256ths: u32,
     /// Active OpenType features (canonicalized for determinism).
     pub features: FontFeatures,
-    /// Cache generation epoch — entries from older generations are stale.
-    pub generation: u64,
 }
 
 impl ShapingKey {
@@ -319,7 +316,6 @@ impl ShapingKey {
         font_id: FontId,
         size_256ths: u32,
         features: &FontFeatures,
-        generation: u64,
     ) -> Self {
         let mut hasher = FxHasher::default();
         text.hash(&mut hasher);
@@ -334,7 +330,6 @@ impl ShapingKey {
             font_id,
             size_256ths,
             features: features.clone(),
-            generation,
         }
     }
 }
@@ -540,7 +535,6 @@ impl<S: TextShaper> ShapingCache<S> {
             font_id,
             size_256ths,
             features,
-            self.generation,
         );
 
         // Check cache.
@@ -891,7 +885,6 @@ mod tests {
             FontId(0),
             3072,
             &ff,
-            0,
         );
         let k2 = ShapingKey::new(
             "Hello",
@@ -901,7 +894,6 @@ mod tests {
             FontId(0),
             3072,
             &ff,
-            0,
         );
         assert_eq!(k1, k2);
     }
@@ -917,7 +909,6 @@ mod tests {
             FontId(0),
             3072,
             &ff,
-            0,
         );
         let k2 = ShapingKey::new(
             "World",
@@ -927,7 +918,6 @@ mod tests {
             FontId(0),
             3072,
             &ff,
-            0,
         );
         assert_ne!(k1, k2);
     }
@@ -943,7 +933,6 @@ mod tests {
             FontId(0),
             3072,
             &ff,
-            0,
         );
         let k2 = ShapingKey::new(
             "Hello",
@@ -953,7 +942,6 @@ mod tests {
             FontId(1),
             3072,
             &ff,
-            0,
         );
         assert_ne!(k1, k2);
     }
@@ -969,7 +957,6 @@ mod tests {
             FontId(0),
             3072,
             &ff,
-            0,
         );
         let k2 = ShapingKey::new(
             "Hello",
@@ -979,13 +966,12 @@ mod tests {
             FontId(0),
             4096,
             &ff,
-            0,
         );
         assert_ne!(k1, k2);
     }
 
     #[test]
-    fn shaping_key_differs_by_generation() {
+    fn shaping_key_generation_is_not_part_of_key() {
         let ff = FontFeatures::default();
         let k1 = ShapingKey::new(
             "Hello",
@@ -995,7 +981,6 @@ mod tests {
             FontId(0),
             3072,
             &ff,
-            0,
         );
         let k2 = ShapingKey::new(
             "Hello",
@@ -1005,9 +990,8 @@ mod tests {
             FontId(0),
             3072,
             &ff,
-            1,
         );
-        assert_ne!(k1, k2);
+        assert_eq!(k1, k2);
     }
 
     #[test]
@@ -1025,7 +1009,6 @@ mod tests {
             FontId(0),
             3072,
             &ff1,
-            0,
         );
         let k2 = ShapingKey::new(
             "Hello",
@@ -1035,7 +1018,6 @@ mod tests {
             FontId(0),
             3072,
             &ff2,
-            0,
         );
         assert_ne!(k1, k2);
     }
@@ -1052,7 +1034,6 @@ mod tests {
             FontId(0),
             3072,
             &ff,
-            0,
         );
         let mut set = HashSet::new();
         set.insert(key.clone());
@@ -1240,6 +1221,78 @@ mod tests {
     }
 
     #[test]
+    fn cache_miss_on_ligature_feature_toggle() {
+        let mut cache = ShapingCache::new(NoopShaper, 64);
+
+        let mut ligatures_on = FontFeatures::default();
+        ligatures_on.set_standard_ligatures(true);
+
+        let mut ligatures_off = FontFeatures::default();
+        ligatures_off.set_standard_ligatures(false);
+
+        cache.shape(
+            "office affine",
+            Script::Latin,
+            RunDirection::Ltr,
+            FontId(0),
+            3072,
+            &ligatures_on,
+        );
+        cache.shape(
+            "office affine",
+            Script::Latin,
+            RunDirection::Ltr,
+            FontId(0),
+            3072,
+            &ligatures_off,
+        );
+
+        assert_eq!(
+            cache.stats().misses,
+            2,
+            "ligature mode changes must produce distinct cache keys"
+        );
+    }
+
+    #[test]
+    fn cache_hit_with_canonicalized_ligature_feature_order() {
+        let mut cache = ShapingCache::new(NoopShaper, 64);
+
+        let mut ff_a = FontFeatures::new();
+        ff_a.push(FontFeature::new(*b"clig", 1));
+        ff_a.push(FontFeature::new(*b"liga", 1));
+        ff_a.canonicalize();
+
+        let mut ff_b = FontFeatures::new();
+        ff_b.push(FontFeature::new(*b"liga", 1));
+        ff_b.push(FontFeature::new(*b"clig", 1));
+        ff_b.canonicalize();
+
+        cache.shape(
+            "offline profile",
+            Script::Latin,
+            RunDirection::Ltr,
+            FontId(0),
+            3072,
+            &ff_a,
+        );
+        cache.shape(
+            "offline profile",
+            Script::Latin,
+            RunDirection::Ltr,
+            FontId(0),
+            3072,
+            &ff_b,
+        );
+
+        assert_eq!(
+            cache.stats().hits,
+            1,
+            "equivalent ligature features must hit the same key after canonicalization"
+        );
+    }
+
+    #[test]
     fn cache_invalidation_bumps_generation() {
         let mut cache = ShapingCache::new(NoopShaper, 64);
         assert_eq!(cache.generation(), 0);
@@ -1281,7 +1334,54 @@ mod tests {
             &ff,
         );
         assert_eq!(cache.stats().misses, 2);
-        assert_eq!(cache.stats().stale_evictions, 0); // old key had gen=0, new key has gen=1, they don't match by key
+        assert_eq!(cache.stats().stale_evictions, 1);
+    }
+
+    #[test]
+    fn cache_invalidation_recomputes_ligature_entries_after_font_change() {
+        let mut cache = ShapingCache::new(NoopShaper, 64);
+        let mut ligatures_on = FontFeatures::default();
+        ligatures_on.set_standard_ligatures(true);
+
+        // Cache baseline entry.
+        cache.shape(
+            "office affine",
+            Script::Latin,
+            RunDirection::Ltr,
+            FontId(0),
+            3072,
+            &ligatures_on,
+        );
+        assert_eq!(cache.stats().misses, 1);
+        assert_eq!(cache.stats().hits, 0);
+
+        // Same request hits.
+        cache.shape(
+            "office affine",
+            Script::Latin,
+            RunDirection::Ltr,
+            FontId(0),
+            3072,
+            &ligatures_on,
+        );
+        assert_eq!(cache.stats().hits, 1);
+
+        // Simulate font reload/zoom/DPR transition.
+        cache.invalidate();
+
+        // Same request must miss due to generation bump.
+        cache.shape(
+            "office affine",
+            Script::Latin,
+            RunDirection::Ltr,
+            FontId(0),
+            3072,
+            &ligatures_on,
+        );
+        let stats = cache.stats();
+        assert_eq!(stats.misses, 2);
+        assert_eq!(stats.stale_evictions, 1);
+        assert_eq!(stats.generation, 1);
     }
 
     #[test]

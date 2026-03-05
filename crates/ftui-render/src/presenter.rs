@@ -222,7 +222,12 @@ mod cost_model {
         prev_y: Option<u16>,
         scratch: &mut RowPlanScratch,
     ) -> RowPlan {
-        debug_assert!(!row_runs.is_empty());
+        if row_runs.is_empty() {
+            return RowPlan {
+                spans: SmallVec::new(),
+                total_cost: 0,
+            };
+        }
 
         let row_y = row_runs[0].y;
         let run_count = row_runs.len();

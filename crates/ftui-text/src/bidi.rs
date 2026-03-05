@@ -509,31 +509,13 @@ pub fn has_rtl(text: &str) -> bool {
     text.chars().any(is_rtl_char)
 }
 
+use unicode_bidi::BidiClass;
+
 /// Returns `true` if the character has an RTL bidi class.
 fn is_rtl_char(c: char) -> bool {
-    matches!(c,
-        '\u{0590}'..='\u{05FF}' |  // Hebrew
-        '\u{0600}'..='\u{06FF}' |  // Arabic
-        '\u{0700}'..='\u{074F}' |  // Syriac
-        '\u{0780}'..='\u{07BF}' |  // Thaana
-        '\u{07C0}'..='\u{07FF}' |  // NKo
-        '\u{0800}'..='\u{083F}' |  // Samaritan
-        '\u{0840}'..='\u{085F}' |  // Mandaic
-        '\u{08A0}'..='\u{08FF}' |  // Arabic Extended-A
-        '\u{FB1D}'..='\u{FB4F}' |  // Hebrew Presentation Forms
-        '\u{FB50}'..='\u{FDFF}' |  // Arabic Presentation Forms-A
-        '\u{FE70}'..='\u{FEFF}' |  // Arabic Presentation Forms-B
-        '\u{10800}'..='\u{1083F}' | // Cypriot
-        '\u{10840}'..='\u{1085F}' | // Imperial Aramaic
-        '\u{10900}'..='\u{1091F}' | // Phoenician
-        '\u{10920}'..='\u{1093F}' | // Lydian
-        '\u{10A00}'..='\u{10A5F}' | // Kharoshthi
-        '\u{10B00}'..='\u{10B3F}' | // Avestan
-        '\u{1EE00}'..='\u{1EEFF}' | // Arabic Mathematical Symbols
-        '\u{200F}' |               // RLM
-        '\u{202B}' |               // RLE
-        '\u{202E}' |               // RLO
-        '\u{2067}'                  // RLI
+    matches!(
+        unicode_bidi::bidi_class(c),
+        BidiClass::R | BidiClass::AL | BidiClass::RLE | BidiClass::RLO | BidiClass::RLI
     )
 }
 
