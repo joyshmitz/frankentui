@@ -637,8 +637,8 @@ mod tests {
         // Build degree sequence in BFS order
         let total = 2 * n - 1;
         let mut degrees = vec![0usize; total];
-        for i in 0..n - 1 {
-            degrees[i] = 2;
+        for d in degrees.iter_mut().take(n - 1) {
+            *d = 2;
         }
         let tree = LoudsTree::from_degrees(&degrees);
 
@@ -655,8 +655,8 @@ mod tests {
         for &n in &[100, 1000, 10_000] {
             let total = 2 * n - 1;
             let mut degrees = vec![0usize; total];
-            for i in 0..n - 1 {
-                degrees[i] = 2;
+            for d in degrees.iter_mut().take(n - 1) {
+                *d = 2;
             }
             let tree = LoudsTree::from_degrees(&degrees);
             let bits_per_node = (tree.size_in_bytes() * 8) as f64 / total as f64;
@@ -786,10 +786,10 @@ mod tests {
                 }
 
                 // Degree matches children count
-                for v in 0..n {
+                for (v, &expected_deg) in degrees.iter().enumerate().take(n) {
                     let child_count = tree.children(v).count();
                     prop_assert_eq!(tree.degree(v), child_count);
-                    prop_assert_eq!(tree.degree(v), degrees[v]);
+                    prop_assert_eq!(tree.degree(v), expected_deg);
                 }
             }
 
@@ -818,8 +818,8 @@ mod tests {
             fn memory_sublinear(n in 50..500usize) {
                 let total = 2 * n - 1;
                 let mut degrees = vec![0usize; total];
-                for i in 0..n - 1 {
-                    degrees[i] = 2;
+                for d in degrees.iter_mut().take(n - 1) {
+                    *d = 2;
                 }
                 let tree = LoudsTree::from_degrees(&degrees);
                 let bits_per_node = (tree.size_in_bytes() * 8) as f64 / total as f64;

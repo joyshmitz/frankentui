@@ -10,7 +10,7 @@ use ftui_core::geometry::Rect;
 use ftui_harness::golden::compute_buffer_checksum;
 use ftui_layout::dep_graph::{InputKind, NodeId};
 use ftui_layout::incremental::IncrementalLayout;
-use ftui_layout::{Constraint, Flex};
+use ftui_layout::{Constraint, Flex, Rects};
 use ftui_render::buffer::Buffer;
 use ftui_render::cell::Cell;
 use serde_json::json;
@@ -68,7 +68,7 @@ fn xorshift32(state: &mut u32) -> u32 {
 
 /// Render layout results into a Buffer: each rect filled with a char
 /// derived from its node ID for visual uniqueness.
-fn render_rects_to_buffer(buf: &mut Buffer, nodes_and_rects: &[(NodeId, Vec<Rect>)]) {
+fn render_rects_to_buffer(buf: &mut Buffer, nodes_and_rects: &[(NodeId, Rects)]) {
     for (node_id, rects) in nodes_and_rects {
         let ch = (b'A' + (node_id.raw() % 26) as u8) as char;
         let cell = Cell::from_char(ch);
@@ -111,7 +111,7 @@ fn compute_layout(
     inc: &mut IncrementalLayout,
     root: NodeId,
     root_area: Rect,
-) -> Vec<(NodeId, Vec<Rect>)> {
+) -> Vec<(NodeId, Rects)> {
     let mut result = Vec::new();
 
     let child_count = inc.graph().dependents(root).len();
@@ -148,7 +148,7 @@ fn compute_layout(
             } else {
                 Rect::default()
             };
-            let gc_rects = inc.get_or_compute(*gc, gc_area, |a| vec![a]);
+            let gc_rects = inc.get_or_compute(*gc, gc_area, |a| Rects::from_elem(a, 1));
             result.push((*gc, gc_rects));
         }
     }
@@ -635,7 +635,7 @@ fn golden_mixed_constraints() {
                 } else {
                     Rect::default()
                 };
-                inc.get_or_compute(*gc, gc_area, |a| vec![a]);
+                inc.get_or_compute(*gc, gc_area, |a| Rects::from_elem(a, 1));
             }
         }
 
@@ -696,7 +696,7 @@ fn golden_deep_tree() {
             let deps: Vec<_> = inc.graph().dependents(id).to_vec();
             inc.get_or_compute(id, a, |a| {
                 if deps.is_empty() {
-                    vec![a]
+                    Rects::from_elem(a, 1)
                 } else {
                     Flex::vertical()
                         .constraints(vec![Constraint::Ratio(1, 1)])
@@ -715,7 +715,7 @@ fn golden_deep_tree() {
             let deps: Vec<_> = inc.graph().dependents(id).to_vec();
             let rects = inc.get_or_compute(id, a, |a| {
                 if deps.is_empty() {
-                    vec![a]
+                    Rects::from_elem(a, 1)
                 } else {
                     Flex::vertical()
                         .constraints(vec![Constraint::Ratio(1, 1)])
@@ -737,7 +737,7 @@ fn golden_deep_tree() {
             let deps: Vec<_> = inc.graph().dependents(id).to_vec();
             let rects = inc.get_or_compute(id, a, |a| {
                 if deps.is_empty() {
-                    vec![a]
+                    Rects::from_elem(a, 1)
                 } else {
                     Flex::vertical()
                         .constraints(vec![Constraint::Ratio(1, 1)])

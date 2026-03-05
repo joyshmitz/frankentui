@@ -14,6 +14,7 @@
 use ftui_core::geometry::Rect;
 use ftui_layout::dep_graph::{CycleError, DepGraph, InputKind, NodeId};
 use ftui_layout::incremental::IncrementalLayout;
+use ftui_layout::Rects;
 use serde_json::json;
 use std::collections::HashSet;
 use std::io::Write as _;
@@ -66,9 +67,9 @@ fn area(w: u16, h: u16) -> Rect {
     Rect::new(0, 0, w, h)
 }
 
-fn split_equal(a: Rect, n: usize) -> Vec<Rect> {
+fn split_equal(a: Rect, n: usize) -> Rects {
     if n == 0 {
-        return vec![];
+        return Rects::new();
     }
     let w = a.width / n as u16;
     (0..n)
@@ -107,7 +108,7 @@ fn walk_tree(inc: &mut IncrementalLayout, root: NodeId, root_area: Rect) {
             } else {
                 Rect::default()
             };
-            inc.get_or_compute(*gc, gc_area, |a| vec![a]);
+            inc.get_or_compute(*gc, gc_area, |a| Rects::from_elem(a, 1));
         }
     }
 }
@@ -829,7 +830,7 @@ fn e2e_edge_case_single_node() {
     let n = inc.add_node(None);
     inc.propagate();
 
-    let rects = inc.get_or_compute(n, area(80, 24), |_| vec![]);
+    let rects = inc.get_or_compute(n, area(80, 24), |_| Rects::new());
     assert!(rects.is_empty());
 
     let s = inc.stats();
@@ -871,7 +872,7 @@ fn e2e_edge_case_10k_flat_nodes() {
     // Full pass.
     let root_rects = inc.get_or_compute(root, a, |a| split_equal(a, 1));
     for &c in &children {
-        inc.get_or_compute(c, root_rects[0], |a| vec![a]);
+        inc.get_or_compute(c, root_rects[0], |a| Rects::from_elem(a, 1));
     }
 
     let s = inc.stats();
@@ -885,7 +886,7 @@ fn e2e_edge_case_10k_flat_nodes() {
 
     let root_rects = inc.get_or_compute(root, a, |a| split_equal(a, 1));
     for &c in &children {
-        inc.get_or_compute(c, root_rects[0], |a| vec![a]);
+        inc.get_or_compute(c, root_rects[0], |a| Rects::from_elem(a, 1));
     }
 
     let s = inc.stats();
@@ -967,11 +968,11 @@ fn e2e_edge_case_zero_size_area() {
     inc.propagate();
 
     let zero = Rect::default();
-    inc.get_or_compute(n, zero, |_| vec![]);
+    inc.get_or_compute(n, zero, |_| Rects::new());
 
     // Same zero area → cache hit.
     inc.reset_stats();
-    inc.get_or_compute(n, zero, |_| vec![]);
+    inc.get_or_compute(n, zero, |_| Rects::new());
     assert_eq!(inc.stats().cached, 1);
 
     log.emit(json!({

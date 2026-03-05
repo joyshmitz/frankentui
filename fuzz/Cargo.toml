@@ -15,14 +15,20 @@ arbitrary = { version = "1", features = ["derive"] }
 [dependencies.ftui-core]
 path = "../crates/ftui-core"
 
-[dependencies.frankenterm-core]
-path = "../crates/frankenterm-core"
-
 [dependencies.ftui-text]
 path = "../crates/ftui-text"
 
 [dependencies.ftui-style]
 path = "../crates/ftui-style"
+
+[dependencies.ftui-layout]
+path = "../crates/ftui-layout"
+
+[dependencies.ftui-render]
+path = "../crates/ftui-render"
+
+[dependencies.ftui-widgets]
+path = "../crates/ftui-widgets"
 
 [[bin]]
 name = "fuzz_input_parser"
@@ -45,19 +51,9 @@ test = false
 doc = false
 bench = false
 
-[[bin]]
-name = "fuzz_vt_parser"
-path = "fuzz_targets/fuzz_vt_parser.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "fuzz_grid_mutations"
-path = "fuzz_targets/fuzz_grid_mutations.rs"
-test = false
-doc = false
-bench = false
+## NOTE: fuzz_vt_parser and fuzz_grid_mutations removed — frankenterm-core crate
+## was removed from the workspace. These targets need to be rewritten against
+## the current parser/grid API if/when it's available again.
 
 [[bin]]
 name = "fuzz_text_cluster_map"
@@ -90,6 +86,20 @@ bench = false
 [[bin]]
 name = "fuzz_text_hyphenation"
 path = "fuzz_targets/fuzz_text_hyphenation.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_layout_constraints"
+path = "fuzz_targets/fuzz_layout_constraints.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_widget_render"
+path = "fuzz_targets/fuzz_widget_render.rs"
 test = false
 doc = false
 bench = false

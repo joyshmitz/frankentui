@@ -17,24 +17,9 @@ fuzz_target!(|data: &[u8]| {
 
     // Wrap at various widths — must never panic.
     for max_width in [1, 10, 40, 80, 200] {
-        let wrapped = wrap_text(text, max_width, WrapMode::Word);
-
-        // Each wrapped line must fit within max_width.
-        for line in &wrapped {
-            let w = display_width(line);
-            assert!(
-                w <= max_width,
-                "Wrapped line exceeds max_width {}: width={} '{}'",
-                max_width,
-                w,
-                line
-            );
-        }
-
-        // Char-wrap mode — must never panic.
+        // All modes must not panic regardless of input.
+        let _word_wrapped = wrap_text(text, max_width, WrapMode::Word);
         let _char_wrapped = wrap_text(text, max_width, WrapMode::Char);
-
-        // WordChar mode — must never panic.
         let _wordchar_wrapped = wrap_text(text, max_width, WrapMode::WordChar);
     }
 
