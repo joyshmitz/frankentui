@@ -358,13 +358,30 @@ impl Draw for Buffer {
         fg: Option<crate::cell::PackedRgba>,
         bg: Option<crate::cell::PackedRgba>,
     ) {
-        for y in rect.y..rect.bottom() {
-            for x in rect.x..rect.right() {
-                if let Some(cell) = self.get_mut(x, y) {
-                    if let Some(fg_color) = fg {
+        let clipped = self.current_scissor().intersection(&rect);
+        if clipped.is_empty() {
+            return;
+        }
+
+        let opacity = self.current_opacity();
+
+        for y in clipped.y..clipped.bottom() {
+            self.mark_dirty_span(y, clipped.x, clipped.right());
+            for x in clipped.x..clipped.right() {
+                let idx = self.index_unchecked(x, y);
+                let cell = self.cell_mut_unchecked(idx);
+                
+                if let Some(fg_color) = fg {
+                    if opacity < 1.0 {
+                        cell.fg = fg_color.with_opacity(opacity);
+                    } else {
                         cell.fg = fg_color;
                     }
-                    if let Some(bg_color) = bg {
+                }
+                if let Some(bg_color) = bg {
+                    if opacity < 1.0 {
+                        cell.bg = bg_color.with_opacity(opacity).over(cell.bg);
+                    } else {
                         cell.bg = bg_color;
                     }
                 }

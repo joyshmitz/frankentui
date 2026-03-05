@@ -1434,7 +1434,8 @@ impl ResizeCoalescer {
         // and to correctly reflect high rates for near-instantaneous bursts.
         let duration_secs = window_duration.as_secs_f64().max(0.001);
 
-        (self.event_times.len() as f64) / duration_secs
+        // Number of intervals is len - 1
+        ((self.event_times.len() - 1) as f64) / duration_secs
     }
 
     fn log_decision(

@@ -203,12 +203,45 @@ impl BidiSegment {
     /// - For `len` (end of text), position depends on paragraph direction.
     pub fn visual_cursor_pos(&self, logical: usize) -> usize {
         let n = self.chars.len();
-        for v in 0..=n {
-            if self.logical_cursor_pos(v) == logical {
-                return v;
+        if n == 0 {
+            return 0;
+        }
+
+        let base_level = if self.base_direction() == Direction::Ltr { 0 } else { 1 };
+
+        let level_left = if logical > 0 { self.levels[logical - 1].number() } else { base_level };
+        let level_right = if logical < n { self.levels[logical].number() } else { base_level };
+
+        if level_left <= level_right {
+            // Attach to the left logical character (logical - 1), or paragraph start if logical == 0.
+            if logical == 0 {
+                // Paragraph start.
+                return if base_level % 2 == 0 { 0 } else { n };
+            }
+            let prev = logical - 1;
+            let v = self.logical_to_visual[prev];
+            if self.levels[prev].is_rtl() {
+                // For RTL char, its logical right is its visual left.
+                v
+            } else {
+                // For LTR char, its logical right is its visual right.
+                v + 1
+            }
+        } else {
+            // Attach to the right logical character (logical), or paragraph end if logical == n.
+            if logical == n {
+                // Paragraph end.
+                return if base_level % 2 == 0 { n } else { 0 };
+            }
+            let v = self.logical_to_visual[logical];
+            if self.levels[logical].is_rtl() {
+                // For RTL char, its logical left is its visual right.
+                v + 1
+            } else {
+                // For LTR char, its logical left is its visual left.
+                v
             }
         }
-        0
     }
 
     /// Get the logical cursor position for a visual insertion point `0..=len`.

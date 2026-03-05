@@ -1025,6 +1025,7 @@ impl<W: Write> Presenter<W> {
 
         // Decide cheapest move
         let same_row = self.cursor_y == Some(y);
+        let actual_y = y.saturating_add(self.viewport_offset_y);
 
         if same_row {
             if let Some(cx) = self.cursor_x {
@@ -1033,7 +1034,7 @@ impl<W: Write> Presenter<W> {
                     let dx = x - cx;
                     let cuf = cost_model::cuf_cost(dx);
                     let cha = cost_model::cha_cost(x);
-                    let cup = cost_model::cup_cost(y, x);
+                    let cup = cost_model::cup_cost(actual_y, x);
 
                     if cuf <= cha && cuf <= cup {
                         ansi::cuf(&mut self.writer, dx)?;
@@ -1042,7 +1043,7 @@ impl<W: Write> Presenter<W> {
                     } else {
                         ansi::cup(
                             &mut self.writer,
-                            y.saturating_add(self.viewport_offset_y),
+                            actual_y,
                             x,
                         )?;
                     }
@@ -1051,7 +1052,7 @@ impl<W: Write> Presenter<W> {
                     let dx = cx - x;
                     let cub = cost_model::cub_cost(dx);
                     let cha = cost_model::cha_cost(x);
-                    let cup = cost_model::cup_cost(y, x);
+                    let cup = cost_model::cup_cost(actual_y, x);
 
                     if cha <= cub && cha <= cup {
                         ansi::cha(&mut self.writer, x)?;
@@ -1060,7 +1061,7 @@ impl<W: Write> Presenter<W> {
                     } else {
                         ansi::cup(
                             &mut self.writer,
-                            y.saturating_add(self.viewport_offset_y),
+                            actual_y,
                             x,
                         )?;
                     }
@@ -1072,7 +1073,7 @@ impl<W: Write> Presenter<W> {
                 // Fallback to absolute
                 ansi::cup(
                     &mut self.writer,
-                    y.saturating_add(self.viewport_offset_y),
+                    actual_y,
                     x,
                 )?;
             }
@@ -1080,7 +1081,7 @@ impl<W: Write> Presenter<W> {
             // Different row: CUP is the only option
             ansi::cup(
                 &mut self.writer,
-                y.saturating_add(self.viewport_offset_y),
+                actual_y,
                 x,
             )?;
         }

@@ -405,7 +405,9 @@ impl Editor {
 
         self.rope.remove(start_char..end_char);
 
-        // Cursor doesn't move
+        // Re-clamp cursor just in case, matching other forward deletions
+        let nav = CursorNavigator::new(&self.rope);
+        self.cursor = nav.clamp(self.cursor);
         true
     }
 

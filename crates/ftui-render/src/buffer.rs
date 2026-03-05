@@ -392,7 +392,7 @@ impl Buffer {
 
     /// Mark a span within a row as dirty (half-open).
     #[inline]
-    fn mark_dirty_span(&mut self, y: u16, x0: u16, x1: u16) {
+    pub(crate) fn mark_dirty_span(&mut self, y: u16, x0: u16, x1: u16) {
         self.mark_dirty_row(y);
         let width = self.width;
         let (start, mut end) = if x0 <= x1 { (x0, x1) } else { (x1, x0) };
@@ -626,9 +626,19 @@ impl Buffer {
     ///
     /// Caller must ensure x < width and y < height.
     #[inline]
-    fn index_unchecked(&self, x: u16, y: u16) -> usize {
+    pub(crate) fn index_unchecked(&self, x: u16, y: u16) -> usize {
         debug_assert!(x < self.width && y < self.height);
         y as usize * self.width as usize + x as usize
+    }
+
+    /// Get mutable reference to a cell at a linear index without bounds checking.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure idx < width * height and handle dirty tracking manually.
+    #[inline]
+    pub(crate) fn cell_mut_unchecked(&mut self, idx: usize) -> &mut Cell {
+        &mut self.cells[idx]
     }
 
     /// Get a reference to the cell at (x, y).
