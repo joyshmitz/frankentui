@@ -38,6 +38,7 @@ pub mod conformal_stages;
 pub mod cost_model;
 pub mod debug_trace;
 pub mod decision_core;
+pub mod demo;
 pub mod degradation_cascade;
 pub mod diff_evidence;
 pub mod effect_system;
@@ -172,6 +173,9 @@ pub use cost_model::{
 pub use decision_core::{
     Action as DecisionAction, Decision, DecisionCore, Outcome as DecisionOutcome, Posterior,
     State as DecisionState, argmin_expected_loss, second_best_loss,
+};
+pub use demo::{
+    DemoDefinition, DemoParseError, DemoStep, parse_demo_yaml, validate_demos,
 };
 pub use degradation_cascade::{
     CascadeConfig, CascadeDecision, CascadeEvidence, CascadeTelemetry, DegradationCascade,
