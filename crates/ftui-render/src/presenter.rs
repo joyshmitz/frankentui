@@ -488,18 +488,7 @@ impl<W: Write> Presenter<W> {
         let emit_result = self.emit_diff_runs(buffer, pool, links);
 
         // Always attempt to restore terminal state, even if diff emission failed.
-        let reset_result = ansi::sgr_reset(&mut self.writer);
-        self.current_style = None;
-
-        let hyperlink_close_result = if self.current_link.is_some() {
-            let res = ansi::hyperlink_end(&mut self.writer);
-            if res.is_ok() {
-                self.current_link = None;
-            }
-            Some(res)
-        } else {
-            None
-        };
+        let frame_end_result = self.finish_frame();
 
         let bracket_end_result = if bracket_supported {
             ansi::sync_end(&mut self.writer)
@@ -512,9 +501,8 @@ impl<W: Write> Presenter<W> {
         // Prioritize terminal-state restoration errors over emission errors:
         // if cleanup fails (reset/link-close/sync-end/flush), callers need that
         // failure surfaced immediately to avoid leaving the terminal wedged.
-        let cleanup_error = reset_result
+        let cleanup_error = frame_end_result
             .err()
-            .or_else(|| hyperlink_close_result.and_then(Result::err))
             .or_else(|| bracket_end_result.err())
             .or_else(|| flush_result.err());
         if let Some(err) = cleanup_error {
@@ -635,6 +623,45 @@ impl<W: Write> Presenter<W> {
         diff.runs_into(&mut self.runs_buf);
     }
 
+    /// Finish a frame by restoring neutral SGR state and closing any open link.
+    ///
+    /// Callers that drive emission manually through [`emit_diff_runs`] must
+    /// invoke this before returning control to non-UI terminal output.
+    pub fn finish_frame(&mut self) -> io::Result<()> {
+        let reset_result = ansi::sgr_reset(&mut self.writer);
+        self.current_style = None;
+
+        let hyperlink_close_result = if self.current_link.is_some() {
+            let res = ansi::hyperlink_end(&mut self.writer);
+            if res.is_ok() {
+                self.current_link = None;
+            }
+            Some(res)
+        } else {
+            None
+        };
+
+        if let Some(err) = reset_result
+            .err()
+            .or_else(|| hyperlink_close_result.and_then(Result::err))
+        {
+            return Err(err);
+        }
+
+        Ok(())
+    }
+
+    /// Best-effort frame cleanup used on error and drop paths.
+    pub fn finish_frame_best_effort(&mut self) {
+        let _ = ansi::sgr_reset(&mut self.writer);
+        self.current_style = None;
+
+        if self.current_link.is_some() {
+            let _ = ansi::hyperlink_end(&mut self.writer);
+            self.current_link = None;
+        }
+    }
+
     /// Emit a single cell.
     fn emit_cell(
         &mut self,
@@ -685,15 +712,14 @@ impl<W: Write> Presenter<W> {
                     {
                         self.move_cursor_optimal(x, y)?;
                     }
-                    self.writer.write_all(b" ")?;
-                    self.cursor_x = Some(x.saturating_add(1));
-                    return Ok(());
+                    return self.emit_orphan_continuation_space(x, links);
                 }
                 // Defensive: move_cursor_optimal should always set cursor_x before emit_cell is called.
                 None => {
-                    self.writer.write_all(b" ")?;
-                    self.cursor_x = Some(x.saturating_add(1));
-                    return Ok(());
+                    if let Some(y) = self.cursor_y {
+                        self.move_cursor_optimal(x, y)?;
+                    }
+                    return self.emit_orphan_continuation_space(x, links);
                 }
             }
         }
@@ -729,6 +755,23 @@ impl<W: Write> Presenter<W> {
             self.cursor_x = Some(cx.saturating_add(width as u16));
         }
 
+        Ok(())
+    }
+
+    /// Clear a continuation cell with a visually neutral blank.
+    ///
+    /// This path intentionally resets style and closes hyperlinks first so the
+    /// cleanup space cannot inherit stale state from the previous emitted cell.
+    fn emit_orphan_continuation_space(
+        &mut self,
+        x: u16,
+        links: Option<&LinkRegistry>,
+    ) -> io::Result<()> {
+        let blank = Cell::default();
+        self.emit_style_changes(&blank)?;
+        self.emit_link_changes(&blank, links)?;
+        self.writer.write_all(b" ")?;
+        self.cursor_x = Some(x.saturating_add(1));
         Ok(())
     }
 
@@ -1593,6 +1636,51 @@ mod tests {
         assert!(
             output.contains(&b' '),
             "orphan continuation should be cleared with a space"
+        );
+    }
+
+    #[test]
+    fn continuation_cleanup_resets_style_and_closes_link_before_space() {
+        let mut presenter = test_presenter_with_hyperlinks();
+        let mut links = LinkRegistry::new();
+        let link_id = links.register("https://example.com");
+
+        let styled = Cell::from_char('X')
+            .with_fg(PackedRgba::rgb(255, 0, 0))
+            .with_bg(PackedRgba::rgb(0, 0, 255))
+            .with_attrs(CellAttrs::new(StyleFlags::UNDERLINE, link_id));
+        presenter.current_style = Some(CellStyle::from_cell(&styled));
+        presenter.current_link = Some(link_id);
+        presenter.cursor_x = Some(0);
+        presenter.cursor_y = Some(0);
+
+        presenter
+            .emit_cell(0, &Cell::CONTINUATION, None, Some(&links))
+            .unwrap();
+        let output = presenter.into_inner().unwrap();
+
+        let reset = b"\x1b[0m";
+        let close = b"\x1b]8;;\x07";
+        let reset_pos = output
+            .windows(reset.len())
+            .position(|window| window == reset)
+            .expect("continuation cleanup should reset SGR state");
+        let close_pos = output
+            .windows(close.len())
+            .position(|window| window == close)
+            .expect("continuation cleanup should close OSC 8");
+        let space_pos = output
+            .iter()
+            .position(|&byte| byte == b' ')
+            .expect("continuation cleanup should emit a space");
+
+        assert!(
+            reset_pos < space_pos,
+            "cleanup reset must precede the blank"
+        );
+        assert!(
+            close_pos < space_pos,
+            "cleanup link close must precede the blank"
         );
     }
 

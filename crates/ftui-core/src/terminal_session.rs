@@ -79,7 +79,7 @@ use std::cell::Cell;
 use std::env;
 use std::io::{self, Write};
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::event::Event;
@@ -99,9 +99,13 @@ static IO_WRITE_DURATION_SUM_US: AtomicU64 = AtomicU64::new(0);
 static IO_WRITE_COUNT: AtomicU64 = AtomicU64::new(0);
 static IO_FLUSH_DURATION_SUM_US: AtomicU64 = AtomicU64::new(0);
 static IO_FLUSH_COUNT: AtomicU64 = AtomicU64::new(0);
+static PENDING_TERMINATION_SIGNAL: AtomicI32 = AtomicI32::new(0);
 thread_local! {
     static PANIC_CLEANUP_SUPPRESS_DEPTH: Cell<u32> = const { Cell::new(0) };
 }
+
+const SIGNAL_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+const SIGNAL_SHUTDOWN_POLL: Duration = Duration::from_millis(10);
 
 /// Returns (sum_us, count) for read I/O operations.
 pub fn terminal_io_read_stats() -> (u64, u64) {
@@ -125,6 +129,45 @@ pub fn terminal_io_flush_stats() -> (u64, u64) {
         IO_FLUSH_DURATION_SUM_US.load(Ordering::Relaxed),
         IO_FLUSH_COUNT.load(Ordering::Relaxed),
     )
+}
+
+/// Record that a termination signal was intercepted and graceful shutdown is required.
+///
+/// The first pending signal wins until the runtime explicitly clears it after
+/// finishing teardown.
+pub fn record_pending_termination_signal(signal: i32) {
+    let _ =
+        PENDING_TERMINATION_SIGNAL.compare_exchange(0, signal, Ordering::SeqCst, Ordering::SeqCst);
+}
+
+/// Inspect the currently pending termination signal, if any.
+#[must_use]
+pub fn pending_termination_signal() -> Option<i32> {
+    match PENDING_TERMINATION_SIGNAL.load(Ordering::SeqCst) {
+        0 => None,
+        signal => Some(signal),
+    }
+}
+
+/// Clear any pending graceful-termination request.
+pub fn clear_pending_termination_signal() {
+    PENDING_TERMINATION_SIGNAL.store(0, Ordering::SeqCst);
+}
+
+fn wait_for_shutdown_ack() -> bool {
+    let deadline = std::time::Instant::now()
+        .checked_add(SIGNAL_SHUTDOWN_GRACE)
+        .unwrap_or_else(std::time::Instant::now);
+
+    loop {
+        if pending_termination_signal().is_none() {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(SIGNAL_SHUTDOWN_POLL);
+    }
 }
 
 /// Run a closure while suppressing best-effort terminal cleanup in the panic hook.
@@ -170,6 +213,20 @@ fn panic_cleanup_suppressed() -> bool {
 /// overflow on the `as_micros() -> u64` conversion.
 fn to_std_duration(d: web_time::Duration) -> Duration {
     Duration::from_micros(d.as_micros().min(u64::MAX as u128) as u64)
+}
+
+const SIZE_RETRY_DELAY: Duration = Duration::from_millis(10);
+
+#[inline]
+fn size_retry_delay(cx: &crate::cx::Cx) -> Option<Duration> {
+    if cx.is_done() {
+        return None;
+    }
+
+    match cx.remaining() {
+        Some(remaining) if to_std_duration(remaining) <= SIZE_RETRY_DELAY => None,
+        _ => Some(SIZE_RETRY_DELAY),
+    }
 }
 
 /// Compute remaining microseconds for Cx, or `u64::MAX` if no deadline.
@@ -390,6 +447,11 @@ pub struct TerminalSession {
     /// Only sessions created via `TerminalSession::new` acquire this lock.
     /// `new_for_tests` intentionally skips it to allow parallel headless tests.
     session_lock: Option<SessionLock>,
+    /// Whether this session must avoid mutating real terminal state.
+    ///
+    /// Test-helper sessions use this to skip global panic-hook installation and
+    /// teardown writes on drop.
+    headless: bool,
     options: SessionOptions,
     /// Track what was enabled so we can disable on drop.
     alternate_screen_enabled: bool,
@@ -449,6 +511,7 @@ impl TerminalSession {
 
         let mut session = Self {
             session_lock: Some(session_lock),
+            headless: false,
             options: options.clone(),
             alternate_screen_enabled: false,
             mouse_enabled: false,
@@ -513,18 +576,19 @@ impl TerminalSession {
         Ok(session)
     }
 
-    /// Create a session for tests without touching the real terminal.
+    /// Create a session for tests without entering raw mode or installing
+    /// global terminal cleanup hooks.
     ///
     /// This skips raw mode and feature toggles, allowing headless tests
     /// to construct `TerminalSession` safely.
     #[cfg(feature = "test-helpers")]
     pub fn new_for_tests(options: SessionOptions) -> io::Result<Self> {
-        install_panic_hook();
         #[cfg(unix)]
         let signal_guard = None;
 
         Ok(Self {
             session_lock: None,
+            headless: true,
             options,
             alternate_screen_enabled: false,
             mouse_enabled: false,
@@ -554,7 +618,7 @@ impl TerminalSession {
         }
 
         // Re-probe once after a short delay to catch terminals that report size late.
-        std::thread::sleep(Duration::from_millis(10));
+        std::thread::sleep(SIZE_RETRY_DELAY);
         let (w2, h2) = crossterm::terminal::size()?;
         if w2 > 1 && h2 > 1 {
             return Ok((w2, h2));
@@ -862,11 +926,12 @@ impl TerminalSession {
         if let Some((env_w, env_h)) = size_from_env() {
             return Ok((env_w, env_h));
         }
-        // Skip retry delay if Cx is running out of time.
-        if cx.is_done() {
+        // Skip the startup retry when the context no longer has enough budget
+        // to pay for the delay and follow-up probe.
+        let Some(retry_delay) = size_retry_delay(cx) else {
             return Ok((w.max(2), h.max(2)));
-        }
-        std::thread::sleep(Duration::from_millis(10));
+        };
+        std::thread::sleep(retry_delay);
         let (w2, h2) = crossterm::terminal::size()?;
         if w2 > 1 && h2 > 1 {
             return Ok((w2, h2));
@@ -908,6 +973,16 @@ impl TerminalSession {
     fn cleanup(&mut self) {
         #[cfg(unix)]
         let _ = self.signal_guard.take();
+
+        if self.headless {
+            self.alternate_screen_enabled = false;
+            self.mouse_enabled = false;
+            self.bracketed_paste_enabled = false;
+            self.focus_events_enabled = false;
+            self.kitty_keyboard_enabled = false;
+            let _ = self.session_lock.take();
+            return;
+        }
 
         let mut stdout = io::stdout();
         let caps = TerminalCapabilities::with_overrides();
@@ -1066,8 +1141,11 @@ impl SignalGuard {
                     SIGINT | SIGTERM | SIGHUP | SIGQUIT => {
                         #[cfg(feature = "tracing")]
                         tracing::warn!("termination signal received, cleaning up");
+                        record_pending_termination_signal(signal);
                         best_effort_cleanup();
-                        std::process::exit(128 + signal);
+                        if !wait_for_shutdown_ack() {
+                            std::process::exit(128 + signal);
+                        }
                     }
                     _ => {}
                 }
@@ -1574,6 +1652,13 @@ mod tests {
 
     #[cfg(feature = "test-helpers")]
     #[test]
+    fn new_for_tests_marks_session_headless() {
+        let session = TerminalSession::new_for_tests(SessionOptions::default()).unwrap();
+        assert!(session.headless);
+    }
+
+    #[cfg(feature = "test-helpers")]
+    #[test]
     fn mouse_capture_enabled_getter() {
         let session = TerminalSession::new_for_tests(SessionOptions::default()).unwrap();
         assert!(!session.mouse_capture_enabled());
@@ -1707,6 +1792,33 @@ mod tests {
         session.cleanup();
         assert!(!session.mouse_enabled);
         assert!(!session.alternate_screen_enabled);
+    }
+
+    #[cfg(feature = "test-helpers")]
+    #[test]
+    fn cleanup_headless_session_clears_feature_flags() {
+        let mut session = TerminalSession::new_for_tests(SessionOptions {
+            alternate_screen: true,
+            mouse_capture: true,
+            bracketed_paste: true,
+            focus_events: true,
+            kitty_keyboard: true,
+            intercept_signals: true,
+        })
+        .unwrap();
+        session.alternate_screen_enabled = true;
+        session.mouse_enabled = true;
+        session.bracketed_paste_enabled = true;
+        session.focus_events_enabled = true;
+        session.kitty_keyboard_enabled = true;
+
+        session.cleanup();
+
+        assert!(!session.alternate_screen_enabled);
+        assert!(!session.mouse_enabled);
+        assert!(!session.bracketed_paste_enabled);
+        assert!(!session.focus_events_enabled);
+        assert!(!session.kitty_keyboard_enabled);
     }
 
     #[cfg(feature = "test-helpers")]
@@ -2162,5 +2274,50 @@ mod tests {
         let remaining = super::cx_deadline_remaining_us(&cx);
         assert!(remaining <= 50_000, "remaining={remaining}");
         assert!(remaining > 40_000, "remaining={remaining}");
+    }
+
+    #[test]
+    fn size_retry_delay_uses_default_window_without_deadline() {
+        let (cx, _ctrl) = crate::cx::Cx::background();
+        assert_eq!(super::size_retry_delay(&cx), Some(SIZE_RETRY_DELAY));
+    }
+
+    #[test]
+    fn size_retry_delay_skips_when_cancelled() {
+        let (cx, ctrl) = crate::cx::Cx::background();
+        ctrl.cancel();
+        assert_eq!(super::size_retry_delay(&cx), None);
+    }
+
+    #[test]
+    fn size_retry_delay_skips_when_deadline_cannot_cover_retry() {
+        let clock = crate::cx::LabClock::new();
+        let (cx, _ctrl) =
+            crate::cx::Cx::lab_with_deadline(&clock, web_time::Duration::from_millis(10));
+        assert_eq!(super::size_retry_delay(&cx), None);
+    }
+
+    #[test]
+    fn size_retry_delay_allows_retry_when_budget_exceeds_delay() {
+        let clock = crate::cx::LabClock::new();
+        let (cx, _ctrl) =
+            crate::cx::Cx::lab_with_deadline(&clock, web_time::Duration::from_millis(25));
+        assert_eq!(super::size_retry_delay(&cx), Some(SIZE_RETRY_DELAY));
+    }
+
+    #[test]
+    fn pending_termination_signal_round_trip() {
+        super::clear_pending_termination_signal();
+        assert_eq!(super::pending_termination_signal(), None);
+
+        super::record_pending_termination_signal(2);
+        assert_eq!(super::pending_termination_signal(), Some(2));
+
+        // First signal wins until explicitly cleared.
+        super::record_pending_termination_signal(15);
+        assert_eq!(super::pending_termination_signal(), Some(2));
+
+        super::clear_pending_termination_signal();
+        assert_eq!(super::pending_termination_signal(), None);
     }
 }

@@ -1,5 +1,3 @@
-#![cfg(feature = "galaxy-brain")]
-
 //! bd-1lg.14: E2E test — Galaxy-brain decision card standalone embedding.
 //!
 //! Proves the decision card widget renders correctly in isolation:
@@ -9,7 +7,7 @@
 //! 4. Card handles degenerate areas gracefully.
 //!
 //! Run:
-//!   cargo test -p ftui-widgets --features galaxy-brain --test decision_card_standalone
+//!   cargo test -p ftui-widgets --test decision_card_standalone
 
 use ftui_core::geometry::Rect;
 use ftui_render::frame::Frame;

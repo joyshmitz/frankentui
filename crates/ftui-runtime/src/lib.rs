@@ -58,6 +58,7 @@ pub mod locale;
 pub mod log_sink;
 pub mod metrics_registry;
 pub mod policy_config;
+pub mod policy_registry;
 pub mod process_subscription;
 pub mod program;
 pub mod queueing_scheduler;
@@ -70,6 +71,7 @@ pub mod resize_sla;
 pub mod retry;
 pub mod slo;
 pub mod rough_path;
+pub mod schema_compat;
 pub mod simulator;
 pub mod state_persistence;
 #[cfg(feature = "stdio-capture")]
@@ -177,6 +179,11 @@ pub use decision_core::{
 pub use demo::{
     DemoDefinition, DemoParseError, DemoStep, parse_demo_yaml, validate_demos,
 };
+pub use schema_compat::{
+    CompatCheckResult, Compatibility, MatrixEntry, SchemaKind, check_evidence_compat,
+    check_event_trace_compat, check_golden_trace_compat, check_render_trace_compat,
+    check_schema_compat, default_compatibility_matrix, run_compatibility_matrix,
+};
 pub use degradation_cascade::{
     CascadeConfig, CascadeDecision, CascadeEvidence, CascadeTelemetry, DegradationCascade,
     PreRenderResult,
@@ -207,6 +214,7 @@ pub use policy_config::{
     EProcessThrottlePolicyConfig, EvidencePolicyConfig, FrameGuardPolicyConfig, PidPolicyConfig,
     PolicyConfig, PolicyConfigError, VoiPolicyConfig,
 };
+pub use policy_registry::{PolicyRegistry, PolicyRegistryError, PolicySwitchEvent};
 pub use reactive::{BatchScope, Binding, BindingScope, Computed, Observable, TwoWayBinding};
 pub use reversible::{
     AddOp, InsertOp, Journal, MulOp, PushOp, RemoveOp, Reversible, Sequence, SetOp, SwapOp, XorOp,

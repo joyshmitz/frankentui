@@ -1684,11 +1684,10 @@ impl<W: Write> TerminalWriter<W> {
                         emit_stats.diff_cells = full.len();
                         emit_stats.diff_runs = full.runs().len();
                     }
+
+                    presenter.finish_frame()?;
                 }
             }
-
-            // Reset style so subsequent log output doesn't inherit UI styling.
-            self.writer().write_all(b"\x1b[0m")?;
 
             // Restore cursor
             self.writer().write_all(CURSOR_RESTORE)?;
@@ -1806,7 +1805,7 @@ impl<W: Write> TerminalWriter<W> {
                 // AltScreen always starts at (0,0) relative to terminal.
                 presenter.set_viewport_offset_y(0);
 
-                if decision.has_diff {
+                let stats = if decision.has_diff {
                     presenter.prepare_runs(&self.diff_scratch);
                     presenter.emit_diff_runs(buffer, Some(&self.pool), Some(&self.links))?;
 
@@ -1824,11 +1823,11 @@ impl<W: Write> TerminalWriter<W> {
                         diff_cells: (buffer.width() as usize) * (buffer.height() as usize),
                         diff_runs: buffer.height() as usize,
                     }
-                }
-            };
+                };
 
-            // Reset style at end
-            self.writer().write_all(b"\x1b[0m")?;
+                presenter.finish_frame()?;
+                stats
+            };
 
             let mut show_cursor = false;
             if cursor_visible
@@ -1858,6 +1857,12 @@ impl<W: Write> TerminalWriter<W> {
                 ui_height: 0,
             })
         })();
+
+        if operation_result.is_err()
+            && let Some(ref mut presenter) = self.presenter
+        {
+            presenter.finish_frame_best_effort();
+        }
 
         // Always attempt to close sync and flush, regardless of operation_result.
         let sync_end_result = if sync_output_enabled && self.in_sync_block {
@@ -2110,6 +2115,7 @@ impl<W: Write> TerminalWriter<W> {
         let Some(ref mut presenter) = self.presenter else {
             return;
         };
+        presenter.finish_frame_best_effort();
         let writer = presenter.counting_writer_mut();
 
         // Emit restorations unconditionally: write errors can occur after bytes
@@ -2127,7 +2133,6 @@ impl<W: Write> TerminalWriter<W> {
         let _ = writer.write_all(b"\x1b[r");
         self.scroll_region_active = false;
 
-        let _ = writer.write_all(b"\x1b[0m");
         let _ = writer.write_all(b"\x1b[?25h");
         self.cursor_visible = true;
         let _ = writer.flush();
@@ -2138,6 +2143,7 @@ impl<W: Write> TerminalWriter<W> {
         let Some(ref mut presenter) = self.presenter else {
             return; // Presenter already taken (via into_inner)
         };
+        presenter.finish_frame_best_effort();
         let writer = presenter.counting_writer_mut();
 
         // End any pending sync block
@@ -2159,9 +2165,6 @@ impl<W: Write> TerminalWriter<W> {
             let _ = writer.write_all(b"\x1b[r");
             self.scroll_region_active = false;
         }
-
-        // Reset style
-        let _ = writer.write_all(b"\x1b[0m");
 
         // Show cursor
         let _ = writer.write_all(b"\x1b[?25h");
@@ -2545,6 +2548,47 @@ mod tests {
     }
 
     #[test]
+    fn present_ui_inline_closes_hyperlinks_at_frame_end() {
+        let mut output = Vec::new();
+        {
+            let mut caps = full_caps();
+            caps.osc8_hyperlinks = true;
+
+            let mut writer = TerminalWriter::new(
+                &mut output,
+                ScreenMode::Inline { ui_height: 2 },
+                UiAnchor::Bottom,
+                caps,
+            );
+            writer.set_size(8, 4);
+
+            let link_id = writer.links_mut().register("https://example.com");
+            let mut buffer = Buffer::new(8, 2);
+            buffer.set_raw(
+                0,
+                0,
+                Cell::from_char('L').with_attrs(CellAttrs::new(StyleFlags::empty(), link_id)),
+            );
+            writer.present_ui(&buffer, None, true).unwrap();
+        }
+
+        let open = b"\x1b]8;;https://example.com\x07";
+        let close = b"\x1b]8;;\x07";
+        let open_pos = output
+            .windows(open.len())
+            .position(|window| window == open)
+            .expect("expected OSC 8 open sequence");
+        let close_pos = output
+            .windows(close.len())
+            .position(|window| window == close)
+            .expect("expected OSC 8 close sequence");
+        assert!(
+            open_pos < close_pos,
+            "hyperlink must close before frame end"
+        );
+    }
+
+    #[test]
     fn present_ui_altscreen_skips_hyperlinks_in_mux() {
         let mut output = Vec::new();
         {
@@ -2568,6 +2612,43 @@ mod tests {
         assert!(
             !output.windows(b"\x1b]8;".len()).any(|w| w == b"\x1b]8;"),
             "OSC 8 sequences must be suppressed by mux hyperlink policy"
+        );
+    }
+
+    #[test]
+    fn present_ui_altscreen_closes_hyperlinks_at_frame_end() {
+        let mut output = Vec::new();
+        {
+            let mut caps = full_caps();
+            caps.osc8_hyperlinks = true;
+
+            let mut writer =
+                TerminalWriter::new(&mut output, ScreenMode::AltScreen, UiAnchor::Bottom, caps);
+            writer.set_size(8, 4);
+
+            let link_id = writer.links_mut().register("https://example.com");
+            let mut buffer = Buffer::new(8, 2);
+            buffer.set_raw(
+                0,
+                0,
+                Cell::from_char('L').with_attrs(CellAttrs::new(StyleFlags::empty(), link_id)),
+            );
+            writer.present_ui(&buffer, None, true).unwrap();
+        }
+
+        let open = b"\x1b]8;;https://example.com\x07";
+        let close = b"\x1b]8;;\x07";
+        let open_pos = output
+            .windows(open.len())
+            .position(|window| window == open)
+            .expect("expected OSC 8 open sequence");
+        let close_pos = output
+            .windows(close.len())
+            .position(|window| window == close)
+            .expect("expected OSC 8 close sequence");
+        assert!(
+            open_pos < close_pos,
+            "hyperlink must close before frame end"
         );
     }
 

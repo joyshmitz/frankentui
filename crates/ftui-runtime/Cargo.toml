@@ -57,6 +57,7 @@ ftui-render = { path = "../ftui-render", version = "0.2.1" }
 ftui-style = { path = "../ftui-style", version = "0.2.1" }
 ftui-text = { path = "../ftui-text", version = "0.2.1" }
 ftui-tty = { path = "../ftui-tty", version = "0.2.1", optional = true }
+arc-swap = "1.8.2"
 tracing = "0.1.41"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.2.2"

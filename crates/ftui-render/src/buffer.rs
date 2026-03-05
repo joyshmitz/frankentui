@@ -852,6 +852,7 @@ impl Buffer {
 
         self.cells[idx] = final_cell;
         self.mark_dirty_span(y, x, x.saturating_add(1));
+        self.cleanup_orphaned_tails(x.saturating_add(1), y);
     }
 
     /// Set the cell at (x, y).
@@ -977,12 +978,25 @@ impl Buffer {
     /// Set the cell at (x, y) without scissor or opacity processing.
     ///
     /// This is faster but bypasses clipping and transparency.
+    ///
+    /// Unlike [`set`](Self::set), this does not automatically write
+    /// continuation cells for multi-width content; callers that build wide
+    /// glyphs manually must still populate the tail cells themselves. It does,
+    /// however, preserve overlap/orphan-tail cleanup so overwriting an
+    /// existing wide glyph cannot leave stale continuation cells behind.
     /// Does nothing if coordinates are out of bounds.
     #[inline]
     pub fn set_raw(&mut self, x: u16, y: u16, cell: Cell) {
         if let Some(idx) = self.index(x, y) {
+            let mut span_start = x;
+            let mut span_end = x.saturating_add(1);
+            if let Some(span) = self.cleanup_overlap(x, y, &cell) {
+                span_start = span_start.min(span.x0);
+                span_end = span_end.max(span.x1);
+            }
             self.cells[idx] = cell;
-            self.mark_dirty_span(y, x, x.saturating_add(1));
+            self.mark_dirty_span(y, span_start, span_end);
+            self.cleanup_orphaned_tails(x.saturating_add(1), y);
         }
     }
 
@@ -1124,7 +1138,32 @@ impl Buffer {
     /// Clear all cells to the given cell.
     #[inline]
     pub fn clear_with(&mut self, cell: Cell) {
-        self.cells.fill(cell);
+        if cell.is_continuation() {
+            self.clear();
+            return;
+        }
+
+        let width = cell.content.width();
+        if width <= 1 {
+            self.cells.fill(cell);
+            self.mark_all_dirty();
+            return;
+        }
+
+        self.cells.fill(Cell::default());
+        let step = width as u16;
+        for y in 0..self.height {
+            let row_start = y as usize * self.width as usize;
+            let mut x = 0u16;
+            while x.saturating_add(step) <= self.width {
+                let head_idx = row_start + x as usize;
+                self.cells[head_idx] = cell;
+                for off in 1..step {
+                    self.cells[head_idx + off as usize] = Cell::CONTINUATION;
+                }
+                x = x.saturating_add(step);
+            }
+        }
         self.mark_all_dirty();
     }
 
@@ -1768,6 +1807,25 @@ mod tests {
     }
 
     #[test]
+    fn set_fast_clears_orphaned_tail_like_set() {
+        let mut slow = Buffer::new(3, 1);
+        slow.set_raw(0, 0, Cell::from_char('A'));
+        slow.set_raw(1, 0, Cell::CONTINUATION);
+        slow.clear_dirty();
+
+        let mut fast = slow.clone();
+
+        slow.set(0, 0, Cell::from_char('X'));
+        fast.set_fast(0, 0, Cell::from_char('X'));
+
+        assert_eq!(slow.cells(), fast.cells());
+        assert_eq!(fast.get(1, 0), Some(&Cell::default()));
+
+        let spans = fast.dirty_span_row(0).expect("dirty span row").spans();
+        assert_eq!(spans, &[DirtySpan::new(0, 2)]);
+    }
+
+    #[test]
     fn rect_contains() {
         let r = Rect::new(5, 5, 10, 10);
         assert!(r.contains(5, 5)); // Top-left corner
@@ -2140,6 +2198,25 @@ mod tests {
     }
 
     #[test]
+    fn set_raw_overwrite_wide_head_with_single_clears_tails() {
+        let mut buf = Buffer::new(10, 1);
+
+        buf.set(0, 0, Cell::from_char('中'));
+        assert!(buf.get(1, 0).unwrap().is_continuation());
+        buf.clear_dirty();
+
+        buf.set_raw(0, 0, Cell::from_char('A'));
+
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('A'));
+        assert!(
+            buf.get(1, 0).unwrap().is_empty(),
+            "set_raw should clear stale continuation tails when overwriting a wide head"
+        );
+        let spans = buf.dirty_span_row(0).expect("dirty span row").spans();
+        assert_eq!(spans, &[DirtySpan::new(0, 2)]);
+    }
+
+    #[test]
     fn overwrite_continuation_with_single_clears_head_and_tails() {
         let mut buf = Buffer::new(10, 1);
 
@@ -2409,6 +2486,20 @@ mod tests {
             for x in 0..5 {
                 assert_eq!(buf.get(x, y).unwrap().content.as_char(), Some('*'));
             }
+        }
+    }
+
+    #[test]
+    fn clear_with_wide_cell_preserves_head_tail_invariant() {
+        let mut buf = Buffer::new(5, 2);
+        buf.clear_with(Cell::from_char('中'));
+
+        for y in 0..2 {
+            assert_eq!(buf.get(0, y).unwrap().content.as_char(), Some('中'));
+            assert!(buf.get(1, y).unwrap().is_continuation());
+            assert_eq!(buf.get(2, y).unwrap().content.as_char(), Some('中'));
+            assert!(buf.get(3, y).unwrap().is_continuation());
+            assert!(buf.get(4, y).unwrap().is_empty());
         }
     }
 

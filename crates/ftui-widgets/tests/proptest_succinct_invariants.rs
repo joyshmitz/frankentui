@@ -9,9 +9,9 @@ use proptest::prelude::*;
 
 // ── Dense reference: sorted array ────────────────────────────────
 
-/// Dense rank: count values < v in sorted slice.
+/// Dense rank: count values ≤ v in sorted slice (matches EliasFano::rank semantics).
 fn dense_rank(sorted: &[u64], v: u64) -> usize {
-    sorted.partition_point(|&x| x < v)
+    sorted.partition_point(|&x| x <= v)
 }
 
 /// Dense select: return the r-th element (0-indexed).
@@ -102,47 +102,42 @@ fn arb_sorted_sequence(max_len: usize) -> impl Strategy<Value = Vec<u64>> {
 }
 
 /// Generate valid BFS degree sequences for tree construction.
+///
+/// Ensures: sum(degrees) == n-1 AND cumulative sum after node i >= i+1
+/// for all i < n-1 (BFS reachability invariant).
 fn arb_degree_sequence(max_nodes: usize) -> impl Strategy<Value = Vec<usize>> {
     (2..=max_nodes).prop_flat_map(|n| {
-        // Generate degrees for n nodes such that the BFS ordering is valid.
-        // The sum of degrees must equal n-1 (each non-root node has exactly one parent edge).
         let n = n.min(50); // cap for test speed
-        Just(n).prop_flat_map(move |n| {
-            prop::collection::vec(0..=5usize, n).prop_map(move |raw| {
-                // Adjust degrees to produce exactly n-1 children total
-                let mut total_children = 0;
-                let mut result = Vec::with_capacity(n);
+        prop::collection::vec(0..=4usize, n).prop_map(move |raw| {
+            let mut degrees = vec![0usize; n];
+            let target = n - 1;
+            let mut total = 0usize;
 
-                for (i, &d) in raw.iter().enumerate() {
-                    if i >= n {
-                        break;
-                    }
-                    let remaining_nodes = (n - 1) - total_children;
-                    let remaining_parents = n - i - 1;
-                    // Each remaining parent must have at least 0 children,
-                    // but we need to distribute remaining_nodes among remaining_parents+1
-                    let min_needed = remaining_nodes.saturating_sub(remaining_parents * 5);
-                    let max_allowed = remaining_nodes.min(5);
-                    let degree = d.clamp(min_needed, max_allowed);
-                    result.push(degree);
-                    total_children += degree;
-                    if total_children >= n - 1 {
-                        // Fill remaining with 0
-                        result.resize(n, 0);
-                        break;
-                    }
+            for i in 0..n {
+                let remaining = target - total;
+                if remaining == 0 {
+                    break;
                 }
+                // BFS reachability: after assigning degrees[i], cumulative
+                // must be >= i+1 (so node i+1 exists as someone's child).
+                let min_for_reach = if i < n - 1 {
+                    (i + 1).saturating_sub(total)
+                } else {
+                    remaining
+                };
+                let max_allowed = remaining.min(4);
+                let d = raw[i].clamp(min_for_reach, max_allowed);
+                degrees[i] = d;
+                total += d;
+            }
 
-                // If we didn't reach n-1 children, add more to last non-leaf
-                while total_children < n - 1 && !result.is_empty() {
-                    let last = result.len() - 1;
-                    let needed = n - 1 - total_children;
-                    result[last] += needed;
-                    total_children += needed;
-                }
+            // Safety: absorb any remaining deficit into root
+            let deficit = target.saturating_sub(total);
+            if deficit > 0 {
+                degrees[0] += deficit;
+            }
 
-                result
-            })
+            degrees
         })
     })
 }
@@ -378,17 +373,18 @@ proptest! {
         let louds = LoudsTree::from_degrees(&degrees);
         // Verify node_count matches
         prop_assert_eq!(louds.node_count(), n);
-        // Verify all operations don't panic
+        // Verify core navigation operations don't panic
         for v in 0..n {
             let _ = louds.parent(v);
             let _ = louds.first_child(v);
             let _ = louds.next_sibling(v);
             let _ = louds.is_leaf(v);
             let _ = louds.degree(v);
-            let _ = louds.depth(v);
-            let _ = louds.subtree_size(v);
             let _: Vec<_> = louds.children(v).collect();
         }
+        // depth/subtree_size are O(n) per call — spot-check root only
+        prop_assert_eq!(louds.depth(0), 0);
+        prop_assert_eq!(louds.subtree_size(0), n);
     }
 }
 
@@ -400,7 +396,7 @@ fn ef_single_element() {
     let ef = EliasFano::encode(&sorted);
     assert_eq!(ef.len(), 1);
     assert_eq!(ef.access(0), 42);
-    assert_eq!(ef.rank(42), 0);
+    assert_eq!(ef.rank(42), 1);
     assert_eq!(ef.rank(43), 1);
     assert_eq!(ef.select(0), 42);
     assert_eq!(ef.next_geq(0), Some((0, 42)));

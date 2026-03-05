@@ -44,6 +44,13 @@ use crate::evidence_sink::{EvidenceSinkConfig, EvidenceSinkDestination};
 use crate::voi_sampling::VoiConfig;
 use ftui_render::budget::{DegradationLevel, EProcessConfig, PidGains};
 
+#[cfg(feature = "policy-config")]
+const STANDALONE_POLICY_TOML: &str = "ftui-policy.toml";
+#[cfg(feature = "policy-config")]
+const STANDALONE_POLICY_JSON: &str = "ftui-policy.json";
+#[cfg(feature = "policy-config")]
+const CARGO_MANIFEST_NAME: &str = "Cargo.toml";
+
 // ---------------------------------------------------------------------------
 // Top-level PolicyConfig
 // ---------------------------------------------------------------------------
@@ -89,7 +96,8 @@ impl PolicyConfig {
     /// Load from a TOML string.
     #[cfg(feature = "policy-config")]
     pub fn from_toml_str(s: &str) -> Result<Self, PolicyConfigError> {
-        toml::from_str(s).map_err(PolicyConfigError::Toml)
+        let policy: Self = toml::from_str(s).map_err(PolicyConfigError::Toml)?;
+        policy.validate_or_err()
     }
 
     /// Load from a TOML file on disk.
@@ -102,7 +110,8 @@ impl PolicyConfig {
     /// Load from a JSON string.
     #[cfg(feature = "policy-config")]
     pub fn from_json_str(s: &str) -> Result<Self, PolicyConfigError> {
-        serde_json::from_str(s).map_err(PolicyConfigError::Json)
+        let policy: Self = serde_json::from_str(s).map_err(PolicyConfigError::Json)?;
+        policy.validate_or_err()
     }
 
     /// Load from a JSON file on disk.
@@ -110,6 +119,77 @@ impl PolicyConfig {
     pub fn from_json_file(path: impl AsRef<Path>) -> Result<Self, PolicyConfigError> {
         let content = std::fs::read_to_string(path.as_ref()).map_err(PolicyConfigError::Io)?;
         Self::from_json_str(&content)
+    }
+
+    /// Load from a Cargo manifest that embeds policy config under
+    /// `[package.metadata.ftui]`.
+    #[cfg(feature = "policy-config")]
+    pub fn from_cargo_toml_str(s: &str) -> Result<Self, PolicyConfigError> {
+        let manifest: CargoManifestPolicyConfig =
+            toml::from_str(s).map_err(PolicyConfigError::Toml)?;
+        let policy = manifest
+            .package
+            .and_then(|package| package.metadata)
+            .and_then(|metadata| metadata.ftui)
+            .ok_or(PolicyConfigError::MissingMetadataSection(
+                "[package.metadata.ftui]",
+            ))?;
+        policy.validate_or_err()
+    }
+
+    /// Load from a Cargo manifest file that embeds policy config under
+    /// `[package.metadata.ftui]`.
+    #[cfg(feature = "policy-config")]
+    pub fn from_cargo_toml_file(path: impl AsRef<Path>) -> Result<Self, PolicyConfigError> {
+        let content = std::fs::read_to_string(path.as_ref()).map_err(PolicyConfigError::Io)?;
+        Self::from_cargo_toml_str(&content)
+    }
+
+    /// Discover policy config from a project directory.
+    ///
+    /// Precedence is:
+    /// 1. `ftui-policy.toml`
+    /// 2. `ftui-policy.json`
+    /// 3. `Cargo.toml` `[package.metadata.ftui]`
+    #[cfg(feature = "policy-config")]
+    pub fn discover_in_dir(dir: impl AsRef<Path>) -> Result<Self, PolicyConfigError> {
+        let dir = dir.as_ref();
+
+        let standalone_toml = dir.join(STANDALONE_POLICY_TOML);
+        if standalone_toml.is_file() {
+            return Self::from_toml_file(standalone_toml);
+        }
+
+        let standalone_json = dir.join(STANDALONE_POLICY_JSON);
+        if standalone_json.is_file() {
+            return Self::from_json_file(standalone_json);
+        }
+
+        let cargo_manifest = dir.join(CARGO_MANIFEST_NAME);
+        if cargo_manifest.is_file() {
+            return Self::from_cargo_toml_file(cargo_manifest);
+        }
+
+        Err(PolicyConfigError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!(
+                "no policy config found in {} (expected {}, {}, or {})",
+                dir.display(),
+                STANDALONE_POLICY_TOML,
+                STANDALONE_POLICY_JSON,
+                CARGO_MANIFEST_NAME
+            ),
+        )))
+    }
+
+    #[cfg(feature = "policy-config")]
+    fn validate_or_err(self) -> Result<Self, PolicyConfigError> {
+        let errors = self.validate();
+        if errors.is_empty() {
+            Ok(self)
+        } else {
+            Err(PolicyConfigError::Validation(errors))
+        }
     }
 
     /// Validate all parameters are within acceptable ranges.
@@ -120,8 +200,101 @@ impl PolicyConfig {
     pub fn validate(&self) -> Vec<String> {
         let mut errors = Vec::new();
 
+        let conformal_alpha_finite =
+            validate_finite_f64(&mut errors, "conformal.alpha", self.conformal.alpha);
+        let _ = validate_finite_f64(&mut errors, "conformal.q_default", self.conformal.q_default);
+        let frame_guard_fallback_budget_finite = validate_finite_f64(
+            &mut errors,
+            "frame_guard.fallback_budget_us",
+            self.frame_guard.fallback_budget_us,
+        );
+        let pid_kp_finite = validate_finite_f64(&mut errors, "pid.kp", self.pid.kp);
+        let _ = validate_finite_f64(&mut errors, "pid.ki", self.pid.ki);
+        let _ = validate_finite_f64(&mut errors, "pid.kd", self.pid.kd);
+        let pid_integral_max_finite =
+            validate_finite_f64(&mut errors, "pid.integral_max", self.pid.integral_max);
+        let _ = validate_finite_f64(
+            &mut errors,
+            "eprocess_budget.lambda",
+            self.eprocess_budget.lambda,
+        );
+        let eprocess_budget_alpha_finite = validate_finite_f64(
+            &mut errors,
+            "eprocess_budget.alpha",
+            self.eprocess_budget.alpha,
+        );
+        let _ = validate_finite_f64(
+            &mut errors,
+            "eprocess_budget.beta",
+            self.eprocess_budget.beta,
+        );
+        let _ = validate_finite_f64(
+            &mut errors,
+            "eprocess_budget.sigma_ema_decay",
+            self.eprocess_budget.sigma_ema_decay,
+        );
+        let _ = validate_finite_f64(
+            &mut errors,
+            "eprocess_budget.sigma_floor_ms",
+            self.eprocess_budget.sigma_floor_ms,
+        );
+        let _ = validate_finite_f64(&mut errors, "bocpd.mu_steady_ms", self.bocpd.mu_steady_ms);
+        let _ = validate_finite_f64(&mut errors, "bocpd.mu_burst_ms", self.bocpd.mu_burst_ms);
+        let bocpd_hazard_lambda_finite =
+            validate_finite_f64(&mut errors, "bocpd.hazard_lambda", self.bocpd.hazard_lambda);
+        let _ = validate_finite_f64(
+            &mut errors,
+            "bocpd.steady_threshold",
+            self.bocpd.steady_threshold,
+        );
+        let _ = validate_finite_f64(
+            &mut errors,
+            "bocpd.burst_threshold",
+            self.bocpd.burst_threshold,
+        );
+        let _ = validate_finite_f64(&mut errors, "bocpd.burst_prior", self.bocpd.burst_prior);
+        let _ = validate_finite_f64(
+            &mut errors,
+            "bocpd.min_observation_ms",
+            self.bocpd.min_observation_ms,
+        );
+        let _ = validate_finite_f64(
+            &mut errors,
+            "bocpd.max_observation_ms",
+            self.bocpd.max_observation_ms,
+        );
+        let eprocess_throttle_alpha_finite = validate_finite_f64(
+            &mut errors,
+            "eprocess_throttle.alpha",
+            self.eprocess_throttle.alpha,
+        );
+        let _ = validate_finite_f64(
+            &mut errors,
+            "eprocess_throttle.mu_0",
+            self.eprocess_throttle.mu_0,
+        );
+        let _ = validate_finite_f64(
+            &mut errors,
+            "eprocess_throttle.initial_lambda",
+            self.eprocess_throttle.initial_lambda,
+        );
+        let _ = validate_finite_f64(
+            &mut errors,
+            "eprocess_throttle.grapa_eta",
+            self.eprocess_throttle.grapa_eta,
+        );
+        let voi_alpha_finite = validate_finite_f64(&mut errors, "voi.alpha", self.voi.alpha);
+        let _ = validate_finite_f64(&mut errors, "voi.prior_alpha", self.voi.prior_alpha);
+        let _ = validate_finite_f64(&mut errors, "voi.prior_beta", self.voi.prior_beta);
+        let _ = validate_finite_f64(&mut errors, "voi.mu_0", self.voi.mu_0);
+        let _ = validate_finite_f64(&mut errors, "voi.lambda", self.voi.lambda);
+        let _ = validate_finite_f64(&mut errors, "voi.value_scale", self.voi.value_scale);
+        let _ = validate_finite_f64(&mut errors, "voi.boundary_weight", self.voi.boundary_weight);
+        let voi_sample_cost_finite =
+            validate_finite_f64(&mut errors, "voi.sample_cost", self.voi.sample_cost);
+
         // Conformal alpha must be in (0, 1)
-        if self.conformal.alpha <= 0.0 || self.conformal.alpha >= 1.0 {
+        if conformal_alpha_finite && (self.conformal.alpha <= 0.0 || self.conformal.alpha >= 1.0) {
             errors.push(format!(
                 "conformal.alpha must be in (0, 1), got {}",
                 self.conformal.alpha
@@ -144,7 +317,7 @@ impl PolicyConfig {
         }
 
         // Frame guard budget must be positive
-        if self.frame_guard.fallback_budget_us <= 0.0 {
+        if frame_guard_fallback_budget_finite && self.frame_guard.fallback_budget_us <= 0.0 {
             errors.push(format!(
                 "frame_guard.fallback_budget_us must be > 0, got {}",
                 self.frame_guard.fallback_budget_us
@@ -152,10 +325,10 @@ impl PolicyConfig {
         }
 
         // PID gains: kp must be non-negative
-        if self.pid.kp < 0.0 {
+        if pid_kp_finite && self.pid.kp < 0.0 {
             errors.push(format!("pid.kp must be >= 0, got {}", self.pid.kp));
         }
-        if self.pid.integral_max <= 0.0 {
+        if pid_integral_max_finite && self.pid.integral_max <= 0.0 {
             errors.push(format!(
                 "pid.integral_max must be > 0, got {}",
                 self.pid.integral_max
@@ -163,7 +336,9 @@ impl PolicyConfig {
         }
 
         // E-process alpha in (0, 1)
-        if self.eprocess_budget.alpha <= 0.0 || self.eprocess_budget.alpha >= 1.0 {
+        if eprocess_budget_alpha_finite
+            && (self.eprocess_budget.alpha <= 0.0 || self.eprocess_budget.alpha >= 1.0)
+        {
             errors.push(format!(
                 "eprocess_budget.alpha must be in (0, 1), got {}",
                 self.eprocess_budget.alpha
@@ -171,7 +346,7 @@ impl PolicyConfig {
         }
 
         // BOCPD hazard lambda must be positive
-        if self.bocpd.hazard_lambda <= 0.0 {
+        if bocpd_hazard_lambda_finite && self.bocpd.hazard_lambda <= 0.0 {
             errors.push(format!(
                 "bocpd.hazard_lambda must be > 0, got {}",
                 self.bocpd.hazard_lambda
@@ -182,7 +357,9 @@ impl PolicyConfig {
         }
 
         // E-process throttle alpha in (0, 1)
-        if self.eprocess_throttle.alpha <= 0.0 || self.eprocess_throttle.alpha >= 1.0 {
+        if eprocess_throttle_alpha_finite
+            && (self.eprocess_throttle.alpha <= 0.0 || self.eprocess_throttle.alpha >= 1.0)
+        {
             errors.push(format!(
                 "eprocess_throttle.alpha must be in (0, 1), got {}",
                 self.eprocess_throttle.alpha
@@ -190,14 +367,14 @@ impl PolicyConfig {
         }
 
         // VOI alpha in (0, 1)
-        if self.voi.alpha <= 0.0 || self.voi.alpha >= 1.0 {
+        if voi_alpha_finite && (self.voi.alpha <= 0.0 || self.voi.alpha >= 1.0) {
             errors.push(format!(
                 "voi.alpha must be in (0, 1), got {}",
                 self.voi.alpha
             ));
         }
 
-        if self.voi.sample_cost < 0.0 {
+        if voi_sample_cost_finite && self.voi.sample_cost < 0.0 {
             errors.push(format!(
                 "voi.sample_cost must be >= 0, got {}",
                 self.voi.sample_cost
@@ -350,6 +527,15 @@ impl PolicyConfig {
             self.voi.alpha,
             self.evidence.ledger_capacity,
         )
+    }
+}
+
+fn validate_finite_f64(errors: &mut Vec<String>, field: &str, value: f64) -> bool {
+    if value.is_finite() {
+        true
+    } else {
+        errors.push(format!("{field} must be finite, got {value}"));
+        false
     }
 }
 
@@ -688,6 +874,8 @@ impl Default for EvidencePolicyConfig {
 pub enum PolicyConfigError {
     /// I/O error reading a file.
     Io(std::io::Error),
+    /// Expected `[package.metadata.ftui]` section was not present in Cargo.toml.
+    MissingMetadataSection(&'static str),
     /// TOML parse error.
     #[cfg(feature = "policy-config")]
     Toml(toml::de::Error),
@@ -702,6 +890,9 @@ impl std::fmt::Display for PolicyConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(e) => write!(f, "I/O error: {e}"),
+            Self::MissingMetadataSection(path) => {
+                write!(f, "missing metadata section: {path}")
+            }
             #[cfg(feature = "policy-config")]
             Self::Toml(e) => write!(f, "TOML parse error: {e}"),
             #[cfg(feature = "policy-config")]
@@ -717,6 +908,7 @@ impl std::error::Error for PolicyConfigError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(e) => Some(e),
+            Self::MissingMetadataSection(_) => None,
             #[cfg(feature = "policy-config")]
             Self::Toml(e) => Some(e),
             #[cfg(feature = "policy-config")]
@@ -768,6 +960,24 @@ where
     }
 }
 
+#[cfg(feature = "policy-config")]
+#[derive(Debug, Deserialize)]
+struct CargoManifestPolicyConfig {
+    package: Option<CargoPackagePolicyConfig>,
+}
+
+#[cfg(feature = "policy-config")]
+#[derive(Debug, Deserialize)]
+struct CargoPackagePolicyConfig {
+    metadata: Option<CargoMetadataPolicyConfig>,
+}
+
+#[cfg(feature = "policy-config")]
+#[derive(Debug, Deserialize)]
+struct CargoMetadataPolicyConfig {
+    ftui: Option<PolicyConfig>,
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -775,6 +985,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "policy-config")]
+    use tempfile::tempdir;
 
     #[test]
     fn default_matches_component_defaults() {
@@ -981,5 +1194,223 @@ mod tests {
             errors.len() >= 3,
             "should catch multiple errors: {errors:?}"
         );
+    }
+
+    #[cfg(feature = "policy-config")]
+    #[test]
+    fn from_toml_str_rejects_invalid_loaded_values() {
+        let err = PolicyConfig::from_toml_str(
+            r#"
+            [conformal]
+            alpha = 0.0
+            "#,
+        )
+        .expect_err("invalid TOML policy should fail validation");
+
+        assert!(matches!(err, PolicyConfigError::Validation(_)));
+    }
+
+    #[cfg(feature = "policy-config")]
+    #[test]
+    fn from_json_str_rejects_invalid_loaded_values() {
+        let err = PolicyConfig::from_json_str(r#"{"conformal":{"alpha":1.2}}"#)
+            .expect_err("invalid JSON policy should fail validation");
+
+        assert!(matches!(err, PolicyConfigError::Validation(_)));
+    }
+
+    #[test]
+    fn validate_rejects_non_finite_values() {
+        let mut policy = PolicyConfig::default();
+        policy.conformal.q_default = f64::NAN;
+        policy.frame_guard.fallback_budget_us = f64::INFINITY;
+        policy.pid.kp = f64::NEG_INFINITY;
+        policy.voi.sample_cost = f64::NEG_INFINITY;
+
+        let errors = policy.validate();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("conformal.q_default must be finite")),
+            "missing q_default finite error: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("frame_guard.fallback_budget_us must be finite")),
+            "missing frame_guard finite error: {errors:?}"
+        );
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|error| error.contains("pid.kp"))
+                .count(),
+            1,
+            "pid.kp should emit a single finite-value error: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("voi.sample_cost must be finite")),
+            "missing sample_cost finite error: {errors:?}"
+        );
+    }
+
+    #[cfg(feature = "policy-config")]
+    #[test]
+    fn from_toml_str_rejects_non_finite_loaded_values() {
+        let err = PolicyConfig::from_toml_str(
+            r#"
+            [conformal]
+            alpha = nan
+            q_default = inf
+
+            [frame_guard]
+            fallback_budget_us = inf
+            "#,
+        )
+        .expect_err("non-finite TOML policy should fail validation");
+
+        match err {
+            PolicyConfigError::Validation(errors) => {
+                assert!(
+                    errors
+                        .iter()
+                        .any(|error| error.contains("conformal.alpha must be finite")),
+                    "missing conformal.alpha finite error: {errors:?}"
+                );
+                assert!(
+                    errors
+                        .iter()
+                        .any(|error| error.contains("conformal.q_default must be finite")),
+                    "missing conformal.q_default finite error: {errors:?}"
+                );
+                assert!(
+                    errors.iter().any(
+                        |error| error.contains("frame_guard.fallback_budget_us must be finite")
+                    ),
+                    "missing frame_guard.fallback_budget_us finite error: {errors:?}"
+                );
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
+    }
+
+    #[cfg(feature = "policy-config")]
+    #[test]
+    fn from_cargo_toml_str_extracts_embedded_policy() {
+        let policy = PolicyConfig::from_cargo_toml_str(
+            r#"
+            [package]
+            name = "demo"
+            version = "0.1.0"
+
+            [package.metadata.ftui.conformal]
+            alpha = 0.01
+
+            [package.metadata.ftui.cascade]
+            recovery_threshold = 24
+            "#,
+        )
+        .expect("embedded Cargo metadata should load");
+
+        assert!((policy.conformal.alpha - 0.01).abs() < f64::EPSILON);
+        assert_eq!(policy.cascade.recovery_threshold, 24);
+        assert_eq!(policy.pid.kp, PidPolicyConfig::default().kp);
+    }
+
+    #[cfg(feature = "policy-config")]
+    #[test]
+    fn from_cargo_toml_str_requires_ftui_metadata_section() {
+        let err = PolicyConfig::from_cargo_toml_str(
+            r#"
+            [package]
+            name = "demo"
+            version = "0.1.0"
+            "#,
+        )
+        .expect_err("missing metadata section should fail");
+
+        assert!(matches!(
+            err,
+            PolicyConfigError::MissingMetadataSection("[package.metadata.ftui]")
+        ));
+    }
+
+    #[cfg(feature = "policy-config")]
+    #[test]
+    fn discover_in_dir_prefers_standalone_toml() {
+        let dir = tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join(STANDALONE_POLICY_TOML),
+            r#"
+            [conformal]
+            alpha = 0.03
+            "#,
+        )
+        .expect("write standalone policy");
+        std::fs::write(
+            dir.path().join(CARGO_MANIFEST_NAME),
+            r#"
+            [package]
+            name = "demo"
+            version = "0.1.0"
+
+            [package.metadata.ftui.conformal]
+            alpha = 0.01
+            "#,
+        )
+        .expect("write Cargo manifest");
+
+        let policy = PolicyConfig::discover_in_dir(dir.path()).expect("discover TOML policy");
+        assert!((policy.conformal.alpha - 0.03).abs() < f64::EPSILON);
+    }
+
+    #[cfg(feature = "policy-config")]
+    #[test]
+    fn discover_in_dir_prefers_json_over_cargo_manifest() {
+        let dir = tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join(STANDALONE_POLICY_JSON),
+            r#"{"cascade":{"recovery_threshold":17}}"#,
+        )
+        .expect("write standalone json");
+        std::fs::write(
+            dir.path().join(CARGO_MANIFEST_NAME),
+            r#"
+            [package]
+            name = "demo"
+            version = "0.1.0"
+
+            [package.metadata.ftui.cascade]
+            recovery_threshold = 33
+            "#,
+        )
+        .expect("write Cargo manifest");
+
+        let policy = PolicyConfig::discover_in_dir(dir.path()).expect("discover JSON policy");
+        assert_eq!(policy.cascade.recovery_threshold, 17);
+    }
+
+    #[cfg(feature = "policy-config")]
+    #[test]
+    fn discover_in_dir_falls_back_to_cargo_manifest() {
+        let dir = tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join(CARGO_MANIFEST_NAME),
+            r#"
+            [package]
+            name = "demo"
+            version = "0.1.0"
+
+            [package.metadata.ftui.cascade]
+            recovery_threshold = 33
+            "#,
+        )
+        .expect("write Cargo manifest");
+
+        let policy =
+            PolicyConfig::discover_in_dir(dir.path()).expect("discover Cargo metadata policy");
+        assert_eq!(policy.cascade.recovery_threshold, 33);
     }
 }

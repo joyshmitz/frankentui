@@ -19,6 +19,7 @@
 use core::time::Duration;
 use std::collections::VecDeque;
 use std::io::{self, BufWriter, Read, Write};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock, mpsc};
 use std::time::Instant;
 
@@ -77,6 +78,9 @@ const SGR_RESET: &[u8] = b"\x1b[0m";
 // ── Debug Input Tracing ──────────────────────────────────────────────────
 
 const INPUT_TRACE_ENV: &str = "FTUI_TTY_INPUT_TRACE";
+const SIGNAL_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+const SIGNAL_SHUTDOWN_POLL: Duration = Duration::from_millis(10);
+static LIVE_SIGNAL_INTERCEPT_SESSIONS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug)]
 struct InputTrace {
@@ -289,9 +293,25 @@ fn install_termination_signal_hook() {
         let _ = std::thread::Builder::new()
             .name("ftui-tty-term-signal".to_string())
             .spawn(move || {
-                if let Some(signal) = signals.forever().next() {
+                for signal in signals.forever() {
+                    if LIVE_SIGNAL_INTERCEPT_SESSIONS.load(Ordering::SeqCst) == 0 {
+                        std::process::exit(128 + signal);
+                    }
+
+                    ftui_core::terminal_session::record_pending_termination_signal(signal);
                     best_effort_termination_cleanup();
-                    std::process::exit(128 + signal);
+                    let deadline = std::time::Instant::now()
+                        .checked_add(SIGNAL_SHUTDOWN_GRACE)
+                        .unwrap_or_else(std::time::Instant::now);
+                    loop {
+                        if ftui_core::terminal_session::pending_termination_signal().is_none() {
+                            break;
+                        }
+                        if std::time::Instant::now() >= deadline {
+                            std::process::exit(128 + signal);
+                        }
+                        std::thread::sleep(SIGNAL_SHUTDOWN_POLL);
+                    }
                 }
             });
     });
@@ -1207,6 +1227,8 @@ pub struct TtyBackend {
     presenter: TtyPresenter,
     alt_screen_active: bool,
     #[cfg(unix)]
+    signal_interception_active: bool,
+    #[cfg(unix)]
     raw_mode: Option<RawModeGuard>,
 }
 
@@ -1219,6 +1241,8 @@ impl TtyBackend {
             events: TtyEventSource::new(width, height),
             presenter: TtyPresenter::new(TerminalCapabilities::detect()),
             alt_screen_active: false,
+            #[cfg(unix)]
+            signal_interception_active: false,
             #[cfg(unix)]
             raw_mode: None,
         }
@@ -1233,6 +1257,8 @@ impl TtyBackend {
             presenter: TtyPresenter::new(capabilities),
             alt_screen_active: false,
             #[cfg(unix)]
+            signal_interception_active: false,
+            #[cfg(unix)]
             raw_mode: None,
         }
     }
@@ -1246,7 +1272,10 @@ impl TtyBackend {
         // Enter raw mode first — if this fails, nothing to clean up.
         let raw_mode = RawModeGuard::enter()?;
         install_abort_panic_hook();
+        let mut signal_interception_active = false;
         if options.intercept_signals {
+            LIVE_SIGNAL_INTERCEPT_SESSIONS.fetch_add(1, Ordering::SeqCst);
+            signal_interception_active = true;
             install_termination_signal_hook();
         }
         let capabilities = TerminalCapabilities::with_overrides();
@@ -1293,6 +1322,9 @@ impl TtyBackend {
                 &mut stdout,
             );
             let _ = stdout.flush();
+            if signal_interception_active {
+                LIVE_SIGNAL_INTERCEPT_SESSIONS.fetch_sub(1, Ordering::SeqCst);
+            }
             return Err(err);
         }
 
@@ -1303,6 +1335,7 @@ impl TtyBackend {
             events,
             presenter: TtyPresenter::live(capabilities),
             alt_screen_active,
+            signal_interception_active,
             raw_mode: Some(raw_mode),
         })
     }
@@ -1343,6 +1376,11 @@ impl Drop for TtyBackend {
 
             // Flush everything before RawModeGuard restores termios.
             let _ = stdout.flush();
+
+            if self.signal_interception_active {
+                LIVE_SIGNAL_INTERCEPT_SESSIONS.fetch_sub(1, Ordering::SeqCst);
+                self.signal_interception_active = false;
+            }
 
             // RawModeGuard::drop() runs after this, restoring original termios.
         }

@@ -92,6 +92,7 @@ use ftui_render::frame::{Frame, HitData, HitId, HitRegion, WidgetBudget, WidgetS
 use ftui_render::frame_guardrails::{FrameGuardrails, GuardrailsConfig};
 use ftui_render::sanitize::sanitize;
 use std::collections::HashMap;
+use std::error::Error as _;
 use std::io::{self, Stdout, Write};
 use std::sync::Arc;
 use std::sync::mpsc;
@@ -238,6 +239,25 @@ pub struct FrameTiming {
     pub diff_us: u64,
     pub present_us: u64,
     pub total_us: u64,
+}
+
+#[derive(Debug)]
+struct SignalTerminationError {
+    signal: i32,
+}
+
+impl std::fmt::Display for SignalTerminationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "terminated by signal {}", self.signal)
+    }
+}
+
+impl std::error::Error for SignalTerminationError {}
+
+fn signal_termination_from_error(err: &io::Error) -> Option<i32> {
+    err.get_ref()
+        .and_then(|inner| inner.downcast_ref::<SignalTerminationError>())
+        .map(|inner| inner.signal)
 }
 
 /// Sink for frame timing events.
@@ -3672,9 +3692,18 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
         // Initial render
         self.render_frame()?;
 
+        let mut termination_signal = ftui_core::terminal_session::pending_termination_signal();
+
         // Main loop
         let mut loop_count: u64 = 0;
         while self.running {
+            termination_signal =
+                termination_signal.or_else(ftui_core::terminal_session::pending_termination_signal);
+            if termination_signal.is_some() {
+                self.running = false;
+                break;
+            }
+
             loop_count += 1;
             // Log heartbeat every 100 iterations to avoid flooding stderr
             if loop_count.is_multiple_of(100) {
@@ -3686,8 +3715,20 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
 
             // Poll for events with timeout
             let poll_result = self.events.poll_event(timeout)?;
+            termination_signal =
+                termination_signal.or_else(ftui_core::terminal_session::pending_termination_signal);
+            if termination_signal.is_some() {
+                self.running = false;
+                break;
+            }
             if poll_result {
                 self.drain_ready_events()?;
+            }
+            termination_signal =
+                termination_signal.or_else(ftui_core::terminal_session::pending_termination_signal);
+            if termination_signal.is_some() {
+                self.running = false;
+                break;
             }
 
             // Process subscription messages
@@ -3698,6 +3739,12 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             self.reap_finished_tasks();
 
             self.process_resize_coalescer()?;
+            termination_signal =
+                termination_signal.or_else(ftui_core::terminal_session::pending_termination_signal);
+            if termination_signal.is_some() {
+                self.running = false;
+                break;
+            }
 
             // Detect screen transitions from any update() calls above.
             // A.2: notifies the tick strategy so predictive strategies learn.
@@ -3807,6 +3854,12 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
 
             // Detect locale changes outside the event loop.
             self.check_locale_change();
+            termination_signal =
+                termination_signal.or_else(ftui_core::terminal_session::pending_termination_signal);
+            if termination_signal.is_some() {
+                self.running = false;
+                break;
+            }
 
             // Render if dirty
             if self.dirty {
@@ -3818,6 +3871,12 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
                 self.writer.gc(None);
             }
         }
+
+        let shutdown_cmd = {
+            let _span = info_span!("ftui.program.shutdown").entered();
+            self.model.on_shutdown()
+        };
+        self.execute_cmd(shutdown_cmd)?;
 
         // Auto-save state on exit
         if self.persistence_config.auto_save {
@@ -3832,6 +3891,15 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
         // Stop all subscriptions on exit
         self.subscriptions.stop_all();
         self.reap_finished_tasks();
+
+        if let Some(signal) = termination_signal {
+            #[cfg(feature = "crossterm-compat")]
+            ftui_core::terminal_session::clear_pending_termination_signal();
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                SignalTerminationError { signal },
+            ));
+        }
 
         Ok(())
     }
@@ -5193,7 +5261,14 @@ impl<M: Model> AppBuilder<M> {
         M::Message: Send + 'static,
     {
         let mut program = Program::with_config(self.model, self.config)?;
-        program.run()
+        let result = program.run();
+        if let Err(ref err) = result
+            && let Some(signal) = signal_termination_from_error(err)
+        {
+            drop(program);
+            std::process::exit(128 + signal);
+        }
+        result
     }
 
     /// Run the application using the native TTY backend.
@@ -5203,7 +5278,14 @@ impl<M: Model> AppBuilder<M> {
         M::Message: Send + 'static,
     {
         let mut program = Program::with_native_backend(self.model, self.config)?;
-        program.run()
+        let result = program.run();
+        if let Err(ref err) = result
+            && let Some(signal) = signal_termination_from_error(err)
+        {
+            drop(program);
+            std::process::exit(128 + signal);
+        }
+        result
     }
 
     /// Run the application using the legacy Crossterm backend.
@@ -7849,6 +7931,8 @@ mod tests {
     where
         M::Message: Send + 'static,
     {
+        #[cfg(feature = "crossterm-compat")]
+        ftui_core::terminal_session::clear_pending_termination_signal();
         let capabilities = TerminalCapabilities::basic();
         let mut writer = TerminalWriter::with_diff_config(
             Vec::new(),
@@ -8056,6 +8140,128 @@ mod tests {
             .expect("process task results");
         assert_eq!(program.model().updates, 1);
         assert!(program.dirty);
+    }
+
+    #[test]
+    fn run_invokes_on_shutdown_after_quit() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        struct ShutdownModel {
+            shutdowns: Arc<AtomicUsize>,
+        }
+
+        #[derive(Debug, Clone, Copy)]
+        enum ShutdownMsg {
+            Quit,
+            ShutdownRan,
+        }
+
+        impl From<Event> for ShutdownMsg {
+            fn from(_: Event) -> Self {
+                ShutdownMsg::Quit
+            }
+        }
+
+        impl Model for ShutdownModel {
+            type Message = ShutdownMsg;
+
+            fn init(&mut self) -> Cmd<Self::Message> {
+                Cmd::quit()
+            }
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    ShutdownMsg::Quit => Cmd::quit(),
+                    ShutdownMsg::ShutdownRan => {
+                        self.shutdowns.fetch_add(1, Ordering::SeqCst);
+                        Cmd::none()
+                    }
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+
+            fn on_shutdown(&mut self) -> Cmd<Self::Message> {
+                Cmd::msg(ShutdownMsg::ShutdownRan)
+            }
+        }
+
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+        let mut program = headless_program_with_config(
+            ShutdownModel {
+                shutdowns: Arc::clone(&shutdowns),
+            },
+            ProgramConfig::default(),
+        );
+
+        program.run().expect("program run");
+
+        assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn run_invokes_on_shutdown_before_returning_signal_error() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        struct ShutdownModel {
+            shutdowns: Arc<AtomicUsize>,
+        }
+
+        #[derive(Debug, Clone, Copy)]
+        enum ShutdownMsg {
+            Noop,
+            ShutdownRan,
+        }
+
+        impl From<Event> for ShutdownMsg {
+            fn from(_: Event) -> Self {
+                ShutdownMsg::Noop
+            }
+        }
+
+        impl Model for ShutdownModel {
+            type Message = ShutdownMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    ShutdownMsg::Noop => Cmd::none(),
+                    ShutdownMsg::ShutdownRan => {
+                        self.shutdowns.fetch_add(1, Ordering::SeqCst);
+                        Cmd::none()
+                    }
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+
+            fn on_shutdown(&mut self) -> Cmd<Self::Message> {
+                Cmd::msg(ShutdownMsg::ShutdownRan)
+            }
+        }
+
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+        let mut program = headless_program_with_config(
+            ShutdownModel {
+                shutdowns: Arc::clone(&shutdowns),
+            },
+            ProgramConfig::default(),
+        );
+
+        ftui_core::terminal_session::record_pending_termination_signal(2);
+        let err = program.run().expect_err("signal should stop runtime");
+
+        assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
+        assert_eq!(signal_termination_from_error(&err), Some(2));
+        assert_eq!(
+            ftui_core::terminal_session::pending_termination_signal(),
+            None
+        );
     }
 
     #[test]

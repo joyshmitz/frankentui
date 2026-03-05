@@ -135,7 +135,6 @@ pub mod cached;
 pub mod columns;
 pub mod command_palette;
 /// Galaxy-brain decision card widget with progressive-disclosure transparency.
-#[cfg(feature = "galaxy-brain")]
 pub mod decision_card;
 pub mod constraint_overlay;
 #[cfg(feature = "debug-overlay")]
@@ -216,7 +215,6 @@ pub use badge::Badge;
 pub use cached::{CacheKey, CachedWidget, CachedWidgetState, FnKey, HashKey, NoCacheKey};
 pub use columns::{Column, Columns};
 pub use constraint_overlay::{ConstraintOverlay, ConstraintOverlayStyle};
-#[cfg(feature = "galaxy-brain")]
 pub use decision_card::DecisionCard;
 #[cfg(feature = "debug-overlay")]
 pub use debug_overlay::{

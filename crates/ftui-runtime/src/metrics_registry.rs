@@ -208,10 +208,12 @@ pub enum BuiltinCounter {
     BocpdChangePointsTotal = 12,
     /// E-process rejections.
     EProcessRejectionsTotal = 13,
+    /// Trace/evidence schema compatibility failures.
+    TraceCompatFailuresTotal = 14,
 }
 
 impl BuiltinCounter {
-    const COUNT: usize = 14;
+    const COUNT: usize = 15;
 
     const ALL: [Self; Self::COUNT] = [
         Self::RenderFramesTotal,
@@ -228,6 +230,7 @@ impl BuiltinCounter {
         Self::VoiSamplesSkippedTotal,
         Self::BocpdChangePointsTotal,
         Self::EProcessRejectionsTotal,
+        Self::TraceCompatFailuresTotal,
     ];
 
     fn name(self) -> &'static str {
@@ -246,6 +249,7 @@ impl BuiltinCounter {
             Self::VoiSamplesSkippedTotal => "ftui_voi_samples_skipped_total",
             Self::BocpdChangePointsTotal => "ftui_bocpd_change_points_total",
             Self::EProcessRejectionsTotal => "ftui_eprocess_rejections_total",
+            Self::TraceCompatFailuresTotal => "ftui_trace_compat_failures_total",
         }
     }
 
@@ -265,6 +269,7 @@ impl BuiltinCounter {
             Self::VoiSamplesSkippedTotal => "VOI samples skipped.",
             Self::BocpdChangePointsTotal => "BOCPD change points detected.",
             Self::EProcessRejectionsTotal => "E-process rejections triggered.",
+            Self::TraceCompatFailuresTotal => "Trace/evidence schema compatibility failures.",
         }
     }
 }

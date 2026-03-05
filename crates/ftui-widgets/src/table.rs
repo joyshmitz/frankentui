@@ -48,9 +48,12 @@ impl Row {
     }
 
     /// Set the row height in lines.
+    ///
+    /// Values below 1 clamp to a single visible line so rows always consume
+    /// vertical space deterministically.
     #[must_use]
     pub fn height(mut self, height: u16) -> Self {
-        self.height = height;
+        self.height = height.max(1);
         self
     }
 
@@ -606,18 +609,18 @@ impl TableState {
         }
     }
 
-    /// Scroll the table up by the given number of lines.
-    pub fn scroll_up(&mut self, lines: usize) {
-        self.offset = self.offset.saturating_sub(lines);
+    /// Scroll the table up by the given number of rows.
+    pub fn scroll_up(&mut self, rows: usize) {
+        self.offset = self.offset.saturating_sub(rows);
     }
 
-    /// Scroll the table down by the given number of lines.
+    /// Scroll the table down by the given number of rows.
     ///
     /// Clamps so that the last row can still appear at the top of the viewport.
-    pub fn scroll_down(&mut self, lines: usize, row_count: usize) {
+    pub fn scroll_down(&mut self, rows: usize, row_count: usize) {
         self.offset = self
             .offset
-            .saturating_add(lines)
+            .saturating_add(rows)
             .min(row_count.saturating_sub(1));
     }
 }
@@ -1437,6 +1440,12 @@ mod tests {
         assert!(row.style.has_attr(ftui_style::StyleFlags::BOLD));
     }
 
+    #[test]
+    fn row_height_zero_clamps_to_one() {
+        let row = Row::new(["X"]).height(0);
+        assert_eq!(row.height, 1);
+    }
+
     // --- TableState tests ---
 
     #[test]
@@ -1548,6 +1557,35 @@ mod tests {
         assert_eq!(cell_char(&frame.buffer, 0, 0), Some('N'));
         // Data on row 1
         assert_eq!(cell_char(&frame.buffer, 0, 1), Some('f'));
+    }
+
+    #[test]
+    fn zero_height_row_clamps_and_preserves_vertical_flow() {
+        let table = Table::new(
+            [Row::new(["A"]).height(0), Row::new(["B"])],
+            [Constraint::Fixed(3)],
+        );
+        let area = Rect::new(0, 0, 3, 2);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(3, 2, &mut pool);
+        Widget::render(&table, area, &mut frame);
+
+        assert_eq!(cell_char(&frame.buffer, 0, 0), Some('A'));
+        assert_eq!(cell_char(&frame.buffer, 0, 1), Some('B'));
+    }
+
+    #[test]
+    fn zero_height_header_clamps_to_one_and_offsets_rows() {
+        let header = Row::new(["H"]).height(0);
+        let table = Table::new([Row::new(["D"])], [Constraint::Fixed(3)]).header(header);
+
+        let area = Rect::new(0, 0, 3, 2);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(3, 2, &mut pool);
+        Widget::render(&table, area, &mut frame);
+
+        assert_eq!(cell_char(&frame.buffer, 0, 0), Some('H'));
+        assert_eq!(cell_char(&frame.buffer, 0, 1), Some('D'));
     }
 
     #[test]
