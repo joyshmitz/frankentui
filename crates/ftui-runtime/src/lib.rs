@@ -26,6 +26,7 @@
 //! optional layers used by your `view()` to construct UI output.
 
 pub mod allocation_budget;
+pub mod alpha_investing;
 pub mod asciicast;
 pub mod bocpd;
 pub mod cancellation;
@@ -33,6 +34,7 @@ pub mod cancellation;
 pub mod conformal_alert;
 pub mod conformal_frame_guard;
 pub mod conformal_predictor;
+pub mod conformal_stages;
 pub mod cost_model;
 pub mod debug_trace;
 pub mod decision_core;
@@ -45,7 +47,9 @@ pub mod event_trace;
 pub mod evidence_bridges;
 pub mod evidence_sink;
 pub mod evidence_telemetry;
+pub mod flat_combine;
 pub mod flake_detector;
+pub mod lens;
 pub mod input_fairness;
 pub mod input_macro;
 pub mod ivm;
@@ -59,8 +63,10 @@ pub mod queueing_scheduler;
 pub mod render_thread;
 pub mod render_trace;
 pub mod resize_coalescer;
+pub mod reversible;
 pub mod resize_sla;
 pub mod retry;
+pub mod rough_path;
 pub mod simulator;
 pub mod state_persistence;
 #[cfg(feature = "stdio-capture")]
@@ -69,6 +75,7 @@ pub mod string_model;
 pub mod subscription;
 pub mod terminal_writer;
 pub mod tick_strategy;
+pub mod transparency;
 pub mod undo;
 pub mod unified_evidence;
 pub mod validation_pipeline;
@@ -183,12 +190,17 @@ pub use event_trace::{
     SerDecisionDomain, SerEvidenceEntry, SerEvidenceTerm, TraceFile, TraceRecord,
 };
 pub use flake_detector::{EvidenceLog, FlakeConfig, FlakeDecision, FlakeDetector, FlakeSummary};
+pub use flat_combine::{CombinerStats, FlatCombiner};
+pub use lens::{AtIndex, Composed, Fst, Identity, Lens, Prism, Snd, SomePrism, at_index, compose};
 pub use policy_config::{
     BocpdPolicyConfig, CascadePolicyConfig, ConformalPolicyConfig, EProcessBudgetPolicyConfig,
     EProcessThrottlePolicyConfig, EvidencePolicyConfig, FrameGuardPolicyConfig, PidPolicyConfig,
     PolicyConfig, PolicyConfigError, VoiPolicyConfig,
 };
 pub use reactive::{BatchScope, Binding, BindingScope, Computed, Observable, TwoWayBinding};
+pub use reversible::{
+    AddOp, InsertOp, Journal, MulOp, PushOp, RemoveOp, Reversible, Sequence, SetOp, SwapOp, XorOp,
+};
 pub use resize_coalescer::{
     CoalesceAction, CoalescerConfig, CoalescerStats, CycleTimePercentiles, DecisionLog,
     DecisionSummary, Regime, ResizeCoalescer,
