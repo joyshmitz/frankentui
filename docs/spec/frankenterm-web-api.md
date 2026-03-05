@@ -156,6 +156,23 @@ The public browser contract uses semantic versioning:
 - `setTextShaping`
 - `textShapingState`
 
+`setTextShaping` and `textShapingState` use a deterministic ligature/fallback
+contract:
+
+- Ligature policy is explicit (`auto`, `enabled`, `disabled`).
+- When ligatures are requested but runtime capability reports unsupported
+  ligatures, output must deterministically fall back to canonical grapheme
+  boundaries (no backend-default variability).
+- Selection, cursor, and extraction semantics must remain canonical across
+  shaping and fallback paths.
+- Shaping cache keys include OpenType feature state (`liga`/`clig` values) and
+  font identity/size so toggles cannot alias.
+- Font/DPR/zoom changes must invalidate shaped-run cache generation before the
+  next frame, ensuring stale glyph clusters are not reused across font metric
+  transitions.
+- Hosts should expect shaping diagnostics to be replay-safe and auditable via
+  JSONL event streams (including fallback-path evidence).
+
 ### Contract introspection
 
 - `apiVersion`

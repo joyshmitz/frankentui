@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# E2E: Remote paste with Unicode over WebSocket (bd-lff4p.10.5)
+# E2E: Remote paste with Unicode over WebSocket (bd-2vr05.4.4)
 #
 # Tests bracketed paste mode with multi-script Unicode content
 # through the WebSocket PTY bridge.
@@ -45,13 +45,20 @@ RESULT="$(remote_run_scenario "$SCENARIOS_DIR/paste_unicode.json" \
 }
 
 OUTCOME="$(echo "$RESULT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["outcome"])' 2>/dev/null || echo "unknown")"
+ASSERTIONS_TOTAL="$(echo "$RESULT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("assertions_total", 0))' 2>/dev/null || echo "0")"
+ASSERTIONS_FAILED="$(echo "$RESULT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("assertions_failed", 0))' 2>/dev/null || echo "0")"
 
 if [[ "$OUTCOME" == "pass" ]]; then
+    if [[ "${ASSERTIONS_FAILED:-0}" -ne 0 ]]; then
+        echo "[FAIL] Remote paste unicode assertions failed: ${ASSERTIONS_FAILED}/${ASSERTIONS_TOTAL}"
+        echo "$RESULT"
+        exit 1
+    fi
     echo "[PASS] Remote paste unicode"
     echo "$RESULT" | python3 -c "
 import json, sys
 r = json.load(sys.stdin)
-print(f'  WS out: {r[\"ws_out_bytes\"]} bytes | Frames: {r[\"frames\"]}')
+print(f'  WS out: {r[\"ws_out_bytes\"]} bytes | Frames: {r[\"frames\"]} | Assertions: {r.get(\"assertions_total\", 0)}/{r.get(\"assertions_total\", 0)}')
 " 2>/dev/null || true
 else
     echo "[FAIL] Remote paste unicode: $OUTCOME"

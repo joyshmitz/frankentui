@@ -5579,22 +5579,6 @@ mod tests {
         lines[0]
     }
 
-    /// Doom jump should peak below wall height and settle back on the ground.
-    #[cfg(any())]
-    #[test]
-    fn doom_jump_height_and_landing() {
-        todo!(
-            "rewrite for DoomEngine API: player.jump_z → engine.player.mom_z, player.grounded → engine.player.on_ground"
-        );
-    }
-
-    /// Doom collision should prevent stepping through walls.
-    #[cfg(any())]
-    #[test]
-    fn doom_collision_blocks_wall_crossing() {
-        todo!("rewrite for DoomEngine API: doom.lines/player/try_move → doom.engine.*");
-    }
-
     /// Quake jump should return to ground.
     #[test]
     fn quake_jump_returns_to_ground() {

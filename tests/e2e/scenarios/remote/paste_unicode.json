@@ -1,6 +1,7 @@
 {
   "name": "remote_paste_unicode",
   "description": "Bracketed paste with Unicode content over WebSocket",
+  "fixture_categories": ["happy_path", "paste", "unicode", "bracketed_paste"],
   "initial_cols": 80,
   "initial_rows": 24,
   "steps": [
@@ -13,6 +14,11 @@
     {"type": "wait", "ms": 200},
     {"type": "send", "data_hex": "04", "delay_ms": 100, "comment": "Ctrl-D to exit cat"},
     {"type": "drain"}
+  ],
+  "assertions": [
+    {"id": "paste_unicode_line_1", "kind": "contains", "pattern": "Hello, 世界! 🌍", "category": "unicode"},
+    {"id": "paste_unicode_line_2", "kind": "contains", "pattern": "Café ☃ Snowman ❤ Heart", "category": "unicode"},
+    {"id": "paste_unicode_line_3", "kind": "contains", "pattern": "กขฃ Thai あいう Japanese", "category": "unicode"}
   ],
   "timeout_s": 15
 }

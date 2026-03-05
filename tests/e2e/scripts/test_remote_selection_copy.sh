@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# E2E: Remote selection+copy interaction markers over WebSocket (bd-lff4p.2.17)
+# E2E: Remote selection+copy interaction markers over WebSocket (bd-2vr05.4.4)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/../lib"
@@ -59,9 +59,18 @@ OUTCOME="$(echo "$RESULT" | python3 -c 'import json,sys; print(json.load(sys.std
 FRAMES="$(echo "$RESULT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("frames", 0))' 2>/dev/null || echo "0")"
 WS_IN="$(echo "$RESULT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("ws_in_bytes", 0))' 2>/dev/null || echo "0")"
 WS_OUT="$(echo "$RESULT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("ws_out_bytes", 0))' 2>/dev/null || echo "0")"
+ASSERTIONS_TOTAL="$(echo "$RESULT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("assertions_total", 0))' 2>/dev/null || echo "0")"
+ASSERTIONS_FAILED="$(echo "$RESULT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("assertions_failed", 0))' 2>/dev/null || echo "0")"
 
 if [[ "$OUTCOME" != "pass" ]]; then
     echo "[FAIL] Remote selection+copy scenario outcome: $OUTCOME"
+    echo "$RESULT"
+    print_repro
+    exit 1
+fi
+
+if [[ "${ASSERTIONS_FAILED:-0}" -ne 0 ]]; then
+    echo "[FAIL] Scenario assertions failed: ${ASSERTIONS_FAILED}/${ASSERTIONS_TOTAL}"
     echo "$RESULT"
     print_repro
     exit 1
@@ -88,4 +97,4 @@ assert_transcript_contains "COPY_PAYLOAD_B64:YWxwaGEgYmV0YSBnYW1tYQ=="
 assert_transcript_contains "SELECTION_COPY_DONE"
 
 echo "[PASS] Remote selection+copy markers validated"
-echo "  WS in: $WS_IN bytes | WS out: $WS_OUT bytes | Frames: $FRAMES"
+echo "  WS in: $WS_IN bytes | WS out: $WS_OUT bytes | Frames: $FRAMES | Assertions: ${ASSERTIONS_TOTAL}/${ASSERTIONS_TOTAL}"
