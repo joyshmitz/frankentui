@@ -7,7 +7,7 @@
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││MEM ▅╭────────────────────────── Command Palette ───────────────────────────╮3  @90 ││ 14x13  @10 │││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││NET ▁│>Type to search...                                                    │       ││            │││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││OUT ▁│> [App] Quit  Exit the application                                    │       ││            │││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││EPS █│  [View] Toggle Help  Show or hide the keyboard shortcuts overlay     │       ││            │││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││EPS  │  [View] Toggle Help  Show or hide the keyboard shortcuts overlay     │       ││            │││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││     │  [View] Cycle Theme  Switch to the next color theme                  │       ││            │││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││     │  [View] Toggle Debug Overlay  Show or hide the debug information pan…│       ││            │││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││     │  [Input] Toggle Mouse Capture  Enable or disable terminal mouse repo…│       ││            │││

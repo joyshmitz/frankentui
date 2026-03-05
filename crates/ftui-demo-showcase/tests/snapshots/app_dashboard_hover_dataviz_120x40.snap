@@ -7,7 +7,7 @@
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││MEM ▅▂ ▃▁▄▄▂▂▇▅▃▅▂▃▄ 41%││                        ││Status: NOMINAL│  │┃ 14x13  @90 ││ 14x13  @10 │││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││NET ▁▁▁▁▁  ▁   ▇▁▁    14││use ftui_core::event::Ev││FPS: 0 Size: 1 │  │┃            ││            │││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││OUT ▁▁▁▃▁█  ▁▁ ▁  ▁▁▇149││use ftui_render::cell::C││Events/Theme:  │  │┃            ││            │││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││EPS ██░ DSK ██░ IO  ░░░ ││use ftui_render::frame::││CPU:  4Alerts: │  │┃            ││            │││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││EPS   7 DSK   6 IO      ││use ftui_render::frame::││CPU:  4Alerts: │  │┃            ││            │││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                        ││use ftui_runtime::{Cmd, ││NET:   Pipelin │  │┃            ││            │││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                        ││                        ││Frame: Headroo │  │┃            ││            │││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                        ││#[derive(Debug, Clone)] ││               │  │┃            ││            │││

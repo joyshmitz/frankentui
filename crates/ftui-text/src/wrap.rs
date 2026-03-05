@@ -202,7 +202,7 @@ fn wrap_paragraph(
     current_width: &mut usize,
 ) {
     for word in split_words(text) {
-        let is_whitespace_only = word.trim().is_empty();
+        let is_whitespace_only = word.chars().all(is_breaking_whitespace);
 
         // Skip leading whitespace on new lines if not preserving indent
         if *current_width == 0 && is_whitespace_only && !options.preserve_indent {
@@ -243,16 +243,10 @@ fn wrap_paragraph(
             }
         } else {
             // Word fits on a fresh line
-            let (fragment, fragment_width) = if options.preserve_indent {
-                (word, word_width)
-            } else {
-                let trimmed = word.trim_start();
-                (trimmed, display_width(trimmed))
-            };
-            if !fragment.is_empty() {
-                current_line.push_str(fragment);
+            if !word.is_empty() {
+                current_line.push_str(word);
             }
-            *current_width = fragment_width;
+            *current_width = word_width;
         }
     }
 }
@@ -269,7 +263,7 @@ fn wrap_long_word(
         let grapheme_width = crate::wrap::grapheme_width(grapheme);
 
         // Skip leading whitespace on new lines
-        if *current_width == 0 && grapheme.trim().is_empty() && !options.preserve_indent {
+        if *current_width == 0 && grapheme.chars().all(is_breaking_whitespace) && !options.preserve_indent {
             continue;
         }
 
@@ -279,7 +273,7 @@ fn wrap_long_word(
             *current_width = 0;
 
             // Skip leading whitespace after wrap
-            if grapheme.trim().is_empty() && !options.preserve_indent {
+            if grapheme.chars().all(is_breaking_whitespace) && !options.preserve_indent {
                 continue;
             }
         }
@@ -325,7 +319,7 @@ fn split_words(text: &str) -> Vec<&str> {
 /// Finalize a line (apply trimming, etc.).
 fn finalize_line(line: &str, options: &WrapOptions) -> String {
     if options.trim_trailing {
-        line.trim_end().to_string()
+        line.trim_end_matches(is_breaking_whitespace).to_string()
     } else {
         line.to_string()
     }
@@ -868,7 +862,7 @@ pub fn wrap_optimal(text: &str, width: usize) -> KpBreakResult {
         }
 
         // Trim trailing whitespace from each line (standard behavior)
-        let trimmed = line.trim_end().to_string();
+        let trimmed = line.trim_end_matches(is_breaking_whitespace).to_string();
 
         // Compute this line's badness for diagnostics
         let line_w = display_width(trimmed.as_str());

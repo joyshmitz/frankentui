@@ -7,7 +7,7 @@
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││MEM ▅╭────────────────────────── Command Palette ───────────────────────────╮3  @90 ││ 14x13  @10 │││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││NET ▁│>Type to search...                                                    │       ││            │││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││OUT ▁│> [App] Quit  Exit the application                                    │       ││            │││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││EPS █│  [Visuals] Data Viz  Dense charts and small-multiple visualizations. │       ││            │││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││EPS  │  [Visuals] Data Viz  Dense charts and small-multiple visualizations. │       ││            │││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││     │  [Core] Advanced  Advanced widget patterns and composite layouts.    │       ││            │││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││     │  [Text] Markdown  Markdown rendering with styling and layout.        │       ││            │││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││     │  [Tour] Dashboard  Cinematic overview of key features and live tiles.│       ││            │││
