@@ -154,3 +154,6 @@ pub mod doom;
 
 #[cfg(feature = "quake")]
 pub mod quake;
+
+#[cfg(feature = "sinkhorn-morph")]
+pub mod sinkhorn_morph;

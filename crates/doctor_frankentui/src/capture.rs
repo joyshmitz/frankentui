@@ -473,7 +473,21 @@ fn conservative_env_enabled() -> bool {
 }
 
 pub fn print_profiles() {
-    for name in list_profile_names() {
+    let integration = OutputIntegration::detect();
+    let profiles = list_profile_names();
+    if integration.should_emit_json() {
+        println!(
+            "{}",
+            serde_json::json!({
+                "command": "list-profiles",
+                "status": "ok",
+                "profiles": profiles,
+                "integration": integration,
+            })
+        );
+        return;
+    }
+    for name in profiles {
         println!("{name}");
     }
 }

@@ -225,7 +225,7 @@ fn build_capture_smoke_command(
 ) -> Command {
     let mut command = Command::new(current_exe);
     command
-        .arg("capture")
+        .arg("replay")
         .arg("--profile")
         .arg("analytics-empty")
         .arg("--app-command")
@@ -356,7 +356,7 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
     let integration = OutputIntegration::detect();
     let ui = output_for(&integration);
 
-    ui.rule(Some("doctor_frankentui doctor"));
+    ui.rule(Some("doctor_frankentui certify"));
     ui.info(&format!(
         "binary={}",
         args.binary
@@ -407,10 +407,13 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
     let mut app_smoke_summary: Option<String> = None;
 
     ui.rule(Some("script help checks"));
-    run_help_check(&current_exe, "capture")?;
-    run_help_check(&current_exe, "suite")?;
+    run_help_check(&current_exe, "plan")?;
+    run_help_check(&current_exe, "migrate")?;
+    run_help_check(&current_exe, "certify")?;
+    run_help_check(&current_exe, "replay")?;
     run_help_check(&current_exe, "report")?;
     run_help_check(&current_exe, "seed-demo")?;
+    run_help_check(&current_exe, "list-profiles")?;
     ui.success("help checks passed");
 
     ui.rule(Some("profile checks"));

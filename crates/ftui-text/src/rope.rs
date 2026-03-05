@@ -217,8 +217,10 @@ impl Rope {
             self.len_chars()
         };
         let line_len = next_line_start.saturating_sub(line_start);
-        
-        let char_idx = line_start.saturating_add(col.min(line_len)).min(self.len_chars());
+
+        let char_idx = line_start
+            .saturating_add(col.min(line_len))
+            .min(self.len_chars());
         self.char_to_byte(char_idx)
     }
 

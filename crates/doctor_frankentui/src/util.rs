@@ -1,6 +1,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
 use chrono::{Local, Utc};
@@ -27,6 +28,34 @@ pub fn command_exists(command: &str) -> bool {
     which::which(command).is_ok()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputModeOverride {
+    Human,
+    Json,
+}
+
+const OUTPUT_MODE_OVERRIDE_AUTO: u8 = 0;
+const OUTPUT_MODE_OVERRIDE_HUMAN: u8 = 1;
+const OUTPUT_MODE_OVERRIDE_JSON: u8 = 2;
+static OUTPUT_MODE_OVERRIDE: AtomicU8 = AtomicU8::new(OUTPUT_MODE_OVERRIDE_AUTO);
+
+fn current_output_mode_override() -> Option<OutputModeOverride> {
+    match OUTPUT_MODE_OVERRIDE.load(Ordering::Relaxed) {
+        OUTPUT_MODE_OVERRIDE_HUMAN => Some(OutputModeOverride::Human),
+        OUTPUT_MODE_OVERRIDE_JSON => Some(OutputModeOverride::Json),
+        _ => None,
+    }
+}
+
+pub fn set_output_mode_override(mode: Option<OutputModeOverride>) {
+    let encoded = match mode {
+        Some(OutputModeOverride::Human) => OUTPUT_MODE_OVERRIDE_HUMAN,
+        Some(OutputModeOverride::Json) => OUTPUT_MODE_OVERRIDE_JSON,
+        None => OUTPUT_MODE_OVERRIDE_AUTO,
+    };
+    OUTPUT_MODE_OVERRIDE.store(encoded, Ordering::Relaxed);
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct OutputIntegration {
     pub fastapi_mode: String,
@@ -41,14 +70,23 @@ impl OutputIntegration {
     #[must_use]
     pub fn detect() -> Self {
         let fastapi_detection = fastapi_output::detect_environment();
-        let fastapi_mode = fastapi_output::OutputMode::auto();
-        let sqlmodel_mode = SqlModelOutputMode::detect();
+        let override_mode = current_output_mode_override();
+        let fastapi_mode = match override_mode {
+            Some(OutputModeOverride::Human) => "plain".to_string(),
+            Some(OutputModeOverride::Json) => "json".to_string(),
+            None => fastapi_output::OutputMode::auto().as_str().to_string(),
+        };
+        let sqlmodel_mode = match override_mode {
+            Some(OutputModeOverride::Human) => "plain".to_string(),
+            Some(OutputModeOverride::Json) => "json".to_string(),
+            None => SqlModelOutputMode::detect().as_str().to_string(),
+        };
         Self {
-            fastapi_mode: fastapi_mode.as_str().to_string(),
+            fastapi_mode,
             fastapi_agent: fastapi_detection.is_agent,
             fastapi_ci: fastapi_detection.is_ci,
             fastapi_tty: fastapi_detection.is_tty,
-            sqlmodel_mode: sqlmodel_mode.as_str().to_string(),
+            sqlmodel_mode,
             sqlmodel_agent: SqlModelOutputMode::is_agent_environment(),
         }
     }

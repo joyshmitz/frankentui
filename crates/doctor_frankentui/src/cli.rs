@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::capture::{CaptureArgs, print_profiles, run_capture};
 use crate::doctor::{DoctorArgs, run_doctor};
@@ -7,14 +7,42 @@ use crate::import::{ImportArgs, run_import};
 use crate::report::{ReportArgs, run_report};
 use crate::seed::{SeedDemoArgs, run_seed_demo};
 use crate::suite::{SuiteArgs, run_suite};
+use crate::util::{OutputModeOverride, set_output_mode_override};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum MachineOutputMode {
+    Auto,
+    Human,
+    Json,
+}
+
+impl MachineOutputMode {
+    fn override_mode(self) -> Option<OutputModeOverride> {
+        match self {
+            Self::Auto => None,
+            Self::Human => Some(OutputModeOverride::Human),
+            Self::Json => Some(OutputModeOverride::Json),
+        }
+    }
+}
 
 #[derive(Debug, Parser)]
 #[command(
     name = "doctor_frankentui",
     about = "Integrated TUI capture and diagnostics toolkit for FrankenTUI agents",
-    version
+    version,
+    after_help = "Failure semantics:\n  - Commands return non-zero exits on contract violations and emit structured errors in JSON mode.\nDeterministic replay hints:\n  - Use stable --run-root/--run-name values for replayable artifacts.\n  - Use --machine json for CI/IDE automation pipelines."
 )]
 pub struct Cli {
+    #[arg(
+        long = "machine",
+        value_enum,
+        global = true,
+        default_value_t = MachineOutputMode::Auto,
+        help = "Output mode: auto, human, or json."
+    )]
+    pub machine: MachineOutputMode,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -22,23 +50,27 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 #[allow(clippy::large_enum_variant)]
 pub enum Commands {
-    /// Profile-driven VHS capture runner.
+    /// Replay deterministic capture workflows (legacy alias: `capture`).
+    #[command(name = "replay", visible_alias = "capture")]
     Capture(CaptureArgs),
 
     /// Seed MCP demo data via JSON-RPC.
     #[command(name = "seed-demo")]
     SeedDemo(SeedDemoArgs),
 
-    /// Run a multi-profile capture suite.
+    /// Run migration replay suites across multiple profiles (legacy alias: `suite`).
+    #[command(name = "migrate", visible_alias = "suite")]
     Suite(SuiteArgs),
 
     /// Generate HTML and JSON reports from a suite directory.
     Report(ReportArgs),
 
-    /// Validate environment and wiring.
+    /// Certify environment wiring and capture readiness (legacy alias: `doctor`).
+    #[command(name = "certify", visible_alias = "doctor")]
     Doctor(DoctorArgs),
 
-    /// Materialize deterministic source snapshots for OpenTUI import.
+    /// Plan deterministic import intake and snapshot materialization (legacy alias: `import`).
+    #[command(name = "plan", visible_alias = "import")]
     Import(ImportArgs),
 
     /// Print built-in profile names.
@@ -52,6 +84,7 @@ pub fn run_from_env() -> Result<()> {
 }
 
 pub fn run(cli: Cli) -> Result<()> {
+    set_output_mode_override(cli.machine.override_mode());
     match cli.command {
         Commands::Capture(args) => run_capture(args),
         Commands::SeedDemo(args) => run_seed_demo(args),
@@ -70,6 +103,7 @@ pub fn run(cli: Cli) -> Result<()> {
 mod tests {
     use std::path::PathBuf;
 
+    use clap::Parser;
     use crate::capture::CaptureArgs;
     use crate::error::DoctorError;
     use crate::import::ImportArgs;
@@ -83,6 +117,7 @@ mod tests {
     #[test]
     fn list_profiles_command_dispatches_successfully() {
         let result = run(Cli {
+            machine: MachineOutputMode::Auto,
             command: Commands::ListProfiles,
         });
         assert!(result.is_ok());
@@ -91,6 +126,7 @@ mod tests {
     #[test]
     fn capture_command_dispatches_profile_not_found_error() {
         let result = run(Cli {
+            machine: MachineOutputMode::Auto,
             command: Commands::Capture(CaptureArgs {
                 profile: "not-a-real-profile".to_string(),
                 list_profiles: false,
@@ -147,6 +183,7 @@ mod tests {
     #[test]
     fn report_command_dispatches_missing_path_error() {
         let result = run(Cli {
+            machine: MachineOutputMode::Auto,
             command: Commands::Report(ReportArgs {
                 suite_dir: PathBuf::from("/tmp/doctor_frankentui/does-not-exist"),
                 output_html: None,
@@ -166,6 +203,7 @@ mod tests {
     #[test]
     fn seed_demo_command_dispatches_fast_timeout_error() {
         let error = run(Cli {
+            machine: MachineOutputMode::Auto,
             command: Commands::SeedDemo(SeedDemoArgs {
                 host: "127.0.0.1".to_string(),
                 port: "not-a-port".to_string(),
@@ -194,6 +232,7 @@ mod tests {
         std::fs::create_dir_all(&project_dir).expect("project dir");
 
         let error = run(Cli {
+            machine: MachineOutputMode::Auto,
             command: Commands::Suite(SuiteArgs {
                 profiles: Some("   ".to_string()),
                 binary: None,
@@ -224,6 +263,7 @@ mod tests {
         let run_root = temp.path().join("import_runs");
 
         let error = run(Cli {
+            machine: MachineOutputMode::Auto,
             command: Commands::Import(ImportArgs {
                 source: missing.display().to_string(),
                 pinned_commit: None,
@@ -238,5 +278,57 @@ mod tests {
             error,
             DoctorError::Exit { message, .. } if message.contains("class=missing_files")
         ));
+    }
+
+    #[test]
+    fn task_oriented_command_names_parse_to_expected_variants() {
+        let replay = Cli::try_parse_from([
+            "doctor_frankentui",
+            "replay",
+            "--profile",
+            "analytics-empty",
+        ])
+        .expect("replay command should parse");
+        assert!(matches!(replay.command, Commands::Capture(_)));
+
+        let migrate = Cli::try_parse_from(["doctor_frankentui", "migrate"])
+            .expect("migrate command should parse");
+        assert!(matches!(migrate.command, Commands::Suite(_)));
+
+        let certify = Cli::try_parse_from(["doctor_frankentui", "certify"])
+            .expect("certify command should parse");
+        assert!(matches!(certify.command, Commands::Doctor(_)));
+
+        let plan = Cli::try_parse_from(["doctor_frankentui", "plan", "--source", "/tmp/source"])
+            .expect("plan command should parse");
+        assert!(matches!(plan.command, Commands::Import(_)));
+    }
+
+    #[test]
+    fn machine_output_mode_parses_json_variant() {
+        let cli = Cli::try_parse_from(["doctor_frankentui", "--machine", "json", "list-profiles"])
+            .expect("json machine mode should parse");
+        assert_eq!(cli.machine, MachineOutputMode::Json);
+    }
+
+    #[test]
+    fn legacy_command_aliases_remain_supported() {
+        let capture =
+            Cli::try_parse_from(["doctor_frankentui", "capture", "--profile", "analytics-empty"])
+                .expect("legacy capture alias should parse");
+        assert!(matches!(capture.command, Commands::Capture(_)));
+
+        let suite = Cli::try_parse_from(["doctor_frankentui", "suite"])
+            .expect("legacy suite alias should parse");
+        assert!(matches!(suite.command, Commands::Suite(_)));
+
+        let doctor = Cli::try_parse_from(["doctor_frankentui", "doctor"])
+            .expect("legacy doctor alias should parse");
+        assert!(matches!(doctor.command, Commands::Doctor(_)));
+
+        let import =
+            Cli::try_parse_from(["doctor_frankentui", "import", "--source", "/tmp/source"])
+                .expect("legacy import alias should parse");
+        assert!(matches!(import.command, Commands::Import(_)));
     }
 }

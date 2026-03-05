@@ -313,7 +313,7 @@ fn move_word_left_in_line(text: &str, grapheme_idx: usize) -> usize {
     if grapheme_idx == 0 {
         return 0;
     }
-    
+
     let byte_offset = grapheme_byte_offset(text, grapheme_idx);
     let before_cursor = &text[..byte_offset];
     let mut pos = grapheme_idx;

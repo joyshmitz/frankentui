@@ -6,6 +6,13 @@
 //! This cache stores computed widths to avoid redundant Unicode width
 //! calculations for repeated strings.
 //!
+//! ## VS16 Policy and Caching
+//!
+//! Cache keys are the grapheme string itself. The VS16 width policy
+//! (controlled by `FTUI_EMOJI_VS16_WIDTH`) is global and read once at
+//! startup via `OnceLock` in `ftui_core::text_width`. Changing the env
+//! var mid-process has no effect on cached or future lookups.
+//!
 //! # Example
 //! ```
 //! use ftui_text::WidthCache;

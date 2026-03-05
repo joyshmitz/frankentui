@@ -1,4 +1,4 @@
-use ftui_text::wrap::{wrap_with_options, WrapOptions};
+use ftui_text::wrap::{WrapOptions, wrap_with_options};
 
 #[test]
 fn test_wrap_spaces() {

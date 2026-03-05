@@ -68,6 +68,30 @@ pub mod text_width {
     //! This module centralizes glyph width calculation so layout (ftui-text)
     //! and rendering (ftui-render) stay in lockstep. It intentionally avoids
     //! ad-hoc emoji heuristics and relies on Unicode data tables.
+    //!
+    //! ## Emoji Width Handling
+    //!
+    //! Most terminals render **text-default** emoji (those with
+    //! `Emoji_Presentation=No`, like U+2764 RED HEART) at **width 1**, even
+    //! when a Variation Selector 16 (U+FE0F) is appended. The Unicode spec
+    //! says VS16 requests emoji presentation (width 2), but terminal reality
+    //! disagrees.
+    //!
+    //! **Default behavior** (`FTUI_EMOJI_VS16_WIDTH` unset):
+    //! - [`strip_vs16`] removes U+FE0F before width calculation.
+    //! - Text-default emoji render at width 1 (matching most terminals).
+    //! - Emoji with `Emoji_Presentation=Yes` (e.g. U+1F600) are unaffected
+    //!   — they are always width 2.
+    //!
+    //! **Opt-in** for terminals that correctly render VS16 at width 2
+    //! (WezTerm, Kitty, Ghostty):
+    //! ```text
+    //! FTUI_EMOJI_VS16_WIDTH=unicode   # or =2
+    //! ```
+    //!
+    //! The policy is read once at startup via [`OnceLock`]. Changing the env
+    //! var mid-process has no effect. See [`vs16_width_trusted`] and
+    //! [`vs16_trust_from_env`] for the API surface.
 
     use std::sync::OnceLock;
 

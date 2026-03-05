@@ -27,6 +27,12 @@
 
 use bumpalo::Bump;
 
+/// A growable vector allocated in the bump arena.
+///
+/// Use this for scratch collections that need `push()` during rendering.
+/// The memory is reclaimed when the arena is reset at frame boundaries.
+pub type BumpVec<'a, T> = bumpalo::collections::Vec<'a, T>;
+
 /// Default initial capacity for the frame arena (256 KB).
 pub const DEFAULT_ARENA_CAPACITY: usize = 256 * 1024;
 
@@ -109,6 +115,32 @@ impl FrameArena {
     /// The returned reference is valid until the next [`reset()`](Self::reset).
     pub fn alloc<T>(&self, val: T) -> &mut T {
         self.bump.alloc(val)
+    }
+
+    /// Collect an iterator into an arena-allocated slice.
+    ///
+    /// This is the arena equivalent of `.collect::<Vec<T>>()` — it avoids
+    /// a heap allocation by writing elements directly into bump memory.
+    pub fn alloc_iter<T, I>(&self, iter: I) -> &mut [T]
+    where
+        I: IntoIterator<Item = T>,
+    {
+        let mut vec = bumpalo::collections::Vec::new_in(&self.bump);
+        vec.extend(iter);
+        vec.into_bump_slice_mut()
+    }
+
+    /// Create a new growable vector backed by this arena.
+    ///
+    /// Use this for scratch collections that grow via `push()` during
+    /// rendering. The vector's memory is reclaimed on arena reset.
+    pub fn new_vec<T>(&self) -> BumpVec<'_, T> {
+        bumpalo::collections::Vec::new_in(&self.bump)
+    }
+
+    /// Create a new growable vector with the given capacity.
+    pub fn new_vec_with_capacity<T>(&self, capacity: usize) -> BumpVec<'_, T> {
+        bumpalo::collections::Vec::with_capacity_in(capacity, &self.bump)
     }
 
     /// Returns the total bytes allocated in the arena (across all chunks).

@@ -933,6 +933,138 @@ fn stress_test_combining_chain() {
 }
 
 // =============================================================================
+// Category 16: VS16 Edge Cases (bd-xi1ii)
+// =============================================================================
+
+/// Tag sequence flags use U+E0001..U+E007F tag characters. These should
+/// render as width 2 like regular flag emoji.
+#[test]
+fn tag_sequence_flag_england() {
+    // 🏴󠁧󠁢󠁥󠁮󠁧󠁿  England flag: U+1F3F4 + tag gbeng + cancel tag
+    let england = "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}";
+    let width = grapheme_width(england);
+    assert!(
+        width >= 1,
+        "Tag sequence flag (England) must not panic and should have width >= 1, got {}",
+        width
+    );
+}
+
+/// Skin-tone modified emoji with VS16 — victory hand (text-default base)
+/// with medium skin tone and VS16 appended.
+#[test]
+fn victory_hand_skin_tone_vs16() {
+    // ✌🏽️  U+270C + U+1F3FD + U+FE0F
+    let s = "\u{270C}\u{1F3FD}\u{FE0F}";
+    let width = grapheme_width(s);
+    assert!(
+        width >= 1,
+        "Victory hand + skin tone + VS16 must not panic, got width {}",
+        width
+    );
+}
+
+/// Writing hand with skin tone (no VS16) — text-default base.
+#[test]
+fn writing_hand_skin_tone() {
+    // ✍🏻  U+270D + U+1F3FB
+    let s = "\u{270D}\u{1F3FB}";
+    let width = grapheme_width(s);
+    assert!(
+        width >= 1,
+        "Writing hand + skin tone must not panic, got width {}",
+        width
+    );
+}
+
+/// Couple with heart using skin tone modifiers — complex ZWJ + VS16 mix.
+#[test]
+fn couple_with_heart_skin_tones() {
+    // 👩🏽‍❤️‍👨🏻  woman(med) ZWJ heart VS16 ZWJ man(light)
+    let s = "\u{1F469}\u{1F3FD}\u{200D}\u{2764}\u{FE0F}\u{200D}\u{1F468}\u{1F3FB}";
+    let width = grapheme_width(s);
+    assert!(
+        width >= 1,
+        "Couple with heart + skin tones must not panic, got width {}",
+        width
+    );
+}
+
+/// Multiple consecutive VS16 — only one should matter; must not panic.
+#[test]
+fn multiple_consecutive_vs16() {
+    let s = "\u{2764}\u{FE0F}\u{FE0F}";
+    let width = grapheme_width(s);
+    // Extra VS16 is stripped; base heart U+2764 is text-default → width 1
+    assert!(
+        width <= 2,
+        "Heart + double VS16 should have width <= 2, got {}",
+        width
+    );
+}
+
+/// Mixed VS15 then VS16 on same base — must not panic.
+#[test]
+fn mixed_vs15_then_vs16() {
+    let s = "\u{2764}\u{FE0E}\u{FE0F}";
+    let _width = grapheme_width(s);
+    // No assertion on value — just verify no panic on degenerate input.
+}
+
+/// Bare VS16 through grapheme_width (not display_width) — must not panic.
+#[test]
+fn bare_vs16_grapheme_width() {
+    let width = grapheme_width("\u{FE0F}");
+    assert_eq!(width, 0, "Bare VS16 should be zero-width");
+}
+
+/// Bare VS15 through grapheme_width — must not panic.
+#[test]
+fn bare_vs15_grapheme_width() {
+    let width = grapheme_width("\u{FE0E}");
+    assert_eq!(width, 0, "Bare VS15 should be zero-width");
+}
+
+/// Keycap digits 0-9 with VS16 + combining enclosing keycap.
+#[test]
+fn keycap_digit_sequences() {
+    for digit in '0'..='9' {
+        let s = format!("{}\u{FE0F}\u{20E3}", digit);
+        let width = grapheme_width(&s);
+        assert!(
+            width >= 1,
+            "Keycap '{}' must not panic, got width {}",
+            digit,
+            width
+        );
+    }
+}
+
+/// Star keycap: * + VS16 + combining enclosing keycap.
+#[test]
+fn keycap_star_sequence() {
+    let s = "*\u{FE0F}\u{20E3}";
+    let width = grapheme_width(s);
+    assert!(width >= 1, "Keycap '*' must not panic, got width {}", width);
+}
+
+/// Verify VS16 stripping does not affect emoji with Emoji_Presentation=Yes.
+/// These should remain width 2 regardless of VS16 stripping.
+#[test]
+fn emoji_presentation_yes_unaffected_by_vs16_strip() {
+    // U+1F600 (grinning face) has Emoji_Presentation=Yes — always wide.
+    let with_vs16 = "\u{1F600}\u{FE0F}";
+    let without = "\u{1F600}";
+    let w1 = grapheme_width(with_vs16);
+    let w2 = grapheme_width(without);
+    assert_eq!(
+        w1, w2,
+        "VS16 on Emoji_Presentation=Yes should not change width"
+    );
+    assert_eq!(w2, 2);
+}
+
+// =============================================================================
 // Terminal Behavior Documentation Tests
 // =============================================================================
 

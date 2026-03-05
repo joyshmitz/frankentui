@@ -273,7 +273,7 @@ pub fn run_import(args: ImportArgs) -> Result<()> {
     }
 
     if !integration.should_emit_json() {
-        ui.rule(Some("doctor_frankentui import"));
+        ui.rule(Some("doctor_frankentui plan|migrate"));
         ui.info(&format!("source={}", args.source));
         ui.info(&format!("source_kind={}", source_kind.as_str()));
         ui.info(&format!("run_dir={}", run_dir.display()));

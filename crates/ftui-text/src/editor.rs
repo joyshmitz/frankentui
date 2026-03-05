@@ -32,9 +32,19 @@ use crate::rope::Rope;
 /// A single edit operation for undo/redo.
 #[derive(Debug, Clone)]
 enum EditOp {
-    Insert { byte_offset: usize, text: String },
-    Delete { byte_offset: usize, text: String },
-    Replace { byte_offset: usize, deleted: String, inserted: String },
+    Insert {
+        byte_offset: usize,
+        text: String,
+    },
+    Delete {
+        byte_offset: usize,
+        text: String,
+    },
+    Replace {
+        byte_offset: usize,
+        deleted: String,
+        inserted: String,
+    },
 }
 
 impl EditOp {
@@ -48,7 +58,11 @@ impl EditOp {
                 byte_offset: *byte_offset,
                 text: text.clone(),
             },
-            Self::Replace { byte_offset, deleted, inserted } => Self::Replace {
+            Self::Replace {
+                byte_offset,
+                deleted,
+                inserted,
+            } => Self::Replace {
                 byte_offset: *byte_offset,
                 deleted: inserted.clone(),
                 inserted: deleted.clone(),
@@ -60,7 +74,9 @@ impl EditOp {
         match self {
             Self::Insert { text, .. } => text.len(),
             Self::Delete { text, .. } => text.len(),
-            Self::Replace { deleted, inserted, .. } => deleted.len() + inserted.len(),
+            Self::Replace {
+                deleted, inserted, ..
+            } => deleted.len() + inserted.len(),
         }
     }
 }
@@ -266,7 +282,7 @@ impl Editor {
 
         if let Some((start_byte, deleted)) = self.extract_selection() {
             let char_idx = self.rope.byte_to_char(start_byte);
-            
+
             self.push_undo(EditOp::Replace {
                 byte_offset: start_byte,
                 deleted,
@@ -274,7 +290,7 @@ impl Editor {
             });
 
             self.rope.insert(char_idx, &sanitized);
-            
+
             let new_byte_idx = start_byte + sanitized.len();
             let nav = CursorNavigator::new(&self.rope);
             self.cursor = nav.from_byte_index(new_byte_idx);
@@ -554,7 +570,11 @@ impl Editor {
                 let end_char = self.rope.byte_to_char(*byte_offset + text.len());
                 self.rope.remove(start_char..end_char);
             }
-            EditOp::Replace { byte_offset, deleted, inserted } => {
+            EditOp::Replace {
+                byte_offset,
+                deleted,
+                inserted,
+            } => {
                 let start_char = self.rope.byte_to_char(*byte_offset);
                 let end_char = self.rope.byte_to_char(*byte_offset + deleted.len());
                 self.rope.remove(start_char..end_char);
@@ -583,7 +603,7 @@ impl Editor {
         self.rope.remove(start_char..end_char);
         let nav = CursorNavigator::new(&self.rope);
         self.cursor = nav.from_byte_index(start_byte);
-        
+
         Some((start_byte, deleted))
     }
 
@@ -788,8 +808,6 @@ impl Editor {
         self.current_undo_size = 0;
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -1462,11 +1480,11 @@ mod tests {
         }
         ed.insert_text("universe");
         assert_eq!(ed.text(), "hello universe");
-        
+
         // Atomic Replace: 1 undo restores the deleted text and removes inserted
         ed.undo();
         assert_eq!(ed.text(), "hello world");
-        
+
         // 1 redo reapplies the edit
         ed.redo();
         assert_eq!(ed.text(), "hello universe");

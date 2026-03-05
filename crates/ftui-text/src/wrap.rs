@@ -263,7 +263,10 @@ fn wrap_long_word(
         let grapheme_width = crate::wrap::grapheme_width(grapheme);
 
         // Skip leading whitespace on new lines
-        if *current_width == 0 && grapheme.chars().all(is_breaking_whitespace) && !options.preserve_indent {
+        if *current_width == 0
+            && grapheme.chars().all(is_breaking_whitespace)
+            && !options.preserve_indent
+        {
             continue;
         }
 

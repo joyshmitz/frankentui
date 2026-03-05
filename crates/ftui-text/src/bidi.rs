@@ -207,10 +207,22 @@ impl BidiSegment {
             return 0;
         }
 
-        let base_level = if self.base_direction() == Direction::Ltr { 0 } else { 1 };
+        let base_level = if self.base_direction() == Direction::Ltr {
+            0
+        } else {
+            1
+        };
 
-        let level_left = if logical > 0 { self.levels[logical - 1].number() } else { base_level };
-        let level_right = if logical < n { self.levels[logical].number() } else { base_level };
+        let level_left = if logical > 0 {
+            self.levels[logical - 1].number()
+        } else {
+            base_level
+        };
+        let level_right = if logical < n {
+            self.levels[logical].number()
+        } else {
+            base_level
+        };
 
         if level_left <= level_right {
             // Attach to the left logical character (logical - 1), or paragraph start if logical == 0.
@@ -255,12 +267,20 @@ impl BidiSegment {
 
         if visual >= n {
             let l_l = self.logical_pos(n - 1);
-            return if self.levels[l_l].number().is_multiple_of(2) { l_l + 1 } else { l_l };
+            return if self.levels[l_l].number().is_multiple_of(2) {
+                l_l + 1
+            } else {
+                l_l
+            };
         }
 
         if visual == 0 {
             let l_r = self.logical_pos(0);
-            return if self.levels[l_r].number().is_multiple_of(2) { l_r } else { l_r + 1 };
+            return if self.levels[l_r].number().is_multiple_of(2) {
+                l_r
+            } else {
+                l_r + 1
+            };
         }
 
         let l_l = self.logical_pos(visual - 1);
@@ -981,7 +1001,7 @@ mod tests {
         // At the rightmost position, move_right should be a no-op.
         let seg = BidiSegment::new("ABC", None);
         // Move right 3 times to get to the end of length 3 string.
-        let last = seg.move_right(seg.move_right(seg.move_right(0))); 
+        let last = seg.move_right(seg.move_right(seg.move_right(0)));
         assert_eq!(seg.visual_cursor_pos(last), 3);
         let still_last = seg.move_right(last);
         assert_eq!(still_last, last);
