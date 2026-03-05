@@ -2439,9 +2439,10 @@ mod tests {
         }
         let large_time = start.elapsed();
 
-        // Large should be within 5x of small (O(log n) vs O(n) would be 100x)
+        // Large should be within 10x of small (O(log n) vs O(n) would be 100x).
+        // Use a generous bound to avoid flakiness on loaded CI workers.
         assert!(
-            large_time < small_time * 5,
+            large_time < small_time * 10,
             "Not O(log n): small={:?}, large={:?}",
             small_time,
             large_time

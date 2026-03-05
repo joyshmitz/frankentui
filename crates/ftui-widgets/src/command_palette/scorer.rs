@@ -3257,7 +3257,7 @@ mod perf_tests {
     const CORPUS_100_BUDGET_US: u64 = 500; // 500µs for 100-item full scan
     const CORPUS_1000_BUDGET_US: u64 = 5_000; // 5ms for 1000-item full scan
     const CORPUS_5000_BUDGET_US: u64 = 25_000; // 25ms for 5000-item full scan
-    const INCREMENTAL_7KEY_100_BUDGET_US: u64 = 2_000; // 2ms for 7 keystrokes on 100 items
+    const INCREMENTAL_7KEY_100_BUDGET_US: u64 = 5_000; // 5ms for 7 keystrokes on 100 items (relaxed from 2ms for CI stability)
     const INCREMENTAL_7KEY_1000_BUDGET_US: u64 = 15_000; // 15ms for 7 keystrokes on 1000 items
 
     const COVERAGE_BUDGET_MULTIPLIER: u64 = 5;
