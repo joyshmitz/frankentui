@@ -560,7 +560,7 @@ impl Screen for LayoutInspector {
                 .gap(theme::spacing::XS)
                 .split(viz_area)
         } else {
-            vec![viz_area]
+            ftui_layout::smallvec::smallvec![viz_area]
         };
 
         let main_viz = viz_rows[0];

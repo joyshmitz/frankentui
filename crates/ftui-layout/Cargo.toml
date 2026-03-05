@@ -13,6 +13,7 @@ readme = "../../README.md"
 ftui-core = { path = "../ftui-core", version = "0.2.1" }
 rustc-hash = "2.1"
 serde = { version = "1.0.227", features = ["derive"] }
+smallvec = "1.15"
 
 [dev-dependencies]
 blake3 = "1.6"

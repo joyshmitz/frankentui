@@ -90,12 +90,26 @@ pub use pane::{
 };
 pub use responsive::Responsive;
 pub use responsive_layout::{ResponsiveLayout, ResponsiveSplit};
+pub use smallvec;
+use smallvec::SmallVec;
 use std::cmp::min;
 pub use visibility::Visibility;
 pub use workspace::{
     MigrationResult, WORKSPACE_SCHEMA_VERSION, WorkspaceMetadata, WorkspaceMigrationError,
     WorkspaceSnapshot, WorkspaceValidationError, migrate_workspace, needs_migration,
 };
+
+/// Inline capacity for layout result vectors.
+///
+/// Most layouts use ≤8 constraints, so inlining avoids heap allocation in the
+/// common case. The `SmallVec` spills to the heap transparently when needed.
+const LAYOUT_INLINE_CAP: usize = 8;
+
+/// Stack-inlined vector of rectangles returned by layout split operations.
+pub type Rects = SmallVec<[Rect; LAYOUT_INLINE_CAP]>;
+
+/// Stack-inlined vector of sizes returned by the constraint solver.
+type Sizes = SmallVec<[u16; LAYOUT_INLINE_CAP]>;
 
 /// A constraint on the size of a layout area.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -572,7 +586,7 @@ impl Flex {
     }
 
     /// Split the given area into smaller rectangles according to the configuration.
-    pub fn split(&self, area: Rect) -> Vec<Rect> {
+    pub fn split(&self, area: Rect) -> Rects {
         // Apply margin
         let inner = area.inner(self.margin);
         if inner.is_empty() {
@@ -586,7 +600,7 @@ impl Flex {
 
         let count = self.constraints.len();
         if count == 0 {
-            return Vec::new();
+            return Rects::new();
         }
 
         // Calculate gaps safely
@@ -608,8 +622,8 @@ impl Flex {
         rects
     }
 
-    fn sizes_to_rects(&self, area: Rect, sizes: &[u16]) -> Vec<Rect> {
-        let mut rects = Vec::with_capacity(sizes.len());
+    fn sizes_to_rects(&self, area: Rect, sizes: &[u16]) -> Rects {
+        let mut rects = SmallVec::with_capacity(sizes.len());
         if sizes.is_empty() {
             return rects;
         }
@@ -748,7 +762,7 @@ impl Flex {
     ///     }
     /// });
     /// ```
-    pub fn split_with_measurer<F>(&self, area: Rect, measurer: F) -> Vec<Rect>
+    pub fn split_with_measurer<F>(&self, area: Rect, measurer: F) -> Rects
     where
         F: Fn(usize, u16) -> LayoutSizeHint,
     {
@@ -765,7 +779,7 @@ impl Flex {
 
         let count = self.constraints.len();
         if count == 0 {
-            return Vec::new();
+            return Rects::new();
         }
 
         // Calculate gaps safely
@@ -796,7 +810,7 @@ impl Flex {
         area: Rect,
         measurer: F,
         cache: &mut CoherenceCache,
-    ) -> Vec<Rect>
+    ) -> Rects
     where
         F: Fn(usize, u16) -> LayoutSizeHint,
     {
@@ -813,7 +827,7 @@ impl Flex {
 
         let count = self.constraints.len();
         if count == 0 {
-            return Vec::new();
+            return Rects::new();
         }
 
         // Calculate gaps safely
@@ -846,7 +860,7 @@ impl Flex {
 ///
 /// This shared logic is used by both Flex and Grid layouts.
 /// For intrinsic sizing support, use [`solve_constraints_with_hints`].
-pub(crate) fn solve_constraints(constraints: &[Constraint], available_size: u16) -> Vec<u16> {
+pub(crate) fn solve_constraints(constraints: &[Constraint], available_size: u16) -> Sizes {
     // Use the with_hints version with a no-op measurer and no coherence
     solve_constraints_with_hints(
         constraints,
@@ -865,15 +879,15 @@ pub(crate) fn solve_constraints_with_hints<F>(
     available_size: u16,
     measurer: &F,
     mut coherence: Option<(&mut CoherenceCache, CoherenceId)>,
-) -> Vec<u16>
+) -> Sizes
 where
     F: Fn(usize, u16) -> LayoutSizeHint,
 {
     const WEIGHT_SCALE: u64 = 10_000;
 
-    let mut sizes = vec![0u16; constraints.len()];
+    let mut sizes: Sizes = smallvec::smallvec![0u16; constraints.len()];
     let mut remaining = available_size;
-    let mut grow_indices = Vec::new();
+    let mut grow_indices: SmallVec<[usize; LAYOUT_INLINE_CAP]> = SmallVec::new();
 
     let grow_weight = |constraint: Constraint| -> u64 {
         match constraint {
@@ -995,7 +1009,8 @@ where
         }
 
         let space_to_distribute = remaining;
-        let mut shares = vec![0u16; constraints.len()];
+        let mut shares: SmallVec<[u16; LAYOUT_INLINE_CAP]> =
+            smallvec::smallvec![0u16; constraints.len()];
 
         // Calculate float targets for fair distribution (Largest Remainder Method)
         let targets: Vec<f64> = grow_indices
@@ -1044,7 +1059,7 @@ where
                 // Store full-sized vector mapping constraint index -> share.
                 // We must inflate the dense `distributed` vector to the sparse constraint space.
                 if distributed.len() == targets.len() {
-                    let mut full_shares = vec![0u16; constraints.len()];
+                    let mut full_shares: Sizes = smallvec::smallvec![0u16; constraints.len()];
                     for (k, &i) in grow_indices.iter().enumerate() {
                         full_shares[i] = distributed[k];
                     }
@@ -1083,7 +1098,7 @@ where
 /// Pass `None` for the first frame or when no history is available.
 /// When provided, the rounding algorithm prefers allocations that
 /// minimize change from the previous frame, reducing visual jitter.
-pub type PreviousAllocation = Option<Vec<u16>>;
+pub type PreviousAllocation = Option<Sizes>;
 
 /// Round real-valued layout targets to integer cells with exact sum conservation.
 ///
@@ -1144,16 +1159,16 @@ pub type PreviousAllocation = Option<Vec<u16>>;
 /// let result = round_layout_stable(&[10.4, 20.6, 9.0], 40, None);
 /// assert_eq!(result.iter().sum::<u16>(), 40);
 /// // 10.4 → 10, 20.6 → 21, 9.0 → 9 = 40 ✓
-/// assert_eq!(result, vec![10, 21, 9]);
+/// assert_eq!(result.as_slice(), &[10, 21, 9]);
 /// ```
-pub fn round_layout_stable(targets: &[f64], total: u16, prev: PreviousAllocation) -> Vec<u16> {
+pub fn round_layout_stable(targets: &[f64], total: u16, prev: PreviousAllocation) -> Sizes {
     let n = targets.len();
     if n == 0 {
-        return Vec::new();
+        return Sizes::new();
     }
 
     // Step 1: Floor all targets
-    let floors: Vec<u16> = targets
+    let floors: Sizes = targets
         .iter()
         .map(|&r| (r.max(0.0).floor() as u64).min(u16::MAX as u64) as u16)
         .collect();
@@ -1174,7 +1189,7 @@ pub fn round_layout_stable(targets: &[f64], total: u16, prev: PreviousAllocation
     }
 
     // Step 3: Compute remainders and build priority list
-    let mut priority: Vec<(usize, f64, bool)> = targets
+    let mut priority: SmallVec<[(usize, f64, bool); LAYOUT_INLINE_CAP]> = targets
         .iter()
         .enumerate()
         .map(|(i, &r)| {
@@ -1220,8 +1235,8 @@ pub fn round_layout_stable(targets: &[f64], total: u16, prev: PreviousAllocation
 ///
 /// This can happen with very small totals and many items. We greedily
 /// reduce the largest items by 1 until the sum matches.
-fn redistribute_overflow(floors: &[u16], total: u16) -> Vec<u16> {
-    let mut result = floors.to_vec();
+fn redistribute_overflow(floors: &[u16], total: u16) -> Sizes {
+    let mut result: Sizes = floors.iter().copied().collect();
     let current_sum: u64 = result.iter().map(|&x| u64::from(x)).sum();
     let total_u64 = u64::from(total);
     let n = result.len();
@@ -2035,7 +2050,7 @@ mod tests {
         fn rounding_conserves_sum_exact() {
             let result = round_layout_stable(&[10.0, 20.0, 10.0], 40, None);
             assert_eq!(result.iter().copied().sum::<u16>(), 40);
-            assert_eq!(result, vec![10, 20, 10]);
+            assert_eq!(result.as_slice(), &[10u16, 20u16, 10u16]);
         }
 
         #[test]
@@ -2191,7 +2206,7 @@ mod tests {
         #[test]
         fn rounding_single_element() {
             let result = round_layout_stable(&[10.7], 11, None);
-            assert_eq!(result, vec![11]);
+            assert_eq!(result.as_slice(), &[11u16]);
         }
 
         #[test]
@@ -2203,25 +2218,29 @@ mod tests {
         #[test]
         fn rounding_all_zeros() {
             let result = round_layout_stable(&[0.0, 0.0, 0.0], 0, None);
-            assert_eq!(result, vec![0, 0, 0]);
+            assert_eq!(result.as_slice(), &[0u16, 0u16, 0u16]);
         }
 
         #[test]
         fn rounding_integer_targets() {
             let result = round_layout_stable(&[10.0, 20.0, 30.0], 60, None);
-            assert_eq!(result, vec![10, 20, 30]);
+            assert_eq!(result.as_slice(), &[10u16, 20u16, 30u16]);
         }
 
         #[test]
         fn rounding_large_deficit() {
             let result = round_layout_stable(&[0.9, 0.9, 0.9], 3, None);
             assert_eq!(result.iter().copied().sum::<u16>(), 3);
-            assert_eq!(result, vec![1, 1, 1]);
+            assert_eq!(result.as_slice(), &[1u16, 1u16, 1u16]);
         }
 
         #[test]
         fn rounding_with_prev_different_length() {
-            let result = round_layout_stable(&[10.5, 10.5], 21, Some(vec![11, 10, 5]));
+            let result = round_layout_stable(
+                &[10.5, 10.5],
+                21,
+                Some(smallvec::smallvec![11u16, 10u16, 5u16]),
+            );
             assert_eq!(result.iter().copied().sum::<u16>(), 21);
         }
 
@@ -2574,7 +2593,7 @@ mod tests {
             let flex = Flex::horizontal().constraints(constraints);
             let rects = flex.split(Rect::new(0, 0, 100, 10));
             let widths: Vec<u16> = rects.iter().map(|r| r.width).collect();
-            coherence.store(id, widths.clone());
+            coherence.store(id, widths.iter().copied().collect());
 
             for _ in 0..10 {
                 let targets: Vec<f64> = widths.iter().map(|&w| w as f64).collect();

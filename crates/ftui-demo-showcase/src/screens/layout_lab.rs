@@ -1738,13 +1738,13 @@ fn first_leaf_id(tree: &PaneTree) -> Option<PaneId> {
 }
 
 /// Solve a flex layout and return the resulting rects (for testing).
-pub fn solve_flex_vertical(area: Rect, constraints: &[Constraint]) -> Vec<Rect> {
+pub fn solve_flex_vertical(area: Rect, constraints: &[Constraint]) -> ftui_layout::Rects {
     Flex::vertical()
         .constraints(constraints.iter().copied())
         .split(area)
 }
 
-pub fn solve_flex_horizontal(area: Rect, constraints: &[Constraint]) -> Vec<Rect> {
+pub fn solve_flex_horizontal(area: Rect, constraints: &[Constraint]) -> ftui_layout::Rects {
     Flex::horizontal()
         .constraints(constraints.iter().copied())
         .split(area)

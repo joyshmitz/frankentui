@@ -68,7 +68,7 @@ struct CachedNodeLayout {
     /// The area that was used for this computation.
     area: Rect,
     /// The computed sub-regions (output of Flex::split / Grid row solve).
-    rects: Vec<Rect>,
+    rects: crate::Rects,
     /// FxHash of the output rects for change detection.
     result_hash: u64,
 }
@@ -265,9 +265,9 @@ impl IncrementalLayout {
     ///
     /// On a cache miss, `compute` is called with the `area` and the
     /// result is stored. The node is cleaned after computation.
-    pub fn get_or_compute<F>(&mut self, id: NodeId, area: Rect, compute: F) -> Vec<Rect>
+    pub fn get_or_compute<F>(&mut self, id: NodeId, area: Rect, compute: F) -> crate::Rects
     where
-        F: FnOnce(Rect) -> Vec<Rect>,
+        F: FnOnce(Rect) -> crate::Rects,
     {
         self.stats.total += 1;
 
@@ -456,9 +456,9 @@ mod tests {
         Rect::new(0, 0, w, h)
     }
 
-    fn split_equal(a: Rect, n: usize) -> Vec<Rect> {
+    fn split_equal(a: Rect, n: usize) -> crate::Rects {
         if n == 0 {
-            return vec![];
+            return crate::Rects::new();
         }
         let w = a.width / n as u16;
         (0..n)
@@ -549,7 +549,7 @@ mod tests {
         let mut calls = 0u32;
         inc.get_or_compute(n, a, |_a| {
             calls += 1;
-            vec![]
+            crate::Rects::new()
         });
         assert_eq!(calls, 0);
     }
@@ -947,7 +947,7 @@ mod tests {
         inc.propagate();
 
         // Define a deterministic compute function.
-        let compute = |a: Rect, n: usize| -> Vec<Rect> { split_equal(a, n) };
+        let compute = |a: Rect, n: usize| -> crate::Rects { split_equal(a, n) };
 
         // Incremental pass.
         let root_rects = inc.get_or_compute(root, a, |a| compute(a, 5));
@@ -1002,7 +1002,7 @@ mod tests {
         let n = inc.add_node(None);
         inc.propagate();
 
-        let r = inc.get_or_compute(n, area(80, 24), |_a| vec![]);
+        let r = inc.get_or_compute(n, area(80, 24), |_a| crate::Rects::new());
         assert!(r.is_empty());
 
         let s = inc.stats();
@@ -1017,12 +1017,12 @@ mod tests {
         inc.propagate();
 
         let a = Rect::default(); // 0×0
-        inc.get_or_compute(n, a, |_| vec![]);
+        inc.get_or_compute(n, a, |_| crate::Rects::new());
 
         let mut calls = 0u32;
         inc.get_or_compute(n, a, |_| {
             calls += 1;
-            vec![]
+            crate::Rects::new()
         });
         assert_eq!(calls, 0);
     }

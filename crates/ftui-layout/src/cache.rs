@@ -208,7 +208,7 @@ impl LayoutCacheKey {
 #[derive(Clone, Debug)]
 struct CachedLayoutEntry {
     /// The cached layout rectangles.
-    chunks: Vec<Rect>,
+    chunks: crate::Rects,
     /// Generation when this entry was created/updated.
     generation: u64,
     /// Access count for LRU eviction.
@@ -295,9 +295,9 @@ impl LayoutCache {
     /// let key = LayoutCacheKey::new(area, &constraints, Direction::Horizontal, None);
     /// let rects = cache.get_or_compute(key, || flex.split(area));
     /// ```
-    pub fn get_or_compute<F>(&mut self, key: LayoutCacheKey, compute: F) -> Vec<Rect>
+    pub fn get_or_compute<F>(&mut self, key: LayoutCacheKey, compute: F) -> crate::Rects
     where
-        F: FnOnce() -> Vec<Rect>,
+        F: FnOnce() -> crate::Rects,
     {
         // Check for existing valid entry
         if let Some(entry) = self.entries.get_mut(&key)
@@ -463,9 +463,9 @@ impl S3FifoLayoutCache {
     ///
     /// Same semantics as [`LayoutCache::get_or_compute`]: entries from
     /// a previous generation are treated as misses.
-    pub fn get_or_compute<F>(&mut self, key: LayoutCacheKey, compute: F) -> Vec<Rect>
+    pub fn get_or_compute<F>(&mut self, key: LayoutCacheKey, compute: F) -> crate::Rects
     where
-        F: FnOnce() -> Vec<Rect>,
+        F: FnOnce() -> crate::Rects,
     {
         if let Some(entry) = self.cache.get(&key) {
             if entry.generation == self.generation {
@@ -625,7 +625,7 @@ pub struct CoherenceCache {
 #[derive(Debug, Clone)]
 struct CoherenceEntry {
     /// Previous allocation sizes.
-    allocation: Vec<u16>,
+    allocation: crate::Sizes,
     /// Tick when this entry was last stored.
     last_stored: u64,
 }
@@ -645,14 +645,14 @@ impl CoherenceCache {
     /// Returns `Some(allocation)` suitable for passing directly to
     /// [`round_layout_stable`](crate::round_layout_stable).
     #[inline]
-    pub fn get(&self, id: &CoherenceId) -> Option<Vec<u16>> {
+    pub fn get(&self, id: &CoherenceId) -> Option<crate::Sizes> {
         self.entries.get(id).map(|e| e.allocation.clone())
     }
 
     /// Store a layout allocation for future coherence lookups.
     ///
     /// If the cache is at capacity, evicts the oldest entry.
-    pub fn store(&mut self, id: CoherenceId, allocation: Vec<u16>) {
+    pub fn store(&mut self, id: CoherenceId, allocation: crate::Sizes) {
         self.tick = self.tick.wrapping_add(1);
 
         if self.entries.len() >= self.max_entries && !self.entries.contains_key(&id) {
@@ -748,7 +748,7 @@ mod tests {
         )
     }
 
-    fn should_not_call(label: &str) -> Vec<Rect> {
+    fn should_not_call(label: &str) -> crate::Rects {
         unreachable!("{label}");
     }
 
@@ -840,7 +840,7 @@ mod tests {
         let mut compute_count = 0;
         let compute = || {
             compute_count += 1;
-            vec![Rect::new(0, 0, 40, 24), Rect::new(40, 0, 40, 24)]
+            smallvec::smallvec![Rect::new(0, 0, 40, 24), Rect::new(40, 0, 40, 24)]
         };
 
         let r1 = cache.get_or_compute(key, compute);
@@ -857,7 +857,7 @@ mod tests {
         let mut compute_count = 0;
         let mut compute = || {
             compute_count += 1;
-            vec![Rect::default()]
+            smallvec::smallvec![Rect::default()]
         };
 
         let k1 = make_key(80, 24);
@@ -877,7 +877,7 @@ mod tests {
         let mut compute_count = 0;
         let mut compute = || {
             compute_count += 1;
-            vec![]
+            smallvec::smallvec![]
         };
 
         cache.get_or_compute(key, &mut compute);
@@ -896,14 +896,14 @@ mod tests {
         let k3 = make_key(30, 30);
 
         // Insert two entries
-        cache.get_or_compute(k1, || vec![Rect::new(0, 0, 10, 10)]);
-        cache.get_or_compute(k2, || vec![Rect::new(0, 0, 20, 20)]);
+        cache.get_or_compute(k1, || smallvec::smallvec![Rect::new(0, 0, 10, 10)]);
+        cache.get_or_compute(k2, || smallvec::smallvec![Rect::new(0, 0, 20, 20)]);
 
         // Access k1 again (increases access count)
         cache.get_or_compute(k1, || should_not_call("k1 should hit"));
 
         // Insert k3, should evict k2 (least accessed)
-        cache.get_or_compute(k3, || vec![Rect::new(0, 0, 30, 30)]);
+        cache.get_or_compute(k3, || smallvec::smallvec![Rect::new(0, 0, 30, 30)]);
 
         assert_eq!(cache.len(), 2);
 
@@ -911,7 +911,7 @@ mod tests {
         let mut was_called = false;
         cache.get_or_compute(k2, || {
             was_called = true;
-            vec![]
+            smallvec::smallvec![]
         });
         assert!(was_called, "k2 should have been evicted");
 
@@ -926,9 +926,9 @@ mod tests {
         let k1 = make_key(80, 24);
         let k2 = make_key(120, 40);
 
-        cache.get_or_compute(k1, Vec::new); // miss
+        cache.get_or_compute(k1, crate::Rects::new); // miss
         cache.get_or_compute(k1, || should_not_call("hit")); // hit
-        cache.get_or_compute(k2, Vec::new); // miss
+        cache.get_or_compute(k2, crate::Rects::new); // miss
 
         let stats = cache.stats();
         assert_eq!(stats.hits, 1);
@@ -941,7 +941,7 @@ mod tests {
         let mut cache = LayoutCache::new(100);
         let key = make_key(80, 24);
 
-        cache.get_or_compute(key, Vec::new);
+        cache.get_or_compute(key, crate::Rects::new);
         cache.get_or_compute(key, || should_not_call("hit"));
 
         let stats = cache.stats();
@@ -960,8 +960,8 @@ mod tests {
     fn clear_removes_all_entries() {
         let mut cache = LayoutCache::new(100);
 
-        cache.get_or_compute(make_key(80, 24), Vec::new);
-        cache.get_or_compute(make_key(120, 40), Vec::new);
+        cache.get_or_compute(make_key(80, 24), crate::Rects::new);
+        cache.get_or_compute(make_key(120, 40), crate::Rects::new);
 
         assert_eq!(cache.len(), 2);
 
@@ -974,7 +974,7 @@ mod tests {
         let mut was_called = false;
         cache.get_or_compute(make_key(80, 24), || {
             was_called = true;
-            vec![]
+            smallvec::smallvec![]
         });
         assert!(was_called);
     }
@@ -1093,7 +1093,7 @@ mod tests {
 
         for i in 0..10u16 {
             let key = make_key(i * 10, i * 5);
-            let result = vec![Rect::new(0, 0, i, i)];
+            let result = smallvec::smallvec![Rect::new(0, 0, i, i)];
 
             cache1.get_or_compute(key, || result.clone());
             cache2.get_or_compute(key, || result);
@@ -1109,7 +1109,7 @@ mod tests {
         let key = make_key(80, 24);
 
         // First access is a miss
-        cache.get_or_compute(key, Vec::new);
+        cache.get_or_compute(key, crate::Rects::new);
 
         // Subsequent accesses are hits
         for _ in 0..5 {
@@ -1139,8 +1139,8 @@ mod tests {
 
         assert!(cc.get(&id).is_none());
 
-        cc.store(id, vec![30, 50]);
-        assert_eq!(cc.get(&id), Some(vec![30, 50]));
+        cc.store(id, smallvec::smallvec![30u16, 50u16]);
+        assert_eq!(cc.get(&id), Some(smallvec::smallvec![30u16, 50u16]));
     }
 
     #[test]
@@ -1148,10 +1148,10 @@ mod tests {
         let mut cc = CoherenceCache::new(64);
         let id = make_coherence_id(1);
 
-        cc.store(id, vec![30, 50]);
-        cc.store(id, vec![31, 49]);
+        cc.store(id, smallvec::smallvec![30u16, 50u16]);
+        cc.store(id, smallvec::smallvec![31u16, 49u16]);
 
-        assert_eq!(cc.get(&id), Some(vec![31, 49]));
+        assert_eq!(cc.get(&id), Some(smallvec::smallvec![31u16, 49u16]));
         assert_eq!(cc.len(), 1);
     }
 
@@ -1161,11 +1161,11 @@ mod tests {
         let id1 = make_coherence_id(1);
         let id2 = make_coherence_id(2);
 
-        cc.store(id1, vec![40, 40]);
-        cc.store(id2, vec![30, 50]);
+        cc.store(id1, smallvec::smallvec![40u16, 40u16]);
+        cc.store(id2, smallvec::smallvec![30u16, 50u16]);
 
-        assert_eq!(cc.get(&id1), Some(vec![40, 40]));
-        assert_eq!(cc.get(&id2), Some(vec![30, 50]));
+        assert_eq!(cc.get(&id1), Some(smallvec::smallvec![40u16, 40u16]));
+        assert_eq!(cc.get(&id2), Some(smallvec::smallvec![30u16, 50u16]));
     }
 
     #[test]
@@ -1176,15 +1176,15 @@ mod tests {
         let id2 = make_coherence_id(2);
         let id3 = make_coherence_id(3);
 
-        cc.store(id1, vec![10]);
-        cc.store(id2, vec![20]);
-        cc.store(id3, vec![30]);
+        cc.store(id1, smallvec::smallvec![10u16]);
+        cc.store(id2, smallvec::smallvec![20u16]);
+        cc.store(id3, smallvec::smallvec![30u16]);
 
         assert_eq!(cc.len(), 2);
         // id1 should be evicted (oldest)
         assert!(cc.get(&id1).is_none());
-        assert_eq!(cc.get(&id2), Some(vec![20]));
-        assert_eq!(cc.get(&id3), Some(vec![30]));
+        assert_eq!(cc.get(&id2), Some(smallvec::smallvec![20u16]));
+        assert_eq!(cc.get(&id3), Some(smallvec::smallvec![30u16]));
     }
 
     #[test]
@@ -1192,7 +1192,7 @@ mod tests {
         let mut cc = CoherenceCache::new(64);
         let id = make_coherence_id(1);
 
-        cc.store(id, vec![10, 20]);
+        cc.store(id, smallvec::smallvec![10u16, 20u16]);
         assert_eq!(cc.len(), 1);
 
         cc.clear();
@@ -1205,7 +1205,7 @@ mod tests {
         let mut cc = CoherenceCache::new(64);
         let id = make_coherence_id(1);
 
-        cc.store(id, vec![30, 50]);
+        cc.store(id, smallvec::smallvec![30u16, 50u16]);
 
         // New allocation differs by 2 cells in each slot
         let (sum, max) = cc.displacement(&id, &[32, 48]);
@@ -1228,7 +1228,7 @@ mod tests {
         let mut cc = CoherenceCache::new(64);
         let id = make_coherence_id(1);
 
-        cc.store(id, vec![30, 50]);
+        cc.store(id, smallvec::smallvec![30u16, 50u16]);
 
         // New allocation has 3 elements (extra element counted as displacement)
         let (sum, max) = cc.displacement(&id, &[30, 50, 10]);
@@ -1319,7 +1319,7 @@ mod tests {
         use crate::round_layout_stable;
 
         // Two identical sweeps should produce identical displacement logs
-        let sweep = |seed: u16| -> Vec<(u16, Vec<u16>, u64, u32)> {
+        let sweep = |seed: u16| -> Vec<(u16, crate::Sizes, u64, u32)> {
             let mut cc = CoherenceCache::new(64);
             let id = CoherenceId::new(
                 &[Constraint::Percentage(30.0), Constraint::Fill],
@@ -1384,7 +1384,7 @@ mod tests {
     fn s3fifo_layout_get_or_compute_caches() {
         let mut cache = S3FifoLayoutCache::new(64);
         let key = s3_fifo_test_key(0, 80);
-        let rects1 = cache.get_or_compute(key, || vec![Rect::new(0, 0, 40, 24)]);
+        let rects1 = cache.get_or_compute(key, || smallvec::smallvec![Rect::new(0, 0, 40, 24)]);
         let rects2 = cache.get_or_compute(key, || panic!("should not recompute"));
         assert_eq!(rects1, rects2);
         let stats = cache.stats();
@@ -1396,13 +1396,13 @@ mod tests {
     fn s3fifo_layout_generation_invalidation() {
         let mut cache = S3FifoLayoutCache::new(64);
         let key = s3_fifo_test_key(0, 80);
-        cache.get_or_compute(key, || vec![Rect::new(0, 0, 40, 24)]);
+        cache.get_or_compute(key, || smallvec::smallvec![Rect::new(0, 0, 40, 24)]);
 
         cache.invalidate_all();
 
         // After invalidation, should recompute
-        let rects = cache.get_or_compute(key, || vec![Rect::new(0, 0, 80, 24)]);
-        assert_eq!(rects, vec![Rect::new(0, 0, 80, 24)]);
+        let rects = cache.get_or_compute(key, || smallvec::smallvec![Rect::new(0, 0, 80, 24)]);
+        assert_eq!(rects.as_slice(), &[Rect::new(0, 0, 80, 24)]);
         let stats = cache.stats();
         assert_eq!(stats.misses, 2);
     }
@@ -1411,7 +1411,7 @@ mod tests {
     fn s3fifo_layout_clear() {
         let mut cache = S3FifoLayoutCache::new(64);
         let key = s3_fifo_test_key(0, 80);
-        cache.get_or_compute(key, || vec![Rect::new(0, 0, 40, 24)]);
+        cache.get_or_compute(key, || smallvec::smallvec![Rect::new(0, 0, 40, 24)]);
         cache.clear();
         assert!(cache.is_empty());
     }
@@ -1421,8 +1421,8 @@ mod tests {
         let mut cache = S3FifoLayoutCache::new(64);
         let k1 = s3_fifo_test_key(0, 80);
         let k2 = s3_fifo_test_key(0, 120);
-        cache.get_or_compute(k1, || vec![Rect::new(0, 0, 40, 24)]);
-        cache.get_or_compute(k2, || vec![Rect::new(0, 0, 60, 24)]);
+        cache.get_or_compute(k1, || smallvec::smallvec![Rect::new(0, 0, 40, 24)]);
+        cache.get_or_compute(k2, || smallvec::smallvec![Rect::new(0, 0, 60, 24)]);
         assert_eq!(cache.len(), 2);
     }
 
@@ -1430,8 +1430,8 @@ mod tests {
     fn s3fifo_layout_reset_stats() {
         let mut cache = S3FifoLayoutCache::new(64);
         let key = s3_fifo_test_key(0, 80);
-        cache.get_or_compute(key, Vec::new);
-        cache.get_or_compute(key, Vec::new);
+        cache.get_or_compute(key, crate::Rects::new);
+        cache.get_or_compute(key, crate::Rects::new);
         cache.reset_stats();
         let stats = cache.stats();
         assert_eq!(stats.hits, 0);
@@ -1445,7 +1445,7 @@ mod tests {
 
         for w in [80, 100, 120, 160, 200] {
             let key = s3_fifo_test_key(0, w);
-            let expected = vec![Rect::new(0, 0, w / 2, 24)];
+            let expected = smallvec::smallvec![Rect::new(0, 0, w / 2, 24)];
             let lru_r = lru.get_or_compute(key, || expected.clone());
             let s3_r = s3.get_or_compute(key, || expected.clone());
             assert_eq!(lru_r, s3_r, "mismatch for width={w}");

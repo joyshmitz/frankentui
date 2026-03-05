@@ -37,7 +37,7 @@
 //! let content_main = layout.cell(1, 1);
 //! ```
 
-use crate::Constraint;
+use crate::{Constraint, Sizes};
 use ftui_core::geometry::Rect;
 use std::collections::HashMap;
 
@@ -101,13 +101,13 @@ impl GridArea {
 #[derive(Debug, Clone)]
 pub struct GridLayout {
     /// Row heights.
-    row_heights: Vec<u16>,
+    row_heights: Sizes,
     /// Column widths.
-    col_widths: Vec<u16>,
+    col_widths: Sizes,
     /// Row Y positions (cumulative with gaps).
-    row_positions: Vec<u16>,
+    row_positions: Sizes,
     /// Column X positions (cumulative with gaps).
-    col_positions: Vec<u16>,
+    col_positions: Sizes,
     /// Named areas from the grid definition.
     named_areas: HashMap<String, GridArea>,
     /// Gap between rows.
@@ -209,10 +209,10 @@ impl Grid {
 
         if num_rows == 0 || num_cols == 0 || area.is_empty() {
             return GridLayout {
-                row_heights: vec![0; num_rows],
-                col_widths: vec![0; num_cols],
-                row_positions: vec![area.y; num_rows],
-                col_positions: vec![area.x; num_cols],
+                row_heights: smallvec::smallvec![0; num_rows],
+                col_widths: smallvec::smallvec![0; num_cols],
+                row_positions: smallvec::smallvec![area.y; num_rows],
+                col_positions: smallvec::smallvec![area.x; num_cols],
                 named_areas: self.named_areas.clone(),
                 row_gap: 0,
                 col_gap: 0,
@@ -259,8 +259,8 @@ impl Grid {
     }
 
     /// Calculate cumulative positions from sizes.
-    fn calculate_positions(&self, sizes: &[u16], start: u16, gap: u16) -> Vec<u16> {
-        let mut positions = Vec::with_capacity(sizes.len());
+    fn calculate_positions(&self, sizes: &[u16], start: u16, gap: u16) -> Sizes {
+        let mut positions = Sizes::with_capacity(sizes.len());
         let mut pos = start;
 
         for (i, &size) in sizes.iter().enumerate() {

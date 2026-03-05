@@ -54,7 +54,7 @@ pub struct ResponsiveSplit {
     /// The breakpoint that was active for this split.
     pub breakpoint: Breakpoint,
     /// The resulting layout rectangles.
-    pub rects: Vec<Rect>,
+    pub rects: crate::Rects,
 }
 
 /// A breakpoint-aware layout that switches [`Flex`] configuration at different
@@ -404,7 +404,7 @@ mod tests {
     fn responsive_split_debug() {
         let split = ResponsiveSplit {
             breakpoint: Breakpoint::Md,
-            rects: vec![Rect::new(0, 0, 50, 24)],
+            rects: smallvec::smallvec![Rect::new(0, 0, 50, 24)],
         };
         let dbg = format!("{:?}", split);
         assert!(dbg.contains("Md"));

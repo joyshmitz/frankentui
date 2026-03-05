@@ -47,7 +47,7 @@ pub struct LayoutRecord {
     /// Total available size before solving.
     pub available_size: u16,
     /// Computed sizes for each constraint.
-    pub computed_sizes: Vec<u16>,
+    pub computed_sizes: crate::Sizes,
     /// Layout direction.
     pub direction: Direction,
     /// Alignment mode.
@@ -59,7 +59,7 @@ pub struct LayoutRecord {
     /// The input area.
     pub input_area: Rect,
     /// The resulting rectangles.
-    pub result_rects: Vec<Rect>,
+    pub result_rects: crate::Rects,
     /// Time taken to solve (if measured).
     pub solve_time: Option<Duration>,
     /// Parent record index (for nested layouts).
@@ -73,13 +73,13 @@ impl LayoutRecord {
             name: name.into(),
             constraints: Vec::new(),
             available_size: 0,
-            computed_sizes: Vec::new(),
+            computed_sizes: crate::Sizes::new(),
             direction: Direction::default(),
             alignment: Alignment::default(),
             margin: Sides::default(),
             gap: 0,
             input_area: Rect::default(),
-            result_rects: Vec::new(),
+            result_rects: crate::Rects::new(),
             solve_time: None,
             parent_index: None,
         }
@@ -233,9 +233,9 @@ pub struct GridLayoutRecord {
     /// Available height.
     pub available_height: u16,
     /// Computed row heights.
-    pub row_heights: Vec<u16>,
+    pub row_heights: crate::Sizes,
     /// Computed column widths.
-    pub col_widths: Vec<u16>,
+    pub col_widths: crate::Sizes,
     /// The input area.
     pub input_area: Rect,
     /// Time taken to solve.
@@ -251,8 +251,8 @@ impl GridLayoutRecord {
             col_constraints: Vec::new(),
             available_width: 0,
             available_height: 0,
-            row_heights: Vec::new(),
-            col_widths: Vec::new(),
+            row_heights: crate::Sizes::new(),
+            col_widths: crate::Sizes::new(),
             input_area: Rect::default(),
             solve_time: None,
         }
@@ -701,7 +701,7 @@ mod tests {
     fn layout_record_overflow_detection() {
         let mut record = LayoutRecord::new("test");
         record.available_size = 100;
-        record.computed_sizes = vec![60, 60];
+        record.computed_sizes = smallvec::smallvec![60u16, 60u16];
         record.gap = 0;
 
         assert!(record.has_overflow());
@@ -711,7 +711,7 @@ mod tests {
     fn layout_record_no_overflow() {
         let mut record = LayoutRecord::new("test");
         record.available_size = 100;
-        record.computed_sizes = vec![40, 40];
+        record.computed_sizes = smallvec::smallvec![40u16, 40u16];
         record.gap = 0;
 
         assert!(!record.has_overflow());
@@ -721,7 +721,7 @@ mod tests {
     fn layout_record_overflow_with_gaps() {
         let mut record = LayoutRecord::new("test");
         record.available_size = 100;
-        record.computed_sizes = vec![45, 45];
+        record.computed_sizes = smallvec::smallvec![45u16, 45u16];
         record.gap = 15; // 45 + 15 + 45 = 105 > 100
 
         assert!(record.has_overflow());
@@ -731,7 +731,7 @@ mod tests {
     fn layout_record_underflow_detection() {
         let mut record = LayoutRecord::new("test");
         record.available_size = 100;
-        record.computed_sizes = vec![20, 20]; // 40% utilization
+        record.computed_sizes = smallvec::smallvec![20u16, 20u16]; // 40% utilization
         record.gap = 0;
 
         assert!(record.has_underflow());
@@ -741,7 +741,7 @@ mod tests {
     fn layout_record_no_underflow() {
         let mut record = LayoutRecord::new("test");
         record.available_size = 100;
-        record.computed_sizes = vec![40, 45]; // 85% utilization
+        record.computed_sizes = smallvec::smallvec![40u16, 45u16]; // 85% utilization
         record.gap = 0;
 
         assert!(!record.has_underflow());
@@ -751,7 +751,7 @@ mod tests {
     fn layout_record_utilization() {
         let mut record = LayoutRecord::new("test");
         record.available_size = 100;
-        record.computed_sizes = vec![25, 25];
+        record.computed_sizes = smallvec::smallvec![25u16, 25u16];
         record.gap = 0;
 
         assert!((record.utilization() - 50.0).abs() < 0.1);
@@ -761,7 +761,7 @@ mod tests {
     fn layout_record_utilization_with_gap() {
         let mut record = LayoutRecord::new("test");
         record.available_size = 100;
-        record.computed_sizes = vec![20, 20];
+        record.computed_sizes = smallvec::smallvec![20u16, 20u16];
         record.gap = 10; // 20 + 10 + 20 = 50
 
         assert!((record.utilization() - 50.0).abs() < 0.1);
@@ -771,7 +771,7 @@ mod tests {
     fn layout_record_utilization_clamped() {
         let mut record = LayoutRecord::new("test");
         record.available_size = 100;
-        record.computed_sizes = vec![150]; // Overflow
+        record.computed_sizes = smallvec::smallvec![150u16]; // Overflow
 
         // Should clamp to 100%
         assert!((record.utilization() - 100.0).abs() < 0.1);
@@ -781,7 +781,7 @@ mod tests {
     fn layout_record_zero_available() {
         let mut record = LayoutRecord::new("test");
         record.available_size = 0;
-        record.computed_sizes = vec![];
+        record.computed_sizes = crate::Sizes::new();
         record.gap = 0;
 
         assert!(!record.has_overflow());
@@ -794,10 +794,11 @@ mod tests {
         let mut record = LayoutRecord::new("main_layout");
         record.constraints = vec![Constraint::Fixed(30), Constraint::Min(10)];
         record.available_size = 100;
-        record.computed_sizes = vec![30, 70];
+        record.computed_sizes = smallvec::smallvec![30u16, 70u16];
         record.direction = Direction::Horizontal;
         record.input_area = Rect::new(0, 0, 100, 50);
-        record.result_rects = vec![Rect::new(0, 0, 30, 50), Rect::new(30, 0, 70, 50)];
+        record.result_rects =
+            smallvec::smallvec![Rect::new(0, 0, 30, 50), Rect::new(30, 0, 70, 50)];
 
         let summary = record.summary();
         assert!(summary.contains("main_layout"));
@@ -869,12 +870,12 @@ mod tests {
 
         let mut overflow_record = LayoutRecord::new("overflow");
         overflow_record.available_size = 100;
-        overflow_record.computed_sizes = vec![60, 60];
+        overflow_record.computed_sizes = smallvec::smallvec![60u16, 60u16];
         debugger.record(overflow_record);
 
         let mut normal_record = LayoutRecord::new("normal");
         normal_record.available_size = 100;
-        normal_record.computed_sizes = vec![30, 30];
+        normal_record.computed_sizes = smallvec::smallvec![30u16, 30u16];
         debugger.record(normal_record);
 
         let overflows = debugger.overflows();
@@ -889,12 +890,12 @@ mod tests {
 
         let mut underflow_record = LayoutRecord::new("underflow");
         underflow_record.available_size = 100;
-        underflow_record.computed_sizes = vec![10, 10]; // 20% utilization
+        underflow_record.computed_sizes = smallvec::smallvec![10u16, 10u16]; // 20% utilization
         debugger.record(underflow_record);
 
         let mut normal_record = LayoutRecord::new("normal");
         normal_record.available_size = 100;
-        normal_record.computed_sizes = vec![45, 45]; // 90% utilization
+        normal_record.computed_sizes = smallvec::smallvec![45u16, 45u16]; // 90% utilization
         debugger.record(normal_record);
 
         let underflows = debugger.underflows();
@@ -909,7 +910,7 @@ mod tests {
 
         let mut record = LayoutRecord::new("test_layout");
         record.available_size = 100;
-        record.computed_sizes = vec![50, 50];
+        record.computed_sizes = smallvec::smallvec![50u16, 50u16];
         record.direction = Direction::Horizontal;
         debugger.record(record);
 
@@ -925,13 +926,13 @@ mod tests {
 
         let mut record = LayoutRecord::new("root");
         record.available_size = 100;
-        record.computed_sizes = vec![50, 50];
+        record.computed_sizes = smallvec::smallvec![50u16, 50u16];
         record.direction = Direction::Vertical;
         debugger.record(record);
 
         let mut child = LayoutRecord::new("child");
         child.available_size = 50;
-        child.computed_sizes = vec![25, 25];
+        child.computed_sizes = smallvec::smallvec![25u16, 25u16];
         child.parent_index = Some(0);
         debugger.record(child);
 
@@ -949,17 +950,17 @@ mod tests {
 
         let mut overflow = LayoutRecord::new("overflow");
         overflow.available_size = 100;
-        overflow.computed_sizes = vec![120];
+        overflow.computed_sizes = smallvec::smallvec![120u16];
         debugger.record(overflow);
 
         let mut underflow = LayoutRecord::new("underflow");
         underflow.available_size = 100;
-        underflow.computed_sizes = vec![10];
+        underflow.computed_sizes = smallvec::smallvec![10u16];
         debugger.record(underflow);
 
         let mut normal = LayoutRecord::new("normal");
         normal.available_size = 100;
-        normal.computed_sizes = vec![90];
+        normal.computed_sizes = smallvec::smallvec![90u16];
         debugger.record(normal);
 
         let dot = debugger.export_dot();
@@ -973,8 +974,8 @@ mod tests {
         let mut record = GridLayoutRecord::new("grid");
         record.available_width = 100;
         record.available_height = 100;
-        record.row_heights = vec![60, 60];
-        record.col_widths = vec![50, 50];
+        record.row_heights = smallvec::smallvec![60u16, 60u16];
+        record.col_widths = smallvec::smallvec![50u16, 50u16];
 
         assert!(record.has_row_overflow());
         assert!(!record.has_col_overflow());
@@ -988,8 +989,8 @@ mod tests {
         let mut record = GridLayoutRecord::new("grid");
         record.available_width = 100;
         record.available_height = 100;
-        record.row_heights = vec![50, 50];
-        record.col_widths = vec![50, 50];
+        record.row_heights = smallvec::smallvec![50u16, 50u16];
+        record.col_widths = smallvec::smallvec![50u16, 50u16];
         debugger.record_grid(record);
 
         let records = debugger.snapshot_grids();
@@ -1028,7 +1029,7 @@ mod tests {
         let mut record = LayoutRecord::new("test_layout");
         record.constraints = vec![Constraint::Fixed(30), Constraint::Min(10)];
         record.available_size = 100;
-        record.computed_sizes = vec![30, 70];
+        record.computed_sizes = smallvec::smallvec![30u16, 70u16];
         record.direction = Direction::Horizontal;
         record.gap = 2;
 
@@ -1050,8 +1051,8 @@ mod tests {
         let mut record = GridLayoutRecord::new("test_grid");
         record.available_width = 100;
         record.available_height = 50;
-        record.row_heights = vec![10, 20, 20];
-        record.col_widths = vec![30, 30, 40];
+        record.row_heights = smallvec::smallvec![10u16, 20u16, 20u16];
+        record.col_widths = smallvec::smallvec![30u16, 30u16, 40u16];
 
         let jsonl = record.to_jsonl();
         assert!(jsonl.contains("\"event\":\"grid_layout_solve\""));
@@ -1081,7 +1082,7 @@ mod tests {
 
         let mut record = LayoutRecord::new("test");
         record.available_size = 100;
-        record.computed_sizes = vec![50, 50];
+        record.computed_sizes = smallvec::smallvec![50u16, 50u16];
         debugger.record(record);
 
         assert_eq!(counter.load(Ordering::SeqCst), 1);
@@ -1104,13 +1105,13 @@ mod tests {
         // Record with overflow
         let mut overflow_record = LayoutRecord::new("overflow");
         overflow_record.available_size = 100;
-        overflow_record.computed_sizes = vec![60, 60]; // 120 > 100
+        overflow_record.computed_sizes = smallvec::smallvec![60u16, 60u16]; // 120 > 100
         debugger.record(overflow_record);
 
         // Record without overflow
         let mut normal_record = LayoutRecord::new("normal");
         normal_record.available_size = 100;
-        normal_record.computed_sizes = vec![30, 30];
+        normal_record.computed_sizes = smallvec::smallvec![30u16, 30u16];
         debugger.record(normal_record);
 
         // Only the overflow record should have triggered the hook
@@ -1134,7 +1135,7 @@ mod tests {
         // Record with underflow (< 80% utilization)
         let mut underflow_record = LayoutRecord::new("underflow");
         underflow_record.available_size = 100;
-        underflow_record.computed_sizes = vec![10, 10]; // 20% utilization
+        underflow_record.computed_sizes = smallvec::smallvec![10u16, 10u16]; // 20% utilization
         debugger.record(underflow_record);
 
         assert_eq!(underflow_counter.load(Ordering::SeqCst), 1);
@@ -1157,8 +1158,8 @@ mod tests {
         let mut record = GridLayoutRecord::new("grid");
         record.available_width = 100;
         record.available_height = 50;
-        record.row_heights = vec![25, 25];
-        record.col_widths = vec![50, 50];
+        record.row_heights = smallvec::smallvec![25u16, 25u16];
+        record.col_widths = smallvec::smallvec![50u16, 50u16];
         debugger.record_grid(record);
 
         assert_eq!(counter.load(Ordering::SeqCst), 1);
@@ -1180,7 +1181,7 @@ mod tests {
 
         let mut record = LayoutRecord::new("test");
         record.available_size = 100;
-        record.computed_sizes = vec![50, 50];
+        record.computed_sizes = smallvec::smallvec![50u16, 50u16];
         debugger.record(record);
 
         // Hook should not fire because debugger is disabled
@@ -1203,7 +1204,7 @@ mod tests {
 
         let mut record1 = LayoutRecord::new("test1");
         record1.available_size = 100;
-        record1.computed_sizes = vec![50, 50];
+        record1.computed_sizes = smallvec::smallvec![50u16, 50u16];
         debugger.record(record1);
 
         assert_eq!(counter.load(Ordering::SeqCst), 1);
@@ -1213,7 +1214,7 @@ mod tests {
 
         let mut record2 = LayoutRecord::new("test2");
         record2.available_size = 100;
-        record2.computed_sizes = vec![50, 50];
+        record2.computed_sizes = smallvec::smallvec![50u16, 50u16];
         debugger.record(record2);
 
         // Counter should still be 1 (hooks cleared)
@@ -1224,7 +1225,7 @@ mod tests {
     fn layout_record_jsonl_overflow_flags() {
         let mut record = LayoutRecord::new("overflow_test");
         record.available_size = 100;
-        record.computed_sizes = vec![60, 60]; // Overflow
+        record.computed_sizes = smallvec::smallvec![60u16, 60u16]; // Overflow
 
         let jsonl = record.to_jsonl();
         assert!(jsonl.contains("\"has_overflow\":true"));
@@ -1234,7 +1235,7 @@ mod tests {
     fn layout_record_jsonl_underflow_flags() {
         let mut record = LayoutRecord::new("underflow_test");
         record.available_size = 100;
-        record.computed_sizes = vec![10, 10]; // 20% utilization
+        record.computed_sizes = smallvec::smallvec![10u16, 10u16]; // 20% utilization
 
         let jsonl = record.to_jsonl();
         assert!(jsonl.contains("\"has_underflow\":true"));
