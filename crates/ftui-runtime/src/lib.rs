@@ -55,6 +55,7 @@ pub mod input_macro;
 pub mod ivm;
 pub mod locale;
 pub mod log_sink;
+pub mod metrics_registry;
 pub mod policy_config;
 pub mod process_subscription;
 pub mod program;
@@ -192,6 +193,10 @@ pub use event_trace::{
 pub use flake_detector::{EvidenceLog, FlakeConfig, FlakeDecision, FlakeDetector, FlakeSummary};
 pub use flat_combine::{CombinerStats, FlatCombiner};
 pub use lens::{AtIndex, Composed, Fst, Identity, Lens, Prism, Snd, SomePrism, at_index, compose};
+pub use metrics_registry::{
+    BuiltinCounter, BuiltinGauge, BuiltinHistogram, Counter as MetricsCounter,
+    Gauge as MetricsGauge, Histogram as MetricsHistogram, MetricsRegistry, METRICS,
+};
 pub use policy_config::{
     BocpdPolicyConfig, CascadePolicyConfig, ConformalPolicyConfig, EProcessBudgetPolicyConfig,
     EProcessThrottlePolicyConfig, EvidencePolicyConfig, FrameGuardPolicyConfig, PidPolicyConfig,
