@@ -1550,10 +1550,11 @@ mod tests {
     // --- Frame construction variants ---
 
     #[test]
-    #[should_panic(expected = "buffer width must be > 0")]
-    fn frame_zero_dimensions_panics() {
+    fn frame_zero_dimensions_clamped_to_one() {
         let mut pool = GraphemePool::new();
-        let _frame = Frame::new(0, 0, &mut pool);
+        let frame = Frame::new(0, 0, &mut pool);
+        assert_eq!(frame.buffer.width(), 1);
+        assert_eq!(frame.buffer.height(), 1);
     }
 
     #[test]
@@ -1684,10 +1685,11 @@ mod tests {
     // --- Frame hit grid with zero-size screen ---
 
     #[test]
-    #[should_panic(expected = "buffer width must be > 0")]
-    fn frame_with_hit_grid_zero_size_panics() {
+    fn frame_with_hit_grid_zero_size_clamped_to_one() {
         let mut pool = GraphemePool::new();
-        let _frame = Frame::with_hit_grid(0, 0, &mut pool);
+        let frame = Frame::with_hit_grid(0, 0, &mut pool);
+        assert_eq!(frame.buffer.width(), 1);
+        assert_eq!(frame.buffer.height(), 1);
     }
 
     // --- Frame register_hit returns true/false correctly ---

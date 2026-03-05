@@ -1606,6 +1606,9 @@ mod tests {
     #[cfg(feature = "test-helpers")]
     #[test]
     fn set_mouse_capture_enable_then_idempotent_enable() {
+        let _g = crate::capability_override::push_override(
+            crate::capability_override::CapabilityOverride::modern(),
+        );
         let mut session = TerminalSession::new_for_tests(SessionOptions::default()).unwrap();
         // Enable mouse
         session.set_mouse_capture(true).unwrap();
@@ -1619,6 +1622,9 @@ mod tests {
     #[cfg(feature = "test-helpers")]
     #[test]
     fn set_mouse_capture_toggle_roundtrip() {
+        let _g = crate::capability_override::push_override(
+            crate::capability_override::CapabilityOverride::modern(),
+        );
         let mut session = TerminalSession::new_for_tests(SessionOptions::default()).unwrap();
         assert!(!session.mouse_capture_enabled());
 
@@ -1634,6 +1640,9 @@ mod tests {
     #[cfg(feature = "test-helpers")]
     #[test]
     fn set_mouse_capture_multiple_toggles() {
+        let _g = crate::capability_override::push_override(
+            crate::capability_override::CapabilityOverride::modern(),
+        );
         let mut session = TerminalSession::new_for_tests(SessionOptions::default()).unwrap();
         for _ in 0..5 {
             session.set_mouse_capture(true).unwrap();

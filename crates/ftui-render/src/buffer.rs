@@ -1814,15 +1814,17 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "width must be > 0")]
-    fn buffer_zero_width_panics() {
-        Buffer::new(0, 24);
+    fn buffer_zero_width_clamped_to_one() {
+        let buf = Buffer::new(0, 24);
+        assert_eq!(buf.width(), 1);
+        assert_eq!(buf.height(), 24);
     }
 
     #[test]
-    #[should_panic(expected = "height must be > 0")]
-    fn buffer_zero_height_panics() {
-        Buffer::new(80, 0);
+    fn buffer_zero_height_clamped_to_one() {
+        let buf = Buffer::new(80, 0);
+        assert_eq!(buf.width(), 80);
+        assert_eq!(buf.height(), 1);
     }
 
     #[test]

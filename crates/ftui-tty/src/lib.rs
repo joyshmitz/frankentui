@@ -2187,15 +2187,17 @@ mod tests {
     // ── Presenter edge-case tests ────────────────────────────────────
 
     #[test]
-    #[should_panic(expected = "buffer width must be > 0")]
-    fn buffer_rejects_zero_width() {
-        let _buf = Buffer::new(0, 5);
+    fn buffer_zero_width_clamped_to_one() {
+        let buf = Buffer::new(0, 5);
+        assert_eq!(buf.width(), 1);
+        assert_eq!(buf.height(), 5);
     }
 
     #[test]
-    #[should_panic(expected = "buffer height must be > 0")]
-    fn buffer_rejects_zero_height() {
-        let _buf = Buffer::new(5, 0);
+    fn buffer_zero_height_clamped_to_one() {
+        let buf = Buffer::new(5, 0);
+        assert_eq!(buf.width(), 5);
+        assert_eq!(buf.height(), 1);
     }
 
     #[test]
