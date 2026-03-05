@@ -634,7 +634,7 @@ exit 1
         );
         let values = arg_list(&command);
 
-        assert!(values.contains(&"capture".to_string()));
+        assert!(values.contains(&"replay".to_string()));
         assert!(values.contains(&"--run-name".to_string()));
         assert!(values.contains(&"doctor_dry_run".to_string()));
         assert!(values.contains(&"--dry-run".to_string()));

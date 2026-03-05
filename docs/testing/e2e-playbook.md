@@ -29,6 +29,7 @@ tests/e2e/scripts/run_all.sh
 | --- | --- | --- | --- |
 | `scripts/e2e_test.sh` | yes | yes | Main PTY suite runner + budget/span/tile scenarios; JSONL run_end + schema v1 validation |
 | `scripts/e2e/bd-2vr05.14.5.sh` | yes | yes | Ligature/shaping deterministic verification (unit + remote browser E2E + benchmark smoke) with replay JSONL evidence |
+| `scripts/e2e/bd-2vr05.14.6.sh` | yes | yes | Addon-parity compatibility harness (fit/web-font, OSC8 links, image, progress, ligature, differential) with replay JSONL + summary |
 | `scripts/demo_showcase_e2e.sh` | yes | yes | Demo showcase end-to-end steps; VFX/layout inspector JSONL artifacts with schema v1 fields |
 | `scripts/e2e_demo_tour.sh` | yes | yes | Guided tour run + report validation |
 | `scripts/demo_text_effects_e2e.sh` | yes | yes | Text effects demo checks |

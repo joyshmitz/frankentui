@@ -26,6 +26,8 @@ REMOTE_TERM="${REMOTE_TERM:-xterm-256color}"
 REMOTE_BRIDGE_PID=""
 REMOTE_TELEMETRY_FILE=""
 REMOTE_WS_CLIENT="${REMOTE_LIB_DIR}/ws_client.py"
+REMOTE_TARGET_DIR="${REMOTE_TARGET_DIR:-$REMOTE_PROJECT_ROOT/target/remote-e2e}"
+REMOTE_ALLOW_LOCAL_CARGO_FALLBACK="${REMOTE_ALLOW_LOCAL_CARGO_FALLBACK:-0}"
 
 # Run cargo build commands via rch when available (falls back to local cargo).
 remote_run_cargo_build() {
@@ -34,6 +36,15 @@ remote_run_cargo_build() {
         return
     fi
     cargo "$@"
+}
+
+# Build locally (opt-in fallback when remote artifact retrieval does not
+# materialize binaries needed for local execution, such as ws_bridge).
+remote_run_local_cargo_build() {
+    (
+        cd "$REMOTE_PROJECT_ROOT"
+        cargo "$@"
+    )
 }
 
 # Build the ws_bridge binary if not already built.
@@ -45,27 +56,44 @@ remote_build_bridge() {
     fi
     echo "[remote] Building frankenterm_ws_bridge..." >&2
     if remote_run_cargo_build build -p ftui-pty --bin frankenterm_ws_bridge --release \
-        --target-dir /data/tmp/cargo-target 2>&1 | tail -3 >&2; then
-        return 0
+        --target-dir "$REMOTE_TARGET_DIR" 2>&1 | tail -3 >&2; then
+        if [[ -x "$bin_path" ]]; then
+            return 0
+        fi
+        echo "[remote] WARN: remote build succeeded but bridge binary is not present locally at $bin_path" >&2
+    fi
+
+    if [[ "$REMOTE_ALLOW_LOCAL_CARGO_FALLBACK" != "1" ]]; then
+        echo "[remote] ERROR: bridge binary missing after rch build: $bin_path" >&2
+        echo "[remote] Hint: set REMOTE_ALLOW_LOCAL_CARGO_FALLBACK=1 to allow local cargo fallback." >&2
+        return 1
     fi
 
     # Some environments have rustup configured without cargo for nightly.
     # Fall back to stable so remote E2E fixtures can still run.
-    echo "[remote] cargo build failed; retrying with stable toolchain..." >&2
-    if remote_run_cargo_build +stable build -p ftui-pty --bin frankenterm_ws_bridge --release \
-        --target-dir /data/tmp/cargo-target 2>&1 | tail -3 >&2; then
+    echo "[remote] retrying build via local cargo (opt-in fallback)..." >&2
+    if remote_run_local_cargo_build build -p ftui-pty --bin frankenterm_ws_bridge --release \
+        --target-dir "$REMOTE_TARGET_DIR" 2>&1 | tail -3 >&2; then
         if [[ -x "$bin_path" ]]; then
             return 0
         fi
     fi
 
-    echo "[remote] ERROR: bridge binary missing after build attempts: $bin_path" >&2
+    echo "[remote] local nightly build failed; retrying local stable toolchain..." >&2
+    if remote_run_local_cargo_build +stable build -p ftui-pty --bin frankenterm_ws_bridge --release \
+        --target-dir "$REMOTE_TARGET_DIR" 2>&1 | tail -3 >&2; then
+        if [[ -x "$bin_path" ]]; then
+            return 0
+        fi
+    fi
+
+    echo "[remote] ERROR: bridge binary missing after fallback attempts: $bin_path" >&2
     return 1
 }
 
 # Return path to the ws_bridge binary.
 remote_bridge_path() {
-    printf '%s' "/data/tmp/cargo-target/release/frankenterm_ws_bridge"
+    printf '%s' "$REMOTE_TARGET_DIR/release/frankenterm_ws_bridge"
 }
 
 # Start the ws_bridge server.

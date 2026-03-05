@@ -1268,8 +1268,8 @@ mod tests {
         let exact = lookup(&atlas, "ViewNodeKind::Component");
         let unsupported = lookup(&atlas, "EffectKind::Dom");
 
-        let (ex_s, ex_f) = mapping_evidence(exact);
-        let (un_s, un_f) = mapping_evidence(unsupported);
+        let (ex_s, ex_f) = mapping_evidence(exact, false);
+        let (un_s, un_f) = mapping_evidence(unsupported, false);
 
         assert!(
             ex_s > un_s,

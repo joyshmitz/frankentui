@@ -521,9 +521,66 @@ fn resolve_fallback(cap: &Capability, required: bool) -> FallbackPolicy {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use serde_json::json;
 
     use super::*;
+
+    #[derive(Debug, Clone)]
+    struct CapabilityScenario {
+        scenario_id: &'static str,
+        capability: Capability,
+        required: bool,
+        expected_outcome: &'static str,
+        expected_fallback: Option<FallbackStrategy>,
+    }
+
+    fn classify_outcome(caps: &TerminalCapabilities, capability_id: &str) -> &'static str {
+        let probe = caps
+            .probes
+            .get(capability_id)
+            .expect("scenario capability must be probed");
+        if probe.available {
+            return "available";
+        }
+
+        match caps
+            .fallbacks
+            .get(capability_id)
+            .map(|fallback| fallback.strategy)
+        {
+            Some(FallbackStrategy::Block) => "blocked",
+            Some(_) => "fallback",
+            None => "missing",
+        }
+    }
+
+    fn profile_for_scenario(scenario: &CapabilityScenario) -> CapabilityProfile {
+        let mut required = BTreeSet::new();
+        let mut optional = BTreeSet::new();
+        if scenario.required {
+            required.insert(scenario.capability.clone());
+        } else {
+            optional.insert(scenario.capability.clone());
+        }
+        CapabilityProfile {
+            required,
+            optional,
+            platform_assumptions: vec![],
+        }
+    }
+
+    fn outcome_map(caps: &TerminalCapabilities) -> BTreeMap<String, String> {
+        let mut outcomes = BTreeMap::new();
+        for capability_id in caps.probes.keys() {
+            outcomes.insert(
+                capability_id.clone(),
+                classify_outcome(caps, capability_id).to_string(),
+            );
+        }
+        outcomes
+    }
 
     fn empty_profile() -> CapabilityProfile {
         CapabilityProfile {
@@ -553,6 +610,228 @@ mod tests {
             trust_environment: false,
             allow_blocking: true,
         }
+    }
+
+    #[test]
+    fn capability_scenarios_cover_happy_boundary_and_failure_modes() {
+        let scenarios = vec![
+            CapabilityScenario {
+                scenario_id: "happy_required_keyboard_input",
+                capability: Capability::KeyboardInput,
+                required: true,
+                expected_outcome: "available",
+                expected_fallback: None,
+            },
+            CapabilityScenario {
+                scenario_id: "happy_required_network_access",
+                capability: Capability::NetworkAccess,
+                required: true,
+                expected_outcome: "available",
+                expected_fallback: None,
+            },
+            CapabilityScenario {
+                scenario_id: "happy_required_file_system",
+                capability: Capability::FileSystem,
+                required: true,
+                expected_outcome: "available",
+                expected_fallback: None,
+            },
+            CapabilityScenario {
+                scenario_id: "happy_required_timers",
+                capability: Capability::Timers,
+                required: true,
+                expected_outcome: "available",
+                expected_fallback: None,
+            },
+            CapabilityScenario {
+                scenario_id: "happy_required_process_spawn",
+                capability: Capability::ProcessSpawn,
+                required: true,
+                expected_outcome: "available",
+                expected_fallback: None,
+            },
+            CapabilityScenario {
+                scenario_id: "happy_required_inline_mode",
+                capability: Capability::InlineMode,
+                required: true,
+                expected_outcome: "available",
+                expected_fallback: None,
+            },
+            CapabilityScenario {
+                scenario_id: "boundary_required_mouse_input_fallback",
+                capability: Capability::MouseInput,
+                required: true,
+                expected_outcome: "fallback",
+                expected_fallback: Some(FallbackStrategy::Disable),
+            },
+            CapabilityScenario {
+                scenario_id: "boundary_required_alternate_screen_fallback",
+                capability: Capability::AlternateScreen,
+                required: true,
+                expected_outcome: "fallback",
+                expected_fallback: Some(FallbackStrategy::Emulate),
+            },
+            CapabilityScenario {
+                scenario_id: "boundary_required_truecolor_fallback",
+                capability: Capability::TrueColor,
+                required: true,
+                expected_outcome: "fallback",
+                expected_fallback: Some(FallbackStrategy::Downgrade),
+            },
+            CapabilityScenario {
+                scenario_id: "boundary_required_unicode_fallback",
+                capability: Capability::Unicode,
+                required: true,
+                expected_outcome: "fallback",
+                expected_fallback: Some(FallbackStrategy::Downgrade),
+            },
+            CapabilityScenario {
+                scenario_id: "boundary_optional_clipboard_fallback",
+                capability: Capability::Clipboard,
+                required: false,
+                expected_outcome: "fallback",
+                expected_fallback: Some(FallbackStrategy::Disable),
+            },
+            CapabilityScenario {
+                scenario_id: "boundary_required_touch_input_fallback",
+                capability: Capability::TouchInput,
+                required: true,
+                expected_outcome: "fallback",
+                expected_fallback: Some(FallbackStrategy::Disable),
+            },
+            CapabilityScenario {
+                scenario_id: "failure_required_custom_capability_blocked",
+                capability: Capability::Custom("gpu-accel".to_string()),
+                required: true,
+                expected_outcome: "blocked",
+                expected_fallback: Some(FallbackStrategy::Block),
+            },
+        ];
+
+        let mut structured_logs = Vec::new();
+        for scenario in &scenarios {
+            let capability_id = capability_name(&scenario.capability);
+            let caps = resolve_capabilities(&profile_for_scenario(scenario), &test_config());
+            let outcome = classify_outcome(&caps, &capability_id);
+            assert_eq!(
+                outcome, scenario.expected_outcome,
+                "Scenario {} expected {}, got {}",
+                scenario.scenario_id, scenario.expected_outcome, outcome
+            );
+
+            if let Some(expected_fallback) = scenario.expected_fallback {
+                let fallback = caps
+                    .fallbacks
+                    .get(&capability_id)
+                    .expect("expected fallback policy must be present");
+                assert_eq!(fallback.strategy, expected_fallback);
+            }
+
+            structured_logs.push(json!({
+                "capability_id": capability_id,
+                "scenario_id": scenario.scenario_id,
+                "outcome_classification": outcome,
+            }));
+        }
+
+        for entry in &structured_logs {
+            let capability_id = entry
+                .get("capability_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let scenario_id = entry
+                .get("scenario_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let outcome_classification = entry
+                .get("outcome_classification")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+
+            assert!(
+                !capability_id.is_empty(),
+                "structured log missing capability_id"
+            );
+            assert!(
+                !scenario_id.is_empty(),
+                "structured log missing scenario_id"
+            );
+            assert!(
+                matches!(
+                    outcome_classification,
+                    "available" | "fallback" | "blocked" | "missing"
+                ),
+                "unexpected outcome_classification: {outcome_classification}"
+            );
+        }
+    }
+
+    #[test]
+    fn migration_fixture_capability_regression_matrix_is_stable() {
+        let dashboard_fixture = CapabilityProfile {
+            required: BTreeSet::from([
+                Capability::KeyboardInput,
+                Capability::AlternateScreen,
+                Capability::TrueColor,
+            ]),
+            optional: BTreeSet::from([Capability::MouseInput, Capability::Unicode]),
+            platform_assumptions: vec![],
+        };
+        let dashboard_caps = resolve_capabilities(&dashboard_fixture, &test_config());
+        let dashboard_outcomes = outcome_map(&dashboard_caps);
+        assert_eq!(dashboard_caps.stats.total_probed, 5);
+        assert_eq!(dashboard_caps.stats.using_fallback, 4);
+        assert_eq!(dashboard_caps.stats.blocking, 0);
+        assert!(migration_can_proceed(&dashboard_caps));
+        assert_eq!(dashboard_outcomes["keyboard_input"], "available");
+        assert_eq!(dashboard_outcomes["alternate_screen"], "fallback");
+        assert_eq!(dashboard_outcomes["true_color"], "fallback");
+        assert_eq!(dashboard_outcomes["mouse_input"], "fallback");
+        assert_eq!(dashboard_outcomes["unicode"], "fallback");
+
+        let worker_fixture = CapabilityProfile {
+            required: BTreeSet::from([
+                Capability::KeyboardInput,
+                Capability::NetworkAccess,
+                Capability::FileSystem,
+                Capability::ProcessSpawn,
+                Capability::Timers,
+            ]),
+            optional: BTreeSet::from([Capability::Clipboard]),
+            platform_assumptions: vec![],
+        };
+        let worker_caps = resolve_capabilities(&worker_fixture, &test_config());
+        let worker_outcomes = outcome_map(&worker_caps);
+        assert_eq!(worker_caps.stats.total_probed, 6);
+        assert_eq!(worker_caps.stats.using_fallback, 1);
+        assert_eq!(worker_caps.stats.blocking, 0);
+        assert!(migration_can_proceed(&worker_caps));
+        assert_eq!(worker_outcomes["clipboard"], "fallback");
+        for capability_id in [
+            "keyboard_input",
+            "network_access",
+            "file_system",
+            "process_spawn",
+            "timers",
+        ] {
+            assert_eq!(worker_outcomes[capability_id], "available");
+        }
+
+        let blocking_fixture = CapabilityProfile {
+            required: BTreeSet::from([
+                Capability::KeyboardInput,
+                Capability::Custom("device-sensor".to_string()),
+            ]),
+            optional: BTreeSet::new(),
+            platform_assumptions: vec![],
+        };
+        let blocking_caps = resolve_capabilities(&blocking_fixture, &test_config());
+        let blocking_outcomes = outcome_map(&blocking_caps);
+        assert_eq!(blocking_caps.stats.total_probed, 2);
+        assert_eq!(blocking_caps.stats.blocking, 1);
+        assert!(!migration_can_proceed(&blocking_caps));
+        assert_eq!(blocking_outcomes["keyboard_input"], "available");
+        assert_eq!(blocking_outcomes["custom:device-sensor"], "blocked");
     }
 
     #[test]

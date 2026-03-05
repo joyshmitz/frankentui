@@ -374,7 +374,7 @@ fn walk_tree(inc: &mut IncrementalLayout, root: NodeId, root_area: Rect) {
                 Rect::default()
             };
             inc.get_or_compute(*gc, gc_area, |a| {
-                vec![a] // Leaf: returns own area.
+                vec![a].into() // Leaf: returns own area.
             });
         }
     }
@@ -715,6 +715,164 @@ fn bench_pane_core_timeline(c: &mut Criterion) {
     group.finish();
 }
 
+// ============================================================================
+// E-graph Layout Benchmarks (bd-14g59.4)
+// ============================================================================
+
+use ftui_layout::egraph::{self, SaturationConfig};
+
+/// Standard Flex.split for comparison baseline.
+fn flex_solve(constraints: &[Constraint], total: u16) -> Vec<u16> {
+    let area = Rect::from_size(total, 1);
+    let flex = Flex::horizontal()
+        .constraints(constraints.to_vec());
+    flex.split(area).iter().map(|r| r.width).collect()
+}
+
+fn bench_egraph_vs_standard(c: &mut Criterion) {
+    let mut group = c.benchmark_group("layout/egraph_vs_standard");
+
+    // Scenario 1: typical sidebar + content + footer
+    let typical: Vec<Constraint> = vec![
+        Constraint::Fixed(30),
+        Constraint::Min(100),
+        Constraint::Fixed(20),
+    ];
+
+    // Scenario 2: dense grid-like 50 widgets
+    let dense: Vec<Constraint> = (0..50)
+        .map(|i| match i % 5 {
+            0 => Constraint::Fixed(10),
+            1 => Constraint::Percentage(20.0),
+            2 => Constraint::Min(5),
+            3 => Constraint::Max(30),
+            4 => Constraint::Ratio(1, 3),
+            _ => unreachable!(),
+        })
+        .collect();
+
+    // Scenario 3: deeply nested (simulated as 100 constraints)
+    let deep: Vec<Constraint> = (0..100)
+        .map(|i| if i % 2 == 0 {
+            Constraint::Ratio(1, 100)
+        } else {
+            Constraint::Min(1)
+        })
+        .collect();
+
+    // Scenario 4: pathological mixed (200 widgets)
+    let pathological: Vec<Constraint> = (0..200)
+        .map(|i| match i % 7 {
+            0 => Constraint::Fixed(i as u16 % 50),
+            1 => Constraint::Percentage((i as f32 * 0.5) % 100.0),
+            2 => Constraint::Min(i as u16 % 30),
+            3 => Constraint::Max(i as u16 % 80),
+            4 => Constraint::Ratio((i as u32 % 10) + 1, 10),
+            5 => Constraint::Fill,
+            _ => Constraint::FitContentBounded { min: 5, max: 50 },
+        })
+        .collect();
+
+    // Scenario 5: 500 widgets (scale test)
+    let large: Vec<Constraint> = (0..500)
+        .map(|i| Constraint::Fixed(i as u16 % 100))
+        .collect();
+
+    let config = SaturationConfig::default();
+    let scenarios: &[(&str, &[Constraint], u16)] = &[
+        ("typical_3w", &typical, 200),
+        ("dense_50w", &dense, 500),
+        ("deep_100w", &deep, 800),
+        ("pathological_200w", &pathological, 1000),
+        ("large_500w", &large, 2000),
+    ];
+
+    for &(name, constraints, total) in scenarios {
+        // Benchmark: Standard Flex.split
+        group.bench_with_input(
+            BenchmarkId::new("flex_split", name),
+            &(constraints, total),
+            |b, &(constraints, total)| {
+                b.iter(|| black_box(flex_solve(constraints, total)))
+            },
+        );
+
+        // Benchmark: E-graph solve_layout
+        group.bench_with_input(
+            BenchmarkId::new("egraph_solve", name),
+            &(constraints, total),
+            |b, &(constraints, total)| {
+                b.iter(|| black_box(egraph::solve_layout(constraints, total, &config)))
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_egraph_saturation_scaling(c: &mut Criterion) {
+    let mut group = c.benchmark_group("layout/egraph_saturation");
+
+    for n in [10, 50, 100, 200, 500] {
+        let constraints: Vec<Constraint> = (0..n)
+            .map(|i| match i % 5 {
+                0 => Constraint::Fixed(10),
+                1 => Constraint::Percentage(20.0),
+                2 => Constraint::Min(5),
+                3 => Constraint::Max(30),
+                4 => Constraint::Ratio(1, 3),
+                _ => unreachable!(),
+            })
+            .collect();
+
+        let config = SaturationConfig::default();
+
+        group.bench_with_input(
+            BenchmarkId::new("solve", n),
+            &constraints,
+            |b, constraints| {
+                b.iter(|| black_box(egraph::solve_layout(constraints, 1000, &config)))
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_egraph_budget_impact(c: &mut Criterion) {
+    let mut group = c.benchmark_group("layout/egraph_budget");
+
+    let constraints: Vec<Constraint> = (0..100)
+        .map(|i| match i % 5 {
+            0 => Constraint::Fixed(10),
+            1 => Constraint::Percentage(20.0),
+            2 => Constraint::Min(5),
+            3 => Constraint::Max(30),
+            4 => Constraint::Ratio(1, 3),
+            _ => unreachable!(),
+        })
+        .collect();
+
+    for budget in [100, 500, 1_000, 5_000, 10_000] {
+        let config = SaturationConfig {
+            node_budget: budget,
+            iteration_limit: 100,
+            time_limit_us: 50_000,
+            memory_limit: 10 * 1024 * 1024,
+        };
+
+        group.bench_with_input(
+            BenchmarkId::new("budget", budget),
+            &constraints,
+            |b, constraints| {
+                b.iter(|| black_box(egraph::solve_layout(constraints, 1000, &config)))
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_flex_split,
@@ -729,6 +887,9 @@ criterion_group!(
     bench_pane_core_apply_operation,
     bench_pane_core_planning,
     bench_pane_core_timeline,
+    bench_egraph_vs_standard,
+    bench_egraph_saturation_scaling,
+    bench_egraph_budget_impact,
 );
 
 criterion_main!(benches);

@@ -103,16 +103,16 @@ pub fn run(cli: Cli) -> Result<()> {
 mod tests {
     use std::path::PathBuf;
 
-    use clap::Parser;
     use crate::capture::CaptureArgs;
     use crate::error::DoctorError;
     use crate::import::ImportArgs;
     use crate::report::ReportArgs;
     use crate::seed::SeedDemoArgs;
     use crate::suite::SuiteArgs;
+    use clap::Parser;
     use tempfile::tempdir;
 
-    use super::{Cli, Commands, run};
+    use super::{Cli, Commands, MachineOutputMode, run};
 
     #[test]
     fn list_profiles_command_dispatches_successfully() {
@@ -313,9 +313,13 @@ mod tests {
 
     #[test]
     fn legacy_command_aliases_remain_supported() {
-        let capture =
-            Cli::try_parse_from(["doctor_frankentui", "capture", "--profile", "analytics-empty"])
-                .expect("legacy capture alias should parse");
+        let capture = Cli::try_parse_from([
+            "doctor_frankentui",
+            "capture",
+            "--profile",
+            "analytics-empty",
+        ])
+        .expect("legacy capture alias should parse");
         assert!(matches!(capture.command, Commands::Capture(_)));
 
         let suite = Cli::try_parse_from(["doctor_frankentui", "suite"])

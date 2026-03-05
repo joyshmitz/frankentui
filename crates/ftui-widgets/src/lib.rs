@@ -139,6 +139,8 @@ pub mod constraint_overlay;
 pub mod debug_overlay;
 /// Drag-and-drop protocol: [`Draggable`](drag::Draggable) sources, [`DropTarget`](drag::DropTarget) targets, and [`DragPayload`](drag::DragPayload).
 pub mod drag;
+/// Elias-Fano encoding for monotone integer sequences (succinct prefix sums).
+pub mod elias_fano;
 pub mod emoji;
 pub mod error_boundary;
 /// Fenwick tree (Binary Indexed Tree) for O(log n) prefix sum queries.
@@ -164,6 +166,7 @@ pub mod layout;
 pub mod layout_debugger;
 pub mod list;
 pub mod log_ring;
+pub mod louds;
 pub mod log_viewer;
 /// Intrinsic sizing support for content-aware layout.
 pub mod measurable;
