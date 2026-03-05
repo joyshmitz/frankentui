@@ -293,8 +293,9 @@ impl<'a> List<'a> {
     /// Handle keyboard navigation and incremental filtering for this list.
     ///
     /// Supported keys:
-    /// - Navigation: `Up`/`Down`, `k`/`j`
-    /// - Incremental filter input: printable chars
+    /// - Navigation: `Up`/`Down`, `k`/`j` (vi-style, always navigate — never
+    ///   appended to the filter query)
+    /// - Incremental filter input: printable chars (except `j`/`k`)
     /// - Filter editing: `Backspace`, `Escape`
     /// - Multi-select toggle (when enabled): `Space`
     pub fn handle_key(&self, state: &mut ListState, key: &KeyEvent) -> bool {
@@ -311,6 +312,7 @@ impl<'a> List<'a> {
                 let filtered = self.filtered_indices(state);
                 self.move_selection_in_filtered(state, &filtered, 1)
             }
+            // j/k are always vi-style navigation, even when a filter is active.
             KeyCode::Char('k') if !nav_modifiers => {
                 let filtered = self.filtered_indices(state);
                 self.move_selection_in_filtered(state, &filtered, -1)
@@ -2465,6 +2467,34 @@ mod tests {
         // j at end → should stay at box(2)
         assert!(!list.handle_key(&mut state, &KeyEvent::new(KeyCode::Char('j'))));
         assert_eq!(state.selected(), Some(2));
+    }
+
+    #[test]
+    fn list_jk_navigate_not_filter_even_when_empty() {
+        // j/k are always vi-navigation and must never be appended to the
+        // filter query, even when the filter is empty. (bd-2pp0c)
+        let list = List::new(vec![
+            ListItem::new("alpha"),
+            ListItem::new("jam"),
+            ListItem::new("kite"),
+        ]);
+        let mut state = ListState::default();
+        assert!(state.filter_query().is_empty());
+
+        // j navigates down, does NOT start a filter for "j"
+        assert!(list.handle_key(&mut state, &KeyEvent::new(KeyCode::Char('j'))));
+        assert!(state.filter_query().is_empty());
+        assert_eq!(state.selected(), Some(0)); // first selection from None
+
+        // j again moves to next item
+        assert!(list.handle_key(&mut state, &KeyEvent::new(KeyCode::Char('j'))));
+        assert!(state.filter_query().is_empty());
+        assert_eq!(state.selected(), Some(1));
+
+        // k navigates up, does NOT start a filter for "k"
+        assert!(list.handle_key(&mut state, &KeyEvent::new(KeyCode::Char('k'))));
+        assert!(state.filter_query().is_empty());
+        assert_eq!(state.selected(), Some(0));
     }
 
     #[test]
