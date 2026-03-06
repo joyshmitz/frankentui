@@ -66,6 +66,9 @@ impl TourHighlight {
     }
 
     pub fn resolve(self, area: Rect) -> Rect {
+        if area.width == 0 || area.height == 0 {
+            return Rect::default();
+        }
         let width = ((area.width as f32) * self.w_pct).round() as u16;
         let height = ((area.height as f32) * self.h_pct).round() as u16;
         let width = width.clamp(1, area.width);
