@@ -868,6 +868,151 @@ fn bench_egraph_budget_impact(c: &mut Criterion) {
     group.finish();
 }
 
+// ============================================================================
+// van Emde Boas Tree Layout Benchmarks (bd-xwkon)
+// ============================================================================
+
+use ftui_layout::veb_tree::{TreeNode, VebTree};
+
+/// Build a binary tree of given depth as `TreeNode` list.
+fn make_binary_tree_nodes(depth: u16) -> Vec<TreeNode<u32>> {
+    let mut nodes = Vec::new();
+    let mut next_id = 1u32;
+    fn build(
+        id: u32,
+        remaining: u16,
+        next_id: &mut u32,
+        nodes: &mut Vec<TreeNode<u32>>,
+    ) {
+        if remaining == 0 {
+            nodes.push(TreeNode::new(id, id, vec![]));
+            return;
+        }
+        let left = *next_id;
+        *next_id += 1;
+        let right = *next_id;
+        *next_id += 1;
+        nodes.push(TreeNode::new(id, id, vec![left, right]));
+        build(left, remaining - 1, next_id, nodes);
+        build(right, remaining - 1, next_id, nodes);
+    }
+    build(0, depth, &mut next_id, &mut nodes);
+    nodes
+}
+
+/// Build a wide tree: root → N children (each a leaf).
+fn make_wide_tree_nodes(n: u32) -> Vec<TreeNode<u32>> {
+    let mut nodes = vec![TreeNode::new(0, 0, (1..=n).collect())];
+    for i in 1..=n {
+        nodes.push(TreeNode::new(i, i, vec![]));
+    }
+    nodes
+}
+
+fn bench_veb_build(c: &mut Criterion) {
+    let mut group = c.benchmark_group("veb/build");
+
+    // Binary trees at different sizes.
+    for depth in [6u16, 9, 13] {
+        // depth 6 → 127 nodes, 9 → 1023, 13 → 16383
+        let nodes = make_binary_tree_nodes(depth);
+        let count = nodes.len();
+        group.bench_with_input(
+            BenchmarkId::new("binary", count),
+            &nodes,
+            |b, nodes| {
+                b.iter(|| black_box(VebTree::build(nodes.clone())))
+            },
+        );
+    }
+
+    // Wide trees.
+    for n in [100u32, 1000, 5000] {
+        let nodes = make_wide_tree_nodes(n);
+        let count = nodes.len();
+        group.bench_with_input(
+            BenchmarkId::new("wide", count),
+            &nodes,
+            |b, nodes| {
+                b.iter(|| black_box(VebTree::build(nodes.clone())))
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_veb_traverse(c: &mut Criterion) {
+    let mut group = c.benchmark_group("veb/traverse");
+
+    for depth in [6u16, 9, 13] {
+        let nodes = make_binary_tree_nodes(depth);
+        let count = nodes.len();
+        let tree = VebTree::build(nodes);
+
+        // vEB-order traversal (sequential memory access).
+        group.bench_with_input(
+            BenchmarkId::new("veb_order", count),
+            &tree,
+            |b, tree| {
+                b.iter(|| {
+                    let mut sum = 0u64;
+                    for entry in tree.iter() {
+                        sum = sum.wrapping_add(entry.id as u64);
+                    }
+                    black_box(sum)
+                })
+            },
+        );
+
+        // DFS traversal (pointer-chasing via child indices).
+        group.bench_with_input(
+            BenchmarkId::new("dfs_order", count),
+            &tree,
+            |b, tree| {
+                b.iter(|| {
+                    let mut sum = 0u64;
+                    for entry in tree.iter_dfs() {
+                        sum = sum.wrapping_add(entry.id as u64);
+                    }
+                    black_box(sum)
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_veb_lookup(c: &mut Criterion) {
+    let mut group = c.benchmark_group("veb/lookup");
+
+    for depth in [6u16, 9, 13] {
+        let nodes = make_binary_tree_nodes(depth);
+        let count = nodes.len();
+        let tree = VebTree::build(nodes);
+        let ids: Vec<u32> = tree.iter().map(|e| e.id).collect();
+
+        group.bench_with_input(
+            BenchmarkId::new("by_id", count),
+            &(&tree, &ids),
+            |b, (tree, ids)| {
+                b.iter(|| {
+                    let mut sum = 0u64;
+                    for &id in *ids {
+                        if let Some(e) = tree.get(id) {
+                            sum = sum.wrapping_add(e.depth as u64);
+                        }
+                    }
+                    black_box(sum)
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_flex_split,
@@ -885,6 +1030,9 @@ criterion_group!(
     bench_egraph_vs_standard,
     bench_egraph_saturation_scaling,
     bench_egraph_budget_impact,
+    bench_veb_build,
+    bench_veb_traverse,
+    bench_veb_lookup,
 );
 
 criterion_main!(benches);
