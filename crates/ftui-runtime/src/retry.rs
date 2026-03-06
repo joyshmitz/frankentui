@@ -38,6 +38,29 @@ use crate::cancellation::{CancellationSource, CancellationToken};
 use crate::program::{Cmd, TaskSpec};
 use web_time::Duration;
 
+const TASK_THREAD_JOIN_TIMEOUT: Duration = Duration::from_millis(250);
+const TASK_THREAD_JOIN_POLL: Duration = Duration::from_millis(5);
+
+fn join_task_thread(handle: std::thread::JoinHandle<()>) {
+    let _ = handle.join();
+}
+
+fn join_task_thread_bounded(handle: std::thread::JoinHandle<()>, task_name: &'static str) {
+    let start = web_time::Instant::now();
+    while !handle.is_finished() {
+        if start.elapsed() >= TASK_THREAD_JOIN_TIMEOUT {
+            tracing::warn!(
+                task = task_name,
+                timeout_ms = TASK_THREAD_JOIN_TIMEOUT.as_millis() as u64,
+                "Timed-out worker thread did not exit within the cancellation join timeout; detaching"
+            );
+            return;
+        }
+        std::thread::sleep(TASK_THREAD_JOIN_POLL);
+    }
+    join_task_thread(handle);
+}
+
 /// Backoff strategy for retry delays.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(
@@ -136,14 +159,18 @@ where
         let source = CancellationSource::new();
         let token = source.token();
         let (tx, rx) = std::sync::mpsc::channel();
-        let _handle = std::thread::spawn(move || {
+        let handle = std::thread::spawn(move || {
             let result = f(token);
             let _ = tx.send(result);
         });
         match rx.recv_timeout(timeout) {
-            Ok(msg) => msg,
+            Ok(msg) => {
+                join_task_thread(handle);
+                msg
+            }
             Err(_) => {
                 source.cancel();
+                join_task_thread_bounded(handle, "task_with_timeout");
                 on_timeout
             }
         }
@@ -165,14 +192,18 @@ where
         let source = CancellationSource::new();
         let token = source.token();
         let (tx, rx) = std::sync::mpsc::channel();
-        let _handle = std::thread::spawn(move || {
+        let handle = std::thread::spawn(move || {
             let result = f(token);
             let _ = tx.send(result);
         });
         match rx.recv_timeout(timeout) {
-            Ok(msg) => msg,
+            Ok(msg) => {
+                join_task_thread(handle);
+                msg
+            }
             Err(_) => {
                 source.cancel();
+                join_task_thread_bounded(handle, "task_with_timeout_named");
                 on_timeout
             }
         }
@@ -230,17 +261,22 @@ where
             let token = source.token();
             let (tx, rx) = std::sync::mpsc::channel();
             let f_clone = std::sync::Arc::clone(&f);
-            let _handle = std::thread::spawn(move || {
+            let handle = std::thread::spawn(move || {
                 let result = f_clone(token);
                 let _ = tx.send(result);
             });
             match rx.recv_timeout(per_attempt_timeout) {
-                Ok(Ok(msg)) => return msg,
+                Ok(Ok(msg)) => {
+                    join_task_thread(handle);
+                    return msg;
+                }
                 Ok(Err(e)) => {
+                    join_task_thread(handle);
                     last_err = e;
                 }
                 Err(_) => {
                     source.cancel();
+                    join_task_thread_bounded(handle, "task_with_retry_and_timeout");
                     last_err = "timeout".into();
                 }
             }

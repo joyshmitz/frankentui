@@ -73,6 +73,7 @@ pub mod rough_path;
 pub mod schema_compat;
 pub mod simulator;
 pub mod slo;
+pub mod sos_barrier;
 pub mod state_persistence;
 #[cfg(feature = "stdio-capture")]
 pub mod stdio_capture;
