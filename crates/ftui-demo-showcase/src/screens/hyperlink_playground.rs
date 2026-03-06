@@ -131,20 +131,29 @@ impl HyperlinkPlayground {
             return;
         }
         let len = self.links.len() as isize;
-        let mut next = self.focused_idx as isize + delta;
+        // Start from the visually active index so keyboard navigation
+        // agrees with whatever the details panel is showing.
+        let base = self.active_index() as isize;
+        let mut next = base + delta;
         if next < 0 {
             next = len - 1;
         } else if next >= len {
             next = 0;
         }
         self.focused_idx = next as usize;
+        // Clear hover so keyboard takes over display ownership.
+        self.hovered_idx = None;
         self.log_event("focus_move", self.focused_idx, "ok");
     }
 
     fn activate_focus(&mut self, reason: &'static str) {
-        if let Some(link) = self.links.get(self.focused_idx) {
+        let idx = self.active_index();
+        if let Some(link) = self.links.get(idx) {
+            // Sync keyboard focus to whichever link is visually active (may be
+            // hovered), so display and action always agree.
+            self.focused_idx = idx;
             self.last_action = Some(format!("Activated {} ({reason})", link.label));
-            self.log_event("activate_keyboard", self.focused_idx, "ok");
+            self.log_event("activate_keyboard", idx, "ok");
         }
     }
 
@@ -166,9 +175,11 @@ impl HyperlinkPlayground {
             KeyCode::Enter => self.activate_focus("Enter"),
             KeyCode::Char(' ') => self.activate_focus("Space"),
             KeyCode::Char('c') => {
-                if let Some(link) = self.links.get(self.focused_idx) {
+                let idx = self.active_index();
+                if let Some(link) = self.links.get(idx) {
+                    self.focused_idx = idx;
                     self.last_action = Some(format!("Copied URL: {}", link.url));
-                    self.log_event("copy_url", self.focused_idx, "ok");
+                    self.log_event("copy_url", idx, "ok");
                 }
             }
             _ => {}

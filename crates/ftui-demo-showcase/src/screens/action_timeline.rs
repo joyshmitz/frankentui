@@ -613,6 +613,7 @@ impl ActionTimeline {
             .style(border_style);
         let inner = block.inner(area);
         block.render(area, frame);
+        self.last_timeline_area.set(inner);
 
         if inner.is_empty() {
             return;
@@ -734,8 +735,7 @@ impl ActionTimeline {
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
                     if timeline_area.contains(mouse.x, mouse.y) {
-                        let header_rows = 1_u16;
-                        let relative_y = mouse.y.saturating_sub(timeline_area.y + header_rows);
+                        let relative_y = mouse.y.saturating_sub(timeline_area.y);
                         let clicked_index = self.scroll_offset + relative_y as usize;
                         let filtered = self.filtered_indices();
                         if clicked_index < filtered.len() {
@@ -903,7 +903,6 @@ impl Screen for ActionTimeline {
 
         let filtered = self.filtered_indices();
         self.render_filters(frame, rows[0]);
-        self.last_timeline_area.set(cols[0]);
         self.render_timeline(frame, cols[0], &filtered);
         self.render_details(frame, cols[1], &filtered);
     }

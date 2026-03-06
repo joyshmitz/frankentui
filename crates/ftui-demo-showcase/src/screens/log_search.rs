@@ -1243,9 +1243,9 @@ impl Screen for LogSearch {
             .border_type(BorderType::Rounded)
             .border_style(border_style);
 
-        self.last_log_area.set(log_area);
         let inner = block.inner(log_area);
         Widget::render(&block, log_area, frame);
+        self.last_log_area.set(inner);
 
         let mut state = self.viewer_state.clone();
         StatefulWidget::render(&self.viewer, inner, frame, &mut state);

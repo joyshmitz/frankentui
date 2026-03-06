@@ -809,6 +809,20 @@ mod tests {
     }
 
     #[test]
+    fn highlight_resolve_zero_area_no_panic() {
+        let highlight = TourHighlight::new_pct(0.5, 0.5, 0.5, 0.5);
+        // Both dimensions zero
+        let rect = highlight.resolve(Rect::new(0, 0, 0, 0));
+        assert_eq!(rect, Rect::default());
+        // Width zero
+        let rect = highlight.resolve(Rect::new(5, 5, 0, 10));
+        assert_eq!(rect, Rect::default());
+        // Height zero
+        let rect = highlight.resolve(Rect::new(5, 5, 10, 0));
+        assert_eq!(rect, Rect::default());
+    }
+
+    #[test]
     fn normalize_speed_handles_bounds() {
         assert!((normalize_speed(0.1) - SPEED_MIN).abs() < f64::EPSILON);
         assert!((normalize_speed(10.0) - SPEED_MAX).abs() < f64::EPSILON);

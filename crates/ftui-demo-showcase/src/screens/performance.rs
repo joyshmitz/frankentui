@@ -107,7 +107,7 @@ impl Performance {
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
                     // Click to select item based on y position in list
-                    let inner_y = mouse.y.saturating_sub(list_area.y + 1); // +1 for border
+                    let inner_y = mouse.y.saturating_sub(list_area.y);
                     let target = self.scroll_offset + inner_y as usize;
                     if target < self.items.len() {
                         self.selected = target;
@@ -139,6 +139,7 @@ impl Performance {
 
         let inner = block.inner(area);
         block.render(area, frame);
+        self.last_list_area.set(inner);
 
         if inner.is_empty() {
             return;
@@ -328,7 +329,6 @@ impl Screen for Performance {
             .constraints([Constraint::Min(40), Constraint::Fixed(35)])
             .split(main[0]);
 
-        self.last_list_area.set(cols[0]);
         self.render_list_panel(frame, cols[0]);
         self.render_stats_panel(frame, cols[1]);
 
@@ -535,11 +535,11 @@ mod tests {
         screen.view(&mut frame, Rect::new(0, 0, 120, 40));
 
         let list_area = screen.last_list_area.get();
-        // Click on third row in list (border + 2 rows = y+3)
+        // Click on third row in list (inner rect, so y+2 = third data row)
         let event = Event::Mouse(ftui_core::event::MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             x: list_area.x + 2,
-            y: list_area.y + 3,
+            y: list_area.y + 2,
             modifiers: ftui_core::event::Modifiers::NONE,
         });
         screen.update(&event);

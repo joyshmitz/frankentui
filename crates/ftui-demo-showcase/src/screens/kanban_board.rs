@@ -258,7 +258,7 @@ impl KanbanBoard {
         self.focus_row = to_row;
     }
 
-    /// Move a card from one column to another (used by both keyboard and mouse).
+    /// Move a card from one column to another by row index.
     fn move_card(&mut self, from_col: usize, from_row: usize, to_col: usize) {
         if from_col == to_col {
             return;
@@ -278,6 +278,30 @@ impl KanbanBoard {
         self.redo_stack.clear();
         self.focus_col = to_col;
         self.focus_row = to_row;
+    }
+
+    /// Move a card by stable identity. Searches all columns for `card_id` and
+    /// moves it to `to_col`. Returns `true` if the card was found and moved.
+    fn move_card_by_id(&mut self, card_id: u32, to_col: usize) -> bool {
+        if to_col > 2 {
+            return false;
+        }
+        // Find the card by ID in any column.
+        let mut found = None;
+        for (col_idx, col) in self.columns.iter().enumerate() {
+            if let Some(row_idx) = col.iter().position(|c| c.id == card_id) {
+                found = Some((col_idx, row_idx));
+                break;
+            }
+        }
+        let Some((from_col, from_row)) = found else {
+            return false;
+        };
+        if from_col == to_col {
+            return false;
+        }
+        self.move_card(from_col, from_row, to_col);
+        true
     }
 
     /// Determine which column a screen-space x,y coordinate falls in.
@@ -355,11 +379,10 @@ impl KanbanBoard {
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 if let Some(drag) = self.mouse_drag.take() {
-                    // Complete the drop
-                    if let Some(target_col) = drag.hover_col
-                        && target_col != drag.source_col
-                    {
-                        self.move_card(drag.source_col, drag.source_row, target_col);
+                    // Complete the drop using stable card identity so mid-drag
+                    // mutations (e.g. keyboard input) can't move the wrong card.
+                    if let Some(target_col) = drag.hover_col {
+                        self.move_card_by_id(drag.card_id, target_col);
                     }
                     return true;
                 }
@@ -1299,5 +1322,34 @@ mod tests {
         assert_eq!(board.columns[0].len(), 3);
         assert_eq!(board.columns[2].len(), 2);
         assert_eq!(board.columns[2].last().unwrap().id, card_id);
+    }
+
+    #[test]
+    fn move_card_by_id_finds_card_after_mutation() {
+        let mut board = KanbanBoard::new();
+        let card_id = board.columns[0][1].id; // "Add input validation"
+
+        // Simulate mid-drag mutation: another card is removed from the same
+        // column, shifting the target card's row index.
+        board.columns[0].remove(0);
+        // card_id was at row 1 but is now at row 0 due to the removal above.
+
+        // move_card_by_id should still find the correct card.
+        assert!(board.move_card_by_id(card_id, 2));
+        assert_eq!(board.columns[2].last().unwrap().id, card_id);
+    }
+
+    #[test]
+    fn move_card_by_id_same_column_is_noop() {
+        let mut board = KanbanBoard::new();
+        let card_id = board.columns[0][0].id;
+        assert!(!board.move_card_by_id(card_id, 0));
+        assert_eq!(board.columns[0].len(), 4);
+    }
+
+    #[test]
+    fn move_card_by_id_missing_card_is_noop() {
+        let mut board = KanbanBoard::new();
+        assert!(!board.move_card_by_id(9999, 1));
     }
 }

@@ -894,8 +894,8 @@ impl TerminalCapabilitiesScreen {
 
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) if matrix_area.contains(mouse.x, mouse.y) => {
-                // +2 accounts for the border (1 row) and header (1 row).
-                let header_offset = 2u16;
+                // +1 accounts for the table header row (border is excluded from inner rect).
+                let header_offset = 1u16;
                 if mouse.y >= matrix_area.y + header_offset {
                     let row_idx = (mouse.y - matrix_area.y - header_offset) as usize;
                     let detected = self.detected_capabilities();
@@ -1045,7 +1045,6 @@ impl TerminalCapabilitiesScreen {
     }
 
     fn render_matrix_panel(&self, frame: &mut Frame, area: Rect, rows: &[CapabilityRow]) {
-        self.last_matrix_area.set(area);
         if area.is_empty() {
             return;
         }
@@ -1057,6 +1056,7 @@ impl TerminalCapabilitiesScreen {
             .style(theme::content_border());
         let inner = block.inner(area);
         block.render(area, frame);
+        self.last_matrix_area.set(inner);
 
         if inner.is_empty() {
             return;
@@ -1108,7 +1108,6 @@ impl TerminalCapabilitiesScreen {
     }
 
     fn render_comparison_panel(&self, frame: &mut Frame, area: Rect, rows: &[ComparisonRow]) {
-        self.last_matrix_area.set(area);
         if area.is_empty() {
             return;
         }
@@ -1120,6 +1119,7 @@ impl TerminalCapabilitiesScreen {
             .style(theme::content_border());
         let inner = block.inner(area);
         block.render(area, frame);
+        self.last_matrix_area.set(inner);
 
         if inner.is_empty() {
             return;
@@ -2455,14 +2455,14 @@ mod tests {
         let mut screen = TerminalCapabilitiesScreen::new();
         assert_eq!(screen.selected, 0);
 
-        // Simulate having rendered the matrix panel at a known area.
-        screen.last_matrix_area.set(Rect::new(0, 0, 80, 20));
+        // Simulate having rendered the matrix panel inner area (borders excluded).
+        screen.last_matrix_area.set(Rect::new(1, 1, 78, 18));
 
-        // Click on row 3 (y = 0 border + 1 header + 3 = row index 3).
+        // Click on row 3 (y = 1 inner_y + 1 header + 3 = row index 3).
         let click = Event::Mouse(MouseEvent::new(
             MouseEventKind::Down(MouseButton::Left),
             10,
-            5, // border(1) + header(1) + row_idx(3) = y=5
+            5, // inner_y(1) + header(1) + row_idx(3) = y=5
         ));
         screen.update(&click);
         assert_eq!(screen.selected, 3, "Click should select row 3");
@@ -2473,7 +2473,7 @@ mod tests {
         let mut screen = TerminalCapabilitiesScreen::new();
         assert_eq!(screen.selected, 0);
 
-        screen.last_matrix_area.set(Rect::new(0, 0, 80, 20));
+        screen.last_matrix_area.set(Rect::new(1, 1, 78, 18));
 
         let scroll_down = Event::Mouse(MouseEvent::new(MouseEventKind::ScrollDown, 10, 5));
         screen.update(&scroll_down);
