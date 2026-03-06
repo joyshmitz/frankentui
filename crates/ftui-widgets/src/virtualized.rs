@@ -197,9 +197,13 @@ impl<T> Virtualized<T> {
     }
 
     /// Get current scroll offset.
+    ///
+    /// The internal sentinel value (`usize::MAX`, used for lazy scroll-to-bottom)
+    /// is clamped to the actual item count so callers never see it.
     #[must_use]
     pub fn scroll_offset(&self) -> usize {
         self.scroll_offset
+            .min(self.len().saturating_sub(1).max(0))
     }
 
     /// Get current visible count (from last render).
@@ -897,10 +901,27 @@ impl VirtualizedListState {
         self.persistence_id.as_deref()
     }
 
-    /// Get current scroll offset.
+    /// Get raw scroll offset.
+    ///
+    /// **Warning:** After `scroll_to_bottom`, this may return `usize::MAX`
+    /// (a lazy sentinel that gets clamped during rendering). Use
+    /// [`scroll_offset_clamped`] with a known `total_items` to get a
+    /// safe value for display or indexing.
     #[must_use]
     pub fn scroll_offset(&self) -> usize {
         self.scroll_offset
+    }
+
+    /// Get scroll offset clamped against a known total item count.
+    ///
+    /// Prefer this over [`scroll_offset()`] when the total is available,
+    /// because `scroll_to_bottom` may store `usize::MAX` internally.
+    #[must_use]
+    pub fn scroll_offset_clamped(&self, total_items: usize) -> usize {
+        if total_items == 0 {
+            return 0;
+        }
+        self.scroll_offset.min(total_items.saturating_sub(1))
     }
 
     /// Get visible item count (from last render).
@@ -2661,9 +2682,12 @@ mod tests {
         for i in 0..20 {
             virt.push(i);
         }
-        // visible_count=0 (default), scroll_to_bottom stores a sentinel.
+        // visible_count=0 (default), scroll_to_bottom stores a sentinel internally.
         virt.scroll_to_bottom();
-        assert_eq!(virt.scroll_offset(), usize::MAX);
+        // Internal field stores MAX sentinel…
+        assert_eq!(virt.scroll_offset, usize::MAX);
+        // …but public API clamps to last valid index.
+        assert_eq!(virt.scroll_offset(), 19);
     }
 
     // ── Virtualized: page navigation edge cases ─────────────────────────

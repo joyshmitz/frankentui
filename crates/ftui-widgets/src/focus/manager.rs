@@ -243,7 +243,27 @@ impl FocusManager {
     }
 
     /// Push focus trap (for modals).
-    pub fn push_trap(&mut self, group_id: u32) {
+    ///
+    /// If the group doesn't exist or has no focusable members, the trap is
+    /// **not** pushed and the method returns `false`. This prevents a deadlock
+    /// where `allowed_by_trap` would deny focus to every widget because the
+    /// group is empty/missing.
+    pub fn push_trap(&mut self, group_id: u32) -> bool {
+        // Guard: the group must exist and contain at least one focusable member.
+        let group_ok = self
+            .groups
+            .get(&group_id)
+            .is_some_and(|g| !g.members.is_empty());
+
+        if !group_ok {
+            #[cfg(feature = "tracing")]
+            tracing::warn!(
+                group_id,
+                "focus.trap_push rejected: group missing or empty"
+            );
+            return false;
+        }
+
         let return_focus = self.current;
         #[cfg(feature = "tracing")]
         tracing::debug!(
@@ -259,6 +279,7 @@ impl FocusManager {
         if !self.is_current_in_group(group_id) {
             self.focus_first_in_group(group_id);
         }
+        true
     }
 
     /// Pop focus trap, restore previous focus.
@@ -1077,6 +1098,33 @@ mod tests {
     fn pop_trap_on_empty_returns_false() {
         let mut fm = FocusManager::new();
         assert!(!fm.pop_trap());
+    }
+
+    #[test]
+    fn push_trap_rejects_missing_group() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.focus(1);
+
+        // Group 999 doesn't exist — push_trap must refuse.
+        assert!(!fm.push_trap(999));
+        assert!(!fm.is_trapped());
+        // Focus should remain unchanged (no deadlock).
+        assert_eq!(fm.current(), Some(1));
+    }
+
+    #[test]
+    fn push_trap_rejects_empty_group() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.focus(1);
+
+        // Create group with no members.
+        fm.create_group(42, vec![]);
+        assert!(!fm.push_trap(42));
+        assert!(!fm.is_trapped());
+        // Focus should remain unchanged (no deadlock).
+        assert_eq!(fm.current(), Some(1));
     }
 
     // --- Focus events ---

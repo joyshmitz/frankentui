@@ -2463,9 +2463,27 @@ impl<M: Send + 'static> EffectQueue<M> {
         let _ = self.sender.send(EffectCommand::Enqueue(spec, task));
     }
 
+    /// Timeout for the effect-queue thread to finish after sending Shutdown.
+    const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+    /// Poll interval when waiting for the effect-queue thread.
+    const SHUTDOWN_POLL: Duration = Duration::from_millis(10);
+
     fn shutdown(&mut self) {
         let _ = self.sender.send(EffectCommand::Shutdown);
         if let Some(handle) = self.handle.take() {
+            // Bounded wait: poll `is_finished` with a timeout so a slow task
+            // cannot block shutdown indefinitely.
+            let start = Instant::now();
+            while !handle.is_finished() {
+                if start.elapsed() >= Self::SHUTDOWN_TIMEOUT {
+                    tracing::warn!(
+                        timeout_ms = Self::SHUTDOWN_TIMEOUT.as_millis() as u64,
+                        "Effect-queue thread did not stop within timeout; detaching"
+                    );
+                    return;
+                }
+                thread::sleep(Self::SHUTDOWN_POLL);
+            }
             let _ = handle.join();
         }
     }

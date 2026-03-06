@@ -130,12 +130,16 @@ impl FocusAwareModalStack {
     ) -> ModalId {
         let group_id = next_focus_group_id();
 
-        // Create focus group and push trap
+        // Create focus group and push trap.
+        // If the group ends up empty (no focusable members), push_trap
+        // returns false and we record no focus group for this modal so
+        // that pop() won't try to pop a trap that was never pushed.
         self.focus_manager.create_group(group_id, focusable_ids);
-        self.focus_manager.push_trap(group_id);
+        let trapped = self.focus_manager.push_trap(group_id);
 
         // Push modal with focus group tracking
-        self.stack.push_with_focus(modal, Some(group_id))
+        let focus_group = if trapped { Some(group_id) } else { None };
+        self.stack.push_with_focus(modal, focus_group)
     }
 
     /// Pop the top modal.
@@ -533,11 +537,13 @@ mod tests {
     fn empty_focus_group_no_panic() {
         let mut modals = FocusAwareModalStack::new();
 
-        // Push modal with empty focus group (edge case)
+        // Push modal with empty focus group (edge case).
+        // The trap is NOT pushed because the group has no focusable members,
+        // preventing a deadlock where no widget could receive focus.
         modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![]);
 
-        // Should not panic, just have no focused element
-        assert!(modals.is_focus_trapped());
+        // Should not panic, and focus should NOT be trapped (empty group).
+        assert!(!modals.is_focus_trapped());
 
         // Pop should still work
         modals.pop();

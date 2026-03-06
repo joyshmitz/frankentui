@@ -718,11 +718,15 @@ impl<'a> ModalFocusIntegration<'a> {
                 // Convert ModalFocusId (u64) to FocusId (u64) for the focus manager
                 let focus_ids: Vec<crate::focus::FocusId> = ids.into_iter().collect();
 
-                // Create focus group and trap
+                // Create focus group and trap.
+                // If the group is empty, push_trap refuses so we don't
+                // record a focus_group_id (avoids pop mismatch).
                 self.focus.create_group(group_id, focus_ids);
-                self.focus.push_trap(group_id);
-
-                Some(group_id)
+                if self.focus.push_trap(group_id) {
+                    Some(group_id)
+                } else {
+                    None
+                }
             } else {
                 None
             }
