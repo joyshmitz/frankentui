@@ -769,8 +769,8 @@ mod tests {
             MigrationProfile::Aggressive,
         ] {
             let resolver = ConfigResolver::from_profile(profile);
-            resolver.validate().expect(&format!(
-                "default {} config should validate",
+            resolver.validate().unwrap_or_else(|e| panic!(
+                "default {} config should validate: {e}",
                 profile.name()
             ));
         }

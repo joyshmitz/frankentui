@@ -48,6 +48,7 @@ pub struct AdaptiveRadixTree<V> {
 
 /// Internal node types with adaptive sizing.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 enum ArtNode<V> {
     /// Leaf node storing a key-value pair.
     Leaf { key: String, value: V },
@@ -64,6 +65,7 @@ enum ArtNode<V> {
 
 /// Adaptive child storage.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 enum Children<V> {
     /// Up to 4 children: sorted key bytes + child pointers.
     Node4 {
@@ -145,10 +147,8 @@ impl<V: Clone> AdaptiveRadixTree<V> {
         if result.is_some() {
             self.len -= 1;
             // Clean up empty root.
-            if let Some(ref root) = self.root {
-                if is_empty_node(root) {
-                    self.root = None;
-                }
+            if let Some(ref root) = self.root && is_empty_node(root) {
+                self.root = None;
             }
         }
         result
@@ -488,10 +488,8 @@ fn delete_recursive<V: Clone>(node: &mut ArtNode<V>, key_bytes: &[u8], depth: us
                 .and_then(|child| delete_recursive(child, key_bytes, next_depth + 1));
             if result.is_some() {
                 // If child became empty leaf, remove it.
-                if let Some(child) = children_get(children, byte) {
-                    if is_empty_node(child) {
-                        children_remove(children, byte);
-                    }
+                if let Some(child) = children_get(children, byte) && is_empty_node(child) {
+                    children_remove(children, byte);
                 }
             }
             result
@@ -539,7 +537,7 @@ fn children_insert<V>(children: &mut Children<V>, byte: u8, child: Box<ArtNode<V
             } else {
                 // Promote to Node16.
                 let mut new_keys = keys.clone();
-                let mut new_ch: Vec<Box<ArtNode<V>>> = ch.drain(..).collect();
+                let mut new_ch: Vec<Box<ArtNode<V>>> = std::mem::take(ch);
                 let pos = new_keys
                     .iter()
                     .position(|&k| k > byte)
@@ -607,7 +605,7 @@ fn children_insert<V>(children: &mut Children<V>, byte: u8, child: Box<ArtNode<V
     }
 }
 
-fn children_get<'a, V>(children: &'a Children<V>, byte: u8) -> Option<&'a ArtNode<V>> {
+fn children_get<V>(children: &Children<V>, byte: u8) -> Option<&ArtNode<V>> {
     match children {
         Children::Node4 { keys, children: ch } => {
             keys.iter().position(|&k| k == byte).map(|i| ch[i].as_ref())
@@ -631,7 +629,7 @@ fn children_get<'a, V>(children: &'a Children<V>, byte: u8) -> Option<&'a ArtNod
     }
 }
 
-fn children_get_mut<'a, V>(children: &'a mut Children<V>, byte: u8) -> Option<&'a mut ArtNode<V>> {
+fn children_get_mut<V>(children: &mut Children<V>, byte: u8) -> Option<&mut ArtNode<V>> {
     match children {
         Children::Node4 { keys, children: ch } => keys
             .iter()
@@ -674,7 +672,7 @@ fn children_remove<V>(children: &mut Children<V>, byte: u8) {
             if ch.len() <= NODE4_MAX {
                 *children = Children::Node4 {
                     keys: keys.clone(),
-                    children: ch.drain(..).collect(),
+                    children: std::mem::take(ch),
                 };
             }
         }
