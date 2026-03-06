@@ -294,6 +294,9 @@ impl TerminalModel {
         self.sgr = SgrState::default();
         self.modes = ModeFlags::new();
         self.current_link_id = 0;
+        // Restore hyperlink registry to initial state (index 0 = empty sentinel)
+        self.links.clear();
+        self.links.push(String::new());
         self.parse_state = ParseState::Ground;
         self.csi_params.clear();
         self.csi_intermediate.clear();
