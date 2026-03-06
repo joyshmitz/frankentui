@@ -125,6 +125,7 @@
 //! [`Frame`]: ftui_render::frame::Frame
 //! [`Buffer`]: ftui_render::buffer::Buffer
 
+pub mod adaptive_radix;
 pub mod align;
 /// Badge widget (status/priority pills).
 pub mod badge;
