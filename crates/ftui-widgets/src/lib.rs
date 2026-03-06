@@ -132,6 +132,7 @@ pub mod badge;
 pub mod block;
 pub mod borders;
 pub mod cached;
+pub mod choreography;
 pub mod columns;
 pub mod command_palette;
 pub mod constraint_overlay;
