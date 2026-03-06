@@ -734,21 +734,67 @@ impl CommandPalette {
             }
 
             KeyCode::Backspace => {
-                if !self.query.is_empty() {
-                    // Remove last character
-                    self.query.pop();
-                    self.cursor = self.query.len();
+                if self.cursor > 0 {
+                    // Find the previous char boundary before the cursor and remove that char.
+                    let prev = self.query[..self.cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    self.query.drain(prev..self.cursor);
+                    self.cursor = prev;
                     self.selected = 0;
                     self.scroll_offset = 0;
                     self.update_filtered(true);
                 }
             }
 
+            KeyCode::Delete => {
+                if self.cursor < self.query.len() {
+                    // Find the next char boundary after the cursor and remove that char.
+                    let next = self.query[self.cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| self.cursor + i)
+                        .unwrap_or(self.query.len());
+                    self.query.drain(self.cursor..next);
+                    self.selected = 0;
+                    self.scroll_offset = 0;
+                    self.update_filtered(true);
+                }
+            }
+
+            KeyCode::Left => {
+                if self.cursor > 0 {
+                    // Move cursor to previous char boundary.
+                    self.cursor = self.query[..self.cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                }
+            }
+
+            KeyCode::Right => {
+                if self.cursor < self.query.len() {
+                    // Move cursor to next char boundary.
+                    self.cursor = self.query[self.cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| self.cursor + i)
+                        .unwrap_or(self.query.len());
+                }
+            }
+
             KeyCode::Char(c) => {
                 if modifiers.contains(Modifiers::CTRL) {
-                    // Ctrl+A: select all (move cursor to start)
+                    // Ctrl+A: move cursor to start
                     if c == 'a' {
                         self.cursor = 0;
+                    }
+                    // Ctrl+E: move cursor to end
+                    if c == 'e' {
+                        self.cursor = self.query.len();
                     }
                     // Ctrl+U: clear query
                     if c == 'u' {
@@ -759,8 +805,9 @@ impl CommandPalette {
                         self.update_filtered(true);
                     }
                 } else {
-                    self.query.push(c);
-                    self.cursor = self.query.len();
+                    // Insert character at cursor position.
+                    self.query.insert(self.cursor, c);
+                    self.cursor += c.len_utf8();
                     self.selected = 0;
                     self.scroll_offset = 0;
                     self.update_filtered(true);

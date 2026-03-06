@@ -415,6 +415,7 @@ impl LogViewer {
     pub fn scroll_up(&mut self, lines: usize) {
         if self.filtered_indices.is_some() {
             self.filtered_scroll_offset = self.filtered_scroll_offset.saturating_sub(lines);
+            self.virt.set_follow(false);
         } else {
             let delta = i32::try_from(lines).unwrap_or(i32::MAX);
             self.virt.scroll(-delta);
@@ -433,6 +434,11 @@ impl LogViewer {
                     self.filtered_scroll_offset = max_offset;
                 }
             }
+            // Re-enable follow if we scrolled to the bottom of the filtered set.
+            let visible_count = self.virt.visible_count();
+            if self.is_filtered_at_bottom(filtered_total, visible_count) {
+                self.virt.set_follow(true);
+            }
         } else {
             let delta = i32::try_from(lines).unwrap_or(i32::MAX);
             self.virt.scroll(delta);
@@ -442,10 +448,11 @@ impl LogViewer {
         }
     }
 
-    /// Jump to top of log history.
+    /// Jump to top of log history. Disables follow mode.
     pub fn scroll_to_top(&mut self) {
         if self.filtered_indices.is_some() {
             self.filtered_scroll_offset = 0;
+            self.virt.set_follow(false);
         } else {
             self.virt.scroll_to_top();
         }
@@ -465,6 +472,7 @@ impl LogViewer {
                     self.filtered_scroll_offset = filtered_total.saturating_sub(visible_count);
                 }
             }
+            self.virt.set_follow(true);
         } else {
             self.virt.scroll_to_end();
         }

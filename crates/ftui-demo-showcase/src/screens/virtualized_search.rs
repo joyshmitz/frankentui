@@ -619,8 +619,8 @@ pub struct VirtualizedSearch {
     selected: usize,
     /// Scroll offset.
     scroll_offset: usize,
-    /// Viewport height (cached from render).
-    viewport_height: usize,
+    /// Viewport height (cached from render, interior-mutable so `view(&self)` can update it).
+    viewport_height: Cell<usize>,
     /// Search input widget.
     search_input: TextInput,
     /// Current search query.
@@ -703,7 +703,7 @@ impl VirtualizedSearch {
             filtered: Vec::new(),
             selected: 0,
             scroll_offset: 0,
-            viewport_height: 20,
+            viewport_height: Cell::new(20),
             search_input,
             query: String::new(),
             focus: Focus::List,
@@ -840,8 +840,9 @@ impl VirtualizedSearch {
         if self.selected < self.scroll_offset {
             self.scroll_offset = self.selected;
         }
-        if self.selected >= self.scroll_offset + self.viewport_height {
-            self.scroll_offset = self.selected.saturating_sub(self.viewport_height - 1);
+        let vh = self.viewport_height.get();
+        if self.selected >= self.scroll_offset + vh {
+            self.scroll_offset = self.selected.saturating_sub(vh - 1);
         }
     }
 
@@ -902,9 +903,10 @@ impl VirtualizedSearch {
     }
 
     fn page_up(&mut self) {
-        if self.viewport_height > 0 {
+        let vh = self.viewport_height.get();
+        if vh > 0 {
             let old_selected = self.selected;
-            self.selected = self.selected.saturating_sub(self.viewport_height);
+            self.selected = self.selected.saturating_sub(vh);
             self.ensure_visible();
 
             if old_selected != self.selected {
@@ -919,9 +921,10 @@ impl VirtualizedSearch {
     }
 
     fn page_down(&mut self) {
-        if !self.filtered.is_empty() && self.viewport_height > 0 {
+        let vh = self.viewport_height.get();
+        if !self.filtered.is_empty() && vh > 0 {
             let old_selected = self.selected;
-            self.selected = (self.selected + self.viewport_height).min(self.filtered.len() - 1);
+            self.selected = (self.selected + vh).min(self.filtered.len() - 1);
             self.ensure_visible();
 
             if old_selected != self.selected {
@@ -1421,12 +1424,12 @@ impl Screen for VirtualizedSearch {
         let list_area = h_chunks[0];
         let stats_area = h_chunks[1];
 
-        // Update viewport height for navigation (mutable through interior mutability would be ideal)
-        // For now we just use the value from the area
-        let _vp = list_area.height.saturating_sub(2) as usize; // -2 for borders
-
-        // Note: We can't mutate self.viewport_height here since view takes &self
-        // The navigation uses the last known value, which is fine for this demo
+        // Update viewport height from actual render area so navigation (page up/down,
+        // ensure_visible) stays in sync after terminal resize.
+        let vp = list_area.height.saturating_sub(2) as usize; // -2 for borders
+        if vp > 0 {
+            self.viewport_height.set(vp);
+        }
 
         self.last_list_area.set(list_area);
         self.render_list_panel(frame, list_area);
@@ -1942,7 +1945,7 @@ mod tests {
         let mut screen = VirtualizedSearch::new().with_diagnostics();
 
         // Set a reasonable viewport height
-        screen.viewport_height = 20;
+        screen.viewport_height.set(20);
 
         // Clear diagnostics
         screen.diagnostic_log_mut().unwrap().clear();
