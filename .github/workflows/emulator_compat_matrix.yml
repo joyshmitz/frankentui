@@ -1,0 +1,101 @@
+# Terminal Emulator Compatibility Matrix CI (bd-2xj.6)
+#
+# Runs the conformance harness across 5 terminal emulator profiles
+# and publishes structured JSONL results as an artifact.
+#
+# The matrix tests widget rendering under each profile's capabilities
+# without requiring actual emulator binaries — we simulate capabilities
+# via TerminalProfile + TerminalCapabilities.
+
+name: Emulator Compatibility Matrix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/ftui-harness/**'
+      - 'crates/ftui-render/**'
+      - 'crates/ftui-widgets/**'
+      - 'crates/ftui-core/src/terminal_capabilities.rs'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/ftui-harness/**'
+      - 'crates/ftui-render/**'
+      - 'crates/ftui-widgets/**'
+      - 'crates/ftui-core/src/terminal_capabilities.rs'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  compat-matrix:
+    name: Compat Matrix (${{ matrix.profile }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        profile:
+          - xterm-256color
+          - screen
+          - kitty
+          - modern   # covers alacritty + WezTerm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-compat-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-compat-
+
+      - name: Run conformance matrix tests
+        env:
+          FTUI_TEST_PROFILE: ${{ matrix.profile }}
+          CONFORMANCE_LOG: "1"
+        run: |
+          cargo test -p ftui-harness --test conformance_matrix_e2e -- --nocapture 2>&1 | tee compat_${{ matrix.profile }}.log
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compat-results-${{ matrix.profile }}
+          path: |
+            /tmp/ftui_conformance_e2e/*.jsonl
+            compat_${{ matrix.profile }}.log
+
+  compat-summary:
+    name: Compatibility Summary
+    needs: compat-matrix
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all results
+        uses: actions/download-artifact@v4
+        with:
+          path: compat-results
+          pattern: compat-results-*
+
+      - name: Generate summary
+        run: |
+          echo "## Terminal Emulator Compatibility Matrix" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Emulator | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
+          for profile in xterm-256color screen kitty modern; do
+            log="compat-results/compat-results-${profile}/compat_${profile}.log"
+            if [ -f "$log" ] && grep -q "test result: ok" "$log"; then
+              echo "| ${profile} | :white_check_mark: Pass |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| ${profile} | :x: Fail |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
