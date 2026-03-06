@@ -246,7 +246,7 @@ fn insert_recursive<V: Clone>(
             if split_depth < existing_bytes.len() {
                 let old_child = Box::new(ArtNode::Leaf {
                     key: old_key,
-                    value: old_val,
+                    value: old_val.clone(),
                 });
                 children_insert(&mut children, existing_bytes[split_depth], old_child);
             }
