@@ -44,7 +44,7 @@ use ftui_render::frame::{Frame, HitId};
 use ftui_style::Style;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::modal::{BackdropConfig, ModalSizeConstraints};
+use crate::modal::{BackdropConfig, MODAL_HIT_BACKDROP, MODAL_HIT_CONTENT, ModalSizeConstraints};
 use crate::set_style_area;
 
 #[cfg(feature = "tracing")]
@@ -504,6 +504,15 @@ impl ModalStack {
             let x = screen.x + (screen.width.saturating_sub(size.width)) / 2;
             let y = screen.y + (screen.height.saturating_sub(size.height)) / 2;
             let content_area = Rect::new(x, y, size.width, size.height);
+
+            // Register hit regions for backdrop and content so that
+            // close_on_backdrop and mouse dispatch can distinguish clicks.
+            if modal.modal.close_on_backdrop() {
+                frame.register_hit(screen, modal.hit_id, MODAL_HIT_BACKDROP, 0);
+            }
+            if !content_area.is_empty() {
+                frame.register_hit(content_area, modal.hit_id, MODAL_HIT_CONTENT, 0);
+            }
 
             // Render modal content
             modal.modal.render_content(content_area, frame);

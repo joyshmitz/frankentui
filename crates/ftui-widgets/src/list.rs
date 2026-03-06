@@ -225,9 +225,7 @@ impl<'a> List<'a> {
             state.selected = None;
             state.hovered = None;
             state.offset = 0;
-            if state.multi_select_enabled {
-                state.multi_selected.clear();
-            }
+            state.multi_selected.clear();
             return;
         }
 
@@ -239,11 +237,9 @@ impl<'a> List<'a> {
             state.selected = filtered.first().copied();
         }
 
-        if state.multi_select_enabled {
-            state
-                .multi_selected
-                .retain(|idx| filtered.binary_search(idx).is_ok());
-        }
+        state
+            .multi_selected
+            .retain(|idx| filtered.binary_search(idx).is_ok());
     }
 
     fn move_selection_in_filtered(

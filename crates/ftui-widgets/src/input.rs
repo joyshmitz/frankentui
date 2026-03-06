@@ -276,7 +276,7 @@ impl TextInput {
                         let available =
                             max.saturating_sub(self.grapheme_count().saturating_sub(selection_len));
                         if clean_text.graphemes(true).count() > available {
-                            return true;
+                            return false;
                         }
                     }
                 }

@@ -784,6 +784,7 @@ impl DialogBuilder {
     /// Set hit ID for mouse interaction.
     pub fn hit_id(mut self, id: HitId) -> Self {
         self.hit_id = Some(id);
+        self.config.modal_config = self.config.modal_config.hit_id(id);
         self
     }
 
