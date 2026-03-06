@@ -32,8 +32,6 @@
 //! assert_eq!(art.get("edit:undo"), Some(&4));
 //! ```
 
-use std::collections::BTreeMap;
-
 /// Maximum number of children in a Node4.
 const NODE4_MAX: usize = 4;
 /// Maximum number of children in a Node16.
@@ -52,10 +50,7 @@ pub struct AdaptiveRadixTree<V> {
 #[derive(Debug, Clone)]
 enum ArtNode<V> {
     /// Leaf node storing a key-value pair.
-    Leaf {
-        key: String,
-        value: V,
-    },
+    Leaf { key: String, value: V },
     /// Inner node with adaptive children.
     Inner {
         /// Compressed path prefix (path compression optimization).
@@ -220,10 +215,8 @@ fn insert_recursive<V: Clone>(
 
             // Split leaf into inner node.
             let existing_bytes = existing_key.as_bytes();
-            let common_prefix_len = common_prefix_length(
-                &existing_bytes[depth..],
-                &key_bytes[depth..],
-            );
+            let common_prefix_len =
+                common_prefix_length(&existing_bytes[depth..], &key_bytes[depth..]);
 
             let prefix = existing_bytes[depth..depth + common_prefix_len].to_vec();
 
@@ -288,7 +281,7 @@ fn insert_recursive<V: Clone>(
                 let old_first_byte = old_suffix[0];
 
                 // Create new inner node with shared prefix.
-                let mut old_inner = ArtNode::Inner {
+                let old_inner = ArtNode::Inner {
                     prefix: old_suffix[1..].to_vec(),
                     children: std::mem::replace(
                         children,
@@ -451,7 +444,7 @@ fn collect_all_inner<'a, V>(node: &'a ArtNode<V>, results: &mut Vec<(&'a str, &'
             results.push((key.as_str(), value));
         }
         ArtNode::Inner {
-            children, value, ..
+            children, value: _, ..
         } => {
             // Note: we can't emit the value here since we don't have the full key.
             // Values at inner nodes are only reachable via exact lookup.
@@ -547,7 +540,10 @@ fn children_insert<V>(children: &mut Children<V>, byte: u8, child: Box<ArtNode<V
                 // Promote to Node16.
                 let mut new_keys = keys.clone();
                 let mut new_ch: Vec<Box<ArtNode<V>>> = ch.drain(..).collect();
-                let pos = new_keys.iter().position(|&k| k > byte).unwrap_or(new_keys.len());
+                let pos = new_keys
+                    .iter()
+                    .position(|&k| k > byte)
+                    .unwrap_or(new_keys.len());
                 new_keys.insert(pos, byte);
                 new_ch.insert(pos, child);
                 *children = Children::Node16 {
@@ -613,16 +609,16 @@ fn children_insert<V>(children: &mut Children<V>, byte: u8, child: Box<ArtNode<V
 
 fn children_get<'a, V>(children: &'a Children<V>, byte: u8) -> Option<&'a ArtNode<V>> {
     match children {
-        Children::Node4 { keys, children: ch } => keys
-            .iter()
-            .position(|&k| k == byte)
-            .map(|i| ch[i].as_ref()),
-        Children::Node16 { keys, children: ch } => keys
-            .iter()
-            .position(|&k| k == byte)
-            .map(|i| ch[i].as_ref()),
+        Children::Node4 { keys, children: ch } => {
+            keys.iter().position(|&k| k == byte).map(|i| ch[i].as_ref())
+        }
+        Children::Node16 { keys, children: ch } => {
+            keys.iter().position(|&k| k == byte).map(|i| ch[i].as_ref())
+        }
         Children::Node48 {
-            index, children: ch, ..
+            index,
+            children: ch,
+            ..
         } => {
             let idx = index[byte as usize];
             if idx != u8::MAX && (idx as usize) < ch.len() {
@@ -646,7 +642,9 @@ fn children_get_mut<'a, V>(children: &'a mut Children<V>, byte: u8) -> Option<&'
             .position(|&k| k == byte)
             .map(move |i| ch[i].as_mut()),
         Children::Node48 {
-            index, children: ch, ..
+            index,
+            children: ch,
+            ..
         } => {
             let idx = index[byte as usize];
             if idx != u8::MAX && (idx as usize) < ch.len() {
@@ -655,9 +653,7 @@ fn children_get_mut<'a, V>(children: &'a mut Children<V>, byte: u8) -> Option<&'
                 None
             }
         }
-        Children::Node256 { children: ch } => {
-            ch[byte as usize].as_mut().map(|c| c.as_mut())
-        }
+        Children::Node256 { children: ch } => ch[byte as usize].as_mut().map(|c| c.as_mut()),
     }
 }
 
@@ -709,7 +705,9 @@ fn children_count<V>(children: &Children<V>) -> usize {
     }
 }
 
-fn children_iter<'a, V>(children: &'a Children<V>) -> Box<dyn Iterator<Item = &'a ArtNode<V>> + 'a> {
+fn children_iter<'a, V>(
+    children: &'a Children<V>,
+) -> Box<dyn Iterator<Item = &'a ArtNode<V>> + 'a> {
     match children {
         Children::Node4 { children: ch, .. } => Box::new(ch.iter().map(|c| c.as_ref())),
         Children::Node16 { children: ch, .. } => Box::new(ch.iter().map(|c| c.as_ref())),
@@ -891,10 +889,24 @@ mod tests {
     fn command_palette_scenario() {
         let mut art = AdaptiveRadixTree::new();
         let commands = [
-            "file:open", "file:save", "file:save-as", "file:close", "file:new",
-            "edit:undo", "edit:redo", "edit:cut", "edit:copy", "edit:paste",
-            "view:sidebar", "view:terminal", "view:explorer", "view:minimap",
-            "go:line", "go:file", "go:symbol", "go:definition",
+            "file:open",
+            "file:save",
+            "file:save-as",
+            "file:close",
+            "file:new",
+            "edit:undo",
+            "edit:redo",
+            "edit:cut",
+            "edit:copy",
+            "edit:paste",
+            "view:sidebar",
+            "view:terminal",
+            "view:explorer",
+            "view:minimap",
+            "go:line",
+            "go:file",
+            "go:symbol",
+            "go:definition",
         ];
         for (i, cmd) in commands.iter().enumerate() {
             art.insert(cmd, i);
