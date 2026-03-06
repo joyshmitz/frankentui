@@ -1,0 +1,200 @@
+# FrankenLab Scenario: Galaxy-Brain Transparency Demo (bd-1lgz8.3)
+#
+# Scripts the complete galaxy-brain Bayesian transparency demo for
+# automated CI execution and interactive replay.
+#
+# This scenario demonstrates the 4-level progressive disclosure of
+# Bayesian diff strategy decisions, drift-triggered fallback, and
+# recovery — all rendered through the decision card widget and
+# drift visualization timeline.
+#
+# Duration: ~600 frames at 60fps = 10 seconds
+# Terminal: 120x40 (standard demo viewport)
+
+[scenario]
+name = "galaxy-brain-transparency-demo"
+description = "Demonstrates Bayesian diff strategy transparency with drift injection and recovery"
+terminal_size = { width = 120, height = 40 }
+duration_frames = 600
+seed = 42
+time_step_ms = 16  # 60fps
+
+# ============================================================================
+# Phase 1: Steady State + L0/L1 Disclosure (frames 0-120)
+# ============================================================================
+#
+# Show the traffic-light badge (L0), expand to plain English (L1).
+# All decisions should show green/OK during steady state.
+
+[[events]]
+frame = 0
+type = "init"
+description = "Initialize demo with default policy, steady-state regime"
+
+[[events]]
+frame = 5
+type = "keypress"
+key = "Enter"
+description = "Open galaxy-brain decision card overlay"
+
+[[checkpoints]]
+frame = 10
+description = "L0 traffic light: green OK badge visible"
+assertions = ["contains:OK", "contains:incremental_diff"]
+
+[[events]]
+frame = 30
+type = "keypress"
+key = "Right"
+description = "Expand disclosure to L1 (plain English)"
+
+[[checkpoints]]
+frame = 35
+description = "L1 plain English: confidence and action label visible"
+assertions = ["contains:confidence", "contains:OK"]
+
+[[events]]
+frame = 60
+type = "keypress"
+key = "Right"
+description = "Expand disclosure to L2 (evidence terms)"
+
+[[checkpoints]]
+frame = 65
+description = "L2 evidence terms: Bayes factor and evidence header visible"
+assertions = ["contains:Evidence", "contains:BF"]
+
+[[events]]
+frame = 100
+type = "keypress"
+key = "Right"
+description = "Expand disclosure to L3 (full Bayesian)"
+
+[[checkpoints]]
+frame = 105
+description = "L3 full Bayesian: posterior and loss visible"
+assertions = ["contains:log_post", "contains:loss"]
+
+# ============================================================================
+# Phase 2: Drift Injection (frames 120-240)
+# ============================================================================
+#
+# Inject frame timing drift. Watch confidence decline, signal turn yellow
+# then red, and fallback trigger.
+
+[[events]]
+frame = 120
+type = "inject_drift"
+intensity = 0.3
+description = "Begin gradual drift (30% intensity)"
+
+[[checkpoints]]
+frame = 150
+description = "Drift detected: confidence declining, signal may shift"
+
+[[events]]
+frame = 160
+type = "inject_drift"
+intensity = 0.6
+description = "Increase drift to 60%"
+
+[[checkpoints]]
+frame = 180
+description = "Strong drift: signal should be WARN or ALERT"
+
+[[events]]
+frame = 200
+type = "inject_drift"
+intensity = 0.9
+description = "Peak drift (90%) — should trigger fallback"
+
+[[checkpoints]]
+frame = 220
+description = "Fallback triggered: safe mode active, conservative diff"
+assertions = ["contains:ALERT"]
+
+# ============================================================================
+# Phase 3: Recovery (frames 240-360)
+# ============================================================================
+#
+# Remove drift. Watch confidence recover, signal return to green,
+# adaptive behavior re-enabled.
+
+[[events]]
+frame = 240
+type = "inject_drift"
+intensity = 0.0
+description = "Remove drift — begin recovery"
+
+[[checkpoints]]
+frame = 280
+description = "Recovery in progress: confidence rebuilding"
+
+[[checkpoints]]
+frame = 340
+description = "Recovery complete: signal back to OK, adaptive re-enabled"
+
+# ============================================================================
+# Phase 4: Full Evidence Review + Teardown (frames 360-600)
+# ============================================================================
+#
+# Show the full evidence timeline, demonstrate L3 with recovery data,
+# then return to L0 for clean exit.
+
+[[events]]
+frame = 360
+type = "keypress"
+key = "t"
+description = "Toggle drift timeline visualization"
+
+[[checkpoints]]
+frame = 370
+description = "Drift timeline visible: shows drift/recovery arc"
+
+[[events]]
+frame = 420
+type = "keypress"
+key = "Left"
+description = "Collapse to L2"
+
+[[events]]
+frame = 450
+type = "keypress"
+key = "Left"
+description = "Collapse to L1"
+
+[[events]]
+frame = 480
+type = "keypress"
+key = "Left"
+description = "Collapse to L0"
+
+[[checkpoints]]
+frame = 490
+description = "L0 restored: clean traffic light badge"
+assertions = ["contains:OK"]
+
+[[events]]
+frame = 540
+type = "keypress"
+key = "Escape"
+description = "Close decision card overlay"
+
+[[checkpoints]]
+frame = 560
+description = "Final state: clean dashboard, no overlay"
+
+[[checkpoints]]
+frame = 599
+description = "End of scenario: verify clean exit state"
+
+# ============================================================================
+# CI Configuration
+# ============================================================================
+
+[ci]
+max_duration_seconds = 30
+deterministic = true
+structured_log_file = "galaxy_brain_transparency.jsonl"
+fail_on_assertion_miss = true
+capture_golden_hashes = true
