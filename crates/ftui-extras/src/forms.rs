@@ -1383,9 +1383,11 @@ impl StatefulWidget for ConfirmDialog {
             .x
             .saturating_add(area.width.saturating_sub(total_btn_width as u16) / 2);
 
-        draw_str(frame, start_x, btn_y, &yes_str, yes_style, area.width);
+        let yes_width = area.right().saturating_sub(start_x);
+        draw_str(frame, start_x, btn_y, &yes_str, yes_style, yes_width);
         let no_x = start_x.saturating_add(yes_w as u16).saturating_add(2);
-        draw_str(frame, no_x, btn_y, &no_str, no_style, area.width);
+        let no_width = area.right().saturating_sub(no_x);
+        draw_str(frame, no_x, btn_y, &no_str, no_style, no_width);
     }
 }
 
@@ -2287,6 +2289,32 @@ mod tests {
             .expect("selected button cell should exist");
         assert_eq!(selected_cell.bg, base_bg);
         assert_eq!(selected_cell.fg, selected_fg);
+    }
+
+    #[test]
+    fn confirm_dialog_buttons_stay_within_area_bounds() {
+        let dialog = ConfirmDialog::new("Proceed?");
+        let area = Rect::new(10, 0, 8, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(30, area.height, &mut pool);
+        let mut state = ConfirmDialogState {
+            selected_yes: true,
+            ..Default::default()
+        };
+
+        StatefulWidget::render(&dialog, area, &mut frame, &mut state);
+
+        for x in area.right()..30 {
+            let cell = frame
+                .buffer
+                .get(x, area.bottom().saturating_sub(1))
+                .copied()
+                .expect("cell outside dialog area should exist");
+            assert!(
+                cell.content.is_empty(),
+                "confirm dialog must not render outside its area at x={x}"
+            );
+        }
     }
 
     #[test]

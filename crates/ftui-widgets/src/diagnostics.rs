@@ -324,11 +324,15 @@ pub fn fnv1a_hash(data: &[u8]) -> u64 {
 
 /// Check an environment variable as a boolean diagnostic flag.
 ///
-/// Returns `true` if the variable is set to `"true"` (case-insensitive).
+/// Returns `true` if the variable is set to `"1"` or `"true"` (case-insensitive).
 pub fn env_flag_enabled(var_name: &str) -> bool {
     std::env::var(var_name)
-        .map(|v| v.eq_ignore_ascii_case("true"))
+        .map(|v| env_flag_value_enabled(&v))
         .unwrap_or(false)
+}
+
+fn env_flag_value_enabled(value: &str) -> bool {
+    value == "1" || value.eq_ignore_ascii_case("true")
 }
 
 // =============================================================================
@@ -470,6 +474,16 @@ mod tests {
     fn env_flag_enabled_false_when_unset() {
         // Use a unique variable name unlikely to be set
         assert!(!env_flag_enabled("FTUI_TEST_DIAGNOSTICS_NEVER_SET_12345"));
+    }
+
+    #[test]
+    fn env_flag_enabled_accepts_true_case_insensitively() {
+        assert!(env_flag_value_enabled("TrUe"));
+    }
+
+    #[test]
+    fn env_flag_enabled_accepts_one() {
+        assert!(env_flag_value_enabled("1"));
     }
 
     #[test]
