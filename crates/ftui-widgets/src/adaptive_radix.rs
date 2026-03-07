@@ -147,7 +147,9 @@ impl<V: Clone> AdaptiveRadixTree<V> {
         if result.is_some() {
             self.len -= 1;
             // Clean up empty root.
-            if let Some(ref root) = self.root && is_empty_node(root) {
+            if let Some(ref root) = self.root
+                && is_empty_node(root)
+            {
                 self.root = None;
             }
         }
@@ -488,7 +490,9 @@ fn delete_recursive<V: Clone>(node: &mut ArtNode<V>, key_bytes: &[u8], depth: us
                 .and_then(|child| delete_recursive(child, key_bytes, next_depth + 1));
             if result.is_some() {
                 // If child became empty leaf, remove it.
-                if let Some(child) = children_get(children, byte) && is_empty_node(child) {
+                if let Some(child) = children_get(children, byte)
+                    && is_empty_node(child)
+                {
                     children_remove(children, byte);
                 }
             }

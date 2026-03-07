@@ -46,7 +46,12 @@ impl ScenarioRunner {
         }
     }
 
-    fn eval(&mut self, scenario: &str, budget: f64, change_rate: f64) -> sos_barrier::BarrierResult {
+    fn eval(
+        &mut self,
+        scenario: &str,
+        budget: f64,
+        change_rate: f64,
+    ) -> sos_barrier::BarrierResult {
         let start = Instant::now();
         let result = sos_barrier::evaluate(budget, change_rate);
         let elapsed_ns = start.elapsed().as_nanos() as u64;
@@ -95,7 +100,11 @@ fn scenario_a_normal_steady_state() {
         let budget = 0.85 - (frame as f64 * 0.01); // slight variation
         let change = 0.05 + (frame as f64 * 0.005);
         let r = runner.eval("normal_60fps", budget, change);
-        assert!(r.is_safe, "frame {} should be admitted: B={:.4}", frame, r.value);
+        assert!(
+            r.is_safe,
+            "frame {} should be admitted: B={:.4}",
+            frame, r.value
+        );
     }
 
     let jsonl_path = std::env::temp_dir().join("sos_barrier_scenario_a.jsonl");
@@ -118,7 +127,11 @@ fn scenario_b_spike_near_boundary() {
     // Spike: budget drops, change_rate rises (25ms frame).
     let r = runner.eval("spike", 0.15, 0.4);
     // Near boundary but should still be admitted (B > 0).
-    assert!(r.is_safe, "spike should still be admitted: B={:.4}", r.value);
+    assert!(
+        r.is_safe,
+        "spike should still be admitted: B={:.4}",
+        r.value
+    );
 
     // Recovery.
     for _ in 0..3 {
@@ -160,7 +173,11 @@ fn scenario_d_recovery() {
 
     // Gradual recovery.
     let r = runner.eval("recovery", 0.3, 0.3);
-    assert!(r.is_safe, "should re-admit after recovery: B={:.4}", r.value);
+    assert!(
+        r.is_safe,
+        "should re-admit after recovery: B={:.4}",
+        r.value
+    );
 
     // Full recovery.
     let r = runner.eval("recovery", 0.8, 0.1);
@@ -186,11 +203,11 @@ fn scenario_e_resize_boundary() {
 
     // Rapid resize events: budget drops during layout recompute.
     let resize_frames = [
-        (0.4, 0.5),  // first resize
+        (0.4, 0.5),   // first resize
         (0.35, 0.55), // second resize
-        (0.3, 0.6),  // third resize
-        (0.5, 0.3),  // coalesced recompute settles
-        (0.7, 0.15), // normal after resize
+        (0.3, 0.6),   // third resize
+        (0.5, 0.3),   // coalesced recompute settles
+        (0.7, 0.15),  // normal after resize
     ];
 
     for (i, &(budget, change)) in resize_frames.iter().enumerate() {
@@ -214,7 +231,7 @@ fn scenario_f_degradation_transition() {
     let mut found_reject = false;
     for step in 0..20 {
         let budget = 0.5 - (step as f64 * 0.025); // 0.5 → 0.0
-        let change = 0.2 + (step as f64 * 0.04);  // 0.2 → 1.0
+        let change = 0.2 + (step as f64 * 0.04); // 0.2 → 1.0
         let budget = budget.max(0.0);
         let change = change.min(1.0);
 
@@ -231,8 +248,16 @@ fn scenario_f_degradation_transition() {
     );
 
     // Verify we have both admit and reject events.
-    let admits = runner.events.iter().filter(|e| e.decision == "admit").count();
-    let rejects = runner.events.iter().filter(|e| e.decision == "reject").count();
+    let admits = runner
+        .events
+        .iter()
+        .filter(|e| e.decision == "admit")
+        .count();
+    let rejects = runner
+        .events
+        .iter()
+        .filter(|e| e.decision == "reject")
+        .count();
     assert!(admits > 0, "should have some admits");
     assert!(rejects > 0, "should have some rejects");
 }

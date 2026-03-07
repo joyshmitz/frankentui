@@ -216,7 +216,11 @@ impl RecipeBController {
         let p99_ms = self.p99_tracker.p99();
 
         // 4. Coverage tracking (conformal interval)
-        let (interval_lower, interval_upper) = if let Some(pred) = self.cascade.last_evidence().and_then(|e| e.prediction.as_ref()) {
+        let (interval_lower, interval_upper) = if let Some(pred) = self
+            .cascade
+            .last_evidence()
+            .and_then(|e| e.prediction.as_ref())
+        {
             let lower = pred.y_hat_us;
             let upper = pred.upper_us;
             self.coverage.record(frame_time_us, upper);
@@ -231,7 +235,9 @@ impl RecipeBController {
         self.bocpd_clock += Duration::from_micros(frame_time_us as u64);
         let _regime = self.bocpd.observe_event(self.bocpd_clock);
         let bocpd_changepoint_prob = self.bocpd.p_burst();
-        let bocpd_run_length = self.bocpd.run_length_posterior()
+        let bocpd_run_length = self
+            .bocpd
+            .run_length_posterior()
             .iter()
             .enumerate()
             .map(|(i, &p)| i as f64 * p)
@@ -255,7 +261,11 @@ impl RecipeBController {
             CascadeDecision::Degrade => "degrade",
             CascadeDecision::Recover => "recover",
             CascadeDecision::Hold => {
-                if self.safe_mode_active { "hold_safe_mode" } else { "hold_normal" }
+                if self.safe_mode_active {
+                    "hold_safe_mode"
+                } else {
+                    "hold_normal"
+                }
             }
         };
 
@@ -366,20 +376,18 @@ fn bocpd_detects_drift_within_20_frames() {
     phase_drift(&mut ctrl);
 
     // Check that BOCPD changepoint probability rises during drift
-    let drift_events: Vec<_> = ctrl.events.iter()
-        .filter(|e| e.phase == "drift")
-        .collect();
+    let drift_events: Vec<_> = ctrl.events.iter().filter(|e| e.phase == "drift").collect();
 
     // BOCPD uses inter-arrival times; as frame times shift from 10ms to 18ms,
     // the inter-arrival distribution changes, triggering burst detection.
-    let any_high_prob = drift_events.iter()
-        .any(|e| e.bocpd_changepoint_prob > 0.5);
+    let any_high_prob = drift_events.iter().any(|e| e.bocpd_changepoint_prob > 0.5);
 
     assert!(
         any_high_prob,
         "BOCPD should detect elevated changepoint probability during drift phase. \
          Max p_burst: {:.4}",
-        drift_events.iter()
+        drift_events
+            .iter()
             .map(|e| e.bocpd_changepoint_prob)
             .fold(0.0_f64, f64::max)
     );
@@ -392,13 +400,12 @@ fn e_process_crosses_threshold_during_drift() {
     phase_steady(&mut ctrl);
     phase_drift(&mut ctrl);
 
-    let drift_events: Vec<_> = ctrl.events.iter()
-        .filter(|e| e.phase == "drift")
-        .collect();
+    let drift_events: Vec<_> = ctrl.events.iter().filter(|e| e.phase == "drift").collect();
 
     // As frame times exceed the 16ms budget during drift, the e-process
     // should accumulate evidence. At least some e-process crossing should occur.
-    let max_wealth = drift_events.iter()
+    let max_wealth = drift_events
+        .iter()
         .map(|e| e.e_process_value)
         .fold(0.0_f64, f64::max);
 
@@ -423,9 +430,7 @@ fn safe_mode_activates_during_overload() {
     // Not all fallback frames need safe mode (the cascade may have already
     // degraded enough to bring times within budget), but safe mode should
     // have been active at some point during drift + fallback.
-    let all_events_with_safe = ctrl.events.iter()
-        .filter(|e| e.safe_mode_active)
-        .count();
+    let all_events_with_safe = ctrl.events.iter().filter(|e| e.safe_mode_active).count();
 
     assert!(
         all_events_with_safe > 0,
@@ -439,9 +444,7 @@ fn p99_bounded_throughout_steady_phase() {
 
     phase_steady(&mut ctrl);
 
-    let steady_events: Vec<_> = ctrl.events.iter()
-        .filter(|e| e.phase == "steady")
-        .collect();
+    let steady_events: Vec<_> = ctrl.events.iter().filter(|e| e.phase == "steady").collect();
 
     // All steady frames should have p99 < 20ms
     for ev in &steady_events {
@@ -462,19 +465,21 @@ fn recovery_re_enables_adaptive_behavior() {
     phase_fallback(&mut ctrl);
     phase_recovery(&mut ctrl);
 
-    let recovery_events: Vec<_> = ctrl.events.iter()
+    let recovery_events: Vec<_> = ctrl
+        .events
+        .iter()
         .filter(|e| e.phase == "recovery")
         .collect();
 
     // During recovery, frame times drop to 10ms. After enough good frames,
     // the cascade should issue a recover decision.
-    let has_recovery_decision = recovery_events.iter()
+    let has_recovery_decision = recovery_events
+        .iter()
         .any(|e| e.cascade_decision == "recover");
 
     // If cascading degradation occurred, recovery should happen. If the cascade
     // never degraded (because the drift was too gradual), that's also fine.
-    let was_degraded = ctrl.events.iter()
-        .any(|e| e.degradation_level != "Full");
+    let was_degraded = ctrl.events.iter().any(|e| e.degradation_level != "Full");
 
     if was_degraded {
         assert!(
@@ -500,14 +505,10 @@ fn conformal_coverage_maintains_threshold() {
     phase_steady(&mut ctrl);
 
     // Check coverage after steady state (conformal should be well-calibrated)
-    let steady_events: Vec<_> = ctrl.events.iter()
-        .filter(|e| e.phase == "steady")
-        .collect();
+    let steady_events: Vec<_> = ctrl.events.iter().filter(|e| e.phase == "steady").collect();
 
     // After calibration (first ~10 frames), coverage should be high
-    let late_steady: Vec<_> = steady_events.iter()
-        .skip(20)
-        .collect();
+    let late_steady: Vec<_> = steady_events.iter().skip(20).collect();
 
     if let Some(last) = late_steady.last() {
         assert!(
@@ -524,9 +525,7 @@ fn sos_barrier_safe_during_steady() {
 
     phase_steady(&mut ctrl);
 
-    let steady_events: Vec<_> = ctrl.events.iter()
-        .filter(|e| e.phase == "steady")
-        .collect();
+    let steady_events: Vec<_> = ctrl.events.iter().filter(|e| e.phase == "steady").collect();
 
     // All steady frames should be in the SOS barrier safe region
     for ev in &steady_events {
@@ -545,9 +544,7 @@ fn sos_barrier_detects_risk_during_drift() {
     phase_steady(&mut ctrl);
     phase_drift(&mut ctrl);
 
-    let drift_events: Vec<_> = ctrl.events.iter()
-        .filter(|e| e.phase == "drift")
-        .collect();
+    let drift_events: Vec<_> = ctrl.events.iter().filter(|e| e.phase == "drift").collect();
 
     // As frame times approach budget, barrier value should decrease
     let first_half: Vec<_> = drift_events.iter().take(50).collect();
@@ -561,7 +558,8 @@ fn sos_barrier_detects_risk_during_drift() {
     assert!(
         avg_second < avg_first,
         "SOS barrier should decrease during drift: first half avg={:.4}, second half avg={:.4}",
-        avg_first, avg_second
+        avg_first,
+        avg_second
     );
 }
 
@@ -596,28 +594,64 @@ fn jsonl_schema_compliance() {
     assert_eq!(lines.len(), 4);
 
     for (i, line) in lines.iter().enumerate() {
-        let v: serde_json::Value = serde_json::from_str(line)
-            .unwrap_or_else(|e| panic!("parse JSON line {i}: {e}"));
+        let v: serde_json::Value =
+            serde_json::from_str(line).unwrap_or_else(|e| panic!("parse JSON line {i}: {e}"));
 
         assert_eq!(v["event"], "recipe_b_frame", "line {i}: event field");
         assert!(v["frame_id"].is_u64(), "line {i}: frame_id");
         assert!(v["phase"].is_string(), "line {i}: phase");
-        assert!(v["conformal_interval_lower"].is_f64(), "line {i}: conformal_interval_lower");
-        assert!(v["conformal_interval_upper"].is_f64(), "line {i}: conformal_interval_upper");
-        assert!(v["conformal_coverage"].is_f64(), "line {i}: conformal_coverage");
+        assert!(
+            v["conformal_interval_lower"].is_f64(),
+            "line {i}: conformal_interval_lower"
+        );
+        assert!(
+            v["conformal_interval_upper"].is_f64(),
+            "line {i}: conformal_interval_upper"
+        );
+        assert!(
+            v["conformal_coverage"].is_f64(),
+            "line {i}: conformal_coverage"
+        );
         assert!(v["e_process_value"].is_f64(), "line {i}: e_process_value");
-        assert!(v["e_process_crossed"].is_boolean(), "line {i}: e_process_crossed");
+        assert!(
+            v["e_process_crossed"].is_boolean(),
+            "line {i}: e_process_crossed"
+        );
         assert!(v["bocpd_run_length"].is_f64(), "line {i}: bocpd_run_length");
-        assert!(v["bocpd_changepoint_prob"].is_f64(), "line {i}: bocpd_changepoint_prob");
-        assert!(v["expected_loss_action"].is_string(), "line {i}: expected_loss_action");
-        assert!(v["safe_mode_active"].is_boolean(), "line {i}: safe_mode_active");
+        assert!(
+            v["bocpd_changepoint_prob"].is_f64(),
+            "line {i}: bocpd_changepoint_prob"
+        );
+        assert!(
+            v["expected_loss_action"].is_string(),
+            "line {i}: expected_loss_action"
+        );
+        assert!(
+            v["safe_mode_active"].is_boolean(),
+            "line {i}: safe_mode_active"
+        );
         assert!(v["frame_time_ms"].is_f64(), "line {i}: frame_time_ms");
-        assert!(v["p99_frame_time_ms"].is_f64(), "line {i}: p99_frame_time_ms");
+        assert!(
+            v["p99_frame_time_ms"].is_f64(),
+            "line {i}: p99_frame_time_ms"
+        );
         assert!(v["p99_bounded"].is_boolean(), "line {i}: p99_bounded");
-        assert!(v["sos_barrier_value"].is_f64(), "line {i}: sos_barrier_value");
-        assert!(v["sos_barrier_safe"].is_boolean(), "line {i}: sos_barrier_safe");
-        assert!(v["degradation_level"].is_string(), "line {i}: degradation_level");
-        assert!(v["cascade_decision"].is_string(), "line {i}: cascade_decision");
+        assert!(
+            v["sos_barrier_value"].is_f64(),
+            "line {i}: sos_barrier_value"
+        );
+        assert!(
+            v["sos_barrier_safe"].is_boolean(),
+            "line {i}: sos_barrier_safe"
+        );
+        assert!(
+            v["degradation_level"].is_string(),
+            "line {i}: degradation_level"
+        );
+        assert!(
+            v["cascade_decision"].is_string(),
+            "line {i}: cascade_decision"
+        );
     }
 
     std::fs::remove_file(&jsonl_path).ok();
@@ -637,11 +671,14 @@ fn degradation_cascade_triggers_during_sustained_drift() {
         ctrl.tick(25.0, "overload");
     }
 
-    let overload_events: Vec<_> = ctrl.events.iter()
+    let overload_events: Vec<_> = ctrl
+        .events
+        .iter()
         .filter(|e| e.phase == "overload")
         .collect();
 
-    let has_degrade = overload_events.iter()
+    let has_degrade = overload_events
+        .iter()
         .any(|e| e.cascade_decision == "degrade");
 
     assert!(
@@ -718,6 +755,7 @@ fn e_process_wealth_increases_with_overbudget_frames() {
     assert!(
         drift_wealth > baseline_wealth,
         "e-process wealth should increase with overbudget frames: baseline={:.4}, drift={:.4}",
-        baseline_wealth, drift_wealth
+        baseline_wealth,
+        drift_wealth
     );
 }

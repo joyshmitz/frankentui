@@ -69,10 +69,16 @@ impl Primitive {
 
     pub fn primary_paper(self) -> &'static str {
         match self {
-            Self::Cegis => "Solar-Lezama et al., \"Combinatorial Sketching for Finite Programs\", ASPLOS 2006",
-            Self::EGraphs => "Willsey et al., \"egg: Fast and Extensible Equality Saturation\", POPL 2021",
+            Self::Cegis => {
+                "Solar-Lezama et al., \"Combinatorial Sketching for Finite Programs\", ASPLOS 2006"
+            }
+            Self::EGraphs => {
+                "Willsey et al., \"egg: Fast and Extensible Equality Saturation\", POPL 2021"
+            }
             Self::ConcolicDse => "Sen et al., \"CUTE: A Concolic Unit Testing Engine\", FSE 2005",
-            Self::AbstractInterpretation => "Cousot & Cousot, \"Abstract Interpretation\", POPL 1977",
+            Self::AbstractInterpretation => {
+                "Cousot & Cousot, \"Abstract Interpretation\", POPL 1977"
+            }
             Self::MetamorphicRelations => "Chen et al., \"Metamorphic Testing\", TSE 2018",
             Self::ShadowRunGovernance => "Veeraraghavan et al., \"Shadow Execution\", SOSP 2015",
         }
@@ -399,10 +405,7 @@ pub fn validate_bundle(bundle: &VerificationBundle) -> Vec<ValidationError> {
             errors.push(ValidationError {
                 primitive: prim,
                 field: "repro_pack.referenced_by_claims".into(),
-                message: format!(
-                    "repro pack references unknown claim_id '{}'",
-                    ref_id
-                ),
+                message: format!("repro pack references unknown claim_id '{}'", ref_id),
             });
         }
     }
@@ -533,11 +536,19 @@ fn build_default_bundle(prim: Primitive) -> VerificationBundle {
 fn default_improvement(prim: Primitive) -> String {
     match prim {
         Primitive::Cegis => "Automated synthesis of unmapped translation holes".into(),
-        Primitive::EGraphs => "Pass-order-insensitive code optimization via equality saturation".into(),
+        Primitive::EGraphs => {
+            "Pass-order-insensitive code optimization via equality saturation".into()
+        }
         Primitive::ConcolicDse => "Automated test generation for edge-case coverage".into(),
-        Primitive::AbstractInterpretation => "Sound over-approximation of program behavior for safety proofs".into(),
-        Primitive::MetamorphicRelations => "Automated oracle generation for regression testing".into(),
-        Primitive::ShadowRunGovernance => "Safe shadow execution for gradual rollout validation".into(),
+        Primitive::AbstractInterpretation => {
+            "Sound over-approximation of program behavior for safety proofs".into()
+        }
+        Primitive::MetamorphicRelations => {
+            "Automated oracle generation for regression testing".into()
+        }
+        Primitive::ShadowRunGovernance => {
+            "Safe shadow execution for gradual rollout validation".into()
+        }
     }
 }
 
@@ -683,7 +694,11 @@ mod tests {
         let mut bundle = build_default_bundle(Primitive::Cegis);
         bundle.repro_pack.referenced_by_claims = vec!["nonexistent-claim".into()];
         let errors = validate_bundle(&bundle);
-        assert!(errors.iter().any(|e| e.message.contains("unknown claim_id")));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("unknown claim_id"))
+        );
     }
 
     #[test]
@@ -699,9 +714,11 @@ mod tests {
             evidence_path: None, // missing!
         });
         let errors = validate_bundle(&bundle);
-        assert!(errors
-            .iter()
-            .any(|e| e.message.contains("no evidence_path")));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("no evidence_path"))
+        );
     }
 
     #[test]
@@ -734,9 +751,11 @@ mod tests {
             evidence_path: None,
         });
         let errors = validate_bundle(&bundle);
-        assert!(errors
-            .iter()
-            .any(|e| e.message.contains("must not be empty")));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("must not be empty"))
+        );
     }
 
     #[test]
@@ -750,9 +769,11 @@ mod tests {
             applies_to_us: true,
         });
         let errors = validate_bundle(&bundle);
-        assert!(errors
-            .iter()
-            .any(|e| e.message.contains("must not be empty")));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("must not be empty"))
+        );
     }
 
     #[test]
@@ -807,8 +828,7 @@ mod tests {
     fn registry_json_roundtrip() {
         let reg = build_default_registry();
         let json = registry_to_json(&reg);
-        let decoded: VerificationRegistry =
-            serde_json::from_value(json).expect("roundtrip failed");
+        let decoded: VerificationRegistry = serde_json::from_value(json).expect("roundtrip failed");
         assert_eq!(decoded.bundles.len(), reg.bundles.len());
         assert_eq!(decoded.schema_version, VERIFICATION_SCHEMA_VERSION);
     }
@@ -818,9 +838,11 @@ mod tests {
         let mut reg = build_default_registry();
         reg.schema_version = "wrong-version".into();
         let errors = validate_registry(&reg);
-        assert!(errors
-            .iter()
-            .any(|e| e.message.contains("unsupported schema")));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("unsupported schema"))
+        );
     }
 
     #[test]

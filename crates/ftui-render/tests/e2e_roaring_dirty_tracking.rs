@@ -6,7 +6,7 @@
 //! sets compared to a HashSet<u32> reference, across multiple screen sizes
 //! and update patterns. Logs JSONL evidence per frame.
 
-use std::collections::{hash_map::DefaultHasher, HashSet};
+use std::collections::{HashSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::time::Instant;
@@ -77,10 +77,26 @@ struct ScreenConfig {
 }
 
 const SCREENS: &[ScreenConfig] = &[
-    ScreenConfig { name: "80x24", width: 80, height: 24 },
-    ScreenConfig { name: "120x40", width: 120, height: 40 },
-    ScreenConfig { name: "200x60", width: 200, height: 60 },
-    ScreenConfig { name: "300x100", width: 300, height: 100 },
+    ScreenConfig {
+        name: "80x24",
+        width: 80,
+        height: 24,
+    },
+    ScreenConfig {
+        name: "120x40",
+        width: 120,
+        height: 40,
+    },
+    ScreenConfig {
+        name: "200x60",
+        width: 200,
+        height: 60,
+    },
+    ScreenConfig {
+        name: "300x100",
+        width: 300,
+        height: 100,
+    },
 ];
 
 // ── Update Patterns ─────────────────────────────────────────────────────────
@@ -147,11 +163,7 @@ impl FrameRunner {
         }
     }
 
-    fn run_frame(
-        &mut self,
-        screen: &ScreenConfig,
-        dirty_cells: &[u32],
-    ) -> bool {
+    fn run_frame(&mut self, screen: &ScreenConfig, dirty_cells: &[u32]) -> bool {
         self.frame_id += 1;
 
         // Build Roaring bitmap
@@ -407,12 +419,12 @@ fn roaring_intersection_preserves_correctness() {
     // Overlapping rows
     let w = screen.width;
     for x in 0..w {
-        a.insert(x);         // row 0
-        a.insert(w + x);     // row 1
+        a.insert(x); // row 0
+        a.insert(w + x); // row 1
         ref_a.insert(x);
         ref_a.insert(w + x);
 
-        b.insert(w + x);     // row 1 (overlap)
+        b.insert(w + x); // row 1 (overlap)
         b.insert(2 * w + x); // row 2
         ref_b.insert(w + x);
         ref_b.insert(2 * w + x);
@@ -496,20 +508,32 @@ fn jsonl_schema_compliance() {
     assert_eq!(lines.len(), 3);
 
     for (i, line) in lines.iter().enumerate() {
-        let v: serde_json::Value = serde_json::from_str(line)
-            .unwrap_or_else(|e| panic!("parse JSON line {i}: {e}"));
+        let v: serde_json::Value =
+            serde_json::from_str(line).unwrap_or_else(|e| panic!("parse JSON line {i}: {e}"));
 
         assert_eq!(v["event"], "roaring_frame", "line {i}: event");
         assert!(v["frame_id"].is_u64(), "line {i}: frame_id");
         assert!(v["screen"].is_string(), "line {i}: screen");
         assert!(v["dirty_cells"].is_u64(), "line {i}: dirty_cells");
         assert!(v["dirty_rows"].is_u64(), "line {i}: dirty_rows");
-        assert!(v["roaring_container_type"].is_string(), "line {i}: container_type");
+        assert!(
+            v["roaring_container_type"].is_string(),
+            "line {i}: container_type"
+        );
         assert!(v["set_size_bytes"].is_u64(), "line {i}: set_size_bytes");
         assert!(v["union_time_ns"].is_u64(), "line {i}: union_time_ns");
-        assert!(v["intersection_time_ns"].is_u64(), "line {i}: intersection_time_ns");
-        assert!(v["diff_output_hash"].is_string(), "line {i}: diff_output_hash");
-        assert!(v["bitvec_diff_hash"].is_string(), "line {i}: bitvec_diff_hash");
+        assert!(
+            v["intersection_time_ns"].is_u64(),
+            "line {i}: intersection_time_ns"
+        );
+        assert!(
+            v["diff_output_hash"].is_string(),
+            "line {i}: diff_output_hash"
+        );
+        assert!(
+            v["bitvec_diff_hash"].is_string(),
+            "line {i}: bitvec_diff_hash"
+        );
         assert!(v["match"].is_boolean(), "line {i}: match");
     }
 
@@ -521,12 +545,20 @@ fn no_panics_edge_cases() {
     let mut runner = FrameRunner::new();
 
     // Screen with minimum size
-    let tiny = ScreenConfig { name: "1x1", width: 1, height: 1 };
+    let tiny = ScreenConfig {
+        name: "1x1",
+        width: 1,
+        height: 1,
+    };
     runner.run_frame(&tiny, &[0]);
     runner.run_frame(&tiny, &[]);
 
     // Large index values (still within u32 range)
-    let large = ScreenConfig { name: "400x200", width: 400, height: 200 };
+    let large = ScreenConfig {
+        name: "400x200",
+        width: 400,
+        height: 200,
+    };
     let max_cell = large.width * large.height - 1;
     runner.run_frame(&large, &[0, max_cell]);
     runner.run_frame(&large, &[max_cell / 2]);

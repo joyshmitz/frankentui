@@ -46,11 +46,7 @@ pub struct TreeNode<T> {
 impl<T> TreeNode<T> {
     /// Create a new tree node.
     pub fn new(id: u32, data: T, children: Vec<u32>) -> Self {
-        Self {
-            id,
-            data,
-            children,
-        }
+        Self { id, data, children }
     }
 }
 
@@ -96,8 +92,10 @@ impl<T: Clone> VebTree<T> {
         let node_map: HashMap<u32, &TreeNode<T>> = input.iter().map(|n| (n.id, n)).collect();
 
         // Find root: a node whose ID is not a child of any other node.
-        let all_children: std::collections::HashSet<u32> =
-            input.iter().flat_map(|n| n.children.iter().copied()).collect();
+        let all_children: std::collections::HashSet<u32> = input
+            .iter()
+            .flat_map(|n| n.children.iter().copied())
+            .collect();
         let root_id = input
             .iter()
             .find(|n| !all_children.contains(&n.id))
@@ -518,7 +516,8 @@ mod tests {
         let tree = VebTree::build(nodes);
 
         let veb_ids: std::collections::HashSet<u32> = tree.iter().map(|e| e.id).collect();
-        let dfs_ids: std::collections::HashSet<u32> = tree.iter_dfs().iter().map(|e| e.id).collect();
+        let dfs_ids: std::collections::HashSet<u32> =
+            tree.iter_dfs().iter().map(|e| e.id).collect();
         assert_eq!(veb_ids, dfs_ids);
     }
 

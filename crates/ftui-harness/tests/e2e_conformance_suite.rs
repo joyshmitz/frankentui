@@ -243,9 +243,9 @@ impl ConformanceRunner {
             }
         }
 
-        let mismatch_field = mismatch
-            .as_deref()
-            .map_or("null".to_string(), |m| format!("\"{}\"", m.replace('"', "'")));
+        let mismatch_field = mismatch.as_deref().map_or("null".to_string(), |m| {
+            format!("\"{}\"", m.replace('"', "'"))
+        });
 
         let json = format!(
             "{{\"event\":\"vt_conformance\",\"seq\":{},\"emulator\":\"{}\",\
@@ -459,7 +459,12 @@ type RenderScenario = (&'static str, u16, u16, fn(&mut Frame));
 
 fn render_scenarios() -> Vec<RenderScenario> {
     vec![
-        ("paragraph_basic", 80, 24, render_paragraph as fn(&mut Frame)),
+        (
+            "paragraph_basic",
+            80,
+            24,
+            render_paragraph as fn(&mut Frame),
+        ),
         ("paragraph_wide", 120, 40, render_paragraph),
         ("list_basic", 80, 24, render_list),
         ("table_basic", 120, 40, render_table),
@@ -612,7 +617,8 @@ fn conformance_vt_fixtures_across_all_emulators() {
     );
 
     assert_eq!(
-        runner.failed, 0,
+        runner.failed,
+        0,
         "VT conformance failures ({}):\n{}",
         runner.failed,
         runner.failures.join("\n")
@@ -1040,7 +1046,8 @@ fn conformance_full_suite_gate() {
 
     // Gate assertions.
     assert_eq!(
-        runner.failed, 0,
+        runner.failed,
+        0,
         "CONFORMANCE GATE FAILED — {} failures:\n{}",
         runner.failed,
         runner.failures.join("\n")

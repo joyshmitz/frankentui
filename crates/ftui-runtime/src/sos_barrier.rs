@@ -120,7 +120,11 @@ mod tests {
     fn full_budget_no_changes_is_safe() {
         let r = evaluate(1.0, 0.0);
         assert!(r.is_safe);
-        assert!(r.value > 1.0, "B(1,0) should be strongly positive: {}", r.value);
+        assert!(
+            r.value > 1.0,
+            "B(1,0) should be strongly positive: {}",
+            r.value
+        );
     }
 
     #[test]

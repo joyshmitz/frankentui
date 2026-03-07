@@ -354,11 +354,12 @@ impl ConfigResolver {
     /// Format: `"planner.seed=0xDEAD"`, `"synthesis.enabled=true"`, etc.
     pub fn apply_cli_overrides(&mut self, overrides: &[String]) -> Result<()> {
         for entry in overrides {
-            let (key, value_str) = entry.split_once('=').ok_or_else(|| {
-                DoctorError::InvalidArgument {
-                    message: format!("invalid override format '{entry}'; expected key=value"),
-                }
-            })?;
+            let (key, value_str) =
+                entry
+                    .split_once('=')
+                    .ok_or_else(|| DoctorError::InvalidArgument {
+                        message: format!("invalid override format '{entry}'; expected key=value"),
+                    })?;
 
             let value: serde_json::Value = parse_value_str(value_str);
             self.apply_override(key.trim(), &value, OverrideSource::Cli)?;
@@ -483,8 +484,7 @@ impl ConfigResolver {
                 self.config.optimization.egraph_optimization = parse_bool_value(value, key)?;
             }
             "optimization.egraph_max_nodes" => {
-                self.config.optimization.egraph_max_nodes =
-                    parse_u64_value(value, key)? as usize;
+                self.config.optimization.egraph_max_nodes = parse_u64_value(value, key)? as usize;
             }
 
             // Synthesis
@@ -586,11 +586,11 @@ fn parse_f64_value(value: &serde_json::Value, key: &str) -> Result<f64> {
         serde_json::Value::Number(n) => n.as_f64().ok_or_else(|| DoctorError::InvalidArgument {
             message: format!("'{key}': cannot convert {n} to f64"),
         }),
-        serde_json::Value::String(s) => s.parse::<f64>().map_err(|_| {
-            DoctorError::InvalidArgument {
+        serde_json::Value::String(s) => {
+            s.parse::<f64>().map_err(|_| DoctorError::InvalidArgument {
                 message: format!("'{key}': cannot parse '{s}' as f64"),
-            }
-        }),
+            })
+        }
         _ => Err(DoctorError::InvalidArgument {
             message: format!("'{key}': expected number, got {value}"),
         }),
@@ -605,15 +605,15 @@ fn parse_u64_value(value: &serde_json::Value, key: &str) -> Result<u64> {
         serde_json::Value::String(s) => {
             let trimmed = s.trim();
             if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
-                u64::from_str_radix(&trimmed[2..], 16).map_err(|_| {
-                    DoctorError::InvalidArgument {
-                        message: format!("'{key}': cannot parse '{s}' as hex u64"),
-                    }
+                u64::from_str_radix(&trimmed[2..], 16).map_err(|_| DoctorError::InvalidArgument {
+                    message: format!("'{key}': cannot parse '{s}' as hex u64"),
                 })
             } else {
-                trimmed.parse::<u64>().map_err(|_| DoctorError::InvalidArgument {
-                    message: format!("'{key}': cannot parse '{s}' as u64"),
-                })
+                trimmed
+                    .parse::<u64>()
+                    .map_err(|_| DoctorError::InvalidArgument {
+                        message: format!("'{key}': cannot parse '{s}' as u64"),
+                    })
             }
         }
         _ => Err(DoctorError::InvalidArgument {
@@ -639,8 +639,14 @@ mod tests {
 
     #[test]
     fn profile_from_name_valid() {
-        assert_eq!(MigrationProfile::from_name("strict").unwrap(), MigrationProfile::Strict);
-        assert_eq!(MigrationProfile::from_name("PARITY").unwrap(), MigrationProfile::Parity);
+        assert_eq!(
+            MigrationProfile::from_name("strict").unwrap(),
+            MigrationProfile::Strict
+        );
+        assert_eq!(
+            MigrationProfile::from_name("PARITY").unwrap(),
+            MigrationProfile::Parity
+        );
         assert_eq!(
             MigrationProfile::from_name("Aggressive").unwrap(),
             MigrationProfile::Aggressive
@@ -708,10 +714,11 @@ mod tests {
         assert!(!cfg.synthesis.enabled);
         assert_eq!(cfg.emission.crate_name, "my-app");
         assert_eq!(cfg.overrides_applied.len(), 3);
-        assert!(cfg
-            .overrides_applied
-            .iter()
-            .all(|o| o.source == OverrideSource::Cli));
+        assert!(
+            cfg.overrides_applied
+                .iter()
+                .all(|o| o.source == OverrideSource::Cli)
+        );
     }
 
     #[test]
@@ -769,10 +776,9 @@ mod tests {
             MigrationProfile::Aggressive,
         ] {
             let resolver = ConfigResolver::from_profile(profile);
-            resolver.validate().unwrap_or_else(|e| panic!(
-                "default {} config should validate: {e}",
-                profile.name()
-            ));
+            resolver.validate().unwrap_or_else(|e| {
+                panic!("default {} config should validate: {e}", profile.name())
+            });
         }
     }
 
@@ -834,11 +840,7 @@ mod tests {
         let dir = std::env::temp_dir().join("ftui-test-precedence");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("prec_config.json");
-        std::fs::write(
-            &path,
-            r#"{ "planner.min_confidence_threshold": 0.5 }"#,
-        )
-        .unwrap();
+        std::fs::write(&path, r#"{ "planner.min_confidence_threshold": 0.5 }"#).unwrap();
 
         let mut resolver = ConfigResolver::from_profile(MigrationProfile::Strict);
         resolver.apply_config_file(&path).unwrap();
@@ -870,10 +872,7 @@ mod tests {
     fn overrides_audit_trail() {
         let mut resolver = ConfigResolver::from_profile(MigrationProfile::Parity);
         resolver
-            .apply_cli_overrides(&[
-                "planner.seed=123".into(),
-                "synthesis.enabled=true".into(),
-            ])
+            .apply_cli_overrides(&["planner.seed=123".into(), "synthesis.enabled=true".into()])
             .unwrap();
         let cfg = resolver.build();
 
@@ -898,14 +897,22 @@ mod tests {
     #[test]
     fn valid_config_keys_covers_all_sections() {
         assert!(VALID_CONFIG_KEYS.iter().any(|k| k.starts_with("planner.")));
-        assert!(VALID_CONFIG_KEYS.iter().any(|k| k.starts_with("confidence.")));
+        assert!(
+            VALID_CONFIG_KEYS
+                .iter()
+                .any(|k| k.starts_with("confidence."))
+        );
         assert!(VALID_CONFIG_KEYS.iter().any(|k| k.starts_with("emission.")));
-        assert!(VALID_CONFIG_KEYS
-            .iter()
-            .any(|k| k.starts_with("optimization.")));
-        assert!(VALID_CONFIG_KEYS
-            .iter()
-            .any(|k| k.starts_with("synthesis.")));
+        assert!(
+            VALID_CONFIG_KEYS
+                .iter()
+                .any(|k| k.starts_with("optimization."))
+        );
+        assert!(
+            VALID_CONFIG_KEYS
+                .iter()
+                .any(|k| k.starts_with("synthesis."))
+        );
         assert_eq!(VALID_CONFIG_KEYS.len(), 20);
     }
 }

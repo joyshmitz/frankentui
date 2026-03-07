@@ -257,10 +257,7 @@ impl FocusManager {
 
         if !group_ok {
             #[cfg(feature = "tracing")]
-            tracing::warn!(
-                group_id,
-                "focus.trap_push rejected: group missing or empty"
-            );
+            tracing::warn!(group_id, "focus.trap_push rejected: group missing or empty");
             return false;
         }
 

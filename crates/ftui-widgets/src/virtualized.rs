@@ -202,8 +202,7 @@ impl<T> Virtualized<T> {
     /// is clamped to the actual item count so callers never see it.
     #[must_use]
     pub fn scroll_offset(&self) -> usize {
-        self.scroll_offset
-            .min(self.len().saturating_sub(1).max(0))
+        self.scroll_offset.min(self.len().saturating_sub(1).max(0))
     }
 
     /// Get current visible count (from last render).

@@ -878,12 +878,7 @@ use ftui_layout::veb_tree::{TreeNode, VebTree};
 fn make_binary_tree_nodes(depth: u16) -> Vec<TreeNode<u32>> {
     let mut nodes = Vec::new();
     let mut next_id = 1u32;
-    fn build(
-        id: u32,
-        remaining: u16,
-        next_id: &mut u32,
-        nodes: &mut Vec<TreeNode<u32>>,
-    ) {
+    fn build(id: u32, remaining: u16, next_id: &mut u32, nodes: &mut Vec<TreeNode<u32>>) {
         if remaining == 0 {
             nodes.push(TreeNode::new(id, id, vec![]));
             return;
@@ -917,26 +912,18 @@ fn bench_veb_build(c: &mut Criterion) {
         // depth 6 → 127 nodes, 9 → 1023, 13 → 16383
         let nodes = make_binary_tree_nodes(depth);
         let count = nodes.len();
-        group.bench_with_input(
-            BenchmarkId::new("binary", count),
-            &nodes,
-            |b, nodes| {
-                b.iter(|| black_box(VebTree::build(nodes.clone())))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("binary", count), &nodes, |b, nodes| {
+            b.iter(|| black_box(VebTree::build(nodes.clone())))
+        });
     }
 
     // Wide trees.
     for n in [100u32, 1000, 5000] {
         let nodes = make_wide_tree_nodes(n);
         let count = nodes.len();
-        group.bench_with_input(
-            BenchmarkId::new("wide", count),
-            &nodes,
-            |b, nodes| {
-                b.iter(|| black_box(VebTree::build(nodes.clone())))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("wide", count), &nodes, |b, nodes| {
+            b.iter(|| black_box(VebTree::build(nodes.clone())))
+        });
     }
 
     group.finish();
@@ -951,34 +938,26 @@ fn bench_veb_traverse(c: &mut Criterion) {
         let tree = VebTree::build(nodes);
 
         // vEB-order traversal (sequential memory access).
-        group.bench_with_input(
-            BenchmarkId::new("veb_order", count),
-            &tree,
-            |b, tree| {
-                b.iter(|| {
-                    let mut sum = 0u64;
-                    for entry in tree.iter() {
-                        sum = sum.wrapping_add(entry.id as u64);
-                    }
-                    black_box(sum)
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("veb_order", count), &tree, |b, tree| {
+            b.iter(|| {
+                let mut sum = 0u64;
+                for entry in tree.iter() {
+                    sum = sum.wrapping_add(entry.id as u64);
+                }
+                black_box(sum)
+            })
+        });
 
         // DFS traversal (pointer-chasing via child indices).
-        group.bench_with_input(
-            BenchmarkId::new("dfs_order", count),
-            &tree,
-            |b, tree| {
-                b.iter(|| {
-                    let mut sum = 0u64;
-                    for entry in tree.iter_dfs() {
-                        sum = sum.wrapping_add(entry.id as u64);
-                    }
-                    black_box(sum)
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("dfs_order", count), &tree, |b, tree| {
+            b.iter(|| {
+                let mut sum = 0u64;
+                for entry in tree.iter_dfs() {
+                    sum = sum.wrapping_add(entry.id as u64);
+                }
+                black_box(sum)
+            })
+        });
     }
 
     group.finish();

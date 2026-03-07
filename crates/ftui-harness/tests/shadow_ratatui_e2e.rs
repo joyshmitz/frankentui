@@ -133,10 +133,7 @@ struct ComparisonResult {
     diff_lines: Vec<(usize, String, String)>,
 }
 
-fn compare_outputs(
-    ftui_buf: &FtuiBuffer,
-    rat_buf: &RatBuffer,
-) -> ComparisonResult {
+fn compare_outputs(ftui_buf: &FtuiBuffer, rat_buf: &RatBuffer) -> ComparisonResult {
     let ftui_text = buffer_to_text(ftui_buf);
     let rat_text = rat_buffer_to_text(rat_buf);
 
@@ -200,7 +197,13 @@ fn ftui_bordered_block(w: u16, h: u16) -> FtuiBuffer {
 
 fn ftui_bullet_list(w: u16, h: u16) -> FtuiBuffer {
     let mut buf = FtuiBuffer::new(w, h);
-    let items = ["First item", "Second item", "Third item", "Fourth item", "Fifth item"];
+    let items = [
+        "First item",
+        "Second item",
+        "Third item",
+        "Fourth item",
+        "Fifth item",
+    ];
     for (i, item) in items.iter().enumerate() {
         let y = i as u16;
         if y >= h {
@@ -264,7 +267,11 @@ fn ftui_three_col_table(w: u16, h: u16) -> FtuiBuffer {
     }
 
     // Data rows
-    let rows = [["alpha", "42", "ok"], ["beta", "17", "warn"], ["gamma", "99", "ok"]];
+    let rows = [
+        ["alpha", "42", "ok"],
+        ["beta", "17", "warn"],
+        ["gamma", "99", "ok"],
+    ];
     for (ri, row) in rows.iter().enumerate() {
         let y = 2 + ri as u16;
         if y >= h {
@@ -544,9 +551,7 @@ fn rat_three_col_table(w: u16, h: u16) -> RatBuffer {
 fn rat_progress_50pct(w: u16, h: u16) -> RatBuffer {
     let area = RatRect::new(0, 0, w, h);
     let mut buf = RatBuffer::empty(area);
-    let gauge = ratatui::widgets::Gauge::default()
-        .percent(50)
-        .label("50%");
+    let gauge = ratatui::widgets::Gauge::default().percent(50).label("50%");
     gauge.render(area, &mut buf);
     buf
 }
@@ -558,8 +563,7 @@ fn rat_word_wrap_para(w: u16, h: u16) -> RatBuffer {
                 This is a longer paragraph that should demonstrate \
                 word wrapping behavior across multiple lines in the \
                 terminal buffer.";
-    let para = ratatui::widgets::Paragraph::new(text)
-        .wrap(ratatui::widgets::Wrap { trim: false });
+    let para = ratatui::widgets::Paragraph::new(text).wrap(ratatui::widgets::Wrap { trim: false });
     para.render(area, &mut buf);
     buf
 }
@@ -650,16 +654,56 @@ struct Scenario {
 }
 
 const SCENARIOS: &[Scenario] = &[
-    Scenario { name: "bordered_block", ftui_fn: ftui_bordered_block, rat_fn: rat_bordered_block },
-    Scenario { name: "bullet_list", ftui_fn: ftui_bullet_list, rat_fn: rat_bullet_list },
-    Scenario { name: "sparkline_bars", ftui_fn: ftui_sparkline, rat_fn: rat_sparkline },
-    Scenario { name: "three_col_table", ftui_fn: ftui_three_col_table, rat_fn: rat_three_col_table },
-    Scenario { name: "progress_50pct", ftui_fn: ftui_progress_50pct, rat_fn: rat_progress_50pct },
-    Scenario { name: "word_wrap_para", ftui_fn: ftui_word_wrap_para, rat_fn: rat_word_wrap_para },
-    Scenario { name: "tabbed_header", ftui_fn: ftui_tabbed_header, rat_fn: rat_tabbed_header },
-    Scenario { name: "nested_blocks", ftui_fn: ftui_nested_blocks, rat_fn: rat_nested_blocks },
-    Scenario { name: "styled_list", ftui_fn: ftui_styled_list, rat_fn: rat_styled_list },
-    Scenario { name: "mixed_layout", ftui_fn: ftui_mixed_layout, rat_fn: rat_mixed_layout },
+    Scenario {
+        name: "bordered_block",
+        ftui_fn: ftui_bordered_block,
+        rat_fn: rat_bordered_block,
+    },
+    Scenario {
+        name: "bullet_list",
+        ftui_fn: ftui_bullet_list,
+        rat_fn: rat_bullet_list,
+    },
+    Scenario {
+        name: "sparkline_bars",
+        ftui_fn: ftui_sparkline,
+        rat_fn: rat_sparkline,
+    },
+    Scenario {
+        name: "three_col_table",
+        ftui_fn: ftui_three_col_table,
+        rat_fn: rat_three_col_table,
+    },
+    Scenario {
+        name: "progress_50pct",
+        ftui_fn: ftui_progress_50pct,
+        rat_fn: rat_progress_50pct,
+    },
+    Scenario {
+        name: "word_wrap_para",
+        ftui_fn: ftui_word_wrap_para,
+        rat_fn: rat_word_wrap_para,
+    },
+    Scenario {
+        name: "tabbed_header",
+        ftui_fn: ftui_tabbed_header,
+        rat_fn: rat_tabbed_header,
+    },
+    Scenario {
+        name: "nested_blocks",
+        ftui_fn: ftui_nested_blocks,
+        rat_fn: rat_nested_blocks,
+    },
+    Scenario {
+        name: "styled_list",
+        ftui_fn: ftui_styled_list,
+        rat_fn: rat_styled_list,
+    },
+    Scenario {
+        name: "mixed_layout",
+        ftui_fn: ftui_mixed_layout,
+        rat_fn: rat_mixed_layout,
+    },
 ];
 
 const SIZES: &[(u16, u16)] = &[(40, 10), (80, 24)];
@@ -815,11 +859,18 @@ fn shadow_structural_elements_match() {
             // Extract only border characters (box drawing)
             let border_chars: &[char] = &['┌', '┐', '└', '┘', '─', '│'];
 
-            let ftui_borders: String = ftui_text.chars().filter(|c| border_chars.contains(c)).collect();
-            let rat_borders: String = rat_text.chars().filter(|c| border_chars.contains(c)).collect();
+            let ftui_borders: String = ftui_text
+                .chars()
+                .filter(|c| border_chars.contains(c))
+                .collect();
+            let rat_borders: String = rat_text
+                .chars()
+                .filter(|c| border_chars.contains(c))
+                .collect();
 
             assert_eq!(
-                ftui_borders, rat_borders,
+                ftui_borders,
+                rat_borders,
                 "Structural border mismatch in {name} at {w}x{h}",
                 name = scenario.name
             );
@@ -848,7 +899,8 @@ fn shadow_content_preservation() {
             let rat_alpha: String = rat_text.chars().filter(|c| c.is_alphanumeric()).collect();
 
             assert_eq!(
-                ftui_alpha, rat_alpha,
+                ftui_alpha,
+                rat_alpha,
                 "Text content mismatch in {name} at {w}x{h}\n\
                  ftui: {ftui_alpha}\n\
                  rat:  {rat_alpha}",
@@ -868,8 +920,16 @@ fn shadow_deterministic_across_runs() {
         let rat_a = rat_buffer_to_text(&(scenario.rat_fn)(w, h));
         let rat_b = rat_buffer_to_text(&(scenario.rat_fn)(w, h));
 
-        assert_eq!(ftui_a, ftui_b, "ftui non-deterministic for {}", scenario.name);
-        assert_eq!(rat_a, rat_b, "ratatui non-deterministic for {}", scenario.name);
+        assert_eq!(
+            ftui_a, ftui_b,
+            "ftui non-deterministic for {}",
+            scenario.name
+        );
+        assert_eq!(
+            rat_a, rat_b,
+            "ratatui non-deterministic for {}",
+            scenario.name
+        );
     }
 }
 

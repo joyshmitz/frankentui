@@ -357,10 +357,7 @@ fn format_guarantee(d: &StrategyDecision) -> String {
     )
 }
 
-fn format_verbose_rationale(
-    d: &StrategyDecision,
-    model: Option<&ConfidenceModel>,
-) -> String {
+fn format_verbose_rationale(d: &StrategyDecision, model: Option<&ConfidenceModel>) -> String {
     let mut parts = Vec::new();
 
     parts.push(d.rationale.clone());
@@ -369,7 +366,12 @@ fn format_verbose_rationale(
         let alt_summary: Vec<String> = d
             .alternatives
             .iter()
-            .map(|a| format!("{}(score={:.2},rejected={})", a.strategy.id, a.score, a.rejection_reason))
+            .map(|a| {
+                format!(
+                    "{}(score={:.2},rejected={})",
+                    a.strategy.id, a.score, a.rejection_reason
+                )
+            })
             .collect();
         parts.push(format!("Alternatives: {}", alt_summary.join("; ")));
     }
@@ -577,10 +579,10 @@ mod tests {
                     target_crate: "ftui-widgets".into(),
                     automatable: false,
                     remediation: RemediationStrategy {
-                    approach: "Manual widget adaptation".into(),
-                    automatable: false,
-                    effort: crate::mapping_atlas::EffortLevel::Medium,
-                },
+                        approach: "Manual widget adaptation".into(),
+                        automatable: false,
+                        effort: crate::mapping_atlas::EffortLevel::Medium,
+                    },
                 },
                 score: 0.65,
                 rejection_reason: "lower confidence than direct-model-impl".into(),
@@ -755,7 +757,10 @@ mod tests {
 
         assert_eq!(e.policy_refs.len(), 2);
         assert!(e.policy_refs.contains(&"claim:claim-state-001".to_string()));
-        assert!(e.policy_refs.contains(&"policy:policy-exact-state".to_string()));
+        assert!(
+            e.policy_refs
+                .contains(&"policy:policy-exact-state".to_string())
+        );
     }
 
     #[test]

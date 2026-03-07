@@ -44,12 +44,7 @@ fn binary_tree_strategy() -> impl Strategy<Value = Vec<TreeNode<u32>>> {
     (1..8u16).prop_map(|depth| {
         let mut nodes = Vec::new();
         let mut next_id = 1u32;
-        fn build(
-            id: u32,
-            remaining: u16,
-            next_id: &mut u32,
-            nodes: &mut Vec<TreeNode<u32>>,
-        ) {
+        fn build(id: u32, remaining: u16, next_id: &mut u32, nodes: &mut Vec<TreeNode<u32>>) {
             if remaining == 0 {
                 nodes.push(TreeNode::new(id, id, vec![]));
                 return;

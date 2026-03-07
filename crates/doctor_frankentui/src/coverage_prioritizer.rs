@@ -217,11 +217,7 @@ struct Candidate {
     rationale: String,
 }
 
-fn blind_spot_to_candidate(
-    spot: &BlindSpot,
-    index: usize,
-    coverage: &CoverageReport,
-) -> Candidate {
+fn blind_spot_to_candidate(spot: &BlindSpot, index: usize, coverage: &CoverageReport) -> Candidate {
     let impact_score = match spot.impact {
         BlindSpotImpact::High => 1.0,
         BlindSpotImpact::Medium => 0.6,
@@ -279,11 +275,7 @@ fn triage_item_to_candidate(item: &TriageItem) -> Candidate {
     }
 }
 
-fn failure_to_candidate(
-    dimension: &str,
-    count: usize,
-    telemetry: &FailureTelemetry,
-) -> Candidate {
+fn failure_to_candidate(dimension: &str, count: usize, telemetry: &FailureTelemetry) -> Candidate {
     let total = telemetry.total_runs.max(1) as f64;
     let failure_rate = (count as f64) / total;
 
@@ -299,7 +291,10 @@ fn failure_to_candidate(
         expected_confidence_lift: failure_rate * 0.10,
         rationale: format!(
             "Failure telemetry: {} failed {}/{} runs ({:.0}%). Adding tests reduces regression risk.",
-            dimension, count, telemetry.total_runs, failure_rate * 100.0
+            dimension,
+            count,
+            telemetry.total_runs,
+            failure_rate * 100.0
         ),
     }
 }
@@ -372,9 +367,7 @@ mod tests {
     use super::*;
     use crate::capability_gap::{BacklogAction, GapRemediation, GapSeverity};
     use crate::fixture_taxonomy::CoverageStats;
-    use crate::gap_triage::{
-        TriageBuckets, TriageConfig, TriageSignals, TriageStats,
-    };
+    use crate::gap_triage::{TriageBuckets, TriageConfig, TriageSignals, TriageStats};
 
     fn sample_coverage() -> CoverageReport {
         CoverageReport {
@@ -499,21 +492,13 @@ mod tests {
 
     #[test]
     fn prioritize_produces_recommendations() {
-        let report = prioritize_default(
-            &sample_coverage(),
-            &sample_triage(),
-            &sample_failures(),
-        );
+        let report = prioritize_default(&sample_coverage(), &sample_triage(), &sample_failures());
         assert!(!report.recommendations.is_empty());
     }
 
     #[test]
     fn recommendations_sorted_by_score_descending() {
-        let report = prioritize_default(
-            &sample_coverage(),
-            &sample_triage(),
-            &sample_failures(),
-        );
+        let report = prioritize_default(&sample_coverage(), &sample_triage(), &sample_failures());
         for pair in report.recommendations.windows(2) {
             assert!(
                 pair[0].score >= pair[1].score,
@@ -526,11 +511,7 @@ mod tests {
 
     #[test]
     fn high_impact_blind_spot_scores_higher_than_low() {
-        let report = prioritize_default(
-            &sample_coverage(),
-            &sample_triage(),
-            &sample_failures(),
-        );
+        let report = prioritize_default(&sample_coverage(), &sample_triage(), &sample_failures());
         let high = report
             .recommendations
             .iter()
@@ -547,11 +528,7 @@ mod tests {
 
     #[test]
     fn triage_immediate_becomes_implement_feature() {
-        let report = prioritize_default(
-            &sample_coverage(),
-            &sample_triage(),
-            &sample_failures(),
-        );
+        let report = prioritize_default(&sample_coverage(), &sample_triage(), &sample_failures());
         let ws = report
             .recommendations
             .iter()
@@ -562,11 +539,7 @@ mod tests {
 
     #[test]
     fn triage_near_term_becomes_improve_translator() {
-        let report = prioritize_default(
-            &sample_coverage(),
-            &sample_triage(),
-            &sample_failures(),
-        );
+        let report = prioritize_default(&sample_coverage(), &sample_triage(), &sample_failures());
         let theme = report
             .recommendations
             .iter()
@@ -577,11 +550,7 @@ mod tests {
 
     #[test]
     fn failure_telemetry_becomes_add_test() {
-        let report = prioritize_default(
-            &sample_coverage(),
-            &sample_triage(),
-            &sample_failures(),
-        );
+        let report = prioritize_default(&sample_coverage(), &sample_triage(), &sample_failures());
         let ws_fail = report
             .recommendations
             .iter()
@@ -593,11 +562,7 @@ mod tests {
 
     #[test]
     fn coverage_gain_positive_for_blind_spots() {
-        let report = prioritize_default(
-            &sample_coverage(),
-            &sample_triage(),
-            &sample_failures(),
-        );
+        let report = prioritize_default(&sample_coverage(), &sample_triage(), &sample_failures());
         for r in &report.recommendations {
             if r.kind == RecommendationKind::AddFixture {
                 assert!(
@@ -610,11 +575,7 @@ mod tests {
 
     #[test]
     fn confidence_lift_positive_for_triage_items() {
-        let report = prioritize_default(
-            &sample_coverage(),
-            &sample_triage(),
-            &sample_failures(),
-        );
+        let report = prioritize_default(&sample_coverage(), &sample_triage(), &sample_failures());
         for r in &report.recommendations {
             if r.kind == RecommendationKind::ImplementFeature
                 || r.kind == RecommendationKind::ImproveTranslator
@@ -641,11 +602,7 @@ mod tests {
 
     #[test]
     fn stats_by_kind_sums_to_total() {
-        let report = prioritize_default(
-            &sample_coverage(),
-            &sample_triage(),
-            &sample_failures(),
-        );
+        let report = prioritize_default(&sample_coverage(), &sample_triage(), &sample_failures());
         let sum: usize = report.stats.by_kind.values().sum();
         assert_eq!(sum, report.stats.recommendations_emitted);
     }
@@ -736,19 +693,14 @@ mod tests {
 
     #[test]
     fn json_roundtrip() {
-        let report = prioritize_default(
-            &sample_coverage(),
-            &sample_triage(),
-            &sample_failures(),
-        );
+        let report = prioritize_default(&sample_coverage(), &sample_triage(), &sample_failures());
         let json = serde_json::to_value(&report).expect("serialize");
-        let decoded: PrioritizationReport =
-            serde_json::from_value(json).expect("deserialize");
+        let decoded: PrioritizationReport = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(decoded.recommendations.len(), report.recommendations.len());
         assert_eq!(
-            decoded.recommendations.len(),
-            report.recommendations.len()
+            decoded.stats.candidates_evaluated,
+            report.stats.candidates_evaluated
         );
-        assert_eq!(decoded.stats.candidates_evaluated, report.stats.candidates_evaluated);
     }
 
     #[test]
@@ -779,19 +731,14 @@ mod tests {
 
         // Top recommendation should differ.
         assert_ne!(
-            cov_report.recommendations[0].kind,
-            tri_report.recommendations[0].kind,
+            cov_report.recommendations[0].kind, tri_report.recommendations[0].kind,
             "different weights should produce different rankings"
         );
     }
 
     #[test]
     fn score_clamped_to_unit_interval() {
-        let report = prioritize_default(
-            &sample_coverage(),
-            &sample_triage(),
-            &sample_failures(),
-        );
+        let report = prioritize_default(&sample_coverage(), &sample_triage(), &sample_failures());
         for r in &report.recommendations {
             assert!(
                 (0.0..=1.0).contains(&r.score),
@@ -803,11 +750,7 @@ mod tests {
 
     #[test]
     fn mean_score_correct() {
-        let report = prioritize_default(
-            &sample_coverage(),
-            &sample_triage(),
-            &sample_failures(),
-        );
+        let report = prioritize_default(&sample_coverage(), &sample_triage(), &sample_failures());
         if !report.recommendations.is_empty() {
             let sum: f64 = report.recommendations.iter().map(|r| r.score).sum();
             let expected = sum / report.recommendations.len() as f64;

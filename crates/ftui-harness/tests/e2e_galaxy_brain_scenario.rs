@@ -33,11 +33,11 @@ use ftui_runtime::transparency::{
     TrafficLight,
 };
 use ftui_runtime::unified_evidence::DecisionDomain;
+use ftui_widgets::Widget;
 use ftui_widgets::decision_card::DecisionCard;
 use ftui_widgets::drift_visualization::{
     DomainSnapshot, DriftSnapshot, DriftTimeline, DriftVisualization,
 };
-use ftui_widgets::Widget;
 
 // ============================================================================
 // Constants (from scenario TOML)
@@ -101,11 +101,7 @@ fn frame_contains(rows: &[String], needle: &str) -> bool {
 // Disclosure Builder (reusable across phases)
 // ============================================================================
 
-fn build_disclosure(
-    level: DisclosureLevel,
-    signal: TrafficLight,
-    confidence: f64,
-) -> Disclosure {
+fn build_disclosure(level: DisclosureLevel, signal: TrafficLight, confidence: f64) -> Disclosure {
     let explanation = if level >= DisclosureLevel::PlainEnglish {
         Some(format!(
             "Diff strategy: chose 'incremental_diff' with {} confidence.",
@@ -208,7 +204,13 @@ impl ScenarioState {
         }
     }
 
-    fn apply_event(&mut self, frame: u64, event_type: &str, key: Option<&str>, intensity: Option<f64>) {
+    fn apply_event(
+        &mut self,
+        frame: u64,
+        event_type: &str,
+        key: Option<&str>,
+        intensity: Option<f64>,
+    ) {
         match event_type {
             "init" => {
                 self.confidence = 0.95;
@@ -326,20 +328,90 @@ struct ScenarioEvent {
 
 fn scenario_events() -> Vec<ScenarioEvent> {
     vec![
-        ScenarioEvent { frame: 0, event_type: "init", key: None, intensity: None },
-        ScenarioEvent { frame: 5, event_type: "keypress", key: Some("Enter"), intensity: None },
-        ScenarioEvent { frame: 30, event_type: "keypress", key: Some("Right"), intensity: None },
-        ScenarioEvent { frame: 60, event_type: "keypress", key: Some("Right"), intensity: None },
-        ScenarioEvent { frame: 100, event_type: "keypress", key: Some("Right"), intensity: None },
-        ScenarioEvent { frame: 120, event_type: "inject_drift", key: None, intensity: Some(0.3) },
-        ScenarioEvent { frame: 160, event_type: "inject_drift", key: None, intensity: Some(0.6) },
-        ScenarioEvent { frame: 200, event_type: "inject_drift", key: None, intensity: Some(0.9) },
-        ScenarioEvent { frame: 240, event_type: "inject_drift", key: None, intensity: Some(0.0) },
-        ScenarioEvent { frame: 360, event_type: "keypress", key: Some("t"), intensity: None },
-        ScenarioEvent { frame: 420, event_type: "keypress", key: Some("Left"), intensity: None },
-        ScenarioEvent { frame: 450, event_type: "keypress", key: Some("Left"), intensity: None },
-        ScenarioEvent { frame: 480, event_type: "keypress", key: Some("Left"), intensity: None },
-        ScenarioEvent { frame: 540, event_type: "keypress", key: Some("Escape"), intensity: None },
+        ScenarioEvent {
+            frame: 0,
+            event_type: "init",
+            key: None,
+            intensity: None,
+        },
+        ScenarioEvent {
+            frame: 5,
+            event_type: "keypress",
+            key: Some("Enter"),
+            intensity: None,
+        },
+        ScenarioEvent {
+            frame: 30,
+            event_type: "keypress",
+            key: Some("Right"),
+            intensity: None,
+        },
+        ScenarioEvent {
+            frame: 60,
+            event_type: "keypress",
+            key: Some("Right"),
+            intensity: None,
+        },
+        ScenarioEvent {
+            frame: 100,
+            event_type: "keypress",
+            key: Some("Right"),
+            intensity: None,
+        },
+        ScenarioEvent {
+            frame: 120,
+            event_type: "inject_drift",
+            key: None,
+            intensity: Some(0.3),
+        },
+        ScenarioEvent {
+            frame: 160,
+            event_type: "inject_drift",
+            key: None,
+            intensity: Some(0.6),
+        },
+        ScenarioEvent {
+            frame: 200,
+            event_type: "inject_drift",
+            key: None,
+            intensity: Some(0.9),
+        },
+        ScenarioEvent {
+            frame: 240,
+            event_type: "inject_drift",
+            key: None,
+            intensity: Some(0.0),
+        },
+        ScenarioEvent {
+            frame: 360,
+            event_type: "keypress",
+            key: Some("t"),
+            intensity: None,
+        },
+        ScenarioEvent {
+            frame: 420,
+            event_type: "keypress",
+            key: Some("Left"),
+            intensity: None,
+        },
+        ScenarioEvent {
+            frame: 450,
+            event_type: "keypress",
+            key: Some("Left"),
+            intensity: None,
+        },
+        ScenarioEvent {
+            frame: 480,
+            event_type: "keypress",
+            key: Some("Left"),
+            intensity: None,
+        },
+        ScenarioEvent {
+            frame: 540,
+            event_type: "keypress",
+            key: Some("Escape"),
+            intensity: None,
+        },
     ]
 }
 
@@ -454,10 +526,7 @@ fn run_scenario() -> ScenarioRun {
             emit_event(
                 &mut jsonl_events,
                 "scenario_event",
-                &[
-                    ("frame", &frame.to_string()),
-                    ("type", ev.event_type),
-                ],
+                &[("frame", &frame.to_string()), ("type", ev.event_type)],
             );
             event_idx += 1;
         }
@@ -614,8 +683,8 @@ fn scenario_jsonl_evidence_valid() {
     );
 
     for (i, line) in lines.iter().enumerate() {
-        let v: serde_json::Value =
-            serde_json::from_str(line).unwrap_or_else(|e| panic!("invalid JSON at line {}: {}", i, e));
+        let v: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("invalid JSON at line {}: {}", i, e));
         assert!(v["event"].is_string(), "line {} missing 'event' field", i);
         assert!(v["seq"].is_u64(), "line {} missing 'seq' field", i);
     }

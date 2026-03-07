@@ -380,9 +380,7 @@ pub struct CompletenessReport {
 /// Execute a choreography against a set of participant state callbacks.
 ///
 /// Returns the ordered list of messages delivered during execution.
-pub fn execute_choreography(
-    choreo: &Choreography,
-) -> Vec<ExecutionEvent> {
+pub fn execute_choreography(choreo: &Choreography) -> Vec<ExecutionEvent> {
     let mut events = Vec::new();
     let mut pending_messages: VecDeque<(String, usize)> = VecDeque::new();
 
@@ -398,9 +396,7 @@ pub fn execute_choreography(
             }
             Action::Handle(msg, handler) => {
                 // Check if this message has been emitted.
-                let delivered = pending_messages
-                    .iter()
-                    .any(|(m, _)| m == msg);
+                let delivered = pending_messages.iter().any(|(m, _)| m == msg);
                 events.push(ExecutionEvent {
                     sequence: step.sequence,
                     participant: step.participant.clone(),
@@ -456,9 +452,18 @@ pub enum EventKind {
 pub fn example_filter_update() -> Choreography {
     let mut c = Choreography::new("filter_update");
     c.step("filter", Action::Emit("filter_changed".into()));
-    c.step("list", Action::Handle("filter_changed".into(), "scroll_to_top".into()));
-    c.step("status", Action::Handle("filter_changed".into(), "update_count".into()));
-    c.step("header", Action::Handle("filter_changed".into(), "highlight_filter".into()));
+    c.step(
+        "list",
+        Action::Handle("filter_changed".into(), "scroll_to_top".into()),
+    );
+    c.step(
+        "status",
+        Action::Handle("filter_changed".into(), "update_count".into()),
+    );
+    c.step(
+        "header",
+        Action::Handle("filter_changed".into(), "highlight_filter".into()),
+    );
     c
 }
 
@@ -466,8 +471,14 @@ pub fn example_filter_update() -> Choreography {
 pub fn example_selection_sync() -> Choreography {
     let mut c = Choreography::new("selection_sync");
     c.step("list", Action::Emit("selection_changed".into()));
-    c.step("detail", Action::Handle("selection_changed".into(), "show_details".into()));
-    c.step("status", Action::Handle("selection_changed".into(), "update_selection_info".into()));
+    c.step(
+        "detail",
+        Action::Handle("selection_changed".into(), "show_details".into()),
+    );
+    c.step(
+        "status",
+        Action::Handle("selection_changed".into(), "update_selection_info".into()),
+    );
     c
 }
 
@@ -475,9 +486,18 @@ pub fn example_selection_sync() -> Choreography {
 pub fn example_tab_navigation() -> Choreography {
     let mut c = Choreography::new("tab_navigation");
     c.step("tabs", Action::Emit("tab_changed".into()));
-    c.step("content", Action::Handle("tab_changed".into(), "switch_view".into()));
-    c.step("breadcrumb", Action::Handle("tab_changed".into(), "update_path".into()));
-    c.step("status", Action::Handle("tab_changed".into(), "update_tab_info".into()));
+    c.step(
+        "content",
+        Action::Handle("tab_changed".into(), "switch_view".into()),
+    );
+    c.step(
+        "breadcrumb",
+        Action::Handle("tab_changed".into(), "update_path".into()),
+    );
+    c.step(
+        "status",
+        Action::Handle("tab_changed".into(), "update_tab_info".into()),
+    );
     c
 }
 
@@ -486,10 +506,19 @@ pub fn example_search_flow() -> Choreography {
     let mut c = Choreography::new("search_flow");
     c.step("search_input", Action::Emit("query_changed".into()));
     c.step("search_input", Action::Local("debounce".into()));
-    c.step("results", Action::Handle("query_changed".into(), "filter_results".into()));
+    c.step(
+        "results",
+        Action::Handle("query_changed".into(), "filter_results".into()),
+    );
     c.step("results", Action::Emit("results_updated".into()));
-    c.step("status", Action::Handle("results_updated".into(), "update_match_count".into()));
-    c.step("preview", Action::Handle("results_updated".into(), "update_preview".into()));
+    c.step(
+        "status",
+        Action::Handle("results_updated".into(), "update_match_count".into()),
+    );
+    c.step(
+        "preview",
+        Action::Handle("results_updated".into(), "update_preview".into()),
+    );
     c
 }
 
@@ -497,9 +526,18 @@ pub fn example_search_flow() -> Choreography {
 pub fn example_modal_dialog() -> Choreography {
     let mut c = Choreography::new("modal_dialog");
     c.step("trigger", Action::Emit("open_modal".into()));
-    c.step("overlay", Action::Handle("open_modal".into(), "show_overlay".into()));
-    c.step("dimmer", Action::Handle("open_modal".into(), "dim_background".into()));
-    c.step("focus_trap", Action::Handle("open_modal".into(), "capture_focus".into()));
+    c.step(
+        "overlay",
+        Action::Handle("open_modal".into(), "show_overlay".into()),
+    );
+    c.step(
+        "dimmer",
+        Action::Handle("open_modal".into(), "dim_background".into()),
+    );
+    c.step(
+        "focus_trap",
+        Action::Handle("open_modal".into(), "capture_focus".into()),
+    );
     c
 }
 
@@ -570,7 +608,10 @@ mod tests {
     #[test]
     fn orphaned_handler_detected() {
         let mut c = Choreography::new("broken");
-        c.step("widget_a", Action::Handle("nonexistent".into(), "do_stuff".into()));
+        c.step(
+            "widget_a",
+            Action::Handle("nonexistent".into(), "do_stuff".into()),
+        );
         let report = c.completeness_report();
         assert!(!report.is_complete);
         assert_eq!(report.orphaned_handlers, vec!["nonexistent"]);
@@ -588,7 +629,10 @@ mod tests {
     #[test]
     fn deadlock_from_missing_emitter() {
         let mut c = Choreography::new("deadlock");
-        c.step("widget_a", Action::Handle("missing".into(), "handler".into()));
+        c.step(
+            "widget_a",
+            Action::Handle("missing".into(), "handler".into()),
+        );
         assert!(!c.verify_deadlock_free());
     }
 
@@ -624,7 +668,10 @@ mod tests {
     #[test]
     fn execute_detects_deadlock_event() {
         let mut c = Choreography::new("deadlock_exec");
-        c.step("widget_b", Action::Handle("missing".into(), "handler".into()));
+        c.step(
+            "widget_b",
+            Action::Handle("missing".into(), "handler".into()),
+        );
         let events = execute_choreography(&c);
         assert_eq!(events.len(), 1);
         assert!(matches!(&events[0].kind, EventKind::Deadlock(m) if m == "missing"));

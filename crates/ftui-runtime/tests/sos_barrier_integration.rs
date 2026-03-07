@@ -110,7 +110,8 @@ fn boundary_zero_budget_varying_change() {
         assert!(
             r.value <= 1e-10,
             "B(0, {:.2}) = {:.8} should be <= 0",
-            x2, r.value
+            x2,
+            r.value
         );
     }
 }
@@ -152,7 +153,12 @@ fn monotone_in_budget_at_fixed_change() {
             assert!(
                 curr >= prev,
                 "B should increase with budget: B({:.1},{:.1})={:.6} < B({:.1},{:.1})={:.6}",
-                b, c, curr, b - 0.1, c, prev
+                b,
+                c,
+                curr,
+                b - 0.1,
+                c,
+                prev
             );
             prev = curr;
         }
@@ -170,7 +176,12 @@ fn monotone_in_change_rate_at_fixed_budget() {
             assert!(
                 curr <= prev,
                 "B should decrease with change_rate: B({:.1},{:.1})={:.6} > B({:.1},{:.1})={:.6}",
-                b, c, curr, b, c - 0.1, prev
+                b,
+                c,
+                curr,
+                b,
+                c - 0.1,
+                prev
             );
             prev = curr;
         }
@@ -187,10 +198,10 @@ fn golden_reference_values() {
 
     let cases: &[(f64, f64, f64)] = &[
         // (budget, change, expected_B)
-        (1.0, 0.0, 1.17),       // 1.0 + 0.1 + 0.05 + 0.02
-        (0.0, 1.0, -0.6),       // -0.5 - 0.1
-        (0.0, 0.0, 0.0),        // origin
-        (1.0, 1.0, 0.12),       // 1.0 - 0.5 + 0.1 - 0.3 + 0.05 - 0.1 - 0.15 + 0.02
+        (1.0, 0.0, 1.17), // 1.0 + 0.1 + 0.05 + 0.02
+        (0.0, 1.0, -0.6), // -0.5 - 0.1
+        (0.0, 0.0, 0.0),  // origin
+        (1.0, 1.0, 0.12), // 1.0 - 0.5 + 0.1 - 0.3 + 0.05 - 0.1 - 0.15 + 0.02
     ];
 
     for &(b, c, expected) in cases {
@@ -198,7 +209,10 @@ fn golden_reference_values() {
         assert!(
             (r.value - expected).abs() < 1e-10,
             "B({}, {}) = {:.10}, expected {:.10}",
-            b, c, r.value, expected
+            b,
+            c,
+            r.value,
+            expected
         );
     }
 }
@@ -216,7 +230,8 @@ fn safety_margin_consistent() {
             assert!(
                 (margin - result.value).abs() < 1e-15,
                 "safety_margin and evaluate disagree at ({}, {})",
-                b, c
+                b,
+                c
             );
         }
     }

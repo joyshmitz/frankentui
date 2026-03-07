@@ -42,7 +42,9 @@
 use ftui_core::geometry::Rect;
 use ftui_core::terminal_capabilities::{TerminalCapabilities, TerminalProfile};
 use ftui_harness::golden::compute_text_checksum;
-use ftui_harness::{buffer_to_text, profile_matrix_text_with_options, MatchMode, ProfileCompareMode};
+use ftui_harness::{
+    MatchMode, ProfileCompareMode, buffer_to_text, profile_matrix_text_with_options,
+};
 use ftui_render::buffer::Buffer;
 use ftui_render::cell::Cell;
 use serde_json::json;
@@ -58,8 +60,8 @@ const EMULATOR_PROFILES: &[(TerminalProfile, &str)] = &[
     (TerminalProfile::Xterm256Color, "xterm-256color"),
     (TerminalProfile::Screen, "screen-256color"),
     (TerminalProfile::Kitty, "kitty"),
-    (TerminalProfile::Modern, "alacritty"),  // Modern covers alacritty
-    (TerminalProfile::Modern, "wezterm"),    // Modern covers WezTerm too
+    (TerminalProfile::Modern, "alacritty"), // Modern covers alacritty
+    (TerminalProfile::Modern, "wezterm"),   // Modern covers WezTerm too
 ];
 
 /// Terminal sizes for the matrix.
@@ -442,7 +444,11 @@ fn run_conformance_matrix(logger: &mut ConformanceLogger) -> ConformanceResults 
                     entry.1 += 1;
                 }
 
-                let status = if deterministic { "pass" } else { "determinism_fail" };
+                let status = if deterministic {
+                    "pass"
+                } else {
+                    "determinism_fail"
+                };
                 logger.log(json!({
                     "event": "widget_render",
                     "ts": timestamp(),

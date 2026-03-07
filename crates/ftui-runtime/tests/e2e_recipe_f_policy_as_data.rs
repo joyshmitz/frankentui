@@ -312,7 +312,10 @@ fn shadow_mode_logs_divergences_without_affecting_rendering() {
     }
 
     for ev in &ctrl.events {
-        assert_eq!(ev.policy_source, "baked_in", "shadow mode should use baked_in");
+        assert_eq!(
+            ev.policy_source, "baked_in",
+            "shadow mode should use baked_in"
+        );
         assert_eq!(ev.delivery_stage, "shadow");
     }
 }
@@ -328,10 +331,14 @@ fn canary_mode_serves_loaded_for_10_percent() {
         ctrl.tick(10.0);
     }
 
-    let loaded_count = ctrl.events.iter()
+    let loaded_count = ctrl
+        .events
+        .iter()
         .filter(|e| e.policy_source == "loaded")
         .count();
-    let baked_in_count = ctrl.events.iter()
+    let baked_in_count = ctrl
+        .events
+        .iter()
         .filter(|e| e.policy_source == "baked_in")
         .count();
 
@@ -350,7 +357,9 @@ fn ramp_mode_serves_loaded_for_50_percent() {
         ctrl.tick(10.0);
     }
 
-    let loaded_count = ctrl.events.iter()
+    let loaded_count = ctrl
+        .events
+        .iter()
         .filter(|e| e.policy_source == "loaded")
         .count();
 
@@ -402,7 +411,10 @@ fn signature_failure_triggers_immediate_fallback() {
     let last = ctrl.events.last().unwrap();
     assert!(!last.signature_valid, "signature should be invalid");
     assert!(last.fallback_triggered, "fallback should be triggered");
-    assert_eq!(last.policy_source, "baked_in", "should fall back to baked_in");
+    assert_eq!(
+        last.policy_source, "baked_in",
+        "should fall back to baked_in"
+    );
 
     // Subsequent frames stay in fallback
     ctrl.tick(10.0);
@@ -564,7 +576,9 @@ fn progressive_delivery_stages_in_order() {
         ctrl.tick(10.0);
     }
 
-    let stage_names: Vec<&str> = ctrl.events.iter()
+    let stage_names: Vec<&str> = ctrl
+        .events
+        .iter()
         .map(|e| e.delivery_stage.as_str())
         .collect();
     assert_eq!(stage_names, vec!["shadow", "canary", "ramp", "default"]);
@@ -590,8 +604,8 @@ fn jsonl_schema_compliance() {
     assert_eq!(lines.len(), 3);
 
     for (i, line) in lines.iter().enumerate() {
-        let v: serde_json::Value = serde_json::from_str(line)
-            .unwrap_or_else(|e| panic!("parse JSON line {i}: {e}"));
+        let v: serde_json::Value =
+            serde_json::from_str(line).unwrap_or_else(|e| panic!("parse JSON line {i}: {e}"));
 
         assert_eq!(v["event"], "recipe_f_policy", "line {i}: event");
         assert!(v["frame_id"].is_u64(), "line {i}: frame_id");
@@ -599,11 +613,20 @@ fn jsonl_schema_compliance() {
         assert!(v["delivery_stage"].is_string(), "line {i}: delivery_stage");
         assert!(v["decision_point"].is_string(), "line {i}: decision_point");
         assert!(v["loaded_action"].is_string(), "line {i}: loaded_action");
-        assert!(v["baked_in_action"].is_string(), "line {i}: baked_in_action");
+        assert!(
+            v["baked_in_action"].is_string(),
+            "line {i}: baked_in_action"
+        );
         assert!(v["divergence"].is_boolean(), "line {i}: divergence");
         assert!(v["policy_version"].is_string(), "line {i}: policy_version");
-        assert!(v["signature_valid"].is_boolean(), "line {i}: signature_valid");
-        assert!(v["fallback_triggered"].is_boolean(), "line {i}: fallback_triggered");
+        assert!(
+            v["signature_valid"].is_boolean(),
+            "line {i}: signature_valid"
+        );
+        assert!(
+            v["fallback_triggered"].is_boolean(),
+            "line {i}: fallback_triggered"
+        );
         assert!(v["frame_time_ms"].is_f64(), "line {i}: frame_time_ms");
     }
 
@@ -621,7 +644,12 @@ fn no_panics_full_scenario() {
     let mut ctrl = RecipeFController::new(artifact);
 
     // Full progression with varied frame times
-    for stage in &[DeliveryStage::Shadow, DeliveryStage::Canary, DeliveryStage::Ramp, DeliveryStage::Default] {
+    for stage in &[
+        DeliveryStage::Shadow,
+        DeliveryStage::Canary,
+        DeliveryStage::Ramp,
+        DeliveryStage::Default,
+    ] {
         ctrl.set_stage(*stage);
         for i in 0..25 {
             let time = 8.0 + (i as f64 % 10.0);
