@@ -111,6 +111,10 @@ pub struct ScreenMeta {
     pub id: ScreenId,
     pub title: &'static str,
     pub short_label: &'static str,
+    /// Stable machine-readable identifier used for palette action IDs and
+    /// navigation. Must be unique, lowercase, and use underscores. Changing a
+    /// title no longer breaks navigation because the slug is the canonical key.
+    pub slug: &'static str,
     pub category: ScreenCategory,
     pub palette_tags: &'static [&'static str],
     pub blurb: &'static str,
@@ -124,6 +128,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::GuidedTour,
         title: "Guided Tour",
         short_label: "Tour",
+        slug: "guided_tour",
         category: ScreenCategory::Tour,
         palette_tags: &["tour", "storyboard", "autoplay"],
         blurb: "Cinematic auto-play tour across key screens.",
@@ -134,6 +139,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::Dashboard,
         title: "Dashboard",
         short_label: "Dash",
+        slug: "dashboard",
         category: ScreenCategory::Tour,
         palette_tags: &["overview", "tour", "widgets"],
         blurb: "Cinematic overview of key features and live tiles.",
@@ -144,6 +150,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::Shakespeare,
         title: "Shakespeare",
         short_label: "Shakes",
+        slug: "shakespeare",
         category: ScreenCategory::Text,
         palette_tags: &["search", "text", "highlight"],
         blurb: "Live search over Shakespeare with animated highlights.",
@@ -154,6 +161,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::CodeExplorer,
         title: "Code Explorer",
         short_label: "Code",
+        slug: "code_explorer",
         category: ScreenCategory::Text,
         palette_tags: &["code", "explorer", "syntax"],
         blurb: "Code browser with pane routing and syntax preview.",
@@ -164,6 +172,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::WidgetGallery,
         title: "Widget Gallery",
         short_label: "Widgets",
+        slug: "widget_gallery",
         category: ScreenCategory::Core,
         palette_tags: &["widgets", "catalog", "layout"],
         blurb: "Library of core widgets in a compact gallery.",
@@ -174,6 +183,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::LayoutLab,
         title: "Layout Lab",
         short_label: "Layout",
+        slug: "layout_lab",
         category: ScreenCategory::Interaction,
         palette_tags: &["layout", "pane", "docking", "reflow", "spring", "timeline"],
         blurb: "Constraint lab + interactive pane studio (drag, resize, dock, undo/redo).",
@@ -184,6 +194,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::FormsInput,
         title: "Forms & Input",
         short_label: "Forms",
+        slug: "forms_input",
         category: ScreenCategory::Interaction,
         palette_tags: &["forms", "input", "controls"],
         blurb: "Form fields, validation cues, and input widgets.",
@@ -194,6 +205,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::DataViz,
         title: "Data Viz",
         short_label: "DataViz",
+        slug: "data_viz",
         category: ScreenCategory::Visuals,
         palette_tags: &["charts", "graphs", "visuals"],
         blurb: "Dense charts and small-multiple visualizations.",
@@ -204,6 +216,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::FileBrowser,
         title: "File Browser",
         short_label: "Files",
+        slug: "file_browser",
         category: ScreenCategory::Interaction,
         palette_tags: &["files", "tree", "navigation"],
         blurb: "File tree with previews and pane routing.",
@@ -214,6 +227,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::AdvancedFeatures,
         title: "Advanced",
         short_label: "Adv",
+        slug: "advanced_features",
         category: ScreenCategory::Core,
         palette_tags: &["advanced", "widgets", "patterns"],
         blurb: "Advanced widget patterns and composite layouts.",
@@ -224,6 +238,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::TableThemeGallery,
         title: "Table Theme Gallery",
         short_label: "Tables",
+        slug: "table_theme_gallery",
         category: ScreenCategory::Visuals,
         palette_tags: &["tables", "theme", "presets"],
         blurb: "Preset gallery for TableTheme across widget + markdown tables.",
@@ -234,16 +249,18 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::TerminalCapabilities,
         title: "Terminal Capabilities",
         short_label: "Caps",
+        slug: "terminal_capabilities",
         category: ScreenCategory::Systems,
         palette_tags: &["terminal", "capabilities", "compat"],
         blurb: "Terminal capability detection and feature matrix.",
-        default_hotkey: Some("0"),
+        default_hotkey: None,
         tour_step_hint: None,
     },
     ScreenMeta {
         id: ScreenId::MacroRecorder,
         title: "Macro Recorder",
         short_label: "Macro",
+        slug: "macro_recorder",
         category: ScreenCategory::Interaction,
         palette_tags: &["macro", "record", "replay"],
         blurb: "Record, edit, and replay input macros.",
@@ -254,6 +271,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::Performance,
         title: "Performance",
         short_label: "Perf",
+        slug: "performance",
         category: ScreenCategory::Systems,
         palette_tags: &["performance", "metrics", "budget"],
         blurb: "Render performance metrics and budgets.",
@@ -264,6 +282,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::MarkdownRichText,
         title: "Markdown",
         short_label: "MD",
+        slug: "markdown_rich_text",
         category: ScreenCategory::Text,
         palette_tags: &["markdown", "render", "text"],
         blurb: "Markdown rendering with styling and layout.",
@@ -274,6 +293,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::MermaidShowcase,
         title: "Mermaid Showcase",
         short_label: "Mermaid",
+        slug: "mermaid_showcase",
         category: ScreenCategory::Visuals,
         palette_tags: &[
             "mermaid",
@@ -292,6 +312,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::MermaidMegaShowcase,
         title: "Mermaid Mega Showcase",
         short_label: "MermaidMega",
+        slug: "mermaid_mega_showcase",
         category: ScreenCategory::Visuals,
         palette_tags: &[
             "mermaid",
@@ -310,6 +331,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::VisualEffects,
         title: "Visual Effects",
         short_label: "VFX",
+        slug: "visual_effects",
         category: ScreenCategory::Visuals,
         palette_tags: &["effects", "particles", "animation"],
         blurb: "High-performance visual effects playground.",
@@ -320,6 +342,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::ResponsiveDemo,
         title: "Responsive Layout",
         short_label: "Resp",
+        slug: "responsive_demo",
         category: ScreenCategory::Core,
         palette_tags: &["responsive", "layout", "breakpoints"],
         blurb: "Responsive layout behavior across sizes.",
@@ -330,6 +353,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::LogSearch,
         title: "Log Search",
         short_label: "Logs",
+        slug: "log_search",
         category: ScreenCategory::Text,
         palette_tags: &["logs", "search", "filter"],
         blurb: "Search and filter logs with live updates.",
@@ -340,6 +364,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::Notifications,
         title: "Notifications",
         short_label: "Notify",
+        slug: "notifications",
         category: ScreenCategory::Interaction,
         palette_tags: &["notifications", "toast", "alerts"],
         blurb: "Toast notifications and transient UI patterns.",
@@ -350,6 +375,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::ActionTimeline,
         title: "Action Timeline",
         short_label: "Timeline",
+        slug: "action_timeline",
         category: ScreenCategory::Systems,
         palette_tags: &["timeline", "events", "audit"],
         blurb: "Event stream and action timeline viewer.",
@@ -360,6 +386,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::IntrinsicSizing,
         title: "Intrinsic Sizing",
         short_label: "Sizing",
+        slug: "intrinsic_sizing",
         category: ScreenCategory::Core,
         palette_tags: &["layout", "intrinsic", "measure"],
         blurb: "Intrinsic sizing and content measurement.",
@@ -370,6 +397,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::LayoutInspector,
         title: "Layout Inspector",
         short_label: "Inspect",
+        slug: "layout_inspector",
         category: ScreenCategory::Core,
         palette_tags: &["layout", "inspector", "constraints"],
         blurb: "Constraint solver visual inspector.",
@@ -380,6 +408,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::AdvancedTextEditor,
         title: "Advanced Text Editor",
         short_label: "Editor",
+        slug: "advanced_text_editor",
         category: ScreenCategory::Text,
         palette_tags: &["editor", "text", "search"],
         blurb: "Advanced multi-line editor with search.",
@@ -390,6 +419,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::MousePlayground,
         title: "Mouse Playground",
         short_label: "Mouse",
+        slug: "mouse_playground",
         category: ScreenCategory::Interaction,
         palette_tags: &["mouse", "hit-test", "interaction"],
         blurb: "Mouse and hit-test interactions.",
@@ -400,6 +430,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::FormValidation,
         title: "Form Validation",
         short_label: "Validate",
+        slug: "form_validation",
         category: ScreenCategory::Interaction,
         palette_tags: &["validation", "forms", "errors"],
         blurb: "Form validation states and error cues.",
@@ -410,6 +441,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::VirtualizedSearch,
         title: "Virtualized Search",
         short_label: "VirtSearch",
+        slug: "virtualized_search",
         category: ScreenCategory::Systems,
         palette_tags: &["virtualized", "list", "performance"],
         blurb: "Virtualized list with fast search.",
@@ -420,6 +452,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::AsyncTasks,
         title: "Async Tasks",
         short_label: "Tasks",
+        slug: "async_tasks",
         category: ScreenCategory::Systems,
         palette_tags: &["async", "jobs", "queue"],
         blurb: "Async tasks and job queue visualization.",
@@ -430,6 +463,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::ThemeStudio,
         title: "Theme Studio",
         short_label: "Themes",
+        slug: "theme_studio",
         category: ScreenCategory::Visuals,
         palette_tags: &["theme", "colors", "design"],
         blurb: "Live theme and palette studio.",
@@ -440,6 +474,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::SnapshotPlayer,
         title: "Time-Travel Studio",
         short_label: "TimeTravel",
+        slug: "snapshot_player",
         category: ScreenCategory::Visuals,
         palette_tags: &["replay", "snapshot", "diff"],
         blurb: "Time-travel snapshots with replay controls.",
@@ -450,6 +485,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::PerformanceHud,
         title: "Performance Challenge",
         short_label: "PerfChal",
+        slug: "performance_hud",
         category: ScreenCategory::Systems,
         palette_tags: &["performance", "budget", "degradation", "stress", "tiers"],
         blurb: "Stress harness for degradation tiers and budget recovery.",
@@ -460,6 +496,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::ExplainabilityCockpit,
         title: "Explainability Cockpit",
         short_label: "Explain",
+        slug: "explainability_cockpit",
         category: ScreenCategory::Systems,
         palette_tags: &["evidence", "bayes", "bocpd", "budget", "diff"],
         blurb: "Diff, resize, and budget evidence in one cockpit.",
@@ -470,6 +507,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::I18nDemo,
         title: "i18n Stress Lab",
         short_label: "i18n",
+        slug: "i18n_demo",
         category: ScreenCategory::Text,
         palette_tags: &["i18n", "unicode", "width"],
         blurb: "International text and width edge cases.",
@@ -480,6 +518,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::VoiOverlay,
         title: "VOI Overlay",
         short_label: "VOI",
+        slug: "voi_overlay",
         category: ScreenCategory::Systems,
         palette_tags: &["voi", "bayes", "overlay"],
         blurb: "Value-of-information overlay and evidence.",
@@ -490,6 +529,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::InlineModeStory,
         title: "Inline Mode",
         short_label: "Inline",
+        slug: "inline_mode_story",
         category: ScreenCategory::Tour,
         palette_tags: &["inline", "scrollback", "chrome"],
         blurb: "Inline mode story and scrollback preservation.",
@@ -500,6 +540,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::AccessibilityPanel,
         title: "Accessibility",
         short_label: "A11y",
+        slug: "accessibility_panel",
         category: ScreenCategory::Systems,
         palette_tags: &["a11y", "accessibility", "contrast"],
         blurb: "Accessibility settings and telemetry.",
@@ -510,6 +551,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::WidgetBuilder,
         title: "Widget Builder",
         short_label: "Builder",
+        slug: "widget_builder",
         category: ScreenCategory::Core,
         palette_tags: &["widgets", "builder", "sandbox"],
         blurb: "Interactive widget builder sandbox.",
@@ -520,6 +562,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::CommandPaletteLab,
         title: "Command Palette Evidence Lab",
         short_label: "Palette",
+        slug: "command_palette_lab",
         category: ScreenCategory::Interaction,
         palette_tags: &["command", "palette", "ranking"],
         blurb: "Command palette ranking with evidence details.",
@@ -530,6 +573,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::DeterminismLab,
         title: "Determinism Lab",
         short_label: "Determinism",
+        slug: "determinism_lab",
         category: ScreenCategory::Systems,
         palette_tags: &["determinism", "checksum", "replay"],
         blurb: "Checksum equivalence and determinism checks.",
@@ -540,6 +584,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::HyperlinkPlayground,
         title: "Hyperlink Playground",
         short_label: "Links",
+        slug: "hyperlink_playground",
         category: ScreenCategory::Interaction,
         palette_tags: &["links", "osc8", "hit-test"],
         blurb: "OSC-8 hyperlink playground and hit regions.",
@@ -550,6 +595,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::KanbanBoard,
         title: "Kanban Board",
         short_label: "Kanban",
+        slug: "kanban_board",
         category: ScreenCategory::Interaction,
         palette_tags: &["kanban", "drag", "drop", "hit"],
         blurb: "Interactive Kanban board with drag-drop task management.",
@@ -560,6 +606,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::MarkdownLiveEditor,
         title: "Live Markdown Editor",
         short_label: "MD Live",
+        slug: "markdown_live_editor",
         category: ScreenCategory::Text,
         palette_tags: &["editor", "preview", "markdown", "search", "diff"],
         blurb: "Split-pane editor with live Markdown preview, search, and diff mode.",
@@ -570,6 +617,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::DragDrop,
         title: "Drag & Drop Lab",
         short_label: "DragDrop",
+        slug: "drag_drop",
         category: ScreenCategory::Interaction,
         palette_tags: &["drag", "drop", "sortable", "keyboard", "accessibility"],
         blurb: "Sortable and cross-container drag/drop interactions with keyboard parity.",
@@ -580,6 +628,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         id: ScreenId::QuakeEasterEgg,
         title: "Quake E1M1 (Easter Egg)",
         short_label: "Quake",
+        slug: "quake_easter_egg",
         category: ScreenCategory::Visuals,
         palette_tags: &["quake", "3d", "easter-egg", "braille", "renderer"],
         blurb: "Retro Quake E1M1 renderer as the final easter-egg screen.",
@@ -638,6 +687,16 @@ pub fn screen_category(id: ScreenId) -> ScreenCategory {
 /// Convenience: title for a screen.
 pub fn screen_title(id: ScreenId) -> &'static str {
     screen_meta(id).title
+}
+
+/// Convenience: stable slug for a screen.
+pub fn screen_slug(id: ScreenId) -> &'static str {
+    screen_meta(id).slug
+}
+
+/// Lookup a screen by its stable slug.
+pub fn screen_by_slug(slug: &str) -> Option<&'static ScreenMeta> {
+    SCREEN_REGISTRY.iter().find(|meta| meta.slug == slug)
 }
 
 /// Convenience: short label for tabs.
@@ -928,6 +987,53 @@ mod tests {
                 registry.iter().any(|meta| meta.id == id),
                 "missing screen in registry: {id:?}"
             );
+        }
+    }
+
+    #[test]
+    fn registry_has_unique_slugs() {
+        for (idx, meta) in SCREEN_REGISTRY.iter().enumerate() {
+            let duplicates = SCREEN_REGISTRY
+                .iter()
+                .enumerate()
+                .filter(|(i, other)| *i != idx && other.slug == meta.slug)
+                .count();
+            assert_eq!(
+                duplicates,
+                0,
+                "duplicate slug in registry: {slug:?} (screen {id:?})",
+                slug = meta.slug,
+                id = meta.id
+            );
+        }
+    }
+
+    #[test]
+    fn registry_hotkeys_are_unique() {
+        let with_hotkeys: Vec<_> = SCREEN_REGISTRY
+            .iter()
+            .filter_map(|meta| meta.default_hotkey.map(|hk| (hk, meta.id)))
+            .collect();
+        for (idx, (hk, id)) in with_hotkeys.iter().enumerate() {
+            let duplicates = with_hotkeys
+                .iter()
+                .enumerate()
+                .filter(|(i, (other_hk, _))| *i != idx && other_hk == hk)
+                .count();
+            assert_eq!(duplicates, 0, "duplicate hotkey {hk:?} in registry: {id:?}");
+        }
+    }
+
+    #[test]
+    fn slug_lookup_roundtrips() {
+        for meta in SCREEN_REGISTRY {
+            let found = screen_by_slug(meta.slug);
+            assert!(
+                found.is_some(),
+                "screen_by_slug failed for slug {:?}",
+                meta.slug
+            );
+            assert_eq!(found.unwrap().id, meta.id);
         }
     }
 
