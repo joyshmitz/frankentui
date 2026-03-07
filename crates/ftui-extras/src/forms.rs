@@ -1461,6 +1461,9 @@ fn set_style_area(buf: &mut Buffer, area: Rect, style: Style) {
 /// Translucent backgrounds must remain as source colors here so the buffer can
 /// composite them exactly once against the current destination cell.
 fn apply_write_style(cell: &mut Cell, style: Style) {
+    // Rewritten text must not inherit stale hyperlink metadata from the
+    // background cell it is painting over.
+    cell.attrs = ftui_render::cell::CellAttrs::new(cell.attrs.flags(), 0);
     if let Some(fg) = style.fg {
         cell.fg = fg;
     }
@@ -2352,9 +2355,34 @@ mod tests {
     }
 
     #[test]
+    fn draw_str_clears_stale_link_metadata() {
+        let area = Rect::new(0, 0, 4, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(area.width, area.height, &mut pool);
+        let mut cell = Cell::from_char('X');
+        cell.attrs =
+            ftui_render::cell::CellAttrs::new(ftui_render::cell::StyleFlags::UNDERLINE, 42);
+        frame.buffer.set_fast(0, 0, cell);
+
+        draw_str(&mut frame, 0, 0, "A", Style::new(), 1);
+
+        let cell = frame
+            .buffer
+            .get(0, 0)
+            .copied()
+            .expect("drawn cell should exist");
+        assert_eq!(cell.attrs.link_id(), 0);
+        assert!(
+            cell.attrs
+                .flags()
+                .contains(ftui_render::cell::StyleFlags::UNDERLINE)
+        );
+    }
+
+    #[test]
     fn confirm_dialog_buttons_stay_within_area_bounds() {
         let dialog = ConfirmDialog::new("Proceed?");
-        let area = Rect::new(10, 0, 8, 3);
+        let area = Rect::new(10, 0, 15, 3);
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(30, area.height, &mut pool);
         let mut state = ConfirmDialogState {
