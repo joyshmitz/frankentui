@@ -184,17 +184,25 @@ fn render_text_to_frame(text: &Text, frame: &mut Frame) {
     }
 }
 
-/// Apply a style to a cell.
+/// Apply a style to a cell using merge semantics.
+///
+/// - **fg:** replaced when set.
+/// - **bg:** alpha-aware compositing (Porter-Duff SourceOver).
+/// - **attrs:** OR-merged on top of existing flags (never cleared).
 fn apply_style(cell: &mut Cell, style: ftui_style::Style) {
     if let Some(fg) = style.fg {
         cell.fg = fg;
     }
     if let Some(bg) = style.bg {
-        cell.bg = bg;
+        match bg.a() {
+            0 => {}                          // Fully transparent: no-op
+            255 => cell.bg = bg,             // Fully opaque: replace
+            _ => cell.bg = bg.over(cell.bg), // Composite src-over-dst
+        }
     }
     if let Some(attrs) = style.attrs {
         let cell_flags: ftui_render::cell::StyleFlags = attrs.into();
-        cell.attrs = cell.attrs.with_flags(cell_flags);
+        cell.attrs = cell.attrs.merged_flags(cell_flags);
     }
 }
 
