@@ -31,10 +31,10 @@ use std::time::Instant;
 use ftui_core::geometry::Rect;
 use ftui_render::frame::{Frame, HitData, HitId, HitRegion};
 use ftui_render::grapheme_pool::GraphemePool;
+use ftui_widgets::Widget;
 use ftui_widgets::inspector::{
     DiagnosticEventKind, InspectorMode, InspectorOverlay, InspectorState, WidgetInfo,
 };
-use ftui_widgets::Widget;
 
 // =============================================================================
 // Test Utilities
