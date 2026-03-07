@@ -2,12 +2,14 @@
 name = "ftui-harness"
 version = "0.2.1"
 edition = "2024"
-license-file = "../../LICENSE"
+license = "MIT"
 description = "Test harness and reference fixtures for FrankenTUI."
 repository = "https://github.com/Dicklesworthstone/frankentui"
 homepage = "https://github.com/Dicklesworthstone/frankentui"
 documentation = "https://docs.rs/ftui-harness"
 readme = "../../README.md"
+keywords = ["tui", "terminal", "ui", "ftui", "frankentui"]
+categories = ["command-line-interface", "gui"]
 
 [features]
 default = []
@@ -30,7 +32,7 @@ tracing = "0.1.41"
 proptest = "1.7.0"
 
 [dev-dependencies]
-ftui-pty = { path = "../ftui-pty", version = "0.2.1" }
+ftui-pty = { path = "../ftui-pty", version = "0.2.2" }
 portable-pty = "0.9.0"
 ratatui = "0.30.0"
 tracing-subscriber = { version = "0.3.20", features = ["registry"] }

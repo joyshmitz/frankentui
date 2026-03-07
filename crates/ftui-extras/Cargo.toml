@@ -2,12 +2,14 @@
 name = "ftui-extras"
 version = "0.2.1"
 edition = "2024"
-license-file = "../../LICENSE"
+license = "MIT"
 description = "Feature-gated extras for FrankenTUI (markdown, charts, clipboard, themes)."
 repository = "https://github.com/Dicklesworthstone/frankentui"
 homepage = "https://github.com/Dicklesworthstone/frankentui"
 documentation = "https://docs.rs/ftui-extras"
 readme = "../../README.md"
+keywords = ["tui", "terminal", "ui", "ftui", "frankentui"]
+categories = ["command-line-interface", "gui"]
 
 [dependencies]
 ftui-runtime = { path = "../ftui-runtime", version = "0.2.1", optional = true }
@@ -16,7 +18,7 @@ ftui-core = { path = "../ftui-core", version = "0.2.1", optional = true }
 ftui-render = { path = "../ftui-render", version = "0.2.1", optional = true }
 ftui-style = { path = "../ftui-style", version = "0.2.1", optional = true }
 ftui-text = { path = "../ftui-text", version = "0.2.1", optional = true }
-ftui-pty = { path = "../ftui-pty", version = "0.2.1", optional = true }
+ftui-pty = { path = "../ftui-pty", version = "0.2.2", optional = true }
 base64 = { version = "0.22.1", optional = true }
 image = { version = "0.25.9", default-features = false, features = ["png", "gif", "jpeg"], optional = true }
 pulldown-cmark = { version = "0.13.0", default-features = false, optional = true }
@@ -119,7 +121,7 @@ ftui-core = { path = "../ftui-core", version = "0.2.1" }
 ftui-render = { path = "../ftui-render", version = "0.2.1" }
 ftui-layout = { path = "../ftui-layout", version = "0.2.1" }
 ftui-widgets = { path = "../ftui-widgets", version = "0.2.1" }
-ftui-pty = { path = "../ftui-pty", version = "0.2.1" }
+ftui-pty = { path = "../ftui-pty", version = "0.2.2" }
 ftui-style = { path = "../ftui-style", version = "0.2.1" }
 portable-pty = "0.9.0"
 unicode-width = "0.2.2"
