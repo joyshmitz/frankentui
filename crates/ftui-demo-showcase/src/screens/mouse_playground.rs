@@ -315,9 +315,10 @@ impl DiagnosticEntry {
             parts.push(format!("\"grid_w\":{w},\"grid_h\":{h}"));
         }
         if let Some(ref ctx) = self.context {
-            // Escape quotes in context
-            let escaped = ctx.replace('\\', "\\\\").replace('"', "\\\"");
-            parts.push(format!("\"context\":\"{escaped}\""));
+            parts.push(format!(
+                "\"context\":{}",
+                diagnostics::json_string_literal(ctx)
+            ));
         }
         parts.push(format!("\"checksum\":\"{:016x}\"", self.checksum));
 
@@ -2336,6 +2337,17 @@ mod diagnostic_tests {
 
         let jsonl = entry.to_jsonl();
         assert!(jsonl.contains("\\\"quotes\\\""));
+    }
+
+    #[test]
+    fn diagnostic_entry_jsonl_escapes_control_characters() {
+        let entry =
+            DiagnosticEntry::new(DiagnosticEventKind::LogClear, 0).with_context("line 1\nline\t2");
+
+        let jsonl = entry.to_jsonl();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&jsonl).expect("diagnostic JSONL should stay valid JSON");
+        assert_eq!(parsed["context"], "line 1\nline\t2");
     }
 
     #[test]

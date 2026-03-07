@@ -1457,7 +1457,12 @@ fn draw_str(frame: &mut Frame, x: u16, y: u16, s: &str, style: Style, max_width:
             continue;
         };
 
-        let mut cell = Cell::new(cell_content);
+        let mut cell = frame
+            .buffer
+            .get(x.saturating_add(col), y)
+            .copied()
+            .unwrap_or_else(|| Cell::new(cell_content));
+        cell.content = cell_content;
         apply_style(&mut cell, style);
 
         // set_fast() skips scissor/opacity/compositing checks for common
@@ -2256,6 +2261,29 @@ mod tests {
         let mut frame = Frame::new(30, 3, &mut pool);
         let mut state = ConfirmDialogState::default();
         StatefulWidget::render(&dialog, area, &mut frame, &mut state);
+    }
+
+    #[test]
+    fn confirm_dialog_selected_style_preserves_base_background() {
+        let base_bg = PackedRgba::rgb(12, 34, 56);
+        let selected_fg = PackedRgba::rgb(250, 240, 10);
+        let dialog = ConfirmDialog::new("Proceed?")
+            .style(Style::new().bg(base_bg))
+            .selected_style(Style::new().fg(selected_fg));
+        let area = Rect::new(0, 0, 24, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(area.width, area.height, &mut pool);
+        let mut state = ConfirmDialogState::default();
+
+        StatefulWidget::render(&dialog, area, &mut frame, &mut state);
+
+        let selected_cell = frame
+            .buffer
+            .get(8, 2)
+            .copied()
+            .expect("selected button cell should exist");
+        assert_eq!(selected_cell.bg, base_bg);
+        assert_eq!(selected_cell.fg, selected_fg);
     }
 
     #[test]

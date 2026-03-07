@@ -989,9 +989,11 @@ mod tests {
     fn draw_text_span_preserves_existing_overlay_fg_and_bg() {
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(3, 1, &mut pool);
-        frame
-            .buffer
-            .set(0, 0, Cell::from_char('x').with_fg(PackedRgba::rgb(200, 40, 10)));
+        frame.buffer.set(
+            0,
+            0,
+            Cell::from_char('x').with_fg(PackedRgba::rgb(200, 40, 10)),
+        );
         set_style_area(
             &mut frame.buffer,
             Rect::new(0, 0, 1, 1),

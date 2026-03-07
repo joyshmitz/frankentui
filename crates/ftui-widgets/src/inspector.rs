@@ -34,7 +34,7 @@ use ftui_render::frame::{Frame, HitCell, HitData, HitId, HitRegion};
 use ftui_text::display_width;
 
 use crate::diagnostics::{self, DiagnosticHookDispatch, DiagnosticRecord, DiagnosticSupport};
-use crate::{draw_text_span, set_style_area, Widget};
+use crate::{Widget, draw_text_span, set_style_area};
 use ftui_style::Style;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use web_time::Instant;
@@ -311,8 +311,10 @@ impl DiagnosticEntry {
             parts.push(format!("\"selected_id\":{}", id.id()));
         }
         if let Some(ref name) = self.widget_name {
-            let escaped = name.replace('\\', "\\\\").replace('"', "\\\"");
-            parts.push(format!("\"widget\":\"{escaped}\""));
+            parts.push(format!(
+                "\"widget\":{}",
+                diagnostics::json_string_literal(name)
+            ));
         }
         if let Some(area) = self.widget_area {
             parts.push(format!("\"widget_x\":{}", area.x));
@@ -330,15 +332,19 @@ impl DiagnosticEntry {
             parts.push(format!("\"widget_count\":{count}"));
         }
         if let Some(ref flag) = self.flag {
-            let escaped = flag.replace('\\', "\\\\").replace('"', "\\\"");
-            parts.push(format!("\"flag\":\"{escaped}\""));
+            parts.push(format!(
+                "\"flag\":{}",
+                diagnostics::json_string_literal(flag)
+            ));
         }
         if let Some(enabled) = self.enabled {
             parts.push(format!("\"enabled\":{enabled}"));
         }
         if let Some(ref ctx) = self.context {
-            let escaped = ctx.replace('\\', "\\\\").replace('"', "\\\"");
-            parts.push(format!("\"context\":\"{escaped}\""));
+            parts.push(format!(
+                "\"context\":{}",
+                diagnostics::json_string_literal(ctx)
+            ));
         }
         parts.push(format!("\"checksum\":\"{:016x}\"", self.checksum));
 
@@ -2233,15 +2239,16 @@ mod tests {
         state.set_mode(2);
         let log = state.diagnostic_log().expect("diagnostic log should exist");
         assert!(!log.entries().is_empty());
-        assert!(!log
-            .entries_matching(|e| e.kind == DiagnosticEventKind::ModeChanged)
-            .is_empty());
+        assert!(
+            !log.entries_matching(|e| e.kind == DiagnosticEventKind::ModeChanged)
+                .is_empty()
+        );
     }
 
     #[test]
     fn telemetry_hooks_on_mode_change_fires() {
-        use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_clone = Arc::clone(&counter);
@@ -2752,5 +2759,17 @@ mod tests {
             p95,
             budget_p95_us
         );
+    }
+
+    #[test]
+    fn diagnostic_entry_jsonl_escapes_control_characters() {
+        let entry = DiagnosticEntry::new(DiagnosticEventKind::WidgetRegistered)
+            .with_widget(&WidgetInfo::new("name\twith\ttabs", Rect::new(0, 0, 1, 1)))
+            .with_context("line 1\nline 2");
+        let jsonl = entry.to_jsonl();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&jsonl).expect("diagnostic JSONL should stay valid JSON");
+        assert_eq!(parsed["widget"], "name\twith\ttabs");
+        assert_eq!(parsed["context"], "line 1\nline 2");
     }
 }

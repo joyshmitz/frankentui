@@ -61,6 +61,35 @@ pub trait DiagnosticHookDispatch<E>: fmt::Debug {
     fn dispatch(&self, entry: &E);
 }
 
+/// Encode a string as a JSON string literal.
+///
+/// The returned value includes the surrounding quotes and correctly escapes
+/// control characters so the result can be embedded directly into JSONL output.
+#[must_use]
+pub fn json_string_literal(value: &str) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0C}' => out.push_str("\\f"),
+            c if c < '\u{20}' => {
+                let _ = write!(&mut out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 // =============================================================================
 // DiagnosticLog<E>
 // =============================================================================
@@ -73,6 +102,8 @@ pub trait DiagnosticHookDispatch<E>: fmt::Debug {
 pub struct DiagnosticLog<E: DiagnosticRecord> {
     /// Collected entries.
     entries: Vec<E>,
+    /// Logical start index after bounded evictions.
+    head: usize,
     /// Maximum entries to keep (0 = unlimited).
     max_entries: usize,
     /// Whether to also write to stderr.
@@ -90,6 +121,7 @@ impl<E: DiagnosticRecord> DiagnosticLog<E> {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
+            head: 0,
             max_entries: 10_000,
             write_stderr: false,
         }
@@ -117,30 +149,35 @@ impl<E: DiagnosticRecord> DiagnosticLog<E> {
             let _ = writeln!(std::io::stderr(), "{}", entry.to_jsonl());
         }
 
-        if self.max_entries > 0 && self.entries.len() >= self.max_entries {
-            self.entries.remove(0);
-        }
         self.entries.push(entry);
+        if self.max_entries > 0 && self.entries.len().saturating_sub(self.head) > self.max_entries {
+            self.head += 1;
+            if self.head >= self.entries.len() / 2 {
+                self.entries.drain(0..self.head);
+                self.head = 0;
+            }
+        }
     }
 
     /// Get all entries.
     pub fn entries(&self) -> &[E] {
-        &self.entries
+        &self.entries[self.head..]
     }
 
     /// Get entries matching a predicate.
     pub fn entries_matching(&self, predicate: impl Fn(&E) -> bool) -> Vec<&E> {
-        self.entries.iter().filter(|e| predicate(e)).collect()
+        self.entries().iter().filter(|e| predicate(e)).collect()
     }
 
     /// Clear all entries.
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.head = 0;
     }
 
     /// Export all entries as a JSONL string (newline-separated).
     pub fn to_jsonl(&self) -> String {
-        self.entries
+        self.entries()
             .iter()
             .map(DiagnosticRecord::to_jsonl)
             .collect::<Vec<_>>()
@@ -149,12 +186,12 @@ impl<E: DiagnosticRecord> DiagnosticLog<E> {
 
     /// Number of recorded entries.
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.entries.len().saturating_sub(self.head)
     }
 
     /// Whether the log is empty.
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.len() == 0
     }
 }
 
@@ -351,6 +388,16 @@ mod tests {
     }
 
     #[test]
+    fn log_preserves_order_after_many_evictions() {
+        let mut log = DiagnosticLog::<TestEntry>::new().with_max_entries(3);
+        for value in 0..16 {
+            log.record(TestEntry { kind: "x", value });
+        }
+        let values: Vec<u64> = log.entries().iter().map(|entry| entry.value).collect();
+        assert_eq!(values, vec![13, 14, 15]);
+    }
+
+    #[test]
     fn log_clear() {
         let mut log = DiagnosticLog::<TestEntry>::new();
         log.record(TestEntry {
@@ -397,6 +444,12 @@ mod tests {
         });
         let matches = log.entries_matching(|e| e.kind == "a");
         assert_eq!(matches.len(), 2);
+    }
+
+    #[test]
+    fn json_string_literal_escapes_control_characters() {
+        let escaped = json_string_literal("line 1\nline\t2");
+        assert_eq!(escaped, "\"line 1\\nline\\t2\"");
     }
 
     #[test]
