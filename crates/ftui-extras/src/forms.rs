@@ -1406,11 +1406,15 @@ fn apply_style(cell: &mut Cell, style: Style) {
         cell.fg = fg;
     }
     if let Some(bg) = style.bg {
-        cell.bg = bg;
+        match bg.a() {
+            0 => {}                          // Fully transparent: no-op
+            255 => cell.bg = bg,             // Fully opaque: replace
+            _ => cell.bg = bg.over(cell.bg), // Composite src-over-dst
+        }
     }
     if let Some(attrs) = style.attrs {
         let cell_flags: ftui_render::cell::StyleFlags = attrs.into();
-        cell.attrs = cell.attrs.with_flags(cell_flags);
+        cell.attrs = cell.attrs.merged_flags(cell_flags);
     }
 }
 

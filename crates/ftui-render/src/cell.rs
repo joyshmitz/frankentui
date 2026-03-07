@@ -662,6 +662,17 @@ impl CellAttrs {
         Self((self.0 & 0xFF00_0000) | (link_id & 0x00FF_FFFF))
     }
 
+    /// Return a copy with additional style flags OR-ed in (preserving existing flags and link ID).
+    ///
+    /// Unlike [`with_flags`](Self::with_flags) which *replaces* all flags, this method
+    /// *merges* the new flags on top so that existing attributes are preserved.
+    #[inline]
+    #[must_use]
+    pub fn merged_flags(self, extra: StyleFlags) -> Self {
+        let combined = self.flags().union(extra);
+        Self((self.0 & 0x00FF_FFFF) | ((combined.bits() as u32) << 24))
+    }
+
     /// Check whether a specific flag is set.
     #[inline]
     pub fn has_flag(self, flag: StyleFlags) -> bool {
@@ -797,6 +808,22 @@ mod tests {
         let b = a.with_flags(StyleFlags::UNDERLINE);
         assert_eq!(b.flags(), StyleFlags::UNDERLINE);
         assert_eq!(b.link_id(), 123);
+    }
+
+    #[test]
+    fn cell_attrs_merged_flags_ors_without_clearing() {
+        let a = CellAttrs::new(StyleFlags::BOLD, 42);
+        let b = a.merged_flags(StyleFlags::ITALIC);
+        assert_eq!(b.flags(), StyleFlags::BOLD | StyleFlags::ITALIC);
+        assert_eq!(b.link_id(), 42, "link_id must be preserved");
+    }
+
+    #[test]
+    fn cell_attrs_merged_flags_noop_for_empty() {
+        let a = CellAttrs::new(StyleFlags::BOLD, 7);
+        let b = a.merged_flags(StyleFlags::empty());
+        assert_eq!(b.flags(), StyleFlags::BOLD);
+        assert_eq!(b.link_id(), 7);
     }
 
     #[test]
