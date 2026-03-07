@@ -2273,7 +2273,10 @@ mod tests {
         let area = Rect::new(0, 0, 24, 3);
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(area.width, area.height, &mut pool);
-        let mut state = ConfirmDialogState::default();
+        let mut state = ConfirmDialogState {
+            selected_yes: true,
+            ..Default::default()
+        };
 
         StatefulWidget::render(&dialog, area, &mut frame, &mut state);
 
