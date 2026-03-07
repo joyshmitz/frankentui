@@ -1379,15 +1379,37 @@ impl StatefulWidget for ConfirmDialog {
         let yes_w = display_width(yes_str.as_str());
         let no_w = display_width(no_str.as_str());
         let total_btn_width = yes_w + 2 + no_w;
-        let start_x = area
-            .x
-            .saturating_add(area.width.saturating_sub(total_btn_width as u16) / 2);
+        if total_btn_width as u16 <= area.width {
+            let start_x = area
+                .x
+                .saturating_add(area.width.saturating_sub(total_btn_width as u16) / 2);
 
-        let yes_width = area.right().saturating_sub(start_x);
-        draw_str(frame, start_x, btn_y, &yes_str, yes_style, yes_width);
-        let no_x = start_x.saturating_add(yes_w as u16).saturating_add(2);
-        let no_width = area.right().saturating_sub(no_x);
-        draw_str(frame, no_x, btn_y, &no_str, no_style, no_width);
+            let yes_width = area.right().saturating_sub(start_x);
+            draw_str(frame, start_x, btn_y, &yes_str, yes_style, yes_width);
+            let no_x = start_x.saturating_add(yes_w as u16).saturating_add(2);
+            let no_width = area.right().saturating_sub(no_x);
+            draw_str(frame, no_x, btn_y, &no_str, no_style, no_width);
+        } else {
+            // Under severe width pressure, keep the selected action visible
+            // instead of letting it fall completely outside the dialog area.
+            let (selected_label, selected_style, selected_width) = if state.selected_yes {
+                (&yes_str, yes_style, yes_w as u16)
+            } else {
+                (&no_str, no_style, no_w as u16)
+            };
+            let selected_width = area.width.min(selected_width);
+            let selected_x = area
+                .x
+                .saturating_add(area.width.saturating_sub(selected_width) / 2);
+            draw_str(
+                frame,
+                selected_x,
+                btn_y,
+                selected_label,
+                selected_style,
+                selected_width,
+            );
+        }
     }
 }
 
@@ -1434,6 +1456,25 @@ fn set_style_area(buf: &mut Buffer, area: Rect, style: Style) {
     }
 }
 
+/// Apply a style to a cell that will be written back through `Buffer::set`.
+///
+/// Translucent backgrounds must remain as source colors here so the buffer can
+/// composite them exactly once against the current destination cell.
+fn apply_write_style(cell: &mut Cell, style: Style) {
+    if let Some(fg) = style.fg {
+        cell.fg = fg;
+    }
+    if let Some(bg) = style.bg
+        && bg.a() != 0
+    {
+        cell.bg = bg;
+    }
+    if let Some(attrs) = style.attrs {
+        let cell_flags: ftui_render::cell::StyleFlags = attrs.into();
+        cell.attrs = cell.attrs.merged_flags(cell_flags);
+    }
+}
+
 /// Draw a string into the frame, clamped to `max_width` visual columns.
 fn draw_str(frame: &mut Frame, x: u16, y: u16, s: &str, style: Style, max_width: u16) {
     let mut col = 0u16;
@@ -1465,7 +1506,7 @@ fn draw_str(frame: &mut Frame, x: u16, y: u16, s: &str, style: Style, max_width:
             .copied()
             .unwrap_or_else(|| Cell::new(cell_content));
         cell.content = cell_content;
-        apply_style(&mut cell, style);
+        apply_write_style(&mut cell, style);
 
         // set_fast() skips scissor/opacity/compositing checks for common
         // single-width opaque cells; falls back to set() otherwise.
@@ -2292,6 +2333,25 @@ mod tests {
     }
 
     #[test]
+    fn draw_str_translucent_background_composites_once() {
+        let base_bg = PackedRgba::rgb(0, 0, 255);
+        let overlay_bg = PackedRgba::rgba(255, 0, 0, 128);
+        let area = Rect::new(0, 0, 4, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(area.width, area.height, &mut pool);
+
+        set_style_area(&mut frame.buffer, area, Style::new().bg(base_bg));
+        draw_str(&mut frame, 0, 0, "A", Style::new().bg(overlay_bg), 1);
+
+        let cell = frame
+            .buffer
+            .get(0, 0)
+            .copied()
+            .expect("drawn cell should exist");
+        assert_eq!(cell.bg, overlay_bg.over(base_bg));
+    }
+
+    #[test]
     fn confirm_dialog_buttons_stay_within_area_bounds() {
         let dialog = ConfirmDialog::new("Proceed?");
         let area = Rect::new(10, 0, 8, 3);
@@ -2315,6 +2375,31 @@ mod tests {
                 "confirm dialog must not render outside its area at x={x}"
             );
         }
+    }
+
+    #[test]
+    fn confirm_dialog_narrow_layout_keeps_selected_button_visible() {
+        let selected_fg = PackedRgba::rgb(250, 240, 10);
+        let dialog = ConfirmDialog::new("Proceed?")
+            .style(Style::new().fg(PackedRgba::rgb(40, 40, 40)))
+            .selected_style(Style::new().fg(selected_fg));
+        let area = Rect::new(10, 0, 8, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(30, area.height, &mut pool);
+        let mut state = ConfirmDialogState::default();
+
+        StatefulWidget::render(&dialog, area, &mut frame, &mut state);
+
+        let selected_visible = (area.x..area.right()).any(|x| {
+            frame
+                .buffer
+                .get(x, area.bottom().saturating_sub(1))
+                .is_some_and(|cell| !cell.content.is_empty() && cell.fg == selected_fg)
+        });
+        assert!(
+            selected_visible,
+            "narrow confirm dialog should keep the selected button visible"
+        );
     }
 
     #[test]
