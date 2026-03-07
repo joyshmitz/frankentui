@@ -141,6 +141,8 @@ pub mod constraint_overlay;
 pub mod debug_overlay;
 /// Galaxy-brain decision card widget with progressive-disclosure transparency.
 pub mod decision_card;
+/// Reusable diagnostic logging and telemetry substrate for JSONL diagnostics.
+pub mod diagnostics;
 /// Drag-and-drop protocol: [`Draggable`](drag::Draggable) sources, [`DropTarget`](drag::DropTarget) targets, and [`DragPayload`](drag::DragPayload).
 pub mod drag;
 /// Drift-triggered fallback visualization with per-domain confidence sparklines.
@@ -496,37 +498,42 @@ pub trait StatefulWidget {
     fn render(&self, area: Rect, frame: &mut Frame, state: &mut Self::State);
 }
 
-/// Helper to apply style to a cell.
+/// Merge a [`Style`] into a cell, preserving existing properties for unset fields.
+///
+/// - **Foreground / Background:** Only overwritten when the style explicitly sets
+///   the field (`Some`).  Background colours with alpha < 255 are composited via
+///   Porter-Duff SourceOver so semi-transparent overlays blend correctly.
+/// - **Attributes:** New flags are OR-ed on top of existing flags (never cleared).
 pub(crate) fn apply_style(cell: &mut Cell, style: Style) {
     if let Some(fg) = style.fg {
         cell.fg = fg;
     }
     if let Some(bg) = style.bg {
-        cell.bg = bg;
+        match bg.a() {
+            0 => {}                          // Fully transparent: no-op
+            255 => cell.bg = bg,             // Fully opaque: replace
+            _ => cell.bg = bg.over(cell.bg), // Composite src-over-dst
+        }
     }
     if let Some(attrs) = style.attrs {
-        // Convert ftui_style::StyleFlags to ftui_render::cell::StyleFlags
-        // Assuming they are compatible or the same type re-exported.
-        // If not, we might need conversion logic.
-        // ftui_style::StyleFlags is u16 (likely), ftui_render is u8.
-        // Let's assume the From implementation exists as per previous code.
         let cell_flags: ftui_render::cell::StyleFlags = attrs.into();
-        cell.attrs = cell.attrs.with_flags(cell_flags);
+        cell.attrs = cell.attrs.merged_flags(cell_flags);
     }
 }
 
-/// Apply a style to all cells in a rectangular area.
+/// Apply a style to all cells in a rectangular area using **merge** semantics.
 ///
-/// This modifies existing cells, preserving their content.
+/// Only fields that are explicitly set in `style` (i.e. `Some`) are applied;
+/// unset fields leave the existing cell values intact.  This is the correct
+/// behaviour for selection / highlight overlays that specify only a background
+/// colour — per-cell foreground colours from earlier text rendering are preserved.
+///
+/// - **Background:** Alpha-aware compositing (Porter-Duff SourceOver).
+/// - **Attributes:** OR-ed on top of existing flags (never cleared).
 pub(crate) fn set_style_area(buf: &mut Buffer, area: Rect, style: Style) {
     if style.is_empty() {
         return;
     }
-    // Apply styles in-place so we don't disturb wide-character continuation cells.
-    //
-    // Important: `Style` backgrounds can carry alpha for internal compositing, but terminals
-    // are opaque. When applying a semi-transparent background we must composite it over the
-    // existing cell background (src-over) so the buffer ends up with the final opaque color.
     let fg = style.fg;
     let bg = style.bg;
     let attrs = style.attrs;
@@ -538,14 +545,14 @@ pub(crate) fn set_style_area(buf: &mut Buffer, area: Rect, style: Style) {
                 }
                 if let Some(bg) = bg {
                     match bg.a() {
-                        0 => {} // Fully transparent: no-op
-                        255 => cell.bg = bg,
-                        _ => cell.bg = bg.over(cell.bg),
+                        0 => {}                          // Fully transparent: no-op
+                        255 => cell.bg = bg,             // Fully opaque: replace
+                        _ => cell.bg = bg.over(cell.bg), // Composite src-over-dst
                     }
                 }
                 if let Some(attrs) = attrs {
                     let cell_flags: ftui_render::cell::StyleFlags = attrs.into();
-                    cell.attrs = cell.attrs.with_flags(cell_flags);
+                    cell.attrs = cell.attrs.merged_flags(cell_flags);
                 }
             }
         }
@@ -760,6 +767,88 @@ mod tests {
         apply_style(&mut cell, Style::default());
         assert_eq!(cell.fg, original.fg);
         assert_eq!(cell.bg, original.bg);
+    }
+
+    #[test]
+    fn apply_style_bg_only_preserves_fg() {
+        // Simulate: cell already has syntax-highlighted fg, selection overlay sets only bg.
+        let mut cell = Cell::from_char('x').with_fg(PackedRgba::rgb(0, 200, 0));
+        let selection = Style::new().bg(PackedRgba::rgb(0, 0, 180));
+        apply_style(&mut cell, selection);
+        // fg must survive — the selection style didn't set a fg.
+        assert_eq!(cell.fg, PackedRgba::rgb(0, 200, 0));
+        assert_eq!(cell.bg, PackedRgba::rgb(0, 0, 180));
+    }
+
+    #[test]
+    fn apply_style_composites_alpha_bg() {
+        let base_bg = PackedRgba::rgb(200, 0, 0);
+        let mut cell = Cell::default().with_bg(base_bg);
+        let overlay = PackedRgba::rgba(0, 0, 200, 128);
+        apply_style(&mut cell, Style::new().bg(overlay));
+        assert_eq!(cell.bg, overlay.over(base_bg));
+    }
+
+    #[test]
+    fn apply_style_transparent_bg_is_noop() {
+        let base_bg = PackedRgba::rgb(100, 100, 100);
+        let mut cell = Cell::default().with_bg(base_bg);
+        apply_style(&mut cell, Style::new().bg(PackedRgba::rgba(255, 0, 0, 0)));
+        assert_eq!(cell.bg, base_bg);
+    }
+
+    #[test]
+    fn apply_style_merges_attrs_not_replaces() {
+        use ftui_render::cell::StyleFlags as CellFlags;
+        // Cell starts with BOLD.
+        let mut cell = Cell::default();
+        cell.attrs = cell.attrs.with_flags(CellFlags::BOLD);
+        // Overlay adds ITALIC — should NOT clear BOLD.
+        let overlay = Style::new().italic();
+        apply_style(&mut cell, overlay);
+        assert!(cell.attrs.has_flag(CellFlags::BOLD), "BOLD must survive");
+        assert!(
+            cell.attrs.has_flag(CellFlags::ITALIC),
+            "ITALIC must be added"
+        );
+    }
+
+    #[test]
+    fn set_style_area_bg_only_preserves_per_cell_fg() {
+        // A 3-cell buffer where each cell has a distinct fg.
+        let mut buf = Buffer::new(3, 1);
+        buf.set(0, 0, Cell::from_char('R').with_fg(PackedRgba::RED));
+        buf.set(1, 0, Cell::from_char('G').with_fg(PackedRgba::GREEN));
+        buf.set(2, 0, Cell::from_char('B').with_fg(PackedRgba::BLUE));
+
+        // Selection highlight sets only bg.
+        let highlight = Style::new().bg(PackedRgba::rgb(40, 40, 40));
+        set_style_area(&mut buf, Rect::new(0, 0, 3, 1), highlight);
+
+        // All fg colours must be preserved.
+        assert_eq!(buf.get(0, 0).unwrap().fg, PackedRgba::RED);
+        assert_eq!(buf.get(1, 0).unwrap().fg, PackedRgba::GREEN);
+        assert_eq!(buf.get(2, 0).unwrap().fg, PackedRgba::BLUE);
+        // bg should be the highlight colour.
+        assert_eq!(buf.get(0, 0).unwrap().bg, PackedRgba::rgb(40, 40, 40));
+    }
+
+    #[test]
+    fn set_style_area_merges_attrs_not_replaces() {
+        use ftui_render::cell::StyleFlags as CellFlags;
+        let mut buf = Buffer::new(1, 1);
+        let mut cell = Cell::from_char('X');
+        cell.attrs = cell.attrs.with_flags(CellFlags::BOLD);
+        buf.set(0, 0, cell);
+
+        set_style_area(&mut buf, Rect::new(0, 0, 1, 1), Style::new().italic());
+
+        let result = buf.get(0, 0).unwrap();
+        assert!(result.attrs.has_flag(CellFlags::BOLD), "BOLD must survive");
+        assert!(
+            result.attrs.has_flag(CellFlags::ITALIC),
+            "ITALIC must be added"
+        );
     }
 
     #[test]

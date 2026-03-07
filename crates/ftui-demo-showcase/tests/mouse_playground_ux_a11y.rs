@@ -40,7 +40,9 @@
 use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers};
 use ftui_core::geometry::Rect;
 use ftui_demo_showcase::screens::Screen;
-use ftui_demo_showcase::screens::mouse_playground::{DiagnosticEventKind, Focus, MousePlayground};
+use ftui_demo_showcase::screens::mouse_playground::{
+    DiagnosticEventKind, Focus, MousePlayground, entries_of_kind,
+};
 use ftui_render::frame::Frame;
 use ftui_render::grapheme_pool::GraphemePool;
 
@@ -317,10 +319,10 @@ fn toggles_record_diagnostics() {
     );
     assert!(screen.overlay_enabled());
 
-    let overlay_entries = screen
-        .diagnostic_log()
-        .expect("diagnostic log")
-        .entries_of_kind(DiagnosticEventKind::OverlayToggle);
+    let overlay_entries = entries_of_kind(
+        screen.diagnostic_log().expect("diagnostic log"),
+        DiagnosticEventKind::OverlayToggle,
+    );
     assert!(!overlay_entries.is_empty(), "Overlay toggle should log");
 
     let _ = screen.update(&key_press(KeyCode::Char('J')));
@@ -332,10 +334,10 @@ fn toggles_record_diagnostics() {
     );
     assert!(screen.jitter_stats_enabled());
 
-    let jitter_entries = screen
-        .diagnostic_log()
-        .expect("diagnostic log")
-        .entries_of_kind(DiagnosticEventKind::JitterStatsToggle);
+    let jitter_entries = entries_of_kind(
+        screen.diagnostic_log().expect("diagnostic log"),
+        DiagnosticEventKind::JitterStatsToggle,
+    );
     assert!(!jitter_entries.is_empty(), "Jitter toggle should log");
 
     let _ = screen.update(&key_press(KeyCode::Char('o')));
@@ -360,10 +362,10 @@ fn clear_log_via_keybinding() {
     );
     assert_eq!(screen.event_log_len(), 0);
 
-    let clear_entries = screen
-        .diagnostic_log()
-        .expect("diagnostic log")
-        .entries_of_kind(DiagnosticEventKind::LogClear);
+    let clear_entries = entries_of_kind(
+        screen.diagnostic_log().expect("diagnostic log"),
+        DiagnosticEventKind::LogClear,
+    );
     assert!(!clear_entries.is_empty(), "Log clear should log");
 }
 

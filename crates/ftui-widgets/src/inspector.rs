@@ -33,9 +33,9 @@ use ftui_render::cell::{Cell, PackedRgba};
 use ftui_render::frame::{Frame, HitCell, HitData, HitId, HitRegion};
 use ftui_text::display_width;
 
-use crate::{Widget, draw_text_span, set_style_area};
+use crate::diagnostics::{self, DiagnosticRecord};
+use crate::{draw_text_span, set_style_area, Widget};
 use ftui_style::Style;
-use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use web_time::Instant;
 
@@ -53,9 +53,7 @@ static INSPECTOR_EVENT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Initialize diagnostic settings from environment.
 pub fn init_diagnostics() {
-    let enabled = std::env::var("FTUI_INSPECTOR_DIAGNOSTICS")
-        .map(|v| v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
+    let enabled = diagnostics::env_flag_enabled("FTUI_INSPECTOR_DIAGNOSTICS");
     INSPECTOR_DIAGNOSTICS_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
@@ -83,9 +81,7 @@ pub fn reset_event_counter() {
 
 /// Check if deterministic mode is enabled.
 pub fn is_deterministic_mode() -> bool {
-    std::env::var("FTUI_INSPECTOR_DETERMINISTIC")
-        .map(|v| v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+    diagnostics::env_flag_enabled("FTUI_INSPECTOR_DETERMINISTIC")
 }
 
 /// Diagnostic event types for JSONL logging.
@@ -272,7 +268,6 @@ impl DiagnosticEntry {
 
     /// Compute FNV-1a hash of entry fields.
     fn compute_checksum(&self) -> u64 {
-        let mut hash: u64 = 0xcbf29ce484222325;
         let payload = format!(
             "{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}",
             self.kind,
@@ -291,15 +286,11 @@ impl DiagnosticEntry {
             self.enabled.unwrap_or(false),
             self.context.as_deref().unwrap_or("")
         );
-        for &b in payload.as_bytes() {
-            hash ^= b as u64;
-            hash = hash.wrapping_mul(0x100000001b3);
-        }
-        hash
+        diagnostics::fnv1a_hash(payload.as_bytes())
     }
 
     /// Format as JSONL string.
-    pub fn to_jsonl(&self) -> String {
+    fn format_jsonl(&self) -> String {
         let mut parts = vec![
             format!("\"seq\":{}", self.seq),
             format!("\"ts_us\":{}", self.timestamp_us),
@@ -355,76 +346,17 @@ impl DiagnosticEntry {
     }
 }
 
-/// Diagnostic log collector.
-#[derive(Debug, Default)]
-pub struct DiagnosticLog {
-    entries: Vec<DiagnosticEntry>,
-    max_entries: usize,
-    write_stderr: bool,
-}
-
-impl DiagnosticLog {
-    /// Create a new diagnostic log.
-    pub fn new() -> Self {
-        Self {
-            entries: Vec::new(),
-            max_entries: 5000,
-            write_stderr: false,
-        }
-    }
-
-    /// Create a log that writes to stderr.
-    #[must_use]
-    pub fn with_stderr(mut self) -> Self {
-        self.write_stderr = true;
-        self
-    }
-
-    /// Set maximum entries to keep.
-    #[must_use]
-    pub fn with_max_entries(mut self, max: usize) -> Self {
-        self.max_entries = max;
-        self
-    }
-
-    /// Record a diagnostic entry.
-    pub fn record(&mut self, entry: DiagnosticEntry) {
-        if self.write_stderr {
-            let _ = writeln!(std::io::stderr(), "{}", entry.to_jsonl());
-        }
-        if self.max_entries > 0 && self.entries.len() >= self.max_entries {
-            self.entries.remove(0);
-        }
-        self.entries.push(entry);
-    }
-
-    /// Get all entries.
-    pub fn entries(&self) -> &[DiagnosticEntry] {
-        &self.entries
-    }
-
-    /// Get entries of a specific kind.
-    pub fn entries_of_kind(&self, kind: DiagnosticEventKind) -> Vec<&DiagnosticEntry> {
-        self.entries.iter().filter(|e| e.kind == kind).collect()
-    }
-
-    /// Clear all entries.
-    pub fn clear(&mut self) {
-        self.entries.clear();
-    }
-
-    /// Export all entries as JSONL string.
-    pub fn to_jsonl(&self) -> String {
-        self.entries
-            .iter()
-            .map(DiagnosticEntry::to_jsonl)
-            .collect::<Vec<_>>()
-            .join("\n")
+impl DiagnosticRecord for DiagnosticEntry {
+    fn to_jsonl(&self) -> String {
+        self.format_jsonl()
     }
 }
+
+/// Diagnostic log collector backed by the shared [`diagnostics::DiagnosticLog`].
+pub type DiagnosticLog = diagnostics::DiagnosticLog<DiagnosticEntry>;
 
 /// Callback type for telemetry hooks.
-pub type TelemetryCallback = Box<dyn Fn(&DiagnosticEntry) + Send + Sync>;
+pub type TelemetryCallback = diagnostics::TelemetryCallback<DiagnosticEntry>;
 
 /// Telemetry hooks for observing inspector events.
 #[derive(Default)]
@@ -733,7 +665,7 @@ impl InspectorState {
     #[must_use]
     pub fn new() -> Self {
         let diagnostic_log = if diagnostics_enabled() {
-            Some(DiagnosticLog::new().with_stderr())
+            Some(DiagnosticLog::new().with_max_entries(5000).with_stderr())
         } else {
             None
         };
@@ -751,7 +683,7 @@ impl InspectorState {
     /// Create with diagnostic log enabled (for testing).
     #[must_use]
     pub fn with_diagnostics(mut self) -> Self {
-        self.diagnostic_log = Some(DiagnosticLog::new());
+        self.diagnostic_log = Some(DiagnosticLog::new().with_max_entries(5000));
         self
     }
 
@@ -2304,16 +2236,15 @@ mod tests {
         state.set_mode(2);
         let log = state.diagnostic_log().expect("diagnostic log should exist");
         assert!(!log.entries().is_empty());
-        assert!(
-            !log.entries_of_kind(DiagnosticEventKind::ModeChanged)
-                .is_empty()
-        );
+        assert!(!log
+            .entries_matching(|e| e.kind == DiagnosticEventKind::ModeChanged)
+            .is_empty());
     }
 
     #[test]
     fn telemetry_hooks_on_mode_change_fires() {
-        use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+        use std::sync::Arc;
 
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_clone = Arc::clone(&counter);

@@ -31,10 +31,10 @@ use std::time::Instant;
 use ftui_core::geometry::Rect;
 use ftui_render::frame::{Frame, HitData, HitId, HitRegion};
 use ftui_render::grapheme_pool::GraphemePool;
-use ftui_widgets::Widget;
 use ftui_widgets::inspector::{
     DiagnosticEventKind, InspectorMode, InspectorOverlay, InspectorState, WidgetInfo,
 };
+use ftui_widgets::Widget;
 
 // =============================================================================
 // Test Utilities
@@ -581,14 +581,20 @@ fn stress_toggle_flags_with_diagnostics() {
     let log = state
         .diagnostic_log()
         .expect("diagnostics should be enabled");
-    let toggle_events = log.entries_of_kind(DiagnosticEventKind::HitsToggled).len()
+    let toggle_events = log
+        .entries_matching(|e| e.kind == DiagnosticEventKind::HitsToggled)
+        .len()
         + log
-            .entries_of_kind(DiagnosticEventKind::BoundsToggled)
+            .entries_matching(|e| e.kind == DiagnosticEventKind::BoundsToggled)
             .len()
-        + log.entries_of_kind(DiagnosticEventKind::NamesToggled).len()
-        + log.entries_of_kind(DiagnosticEventKind::TimesToggled).len()
         + log
-            .entries_of_kind(DiagnosticEventKind::DetailPanelToggled)
+            .entries_matching(|e| e.kind == DiagnosticEventKind::NamesToggled)
+            .len()
+        + log
+            .entries_matching(|e| e.kind == DiagnosticEventKind::TimesToggled)
+            .len()
+        + log
+            .entries_matching(|e| e.kind == DiagnosticEventKind::DetailPanelToggled)
             .len();
 
     log_jsonl(&serde_json::json!({

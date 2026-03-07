@@ -22,7 +22,6 @@
 
 use std::cell::Cell;
 use std::collections::VecDeque;
-use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use web_time::Instant;
 
@@ -42,6 +41,7 @@ use ftui_style::{Style, StyleFlags};
 use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
 use ftui_widgets::borders::{BorderType, Borders};
+use ftui_widgets::diagnostics::{self, DiagnosticRecord};
 use ftui_widgets::paragraph::Paragraph;
 
 use super::{HelpEntry, Screen};
@@ -74,9 +74,7 @@ thread_local! {
 ///
 /// Call this once at startup or in tests to configure diagnostic behavior.
 pub fn init_diagnostics() {
-    let enabled = std::env::var("FTUI_MOUSE_DIAGNOSTICS")
-        .map(|v| v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
+    let enabled = diagnostics::env_flag_enabled("FTUI_MOUSE_DIAGNOSTICS");
     DIAGNOSTICS_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
@@ -274,7 +272,6 @@ impl DiagnosticEntry {
 
     /// Compute FNV-1a hash of entry fields.
     fn compute_checksum(&self) -> u64 {
-        let mut hash: u64 = 0xcbf29ce484222325;
         let payload = format!(
             "{:?}{}{}{}{}{}{}{}",
             self.kind,
@@ -288,15 +285,11 @@ impl DiagnosticEntry {
                 .unwrap_or(0),
             self.context.as_deref().unwrap_or("")
         );
-        for &b in payload.as_bytes() {
-            hash ^= b as u64;
-            hash = hash.wrapping_mul(0x100000001b3);
-        }
-        hash
+        diagnostics::fnv1a_hash(payload.as_bytes())
     }
 
     /// Format as JSONL string.
-    pub fn to_jsonl(&self) -> String {
+    fn format_jsonl(&self) -> String {
         let mut parts = vec![
             format!("\"seq\":{}", self.seq),
             format!("\"ts_us\":{}", self.timestamp_us),
@@ -330,104 +323,44 @@ impl DiagnosticEntry {
     }
 }
 
+impl DiagnosticRecord for DiagnosticEntry {
+    fn to_jsonl(&self) -> String {
+        self.format_jsonl()
+    }
+}
+
 /// Check if deterministic mode is enabled.
 pub fn is_deterministic_mode() -> bool {
     determinism::env_flag("FTUI_MOUSE_DETERMINISTIC") || determinism::is_demo_deterministic()
 }
 
-/// Diagnostic log collector for testing and debugging.
-///
-/// This struct collects diagnostic entries in memory for inspection.
-#[derive(Debug, Default)]
-pub struct DiagnosticLog {
-    /// Collected entries.
-    entries: Vec<DiagnosticEntry>,
-    /// Maximum entries to keep (0 = unlimited).
-    max_entries: usize,
-    /// Whether to also write to stderr.
-    write_stderr: bool,
+/// Diagnostic log collector backed by the shared [`diagnostics::DiagnosticLog`].
+pub type DiagnosticLog = diagnostics::DiagnosticLog<DiagnosticEntry>;
+
+/// Get entries of a specific kind from a diagnostic log.
+pub fn entries_of_kind(log: &DiagnosticLog, kind: DiagnosticEventKind) -> Vec<&DiagnosticEntry> {
+    log.entries_matching(|e| e.kind == kind)
 }
 
-impl DiagnosticLog {
-    /// Create a new diagnostic log.
-    pub fn new() -> Self {
-        Self {
-            entries: Vec::new(),
-            max_entries: 10000,
-            write_stderr: false,
+/// Compute summary statistics from a diagnostic log.
+pub fn diagnostic_summary(log: &DiagnosticLog) -> DiagnosticSummary {
+    let mut summary = DiagnosticSummary::default();
+    for entry in log.entries() {
+        match entry.kind {
+            DiagnosticEventKind::MouseDown => summary.mouse_down_count += 1,
+            DiagnosticEventKind::MouseUp => summary.mouse_up_count += 1,
+            DiagnosticEventKind::MouseMove => summary.mouse_move_count += 1,
+            DiagnosticEventKind::MouseDrag => summary.mouse_drag_count += 1,
+            DiagnosticEventKind::MouseScroll => summary.mouse_scroll_count += 1,
+            DiagnosticEventKind::HitTest => summary.hit_test_count += 1,
+            DiagnosticEventKind::HoverChange => summary.hover_change_count += 1,
+            DiagnosticEventKind::TargetClick => summary.target_click_count += 1,
+            DiagnosticEventKind::Tick => summary.tick_count += 1,
+            _ => {}
         }
     }
-
-    /// Create a log that writes to stderr.
-    #[must_use]
-    pub fn with_stderr(mut self) -> Self {
-        self.write_stderr = true;
-        self
-    }
-
-    /// Set maximum entries to keep.
-    #[must_use]
-    pub fn with_max_entries(mut self, max: usize) -> Self {
-        self.max_entries = max;
-        self
-    }
-
-    /// Record a diagnostic entry.
-    pub fn record(&mut self, entry: DiagnosticEntry) {
-        if self.write_stderr {
-            let _ = writeln!(std::io::stderr(), "{}", entry.to_jsonl());
-        }
-
-        if self.max_entries > 0 && self.entries.len() >= self.max_entries {
-            self.entries.remove(0);
-        }
-        self.entries.push(entry);
-    }
-
-    /// Get all entries.
-    pub fn entries(&self) -> &[DiagnosticEntry] {
-        &self.entries
-    }
-
-    /// Get entries of a specific kind.
-    pub fn entries_of_kind(&self, kind: DiagnosticEventKind) -> Vec<&DiagnosticEntry> {
-        self.entries.iter().filter(|e| e.kind == kind).collect()
-    }
-
-    /// Clear all entries.
-    pub fn clear(&mut self) {
-        self.entries.clear();
-    }
-
-    /// Export all entries as JSONL string.
-    pub fn to_jsonl(&self) -> String {
-        self.entries
-            .iter()
-            .map(DiagnosticEntry::to_jsonl)
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    /// Get summary statistics.
-    pub fn summary(&self) -> DiagnosticSummary {
-        let mut summary = DiagnosticSummary::default();
-        for entry in &self.entries {
-            match entry.kind {
-                DiagnosticEventKind::MouseDown => summary.mouse_down_count += 1,
-                DiagnosticEventKind::MouseUp => summary.mouse_up_count += 1,
-                DiagnosticEventKind::MouseMove => summary.mouse_move_count += 1,
-                DiagnosticEventKind::MouseDrag => summary.mouse_drag_count += 1,
-                DiagnosticEventKind::MouseScroll => summary.mouse_scroll_count += 1,
-                DiagnosticEventKind::HitTest => summary.hit_test_count += 1,
-                DiagnosticEventKind::HoverChange => summary.hover_change_count += 1,
-                DiagnosticEventKind::TargetClick => summary.target_click_count += 1,
-                DiagnosticEventKind::Tick => summary.tick_count += 1,
-                _ => {}
-            }
-        }
-        summary.total_entries = self.entries.len();
-        summary
-    }
+    summary.total_entries = log.entries().len();
+    summary
 }
 
 /// Summary statistics from a diagnostic log.
@@ -471,7 +404,7 @@ impl DiagnosticSummary {
 // =============================================================================
 
 /// Callback type for telemetry hooks.
-pub type TelemetryCallback = Box<dyn Fn(&DiagnosticEntry) + Send + Sync>;
+pub type TelemetryCallback = diagnostics::TelemetryCallback<DiagnosticEntry>;
 
 /// Telemetry hooks for observing mouse playground events.
 ///
@@ -2467,7 +2400,7 @@ mod diagnostic_tests {
         log.record(DiagnosticEntry::new(DiagnosticEventKind::MouseDown, 1));
         log.record(DiagnosticEntry::new(DiagnosticEventKind::HitTest, 2));
 
-        let hit_tests = log.entries_of_kind(DiagnosticEventKind::HitTest);
+        let hit_tests = entries_of_kind(&log, DiagnosticEventKind::HitTest);
         assert_eq!(hit_tests.len(), 2);
     }
 
@@ -2492,7 +2425,7 @@ mod diagnostic_tests {
         log.record(DiagnosticEntry::new(DiagnosticEventKind::HitTest, 2));
         log.record(DiagnosticEntry::new(DiagnosticEventKind::HoverChange, 3));
 
-        let summary = log.summary();
+        let summary = diagnostic_summary(&log);
         assert_eq!(summary.total_entries, 4);
         assert_eq!(summary.mouse_down_count, 2);
         assert_eq!(summary.hit_test_count, 1);
@@ -2622,7 +2555,7 @@ mod diagnostic_tests {
         playground.toggle_overlay();
 
         let log = playground.diagnostic_log().unwrap();
-        let entries = log.entries_of_kind(DiagnosticEventKind::OverlayToggle);
+        let entries = entries_of_kind(log, DiagnosticEventKind::OverlayToggle);
         assert_eq!(entries.len(), 1);
         assert!(
             entries[0]
@@ -2639,7 +2572,7 @@ mod diagnostic_tests {
         playground.toggle_jitter_stats();
 
         let log = playground.diagnostic_log().unwrap();
-        let entries = log.entries_of_kind(DiagnosticEventKind::JitterStatsToggle);
+        let entries = entries_of_kind(log, DiagnosticEventKind::JitterStatsToggle);
         assert_eq!(entries.len(), 1);
     }
 
@@ -2650,7 +2583,7 @@ mod diagnostic_tests {
         playground.clear_log();
 
         let log = playground.diagnostic_log().unwrap();
-        let entries = log.entries_of_kind(DiagnosticEventKind::LogClear);
+        let entries = entries_of_kind(log, DiagnosticEventKind::LogClear);
         assert_eq!(entries.len(), 1);
         assert!(entries[0].context.as_ref().unwrap().contains("cleared=1"));
     }

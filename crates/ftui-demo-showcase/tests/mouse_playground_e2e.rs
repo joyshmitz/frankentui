@@ -44,12 +44,14 @@ use ftui_core::geometry::Rect;
 use ftui_demo_showcase::app::{AppModel, AppMsg, ScreenId};
 use ftui_demo_showcase::screens::Screen;
 use ftui_demo_showcase::screens::mouse_playground::{
-    DiagnosticEventKind, Focus, MousePlayground, TelemetryHooks, reset_event_counter,
+    DiagnosticEventKind, Focus, MousePlayground, TelemetryHooks, diagnostic_summary,
+    entries_of_kind, reset_event_counter,
 };
 use ftui_harness::assert_snapshot;
 use ftui_render::frame::Frame;
 use ftui_render::grapheme_pool::GraphemePool;
 use ftui_runtime::program::Model;
+use ftui_widgets::diagnostics::DiagnosticRecord;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -652,8 +654,8 @@ fn e2e_mouse_click_event_processing() {
 
     // Check diagnostic log has mouse events
     if let Some(log) = playground.diagnostic_log() {
-        let mouse_downs = log.entries_of_kind(DiagnosticEventKind::MouseDown);
-        let mouse_ups = log.entries_of_kind(DiagnosticEventKind::MouseUp);
+        let mouse_downs = entries_of_kind(log, DiagnosticEventKind::MouseDown);
+        let mouse_ups = entries_of_kind(log, DiagnosticEventKind::MouseUp);
         assert!(!mouse_downs.is_empty(), "Should have MouseDown diagnostic");
         assert!(!mouse_ups.is_empty(), "Should have MouseUp diagnostic");
 
@@ -700,7 +702,7 @@ fn e2e_mouse_drag_trail() {
 
     // Diagnostic log should have drag events
     if let Some(log) = playground.diagnostic_log() {
-        let drags = log.entries_of_kind(DiagnosticEventKind::MouseDrag);
+        let drags = entries_of_kind(log, DiagnosticEventKind::MouseDrag);
         assert_eq!(drags.len(), 2, "Should have 2 drag events");
 
         for drag in &drags {
@@ -747,7 +749,7 @@ fn e2e_mouse_scroll_events() {
     playground.update(&mouse_event(MouseEventKind::ScrollUp, 60, 20));
 
     if let Some(log) = playground.diagnostic_log() {
-        let scrolls = log.entries_of_kind(DiagnosticEventKind::MouseScroll);
+        let scrolls = entries_of_kind(log, DiagnosticEventKind::MouseScroll);
         assert_eq!(scrolls.len(), 2, "Should have 2 scroll events");
 
         log_jsonl("scroll_events", &[("count", &scrolls.len().to_string())]);
@@ -775,11 +777,11 @@ fn e2e_mouse_move_and_hover() {
     playground.update(&mouse_move(90, 30));
 
     if let Some(log) = playground.diagnostic_log() {
-        let moves = log.entries_of_kind(DiagnosticEventKind::MouseMove);
+        let moves = entries_of_kind(log, DiagnosticEventKind::MouseMove);
         assert_eq!(moves.len(), 3, "Should have 3 move events");
 
         // Should also have hit tests for each move
-        let hit_tests = log.entries_of_kind(DiagnosticEventKind::HitTest);
+        let hit_tests = entries_of_kind(log, DiagnosticEventKind::HitTest);
         assert_eq!(
             hit_tests.len(),
             moves.len(),
@@ -999,7 +1001,7 @@ fn e2e_keyboard_target_activation() {
 
     // Check diagnostic log has TargetClick event
     if let Some(log) = playground.diagnostic_log() {
-        let clicks = log.entries_of_kind(DiagnosticEventKind::TargetClick);
+        let clicks = entries_of_kind(log, DiagnosticEventKind::TargetClick);
         assert_eq!(clicks.len(), 1, "Should have 1 target click from Space");
         assert_eq!(
             clicks[0].target_id,
@@ -1022,7 +1024,7 @@ fn e2e_keyboard_target_activation() {
     playground.update(&press(KeyCode::Enter));
 
     if let Some(log) = playground.diagnostic_log() {
-        let clicks = log.entries_of_kind(DiagnosticEventKind::TargetClick);
+        let clicks = entries_of_kind(log, DiagnosticEventKind::TargetClick);
         assert_eq!(clicks.len(), 2, "Should have 2 total target clicks");
         assert_eq!(
             clicks[1].target_id,
@@ -1146,7 +1148,7 @@ fn e2e_mouse_click_on_target() {
 
     // Verify click was recorded in diagnostics
     if let Some(log) = playground.diagnostic_log() {
-        let clicks = log.entries_of_kind(DiagnosticEventKind::TargetClick);
+        let clicks = entries_of_kind(log, DiagnosticEventKind::TargetClick);
         if let Some((_x, _y, id)) = clicked_target {
             assert!(!clicks.is_empty(), "Should have recorded a target click");
             assert_eq!(
@@ -1405,7 +1407,7 @@ fn e2e_diagnostic_jsonl_schema() {
         }
 
         // Verify summary
-        let summary = log.summary();
+        let summary = diagnostic_summary(log);
         let summary_jsonl = summary.to_jsonl();
         assert!(
             summary_jsonl.contains("\"total\":"),
