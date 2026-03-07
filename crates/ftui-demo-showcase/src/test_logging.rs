@@ -1,8 +1,25 @@
 #![forbid(unsafe_code)]
 
-//! Shared JSONL logging helpers for tests.
+//! Shared JSONL logging helpers for the demo showcase.
+//!
+//! This module is the **authoritative** owner of JSONL event logging across the
+//! demo-showcase crate. It provides:
+//!
+//! - A single [`escape_json`] implementation (handles all control chars).
+//! - [`JsonlLogger`] — a thread-safe, sequenced event logger with builder API.
+//! - [`LoggerFactory`] — a reusable bootstrap pattern (env gating, `OnceLock`,
+//!   run_id / seed / screen_mode) so each subsystem doesn't re-invent the wheel.
+//! - [`JsonlSink`] — stderr or file sink abstraction.
+//!
+//! **All JSONL emitters inside `ftui-demo-showcase` should go through this module.**
 
+use std::fs::{OpenOptions, create_dir_all};
+use std::io::Write;
+use std::path::Path;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::determinism;
 
 /// Schema version for test JSONL logs.
 pub const TEST_JSONL_SCHEMA: &str = "test-jsonl-v1";
@@ -13,7 +30,22 @@ pub fn jsonl_enabled() -> bool {
     std::env::var("E2E_JSONL").is_ok() || std::env::var("CI").is_ok()
 }
 
-/// Escape a string for JSON output (minimal string escaping).
+/// Returns true if the named env var is set to `"1"` or `"true"` (case-insensitive).
+#[must_use]
+pub fn env_flag_enabled(name: &str) -> bool {
+    std::env::var(name)
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+// ---------------------------------------------------------------------------
+// JSON string escaping
+// ---------------------------------------------------------------------------
+
+/// Escape a string for JSON output.
+///
+/// Handles `"`, `\\`, `\n`, `\r`, `\t`, and all other control characters
+/// (`U+0000`..`U+001F`) via `\uXXXX` notation.
 #[must_use]
 pub fn escape_json(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
@@ -24,11 +56,66 @@ pub fn escape_json(value: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
+            ch if ch.is_control() => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "\\u{:04x}", ch as u32);
+            }
             _ => out.push(ch),
         }
     }
     out
 }
+
+// ---------------------------------------------------------------------------
+// Sink abstraction
+// ---------------------------------------------------------------------------
+
+/// Where a [`JsonlLogger`] writes its output.
+#[derive(Debug, Clone)]
+pub enum JsonlSink {
+    /// Write to stderr (diagnostic channel).
+    Stderr,
+    /// Append to a file at the given path (creates parent dirs as needed).
+    File(String),
+}
+
+impl JsonlSink {
+    /// Best-effort write of a complete JSONL line (including trailing newline).
+    pub fn write_line(&self, line: &str) {
+        match self {
+            Self::Stderr => {
+                let _ = writeln!(std::io::stderr(), "{line}");
+            }
+            Self::File(path) => {
+                if let Some(parent) = Path::new(path).parent()
+                    && !parent.as_os_str().is_empty()
+                {
+                    let _ = create_dir_all(parent);
+                }
+                if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+                    let _ = writeln!(file, "{line}");
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// JSONL field value (string vs numeric)
+// ---------------------------------------------------------------------------
+
+/// A value in a JSONL field — either a quoted string or a raw numeric/boolean literal.
+#[derive(Debug, Clone)]
+pub enum JsonlValue<'a> {
+    /// A string value that will be JSON-escaped and quoted.
+    Str(&'a str),
+    /// A raw literal emitted as-is (for numbers, booleans, null).
+    Raw(&'a str),
+}
+
+// ---------------------------------------------------------------------------
+// JsonlLogger
+// ---------------------------------------------------------------------------
 
 /// JSONL logger with stable run context + per-entry sequence numbering.
 pub struct JsonlLogger {
@@ -36,10 +123,13 @@ pub struct JsonlLogger {
     seed: Option<u64>,
     context: Vec<(String, String)>,
     seq: AtomicU64,
+    sink: JsonlSink,
+    /// When `Some`, this function is checked instead of [`jsonl_enabled`].
+    gate: Option<fn() -> bool>,
 }
 
 impl JsonlLogger {
-    /// Create a new JSONL logger with a run identifier.
+    /// Create a new JSONL logger with a run identifier (defaults to stderr sink).
     #[must_use]
     pub fn new(run_id: impl Into<String>) -> Self {
         Self {
@@ -47,6 +137,8 @@ impl JsonlLogger {
             seed: None,
             context: Vec::new(),
             seq: AtomicU64::new(0),
+            sink: JsonlSink::Stderr,
+            gate: None,
         }
     }
 
@@ -64,9 +156,31 @@ impl JsonlLogger {
         self
     }
 
-    /// Emit a JSONL line if logging is enabled.
+    /// Set the output sink (default: stderr).
+    #[must_use]
+    pub fn with_sink(mut self, sink: JsonlSink) -> Self {
+        self.sink = sink;
+        self
+    }
+
+    /// Override the enable-gate function (default: [`jsonl_enabled`]).
+    #[must_use]
+    pub fn with_gate(mut self, gate: fn() -> bool) -> Self {
+        self.gate = Some(gate);
+        self
+    }
+
+    /// Returns `true` when this logger's gate is open.
+    fn is_enabled(&self) -> bool {
+        match self.gate {
+            Some(gate) => gate(),
+            None => jsonl_enabled(),
+        }
+    }
+
+    /// Emit a JSONL line if logging is enabled (string-only fields).
     pub fn log(&self, event: &str, fields: &[(&str, &str)]) {
-        if !jsonl_enabled() {
+        if !self.is_enabled() {
             return;
         }
 
@@ -86,8 +200,112 @@ impl JsonlLogger {
             parts.push(format!("\"{}\":\"{}\"", key, escape_json(value)));
         }
 
-        eprintln!("{{{}}}", parts.join(","));
+        let line = format!("{{{}}}", parts.join(","));
+        self.sink.write_line(&line);
     }
+
+    /// Emit a JSONL line with mixed string and raw/numeric fields.
+    ///
+    /// Each field is either `JsonlValue::Str` (escaped + quoted) or
+    /// `JsonlValue::Raw` (emitted verbatim — for numbers, bools, null).
+    pub fn log_mixed(&self, event: &str, fields: &[(&str, JsonlValue<'_>)]) {
+        if !self.is_enabled() {
+            return;
+        }
+
+        let seq = self.seq.fetch_add(1, Ordering::Relaxed);
+        let mut parts = Vec::with_capacity(6 + self.context.len() + fields.len());
+        parts.push(format!("\"schema_version\":\"{}\"", TEST_JSONL_SCHEMA));
+        parts.push(format!("\"run_id\":\"{}\"", escape_json(&self.run_id)));
+        parts.push(format!("\"seq\":{seq}"));
+        parts.push(format!("\"event\":\"{}\"", escape_json(event)));
+        if let Some(seed) = self.seed {
+            parts.push(format!("\"seed\":{seed}"));
+        }
+        for (key, value) in &self.context {
+            parts.push(format!("\"{}\":\"{}\"", key, escape_json(value)));
+        }
+        for (key, value) in fields {
+            match value {
+                JsonlValue::Str(s) => {
+                    parts.push(format!("\"{}\":\"{}\"", key, escape_json(s)));
+                }
+                JsonlValue::Raw(r) => {
+                    parts.push(format!("\"{}\":{}", key, r));
+                }
+            }
+        }
+
+        let line = format!("{{{}}}", parts.join(","));
+        self.sink.write_line(&line);
+    }
+
+    /// Return the current sequence counter value (for testing / diagnostics).
+    pub fn seq_value(&self) -> u64 {
+        self.seq.load(Ordering::Relaxed)
+    }
+
+    /// Allocate and return the next sequence number without emitting a line.
+    pub fn next_seq(&self) -> u64 {
+        self.seq.fetch_add(1, Ordering::Relaxed)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Logger factory — reusable bootstrap pattern
+// ---------------------------------------------------------------------------
+
+/// Create a [`JsonlLogger`] pre-configured with the standard demo context fields
+/// (run_id from env, seed, screen_mode).
+///
+/// This is the factory function that replaces the copy-pasted `OnceLock` + env-gate
+/// pattern used by `screen_init_logger`, `mouse_jsonl_logger`, `perf_challenge_logger`, etc.
+///
+/// # Arguments
+/// * `default_run_id` — fallback run-id if `FTUI_DEMO_RUN_ID` is unset.
+/// * `extra_context`  — additional key-value pairs to attach to every entry.
+/// * `sink`           — where to write (stderr or file).
+/// * `gate`           — optional enable-gate override.
+#[must_use]
+pub fn make_demo_logger(
+    default_run_id: &str,
+    extra_context: &[(&str, &str)],
+    sink: JsonlSink,
+    gate: Option<fn() -> bool>,
+) -> JsonlLogger {
+    let run_id = determinism::demo_run_id().unwrap_or_else(|| default_run_id.to_string());
+    let seed = determinism::demo_seed(0);
+    let mut logger = JsonlLogger::new(run_id)
+        .with_seed(seed)
+        .with_context("screen_mode", determinism::demo_screen_mode())
+        .with_sink(sink);
+    if let Some(gate) = gate {
+        logger = logger.with_gate(gate);
+    }
+    for &(key, value) in extra_context {
+        logger = logger.with_context(key, value);
+    }
+    logger
+}
+
+/// Convenience wrapper: create a demo logger behind a `OnceLock`, returning
+/// `None` when the gate is closed.
+///
+/// This is the exact pattern that was copy-pasted across `screen_init_logger`,
+/// `mouse_jsonl_logger`, `perf_challenge_logger`. Now it's a single function.
+pub fn demo_logger(
+    cell: &'static OnceLock<JsonlLogger>,
+    default_run_id: &str,
+    extra_context: &[(&str, &str)],
+) -> Option<&'static JsonlLogger> {
+    if !jsonl_enabled() {
+        return None;
+    }
+    Some(
+        cell.get_or_init(|| {
+            make_demo_logger(default_run_id, extra_context, JsonlSink::Stderr, None)
+        }),
+    )
 }
 
 /// Validate the Mermaid mega showcase recompute JSONL schema.
@@ -203,6 +421,17 @@ mod tests {
         assert_eq!(escape_json("🦀 café"), "🦀 café");
     }
 
+    #[test]
+    fn escape_json_control_chars() {
+        // Control characters other than \n, \r, \t should be \uXXXX escaped.
+        let s = "a\x01b\x7fc";
+        let escaped = escape_json(s);
+        assert!(
+            escaped.contains("\\u0001"),
+            "expected \\u0001 in: {escaped}"
+        );
+    }
+
     // ── JsonlLogger tests ────────────────────────────────────────────
 
     #[test]
@@ -256,6 +485,30 @@ mod tests {
         assert_eq!(logger.run_id, "chained");
         assert_eq!(logger.seed, Some(999));
         assert_eq!(logger.context.len(), 1);
+    }
+
+    #[test]
+    fn logger_with_sink_file() {
+        let logger = JsonlLogger::new("run").with_sink(JsonlSink::File("/tmp/test.jsonl".into()));
+        // Just verifying the builder compiles and sink is set.
+        assert!(matches!(logger.sink, JsonlSink::File(_)));
+    }
+
+    #[test]
+    fn logger_with_gate() {
+        fn always_off() -> bool {
+            false
+        }
+        let logger = JsonlLogger::new("run").with_gate(always_off);
+        assert!(!logger.is_enabled());
+    }
+
+    #[test]
+    fn logger_next_seq_increments() {
+        let logger = JsonlLogger::new("run");
+        assert_eq!(logger.next_seq(), 0);
+        assert_eq!(logger.next_seq(), 1);
+        assert_eq!(logger.seq_value(), 2);
     }
 
     // ── validate_mega_recompute_jsonl_schema tests ───────────────────

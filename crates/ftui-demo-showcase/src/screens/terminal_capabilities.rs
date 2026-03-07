@@ -42,6 +42,7 @@ use serde_json::json;
 
 use super::{HelpEntry, Screen};
 use crate::determinism;
+use crate::test_logging::escape_json;
 use crate::theme;
 
 #[cfg(not(feature = "caps-probe"))]
@@ -261,25 +262,6 @@ impl DiagnosticEntry {
         self.with_detail("selection", &index.to_string())
     }
 
-    /// Escape a string value for JSONL output.
-    fn escape_json(s: &str) -> String {
-        let mut result = String::with_capacity(s.len());
-        for c in s.chars() {
-            match c {
-                '"' => result.push_str("\\\""),
-                '\\' => result.push_str("\\\\"),
-                '\n' => result.push_str("\\n"),
-                '\r' => result.push_str("\\r"),
-                '\t' => result.push_str("\\t"),
-                c if c.is_control() => {
-                    result.push_str(&format!("\\u{:04x}", c as u32));
-                }
-                c => result.push(c),
-            }
-        }
-        result
-    }
-
     /// Serialize to JSONL format.
     pub fn to_jsonl(&self) -> String {
         let mut parts = vec![
@@ -290,8 +272,8 @@ impl DiagnosticEntry {
         for (key, value) in &self.details {
             parts.push(format!(
                 "\"{}\":\"{}\"",
-                Self::escape_json(key),
-                Self::escape_json(value)
+                escape_json(key),
+                escape_json(value)
             ));
         }
         format!("{{{}}}", parts.join(","))

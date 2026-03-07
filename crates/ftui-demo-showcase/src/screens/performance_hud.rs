@@ -32,7 +32,7 @@ use ftui_widgets::paragraph::Paragraph;
 
 use super::{HelpEntry, Screen};
 use crate::determinism;
-use crate::test_logging::{JsonlLogger, jsonl_enabled};
+use crate::test_logging::{JsonlLogger, demo_logger};
 use crate::theme;
 
 /// Maximum number of tick-interval samples in the ring buffer.
@@ -81,18 +81,12 @@ impl StressMode {
 }
 
 fn perf_challenge_logger() -> Option<&'static JsonlLogger> {
-    if !jsonl_enabled() {
-        return None;
-    }
     static LOGGER: OnceLock<JsonlLogger> = OnceLock::new();
-    Some(LOGGER.get_or_init(|| {
-        let run_id = determinism::demo_run_id().unwrap_or_else(|| "perf_challenge".to_string());
-        let seed = determinism::demo_seed(0);
-        JsonlLogger::new(run_id)
-            .with_seed(seed)
-            .with_context("screen_mode", determinism::demo_screen_mode())
-            .with_context("screen", "performance_challenge")
-    }))
+    demo_logger(
+        &LOGGER,
+        "perf_challenge",
+        &[("screen", "performance_challenge")],
+    )
 }
 
 /// Degradation tier based on estimated FPS.

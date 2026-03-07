@@ -14,14 +14,16 @@ use std::fs::{OpenOptions, create_dir_all};
 use std::io::{BufWriter, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use web_time::{Duration, Instant};
 
 use crate::determinism;
 use crate::screens;
 use crate::screens::Screen;
-use crate::test_logging::{JsonlLogger, jsonl_enabled};
+use crate::test_logging::{
+    JsonlLogger, JsonlSink, JsonlValue, demo_logger, env_flag_enabled, escape_json,
+    make_demo_logger,
+};
 use crate::theme;
 use crate::tour::{GuidedTourState, TourAdvanceReason, TourEvent, TourStep};
 use ftui_core::event::{
@@ -55,109 +57,96 @@ const TICK_STALL_WARN_AFTER: Duration = Duration::from_millis(750);
 /// Rate-limit tick stall logs to avoid spamming.
 const TICK_STALL_LOG_INTERVAL: Duration = Duration::from_millis(2_000);
 
-/// Global counter for JSONL log sequence numbers.
+/// Shared perf-HUD logger (env-gated via `FTUI_PERF_HUD_JSONL`).
 #[allow(dead_code)]
-static PERF_HUD_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
-
-/// Check if JSONL diagnostic logging is enabled via env var.
-#[allow(dead_code)]
-fn perf_hud_jsonl_enabled() -> bool {
-    env::var("FTUI_PERF_HUD_JSONL")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+fn perf_hud_logger() -> Option<&'static JsonlLogger> {
+    if !env_flag_enabled("FTUI_PERF_HUD_JSONL") {
+        return None;
+    }
+    static LOGGER: OnceLock<JsonlLogger> = OnceLock::new();
+    Some(LOGGER.get_or_init(|| {
+        make_demo_logger(
+            "perf_hud",
+            &[("screen", "performance_hud")],
+            JsonlSink::Stderr,
+            Some(|| env_flag_enabled("FTUI_PERF_HUD_JSONL")),
+        )
+    }))
 }
 
 /// Emit a JSONL diagnostic log line for the Performance HUD.
 ///
-/// Format: `{"seq":N,"ts_us":T,"event":"E",...fields...}`
+/// Format: `{"schema_version":"...","run_id":"...","seq":N,"event":"E",...fields...}`
 ///
 /// # Fields
 /// - `seq`: Monotonically increasing sequence number
-/// - `ts_us`: Timestamp in microseconds since process start (approximated)
 /// - `event`: Event type (e.g., "tick_stats", "hud_toggle", "threshold_crossed")
 /// - Additional fields depend on event type
 ///
 /// # Invariants (Alien Artifact)
 /// - Sequence numbers are globally unique and monotonically increasing
-/// - Timestamps are best-effort (not wall-clock accurate but monotonic)
 /// - Output is valid JSON on a single line
 /// - No panic on write failure (best-effort logging)
 #[allow(dead_code)]
 fn emit_perf_hud_jsonl(event: &str, fields: &[(&str, &str)]) {
-    if !perf_hud_jsonl_enabled() {
+    let Some(logger) = perf_hud_logger() else {
         return;
-    }
-
-    let seq = PERF_HUD_LOG_SEQ.fetch_add(1, Ordering::Relaxed);
-    // Approximate timestamp using seq as a proxy (each call is ~1 tick apart)
-    let ts_us = seq.saturating_mul(16_667); // Assume ~60 TPS
-
-    let mut json = format!("{{\"seq\":{seq},\"ts_us\":{ts_us},\"event\":\"{event}\"");
-    for (key, value) in fields {
-        // Escape any quotes in value
-        let escaped = value.replace('\"', "\\\"");
-        json.push_str(&format!(",\"{key}\":\"{escaped}\""));
-    }
-    json.push('}');
-
-    // Best-effort write to stderr (diagnostic logs go to stderr)
-    let _ = writeln!(std::io::stderr(), "{json}");
+    };
+    logger.log(event, fields);
 }
 
 /// Emit numeric fields as JSONL (avoids quoting numbers).
 #[allow(dead_code)]
 fn emit_perf_hud_jsonl_numeric(event: &str, fields: &[(&str, f64)]) {
-    if !perf_hud_jsonl_enabled() {
+    let Some(logger) = perf_hud_logger() else {
         return;
-    }
-
-    let seq = PERF_HUD_LOG_SEQ.fetch_add(1, Ordering::Relaxed);
-    let ts_us = seq.saturating_mul(16_667);
-
-    let mut json = format!("{{\"seq\":{seq},\"ts_us\":{ts_us},\"event\":\"{event}\"");
-    for (key, value) in fields {
-        if value.is_finite() {
-            json.push_str(&format!(",\"{key}\":{value:.3}"));
-        } else {
-            json.push_str(&format!(",\"{key}\":null"));
-        }
-    }
-    json.push('}');
-
-    let _ = writeln!(std::io::stderr(), "{json}");
+    };
+    let formatted: Vec<(String, String)> = fields
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.to_string(),
+                if v.is_finite() {
+                    format!("{v:.3}")
+                } else {
+                    "null".to_string()
+                },
+            )
+        })
+        .collect();
+    let mixed: Vec<(&str, JsonlValue<'_>)> = formatted
+        .iter()
+        .map(|(k, v)| (k.as_str(), JsonlValue::Raw(v.as_str())))
+        .collect();
+    logger.log_mixed(event, &mixed);
 }
 
 // ---------------------------------------------------------------------------
 // Accessibility Diagnostics + Telemetry (bd-2o55.5)
 // ---------------------------------------------------------------------------
 
-/// Global counter for A11y JSONL logs.
-static A11Y_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
-
-/// Check if A11y JSONL diagnostics are enabled via env var.
-fn a11y_jsonl_enabled() -> bool {
-    env::var("FTUI_A11Y_JSONL")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+/// Shared a11y logger (env-gated via `FTUI_A11Y_JSONL`).
+fn a11y_logger() -> Option<&'static JsonlLogger> {
+    if !env_flag_enabled("FTUI_A11Y_JSONL") {
+        return None;
+    }
+    static LOGGER: OnceLock<JsonlLogger> = OnceLock::new();
+    Some(LOGGER.get_or_init(|| {
+        make_demo_logger(
+            "a11y",
+            &[],
+            JsonlSink::Stderr,
+            Some(|| env_flag_enabled("FTUI_A11Y_JSONL")),
+        )
+    }))
 }
 
 /// Emit a JSONL diagnostic log line for accessibility mode changes.
 fn emit_a11y_jsonl(event: &str, fields: &[(&str, &str)]) {
-    if !a11y_jsonl_enabled() {
+    let Some(logger) = a11y_logger() else {
         return;
-    }
-
-    let seq = A11Y_LOG_SEQ.fetch_add(1, Ordering::Relaxed);
-    let ts_us = seq.saturating_mul(16_667);
-
-    let mut json = format!("{{\"seq\":{seq},\"ts_us\":{ts_us},\"event\":\"{event}\"");
-    for (key, value) in fields {
-        let escaped = value.replace('\"', "\\\"");
-        json.push_str(&format!(",\"{key}\":\"{escaped}\""));
-    }
-    json.push('}');
-
-    let _ = writeln!(std::io::stderr(), "{json}");
+    };
+    logger.log(event, fields);
 }
 
 // ---------------------------------------------------------------------------
@@ -165,17 +154,8 @@ fn emit_a11y_jsonl(event: &str, fields: &[(&str, &str)]) {
 // ---------------------------------------------------------------------------
 
 fn screen_init_logger() -> Option<&'static JsonlLogger> {
-    if !jsonl_enabled() {
-        return None;
-    }
     static LOGGER: OnceLock<JsonlLogger> = OnceLock::new();
-    Some(LOGGER.get_or_init(|| {
-        let run_id = determinism::demo_run_id().unwrap_or_else(|| "demo_screen_init".to_string());
-        let seed = determinism::demo_seed(0);
-        JsonlLogger::new(run_id)
-            .with_seed(seed)
-            .with_context("screen_mode", determinism::demo_screen_mode())
-    }))
+    demo_logger(&LOGGER, "demo_screen_init", &[])
 }
 
 fn emit_screen_init_log(
@@ -211,17 +191,8 @@ fn emit_screen_init_log(
 // ---------------------------------------------------------------------------
 
 fn mouse_jsonl_logger() -> Option<&'static JsonlLogger> {
-    if !jsonl_enabled() {
-        return None;
-    }
     static LOGGER: OnceLock<JsonlLogger> = OnceLock::new();
-    Some(LOGGER.get_or_init(|| {
-        let run_id = determinism::demo_run_id().unwrap_or_else(|| "demo_mouse".to_string());
-        let seed = determinism::demo_seed(0);
-        JsonlLogger::new(run_id)
-            .with_seed(seed)
-            .with_context("screen_mode", determinism::demo_screen_mode())
-    }))
+    demo_logger(&LOGGER, "demo_mouse", &[])
 }
 
 fn mouse_kind_label(kind: MouseEventKind) -> &'static str {
@@ -614,21 +585,19 @@ impl A11yTelemetryHooks {
 // Command Palette Diagnostics (bd-iuvb.16)
 // ---------------------------------------------------------------------------
 
-/// Global counter for palette JSONL logs.
-static PALETTE_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
-
-/// Return the palette JSONL log path if enabled.
-fn palette_log_path() -> Option<String> {
-    env::var("FTUI_PALETTE_REPORT_PATH").ok()
-}
-
-/// Return the palette run id (for E2E correlation).
-fn palette_run_id() -> String {
-    env::var("FTUI_PALETTE_RUN_ID").unwrap_or_else(|_| "unknown".to_string())
-}
-
-fn json_escape(value: &str) -> String {
-    escape_json(value)
+/// Shared palette logger (env-gated via `FTUI_PALETTE_REPORT_PATH`).
+fn palette_logger() -> Option<&'static JsonlLogger> {
+    let path = env::var("FTUI_PALETTE_REPORT_PATH").ok()?;
+    static LOGGER: OnceLock<JsonlLogger> = OnceLock::new();
+    Some(LOGGER.get_or_init(|| {
+        let run_id = env::var("FTUI_PALETTE_RUN_ID").unwrap_or_else(|_| "unknown".to_string());
+        let seed = determinism::demo_seed(0);
+        JsonlLogger::new(run_id)
+            .with_seed(seed)
+            .with_context("screen_mode", determinism::demo_screen_mode())
+            .with_sink(JsonlSink::File(path))
+            .with_gate(|| env::var("FTUI_PALETTE_REPORT_PATH").is_ok())
+    }))
 }
 
 /// Emit a palette JSONL entry to the report path (best-effort).
@@ -639,73 +608,50 @@ fn emit_palette_jsonl(
     category: Option<screens::ScreenCategory>,
     outcome: &str,
 ) {
-    let Some(path) = palette_log_path() else {
+    let Some(logger) = palette_logger() else {
         return;
     };
-
-    let seq = PALETTE_LOG_SEQ.fetch_add(1, Ordering::Relaxed);
-    let ts_us = seq.saturating_mul(16_667);
-    let run_id = palette_run_id();
     let screen_label = selected_screen.map(|id| id.title()).unwrap_or("none");
     let category_label = category.map(|cat| cat.label()).unwrap_or("none");
-
-    let json = format!(
-        "{{\"seq\":{seq},\"ts_us\":{ts_us},\"run_id\":\"{}\",\"action\":\"{}\",\"query\":\"{}\",\"selected_screen\":\"{}\",\"category\":\"{}\",\"outcome\":\"{}\"}}",
-        json_escape(&run_id),
-        json_escape(action),
-        json_escape(query),
-        json_escape(screen_label),
-        json_escape(category_label),
-        json_escape(outcome)
+    logger.log(
+        "palette",
+        &[
+            ("action", action),
+            ("query", query),
+            ("selected_screen", screen_label),
+            ("category", category_label),
+            ("outcome", outcome),
+        ],
     );
-
-    if let Some(parent) = Path::new(&path).parent()
-        && !parent.as_os_str().is_empty()
-    {
-        let _ = create_dir_all(parent);
-    }
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(file, "{json}");
-    }
 }
 
 // ---------------------------------------------------------------------------
 // Guided Tour Diagnostics (bd-iuvb.1)
 // ---------------------------------------------------------------------------
 
-/// Global counter for guided tour JSONL logs.
-static TOUR_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
-
-/// Return the guided tour JSONL log path if enabled.
-fn tour_log_path() -> Option<String> {
-    env::var("FTUI_TOUR_REPORT_PATH").ok()
-}
-
-/// Return the guided tour run id (for E2E correlation).
-fn tour_run_id() -> String {
-    env::var("FTUI_TOUR_RUN_ID").unwrap_or_else(|_| "unknown".to_string())
-}
-
-/// Return the guided tour seed (deterministic default = 0).
-fn tour_seed() -> u64 {
-    env::var("FTUI_TOUR_SEED")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or_else(|| determinism::demo_seed(0))
-}
-
-/// Resolve a screen mode label for guided tour logs.
-fn tour_screen_mode() -> String {
-    env::var("FTUI_DEMO_SCREEN_MODE")
-        .or_else(|_| env::var("FTUI_HARNESS_SCREEN_MODE"))
-        .unwrap_or_else(|_| "alt".to_string())
-}
-
-/// Resolve a terminal capabilities profile label for guided tour logs.
-fn tour_caps_profile() -> String {
-    env::var("FTUI_TOUR_CAPS_PROFILE")
-        .or_else(|_| env::var("TERM"))
-        .unwrap_or_else(|_| "unknown".to_string())
+/// Shared tour logger (env-gated via `FTUI_TOUR_REPORT_PATH`).
+fn tour_logger() -> Option<&'static JsonlLogger> {
+    let path = env::var("FTUI_TOUR_REPORT_PATH").ok()?;
+    static LOGGER: OnceLock<JsonlLogger> = OnceLock::new();
+    Some(LOGGER.get_or_init(|| {
+        let run_id = env::var("FTUI_TOUR_RUN_ID").unwrap_or_else(|_| "unknown".to_string());
+        let seed = env::var("FTUI_TOUR_SEED")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or_else(|| determinism::demo_seed(0));
+        let screen_mode = env::var("FTUI_DEMO_SCREEN_MODE")
+            .or_else(|_| env::var("FTUI_HARNESS_SCREEN_MODE"))
+            .unwrap_or_else(|_| "alt".to_string());
+        let caps_profile = env::var("FTUI_TOUR_CAPS_PROFILE")
+            .or_else(|_| env::var("TERM"))
+            .unwrap_or_else(|_| "unknown".to_string());
+        JsonlLogger::new(run_id)
+            .with_seed(seed)
+            .with_context("screen_mode", screen_mode)
+            .with_context("caps_profile", caps_profile)
+            .with_sink(JsonlSink::File(path))
+            .with_gate(|| env::var("FTUI_TOUR_REPORT_PATH").is_ok())
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -833,6 +779,12 @@ impl ScreenId {
     /// Short label for the tab (max ~12 chars).
     pub fn tab_label(self) -> &'static str {
         screens::screen_tab_label(self)
+    }
+
+    /// Stable machine-readable slug for this screen, used in palette action
+    /// IDs and navigation. Does not change when the title is renamed.
+    pub fn slug(self) -> &'static str {
+        screens::screen_slug(self)
     }
 
     /// Widget name used in error boundary fallback messages.
@@ -1095,6 +1047,375 @@ impl Default for ScreenStates {
     }
 }
 
+/// Dispatch to a screen field on `ScreenStates`, consolidating the
+/// `ScreenId`-to-field mapping that was previously hand-maintained in five
+/// separate match tables.
+///
+/// # Usage
+///
+/// ```ignore
+/// // Mutable dispatch (most common — update, tick):
+/// dispatch_screen!(mut self_expr, id_expr, screen => { screen.update(event); });
+///
+/// // Immutable dispatch (view, consumes_text_input, keybindings):
+/// dispatch_screen!(ref self_expr, id_expr, screen => screen.view(frame, area));
+/// ```
+///
+/// `GuidedTour` always maps to the `$noop` expression (no screen state).
+/// Feature-gated mermaid screens compile to no-ops when the feature is off.
+macro_rules! dispatch_screen {
+    // Mutable access — used by update() and tick()
+    (mut $self:expr, $id:expr, $screen:ident => $body:expr, noop: $noop:expr) => {{
+        use screens::Screen as _;
+        match $id {
+            ScreenId::GuidedTour => $noop,
+            ScreenId::Dashboard => {
+                let $screen = &mut $self.dashboard;
+                $body
+            }
+            ScreenId::Shakespeare => $self.shakespeare_mut(|$screen| $body),
+            ScreenId::CodeExplorer => $self.code_explorer_mut(|$screen| $body),
+            ScreenId::WidgetGallery => {
+                let $screen = &mut $self.widget_gallery;
+                $body
+            }
+            ScreenId::LayoutLab => {
+                let $screen = &mut $self.layout_lab;
+                $body
+            }
+            ScreenId::FormsInput => {
+                let $screen = &mut $self.forms_input;
+                $body
+            }
+            ScreenId::DataViz => {
+                let $screen = &mut $self.data_viz;
+                $body
+            }
+            ScreenId::TableThemeGallery => {
+                let $screen = &mut $self.table_theme_gallery;
+                $body
+            }
+            ScreenId::FileBrowser => $self.file_browser_mut(|$screen| $body),
+            ScreenId::AdvancedFeatures => {
+                let $screen = &mut $self.advanced_features;
+                $body
+            }
+            ScreenId::TerminalCapabilities => {
+                let $screen = &mut $self.terminal_capabilities;
+                $body
+            }
+            ScreenId::MacroRecorder => {
+                let $screen = &mut $self.macro_recorder;
+                $body
+            }
+            ScreenId::Performance => {
+                let $screen = &mut $self.performance;
+                $body
+            }
+            ScreenId::MarkdownRichText => {
+                let $screen = &mut $self.markdown_rich_text;
+                $body
+            }
+            #[cfg(feature = "screen-mermaid")]
+            ScreenId::MermaidShowcase => {
+                let $screen = &mut $self.mermaid_showcase;
+                $body
+            }
+            #[cfg(not(feature = "screen-mermaid"))]
+            ScreenId::MermaidShowcase => $noop,
+            #[cfg(feature = "screen-mermaid")]
+            ScreenId::MermaidMegaShowcase => {
+                let $screen = &mut $self.mermaid_mega_showcase;
+                $body
+            }
+            #[cfg(not(feature = "screen-mermaid"))]
+            ScreenId::MermaidMegaShowcase => $noop,
+            ScreenId::VisualEffects => $self.visual_effects_mut(|$screen| $body),
+            ScreenId::ResponsiveDemo => {
+                let $screen = &mut $self.responsive_demo;
+                $body
+            }
+            ScreenId::LogSearch => {
+                let $screen = &mut $self.log_search;
+                $body
+            }
+            ScreenId::Notifications => {
+                let $screen = &mut $self.notifications;
+                $body
+            }
+            ScreenId::ActionTimeline => {
+                let $screen = &mut $self.action_timeline;
+                $body
+            }
+            ScreenId::IntrinsicSizing => {
+                let $screen = &mut $self.intrinsic_sizing;
+                $body
+            }
+            ScreenId::LayoutInspector => {
+                let $screen = &mut $self.layout_inspector;
+                $body
+            }
+            ScreenId::AdvancedTextEditor => {
+                let $screen = &mut $self.advanced_text_editor;
+                $body
+            }
+            ScreenId::MousePlayground => {
+                let $screen = &mut $self.mouse_playground;
+                $body
+            }
+            ScreenId::FormValidation => {
+                let $screen = &mut $self.form_validation;
+                $body
+            }
+            ScreenId::VirtualizedSearch => {
+                let $screen = &mut $self.virtualized_search;
+                $body
+            }
+            ScreenId::AsyncTasks => {
+                let $screen = &mut $self.async_tasks;
+                $body
+            }
+            ScreenId::ThemeStudio => {
+                let $screen = &mut $self.theme_studio;
+                $body
+            }
+            ScreenId::SnapshotPlayer => $self.snapshot_player_mut(|$screen| $body),
+            ScreenId::PerformanceHud => {
+                let $screen = &mut $self.performance_hud;
+                $body
+            }
+            ScreenId::ExplainabilityCockpit => {
+                let $screen = &mut $self.explainability_cockpit;
+                $body
+            }
+            ScreenId::I18nDemo => {
+                let $screen = &mut $self.i18n_demo;
+                $body
+            }
+            ScreenId::VoiOverlay => {
+                let $screen = &mut $self.voi_overlay;
+                $body
+            }
+            ScreenId::InlineModeStory => {
+                let $screen = &mut $self.inline_mode_story;
+                $body
+            }
+            ScreenId::AccessibilityPanel => {
+                let $screen = &mut $self.accessibility_panel;
+                $body
+            }
+            ScreenId::WidgetBuilder => {
+                let $screen = &mut $self.widget_builder;
+                $body
+            }
+            ScreenId::CommandPaletteLab => {
+                let $screen = &mut $self.command_palette_lab;
+                $body
+            }
+            ScreenId::DeterminismLab => {
+                let $screen = &mut $self.determinism_lab;
+                $body
+            }
+            ScreenId::HyperlinkPlayground => {
+                let $screen = &mut $self.hyperlink_playground;
+                $body
+            }
+            ScreenId::KanbanBoard => {
+                let $screen = &mut $self.kanban_board;
+                $body
+            }
+            ScreenId::MarkdownLiveEditor => {
+                let $screen = &mut $self.markdown_live_editor;
+                $body
+            }
+            ScreenId::DragDrop => {
+                let $screen = &mut $self.drag_drop;
+                $body
+            }
+            ScreenId::QuakeEasterEgg => {
+                let $screen = &mut $self.quake_easter_egg;
+                $body
+            }
+        }
+    }};
+
+    // Immutable access — used by view(), consumes_text_input(), keybindings()
+    // Lazy screens still need &self._mut() since init is interior-mutable.
+    (ref $self:expr, $id:expr, $screen:ident => $body:expr, noop: $noop:expr) => {{
+        use screens::Screen as _;
+        match $id {
+            ScreenId::GuidedTour => $noop,
+            ScreenId::Dashboard => {
+                let $screen = &$self.dashboard;
+                $body
+            }
+            ScreenId::Shakespeare => $self.shakespeare_mut(|$screen| $body),
+            ScreenId::CodeExplorer => $self.code_explorer_mut(|$screen| $body),
+            ScreenId::WidgetGallery => {
+                let $screen = &$self.widget_gallery;
+                $body
+            }
+            ScreenId::LayoutLab => {
+                let $screen = &$self.layout_lab;
+                $body
+            }
+            ScreenId::FormsInput => {
+                let $screen = &$self.forms_input;
+                $body
+            }
+            ScreenId::DataViz => {
+                let $screen = &$self.data_viz;
+                $body
+            }
+            ScreenId::TableThemeGallery => {
+                let $screen = &$self.table_theme_gallery;
+                $body
+            }
+            ScreenId::FileBrowser => $self.file_browser_mut(|$screen| $body),
+            ScreenId::AdvancedFeatures => {
+                let $screen = &$self.advanced_features;
+                $body
+            }
+            ScreenId::TerminalCapabilities => {
+                let $screen = &$self.terminal_capabilities;
+                $body
+            }
+            ScreenId::MacroRecorder => {
+                let $screen = &$self.macro_recorder;
+                $body
+            }
+            ScreenId::Performance => {
+                let $screen = &$self.performance;
+                $body
+            }
+            ScreenId::MarkdownRichText => {
+                let $screen = &$self.markdown_rich_text;
+                $body
+            }
+            #[cfg(feature = "screen-mermaid")]
+            ScreenId::MermaidShowcase => {
+                let $screen = &$self.mermaid_showcase;
+                $body
+            }
+            #[cfg(not(feature = "screen-mermaid"))]
+            ScreenId::MermaidShowcase => $noop,
+            #[cfg(feature = "screen-mermaid")]
+            ScreenId::MermaidMegaShowcase => {
+                let $screen = &$self.mermaid_mega_showcase;
+                $body
+            }
+            #[cfg(not(feature = "screen-mermaid"))]
+            ScreenId::MermaidMegaShowcase => $noop,
+            ScreenId::VisualEffects => $self.visual_effects_mut(|$screen| $body),
+            ScreenId::ResponsiveDemo => {
+                let $screen = &$self.responsive_demo;
+                $body
+            }
+            ScreenId::LogSearch => {
+                let $screen = &$self.log_search;
+                $body
+            }
+            ScreenId::Notifications => {
+                let $screen = &$self.notifications;
+                $body
+            }
+            ScreenId::ActionTimeline => {
+                let $screen = &$self.action_timeline;
+                $body
+            }
+            ScreenId::IntrinsicSizing => {
+                let $screen = &$self.intrinsic_sizing;
+                $body
+            }
+            ScreenId::LayoutInspector => {
+                let $screen = &$self.layout_inspector;
+                $body
+            }
+            ScreenId::AdvancedTextEditor => {
+                let $screen = &$self.advanced_text_editor;
+                $body
+            }
+            ScreenId::MousePlayground => {
+                let $screen = &$self.mouse_playground;
+                $body
+            }
+            ScreenId::FormValidation => {
+                let $screen = &$self.form_validation;
+                $body
+            }
+            ScreenId::VirtualizedSearch => {
+                let $screen = &$self.virtualized_search;
+                $body
+            }
+            ScreenId::AsyncTasks => {
+                let $screen = &$self.async_tasks;
+                $body
+            }
+            ScreenId::ThemeStudio => {
+                let $screen = &$self.theme_studio;
+                $body
+            }
+            ScreenId::SnapshotPlayer => $self.snapshot_player_mut(|$screen| $body),
+            ScreenId::PerformanceHud => {
+                let $screen = &$self.performance_hud;
+                $body
+            }
+            ScreenId::ExplainabilityCockpit => {
+                let $screen = &$self.explainability_cockpit;
+                $body
+            }
+            ScreenId::I18nDemo => {
+                let $screen = &$self.i18n_demo;
+                $body
+            }
+            ScreenId::VoiOverlay => {
+                let $screen = &$self.voi_overlay;
+                $body
+            }
+            ScreenId::InlineModeStory => {
+                let $screen = &$self.inline_mode_story;
+                $body
+            }
+            ScreenId::AccessibilityPanel => {
+                let $screen = &$self.accessibility_panel;
+                $body
+            }
+            ScreenId::WidgetBuilder => {
+                let $screen = &$self.widget_builder;
+                $body
+            }
+            ScreenId::CommandPaletteLab => {
+                let $screen = &$self.command_palette_lab;
+                $body
+            }
+            ScreenId::DeterminismLab => {
+                let $screen = &$self.determinism_lab;
+                $body
+            }
+            ScreenId::HyperlinkPlayground => {
+                let $screen = &$self.hyperlink_playground;
+                $body
+            }
+            ScreenId::KanbanBoard => {
+                let $screen = &$self.kanban_board;
+                $body
+            }
+            ScreenId::MarkdownLiveEditor => {
+                let $screen = &$self.markdown_live_editor;
+                $body
+            }
+            ScreenId::DragDrop => {
+                let $screen = &$self.drag_drop;
+                $body
+            }
+            ScreenId::QuakeEasterEgg => {
+                let $screen = &$self.quake_easter_egg;
+                $body
+            }
+        }
+    }};
+}
+
 impl ScreenStates {
     fn shakespeare_mut<F, R>(&self, f: F) -> R
     where
@@ -1200,161 +1521,12 @@ impl ScreenStates {
 
     /// Forward an event to the screen identified by `id`.
     fn update(&mut self, id: ScreenId, event: &Event) {
-        use screens::Screen;
-        match id {
-            ScreenId::GuidedTour => {}
-            ScreenId::Dashboard => {
-                self.dashboard.update(event);
-            }
-            ScreenId::Shakespeare => {
-                self.shakespeare_mut(|screen| screen.update(event));
-            }
-            ScreenId::CodeExplorer => {
-                self.code_explorer_mut(|screen| screen.update(event));
-            }
-            ScreenId::WidgetGallery => {
-                self.widget_gallery.update(event);
-            }
-            ScreenId::LayoutLab => {
-                self.layout_lab.update(event);
-            }
-            ScreenId::FormsInput => {
-                self.forms_input.update(event);
-            }
-            ScreenId::DataViz => {
-                self.data_viz.update(event);
-            }
-            ScreenId::TableThemeGallery => {
-                self.table_theme_gallery.update(event);
-            }
-            ScreenId::FileBrowser => {
-                self.file_browser_mut(|screen| screen.update(event));
-            }
-            ScreenId::AdvancedFeatures => {
-                self.advanced_features.update(event);
-            }
-            ScreenId::TerminalCapabilities => {
-                self.terminal_capabilities.update(event);
-            }
-            ScreenId::MacroRecorder => {
-                self.macro_recorder.update(event);
-            }
-            ScreenId::Performance => {
-                self.performance.update(event);
-            }
-            ScreenId::MarkdownRichText => {
-                self.markdown_rich_text.update(event);
-            }
-            #[cfg(feature = "screen-mermaid")]
-            ScreenId::MermaidShowcase => {
-                self.mermaid_showcase.update(event);
-            }
-            #[cfg(not(feature = "screen-mermaid"))]
-            ScreenId::MermaidShowcase => {}
-            #[cfg(feature = "screen-mermaid")]
-            ScreenId::MermaidMegaShowcase => {
-                self.mermaid_mega_showcase.update(event);
-            }
-            #[cfg(not(feature = "screen-mermaid"))]
-            ScreenId::MermaidMegaShowcase => {}
-            ScreenId::VisualEffects => {
-                self.visual_effects_mut(|screen| screen.update(event));
-            }
-            ScreenId::ResponsiveDemo => {
-                self.responsive_demo.update(event);
-            }
-            ScreenId::LogSearch => {
-                self.log_search.update(event);
-            }
-            ScreenId::Notifications => {
-                self.notifications.update(event);
-            }
-            ScreenId::ActionTimeline => {
-                self.action_timeline.update(event);
-            }
-            ScreenId::IntrinsicSizing => {
-                self.intrinsic_sizing.update(event);
-            }
-            ScreenId::LayoutInspector => {
-                self.layout_inspector.update(event);
-            }
-            ScreenId::AdvancedTextEditor => {
-                self.advanced_text_editor.update(event);
-            }
-            ScreenId::MousePlayground => {
-                self.mouse_playground.update(event);
-            }
-            ScreenId::FormValidation => {
-                self.form_validation.update(event);
-            }
-            ScreenId::VirtualizedSearch => {
-                self.virtualized_search.update(event);
-            }
-            ScreenId::AsyncTasks => {
-                self.async_tasks.update(event);
-            }
-            ScreenId::ThemeStudio => {
-                self.theme_studio.update(event);
-            }
-            ScreenId::SnapshotPlayer => {
-                self.snapshot_player_mut(|screen| screen.update(event));
-            }
-            ScreenId::PerformanceHud => {
-                self.performance_hud.update(event);
-            }
-            ScreenId::ExplainabilityCockpit => {
-                self.explainability_cockpit.update(event);
-            }
-            ScreenId::I18nDemo => {
-                self.i18n_demo.update(event);
-            }
-            ScreenId::VoiOverlay => {
-                self.voi_overlay.update(event);
-            }
-            ScreenId::InlineModeStory => {
-                self.inline_mode_story.update(event);
-            }
-            ScreenId::AccessibilityPanel => {
-                self.accessibility_panel.update(event);
-            }
-            ScreenId::WidgetBuilder => {
-                self.widget_builder.update(event);
-            }
-            ScreenId::CommandPaletteLab => {
-                self.command_palette_lab.update(event);
-            }
-            ScreenId::DeterminismLab => {
-                self.determinism_lab.update(event);
-            }
-            ScreenId::HyperlinkPlayground => {
-                self.hyperlink_playground.update(event);
-            }
-            ScreenId::KanbanBoard => {
-                self.kanban_board.update(event);
-            }
-            ScreenId::MarkdownLiveEditor => {
-                self.markdown_live_editor.update(event);
-            }
-            ScreenId::DragDrop => {
-                self.drag_drop.update(event);
-            }
-            ScreenId::QuakeEasterEgg => {
-                self.quake_easter_egg.update(event);
-            }
-        }
+        dispatch_screen!(mut self, id, screen => { let _ = screen.update(event); }, noop: {});
     }
 
     /// Whether the given screen is currently consuming text input.
     fn consumes_text_input(&self, id: ScreenId) -> bool {
-        use screens::Screen;
-        match id {
-            ScreenId::FormsInput => self.forms_input.consumes_text_input(),
-            ScreenId::AdvancedTextEditor => self.advanced_text_editor.consumes_text_input(),
-            ScreenId::VirtualizedSearch => self.virtualized_search.consumes_text_input(),
-            ScreenId::LogSearch => self.log_search.consumes_text_input(),
-            ScreenId::MarkdownLiveEditor => self.markdown_live_editor.consumes_text_input(),
-            _ => false,
-        }
+        dispatch_screen!(ref self, id, screen => screen.consumes_text_input(), noop: false)
     }
 
     /// Forward a tick to the active screen and always tick performance_hud.
@@ -1363,7 +1535,7 @@ impl ScreenStates {
     /// Performance HUD is always ticked to collect metrics regardless of which
     /// screen is visible.
     fn tick(&mut self, active: ScreenId, tick_count: u64) {
-        use screens::Screen;
+        use screens::Screen as _;
 
         // Always tick performance_hud and explainability_cockpit for metrics collection.
         self.performance_hud.tick(tick_count);
@@ -1377,59 +1549,7 @@ impl ScreenStates {
             return;
         }
 
-        match active {
-            ScreenId::GuidedTour => {}
-            ScreenId::Dashboard => self.dashboard.tick(tick_count),
-            ScreenId::Shakespeare => self.shakespeare_mut(|screen| screen.tick(tick_count)),
-            ScreenId::CodeExplorer => self.code_explorer_mut(|screen| screen.tick(tick_count)),
-            ScreenId::WidgetGallery => self.widget_gallery.tick(tick_count),
-            ScreenId::LayoutLab => self.layout_lab.tick(tick_count),
-            ScreenId::FormsInput => self.forms_input.tick(tick_count),
-            ScreenId::DataViz => self.data_viz.tick(tick_count),
-            ScreenId::TableThemeGallery => self.table_theme_gallery.tick(tick_count),
-            ScreenId::FileBrowser => self.file_browser_mut(|screen| screen.tick(tick_count)),
-            ScreenId::AdvancedFeatures => self.advanced_features.tick(tick_count),
-            ScreenId::TerminalCapabilities => self.terminal_capabilities.tick(tick_count),
-            ScreenId::MacroRecorder => self.macro_recorder.tick(tick_count),
-            ScreenId::Performance => self.performance.tick(tick_count),
-            ScreenId::MarkdownRichText => self.markdown_rich_text.tick(tick_count),
-            #[cfg(feature = "screen-mermaid")]
-            ScreenId::MermaidShowcase => self.mermaid_showcase.tick(tick_count),
-            #[cfg(not(feature = "screen-mermaid"))]
-            ScreenId::MermaidShowcase => {}
-            #[cfg(feature = "screen-mermaid")]
-            ScreenId::MermaidMegaShowcase => self.mermaid_mega_showcase.tick(tick_count),
-            #[cfg(not(feature = "screen-mermaid"))]
-            ScreenId::MermaidMegaShowcase => {}
-            ScreenId::VisualEffects => self.visual_effects_mut(|screen| screen.tick(tick_count)),
-            ScreenId::ResponsiveDemo => self.responsive_demo.tick(tick_count),
-            ScreenId::LogSearch => self.log_search.tick(tick_count),
-            ScreenId::Notifications => self.notifications.tick(tick_count),
-            ScreenId::ActionTimeline => self.action_timeline.tick(tick_count),
-            ScreenId::IntrinsicSizing => self.intrinsic_sizing.tick(tick_count),
-            ScreenId::LayoutInspector => self.layout_inspector.tick(tick_count),
-            ScreenId::AdvancedTextEditor => self.advanced_text_editor.tick(tick_count),
-            ScreenId::MousePlayground => self.mouse_playground.tick(tick_count),
-            ScreenId::FormValidation => self.form_validation.tick(tick_count),
-            ScreenId::VirtualizedSearch => self.virtualized_search.tick(tick_count),
-            ScreenId::AsyncTasks => self.async_tasks.tick(tick_count),
-            ScreenId::ThemeStudio => self.theme_studio.tick(tick_count),
-            ScreenId::SnapshotPlayer => self.snapshot_player_mut(|screen| screen.tick(tick_count)),
-            ScreenId::PerformanceHud => {} // Already ticked above
-            ScreenId::ExplainabilityCockpit => {} // Already ticked above
-            ScreenId::I18nDemo => self.i18n_demo.tick(tick_count),
-            ScreenId::VoiOverlay => self.voi_overlay.tick(tick_count),
-            ScreenId::InlineModeStory => self.inline_mode_story.tick(tick_count),
-            ScreenId::AccessibilityPanel => self.accessibility_panel.tick(tick_count),
-            ScreenId::WidgetBuilder => self.widget_builder.tick(tick_count),
-            ScreenId::CommandPaletteLab => self.command_palette_lab.tick(tick_count),
-            ScreenId::DeterminismLab => self.determinism_lab.tick(tick_count),
-            ScreenId::HyperlinkPlayground => self.hyperlink_playground.tick(tick_count),
-            ScreenId::KanbanBoard => self.kanban_board.tick(tick_count),
-            ScreenId::MarkdownLiveEditor => self.markdown_live_editor.tick(tick_count),
-            ScreenId::DragDrop => self.drag_drop.tick(tick_count),
-            ScreenId::QuakeEasterEgg => self.quake_easter_egg.tick(tick_count),
-        }
+        dispatch_screen!(mut self, active, screen => screen.tick(tick_count), noop: {});
     }
 
     fn apply_theme(&mut self) {
@@ -1449,6 +1569,11 @@ impl ScreenStates {
         self.markdown_live_editor.apply_theme();
     }
 
+    /// Gather keybindings from the specified screen for the help overlay.
+    fn keybindings(&self, id: ScreenId) -> Vec<screens::HelpEntry> {
+        dispatch_screen!(ref self, id, screen => screen.keybindings(), noop: vec![])
+    }
+
     /// Render the screen identified by `id` into the given area.
     ///
     /// Wraps each screen's `view()` call in a panic boundary. If a screen
@@ -1464,74 +1589,9 @@ impl ScreenStates {
         }
 
         let result = with_panic_cleanup_suppressed(|| {
-            catch_unwind(AssertUnwindSafe(|| {
-                use screens::Screen;
-                match id {
-                    ScreenId::GuidedTour => {}
-                    ScreenId::Dashboard => self.dashboard.view(frame, area),
-                    ScreenId::Shakespeare => {
-                        self.shakespeare_mut(|screen| screen.view(frame, area))
-                    }
-                    ScreenId::CodeExplorer => {
-                        self.code_explorer_mut(|screen| screen.view(frame, area))
-                    }
-                    ScreenId::WidgetGallery => self.widget_gallery.view(frame, area),
-                    ScreenId::LayoutLab => self.layout_lab.view(frame, area),
-                    ScreenId::FormsInput => self.forms_input.view(frame, area),
-                    ScreenId::DataViz => self.data_viz.view(frame, area),
-                    ScreenId::TableThemeGallery => self.table_theme_gallery.view(frame, area),
-                    ScreenId::FileBrowser => {
-                        self.file_browser_mut(|screen| screen.view(frame, area))
-                    }
-                    ScreenId::AdvancedFeatures => self.advanced_features.view(frame, area),
-                    ScreenId::TerminalCapabilities => self.terminal_capabilities.view(frame, area),
-                    ScreenId::MacroRecorder => self.macro_recorder.view(frame, area),
-                    ScreenId::Performance => self.performance.view(frame, area),
-                    ScreenId::MarkdownRichText => self.markdown_rich_text.view(frame, area),
-                    #[cfg(feature = "screen-mermaid")]
-                    ScreenId::MermaidShowcase => self.mermaid_showcase.view(frame, area),
-                    #[cfg(not(feature = "screen-mermaid"))]
-                    ScreenId::MermaidShowcase => {}
-                    #[cfg(feature = "screen-mermaid")]
-                    ScreenId::MermaidMegaShowcase => self.mermaid_mega_showcase.view(frame, area),
-                    #[cfg(not(feature = "screen-mermaid"))]
-                    ScreenId::MermaidMegaShowcase => {}
-                    ScreenId::VisualEffects => {
-                        self.visual_effects_mut(|screen| screen.view(frame, area))
-                    }
-                    ScreenId::ResponsiveDemo => self.responsive_demo.view(frame, area),
-                    ScreenId::LogSearch => self.log_search.view(frame, area),
-                    ScreenId::Notifications => self.notifications.view(frame, area),
-                    ScreenId::ActionTimeline => self.action_timeline.view(frame, area),
-                    ScreenId::IntrinsicSizing => self.intrinsic_sizing.view(frame, area),
-                    ScreenId::LayoutInspector => self.layout_inspector.view(frame, area),
-                    ScreenId::AdvancedTextEditor => self.advanced_text_editor.view(frame, area),
-                    ScreenId::MousePlayground => self.mouse_playground.view(frame, area),
-                    ScreenId::FormValidation => self.form_validation.view(frame, area),
-                    ScreenId::VirtualizedSearch => self.virtualized_search.view(frame, area),
-                    ScreenId::AsyncTasks => self.async_tasks.view(frame, area),
-                    ScreenId::ThemeStudio => self.theme_studio.view(frame, area),
-                    ScreenId::SnapshotPlayer => {
-                        self.snapshot_player_mut(|screen| screen.view(frame, area))
-                    }
-                    ScreenId::PerformanceHud => self.performance_hud.view(frame, area),
-                    ScreenId::ExplainabilityCockpit => {
-                        self.explainability_cockpit.view(frame, area)
-                    }
-                    ScreenId::I18nDemo => self.i18n_demo.view(frame, area),
-                    ScreenId::VoiOverlay => self.voi_overlay.view(frame, area),
-                    ScreenId::InlineModeStory => self.inline_mode_story.view(frame, area),
-                    ScreenId::AccessibilityPanel => self.accessibility_panel.view(frame, area),
-                    ScreenId::WidgetBuilder => self.widget_builder.view(frame, area),
-                    ScreenId::CommandPaletteLab => self.command_palette_lab.view(frame, area),
-                    ScreenId::DeterminismLab => self.determinism_lab.view(frame, area),
-                    ScreenId::HyperlinkPlayground => self.hyperlink_playground.view(frame, area),
-                    ScreenId::KanbanBoard => self.kanban_board.view(frame, area),
-                    ScreenId::MarkdownLiveEditor => self.markdown_live_editor.view(frame, area),
-                    ScreenId::DragDrop => self.drag_drop.view(frame, area),
-                    ScreenId::QuakeEasterEgg => self.quake_easter_egg.view(frame, area),
-                }
-            }))
+            catch_unwind(AssertUnwindSafe(
+                || dispatch_screen!(ref self, id, screen => screen.view(frame, area), noop: {}),
+            ))
         });
 
         if let Err(payload) = result {
@@ -2566,25 +2626,6 @@ fn open_vfx_writer(path: &str) -> std::io::Result<Box<dyn Write + Send>> {
     Ok(Box::new(BufWriter::new(file)))
 }
 
-fn escape_json(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    for ch in raw.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            ch if ch.is_control() => {
-                use std::fmt::Write as _;
-                let _ = write!(out, "\\u{:04x}", ch as u32);
-            }
-            _ => out.push(ch),
-        }
-    }
-    out
-}
-
 // ---------------------------------------------------------------------------
 // AppModel
 // ---------------------------------------------------------------------------
@@ -2819,16 +2860,10 @@ impl AppModel {
     }
 
     fn emit_tour_jsonl(&self, action: &str, outcome: &str, step: Option<&TourStep>) {
-        let Some(path) = tour_log_path() else {
+        let Some(logger) = tour_logger() else {
             return;
         };
 
-        let seq = TOUR_LOG_SEQ.fetch_add(1, Ordering::Relaxed);
-        let ts_us = seq.saturating_mul(16_667);
-        let run_id = tour_run_id();
-        let seed = tour_seed();
-        let mode = tour_screen_mode();
-        let caps_profile = tour_caps_profile();
         let paused = self.tour.is_paused();
         let checksum_json = self
             .tour_checksum
@@ -2846,30 +2881,31 @@ impl AppModel {
             ("none", "none", 0)
         };
 
-        let json = format!(
-            "{{\"seq\":{seq},\"ts_us\":{ts_us},\"event\":\"tour\",\"run_id\":\"{}\",\"action\":\"{}\",\"outcome\":\"{}\",\"step_id\":\"{}\",\"screen_id\":\"{}\",\"duration_ms\":{duration_ms},\"step_index\":{},\"step_count\":{},\"seed\":{seed},\"width\":{},\"height\":{},\"mode\":\"{}\",\"caps_profile\":\"{}\",\"speed\":{:.2},\"paused\":{paused},\"checksum\":{checksum_json}}}",
-            json_escape(&run_id),
-            json_escape(action),
-            json_escape(outcome),
-            json_escape(step_id),
-            json_escape(screen_id),
-            self.tour.step_index(),
-            self.tour.step_count(),
-            self.terminal_width,
-            self.terminal_height,
-            json_escape(&mode),
-            json_escape(&caps_profile),
-            self.tour.speed(),
-        );
+        let duration_ms_s = duration_ms.to_string();
+        let step_index_s = self.tour.step_index().to_string();
+        let step_count_s = self.tour.step_count().to_string();
+        let width_s = self.terminal_width.to_string();
+        let height_s = self.terminal_height.to_string();
+        let speed_s = format!("{:.2}", self.tour.speed());
+        let paused_s = paused.to_string();
 
-        if let Some(parent) = Path::new(&path).parent()
-            && !parent.as_os_str().is_empty()
-        {
-            let _ = create_dir_all(parent);
-        }
-        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-            let _ = writeln!(file, "{json}");
-        }
+        logger.log_mixed(
+            "tour",
+            &[
+                ("action", JsonlValue::Str(action)),
+                ("outcome", JsonlValue::Str(outcome)),
+                ("step_id", JsonlValue::Str(step_id)),
+                ("screen_id", JsonlValue::Str(screen_id)),
+                ("duration_ms", JsonlValue::Raw(&duration_ms_s)),
+                ("step_index", JsonlValue::Raw(&step_index_s)),
+                ("step_count", JsonlValue::Raw(&step_count_s)),
+                ("width", JsonlValue::Raw(&width_s)),
+                ("height", JsonlValue::Raw(&height_s)),
+                ("speed", JsonlValue::Raw(&speed_s)),
+                ("paused", JsonlValue::Raw(&paused_s)),
+                ("checksum", JsonlValue::Raw(&checksum_json)),
+            ],
+        );
     }
 
     pub fn start_tour(&mut self, start_step: usize, speed: f64) {
@@ -3023,7 +3059,7 @@ impl AppModel {
             } else {
                 meta.title.to_string()
             };
-            let action_id = format!("screen:{}", meta.title.to_lowercase().replace(' ', "_"));
+            let action_id = format!("screen:{}", meta.slug);
             let mut tags: Vec<&str> = Vec::with_capacity(meta.palette_tags.len() + 3);
             tags.extend_from_slice(meta.palette_tags);
             tags.push("screen");
@@ -3101,13 +3137,13 @@ impl AppModel {
         self.command_palette.replace_actions(actions);
     }
 
-    /// Resolve a screen action ID (screen:<name>) to ScreenId.
+    /// Resolve a screen action ID (`screen:<slug>`) to `ScreenId`.
+    ///
+    /// Uses the stable slug from [`ScreenMeta`] rather than title-derived
+    /// strings, so renaming a screen title does not break navigation.
     fn screen_id_from_action_id(action_id: &str) -> Option<ScreenId> {
-        let screen_name = action_id.strip_prefix("screen:")?;
-        screens::screen_registry()
-            .iter()
-            .find(|meta| meta.title.to_lowercase().replace(' ', "_") == screen_name)
-            .map(|meta| meta.id)
+        let slug = action_id.strip_prefix("screen:")?;
+        screens::screen_by_slug(slug).map(|meta| meta.id)
     }
 
     /// Current palette selection resolved to a ScreenId, if any.
@@ -4072,7 +4108,7 @@ impl Model for AppModel {
         };
         crate::chrome::render_status_bar(&status_state, frame, chunks[2]);
 
-        if tour_log_path().is_some() {
+        if tour_logger().is_some() {
             let pool = &*frame.pool;
             let hash = checksum_buffer(&frame.buffer, pool);
             self.tour_checksum.set(Some(hash));
@@ -4095,9 +4131,10 @@ enum UndoAction {
 impl AppModel {
     /// Gather keybindings from the current screen for the help overlay.
     pub fn current_screen_keybindings(&self) -> Vec<crate::chrome::HelpEntry> {
-        use screens::Screen;
-        let mut entries = match self.display_screen() {
-            ScreenId::GuidedTour => vec![
+        let current = self.display_screen();
+        let mut entries = if current == ScreenId::GuidedTour {
+            // GuidedTour has no screen state — provide app-level keybindings.
+            vec![
                 screens::HelpEntry {
                     key: "Click / Enter / Space",
                     action: "Start guided tour from selected step",
@@ -4122,63 +4159,9 @@ impl AppModel {
                     key: "Esc",
                     action: "Back to Dashboard",
                 },
-            ],
-            ScreenId::Dashboard => self.screens.dashboard.keybindings(),
-            ScreenId::Shakespeare => self.screens.shakespeare_mut(|screen| screen.keybindings()),
-            ScreenId::CodeExplorer => self
-                .screens
-                .code_explorer_mut(|screen| screen.keybindings()),
-            ScreenId::WidgetGallery => self.screens.widget_gallery.keybindings(),
-            ScreenId::LayoutLab => self.screens.layout_lab.keybindings(),
-            ScreenId::FormsInput => self.screens.forms_input.keybindings(),
-            ScreenId::DataViz => self.screens.data_viz.keybindings(),
-            ScreenId::TableThemeGallery => self.screens.table_theme_gallery.keybindings(),
-            ScreenId::FileBrowser => self.screens.file_browser_mut(|screen| screen.keybindings()),
-            ScreenId::AdvancedFeatures => self.screens.advanced_features.keybindings(),
-            ScreenId::TerminalCapabilities => self.screens.terminal_capabilities.keybindings(),
-            ScreenId::MacroRecorder => self.screens.macro_recorder.keybindings(),
-            ScreenId::Performance => self.screens.performance.keybindings(),
-            ScreenId::MarkdownRichText => self.screens.markdown_rich_text.keybindings(),
-            #[cfg(feature = "screen-mermaid")]
-            ScreenId::MermaidShowcase => self.screens.mermaid_showcase.keybindings(),
-            #[cfg(not(feature = "screen-mermaid"))]
-            ScreenId::MermaidShowcase => vec![],
-            #[cfg(feature = "screen-mermaid")]
-            ScreenId::MermaidMegaShowcase => self.screens.mermaid_mega_showcase.keybindings(),
-            #[cfg(not(feature = "screen-mermaid"))]
-            ScreenId::MermaidMegaShowcase => vec![],
-            ScreenId::VisualEffects => self
-                .screens
-                .visual_effects_mut(|screen| screen.keybindings()),
-            ScreenId::ResponsiveDemo => self.screens.responsive_demo.keybindings(),
-            ScreenId::LogSearch => self.screens.log_search.keybindings(),
-            ScreenId::Notifications => self.screens.notifications.keybindings(),
-            ScreenId::ActionTimeline => self.screens.action_timeline.keybindings(),
-            ScreenId::IntrinsicSizing => self.screens.intrinsic_sizing.keybindings(),
-            ScreenId::LayoutInspector => self.screens.layout_inspector.keybindings(),
-            ScreenId::AdvancedTextEditor => self.screens.advanced_text_editor.keybindings(),
-            ScreenId::MousePlayground => self.screens.mouse_playground.keybindings(),
-            ScreenId::FormValidation => self.screens.form_validation.keybindings(),
-            ScreenId::VirtualizedSearch => self.screens.virtualized_search.keybindings(),
-            ScreenId::AsyncTasks => self.screens.async_tasks.keybindings(),
-            ScreenId::ThemeStudio => self.screens.theme_studio.keybindings(),
-            ScreenId::SnapshotPlayer => self
-                .screens
-                .snapshot_player_mut(|screen| screen.keybindings()),
-            ScreenId::PerformanceHud => self.screens.performance_hud.keybindings(),
-            ScreenId::ExplainabilityCockpit => self.screens.explainability_cockpit.keybindings(),
-            ScreenId::I18nDemo => self.screens.i18n_demo.keybindings(),
-            ScreenId::VoiOverlay => self.screens.voi_overlay.keybindings(),
-            ScreenId::InlineModeStory => self.screens.inline_mode_story.keybindings(),
-            ScreenId::AccessibilityPanel => self.screens.accessibility_panel.keybindings(),
-            ScreenId::WidgetBuilder => self.screens.widget_builder.keybindings(),
-            ScreenId::CommandPaletteLab => self.screens.command_palette_lab.keybindings(),
-            ScreenId::DeterminismLab => self.screens.determinism_lab.keybindings(),
-            ScreenId::HyperlinkPlayground => self.screens.hyperlink_playground.keybindings(),
-            ScreenId::KanbanBoard => self.screens.kanban_board.keybindings(),
-            ScreenId::MarkdownLiveEditor => self.screens.markdown_live_editor.keybindings(),
-            ScreenId::DragDrop => self.screens.drag_drop.keybindings(),
-            ScreenId::QuakeEasterEgg => self.screens.quake_easter_egg.keybindings(),
+            ]
+        } else {
+            self.screens.keybindings(current)
         };
         if self.tour.is_active() {
             entries.push(screens::HelpEntry {
@@ -4926,7 +4909,7 @@ impl AppModel {
         if self.deterministic_mode {
             return;
         }
-        if !perf_hud_jsonl_enabled() {
+        if perf_hud_logger().is_none() {
             return;
         }
         let Some(last_tick) = self.tick_last_seen else {
@@ -7113,10 +7096,10 @@ mod tests {
         // The function checks FTUI_PERF_HUD_JSONL env var
         // In test environment without explicit setting, it should be disabled
         // We can't easily test stderr output, but we verify the guard function
-        let enabled = perf_hud_jsonl_enabled();
-        // Note: This may be true if the env var is set in CI
+        let logger = perf_hud_logger();
+        // Note: This may be Some if the env var is set in CI
         // The important thing is that the function doesn't panic
-        let _ = enabled; // Exercise the code path
+        let _ = logger; // Exercise the code path
     }
 
     /// Test that emit_perf_hud_jsonl doesn't panic with various inputs.
@@ -7141,20 +7124,21 @@ mod tests {
         emit_perf_hud_jsonl_numeric("test_numeric", &[("zero", 0.0)]);
     }
 
-    /// Test that PERF_HUD_LOG_SEQ increments monotonically.
+    /// Test that perf-HUD logger seq increments when logger is available.
     #[test]
     fn perf_hud_log_seq_increments() {
-        use std::sync::atomic::Ordering;
-        let before = PERF_HUD_LOG_SEQ.load(Ordering::Relaxed);
+        // When the env var is not set, perf_hud_logger() returns None and
+        // emit_perf_hud_jsonl is a no-op. This test just exercises the code
+        // path without panicking.
         emit_perf_hud_jsonl("seq_test_1", &[]);
         emit_perf_hud_jsonl("seq_test_2", &[]);
-        let after = PERF_HUD_LOG_SEQ.load(Ordering::Relaxed);
-        // Sequence should have incremented by at least 2 (possibly more if JSONL was enabled)
-        // If JSONL is disabled, the seq still increments
-        assert!(
-            after >= before,
-            "sequence number must be monotonically increasing"
-        );
+        // If a logger was created (env var set), its internal seq advanced.
+        if let Some(logger) = perf_hud_logger() {
+            assert!(
+                logger.seq_value() >= 2,
+                "sequence number must be monotonically increasing"
+            );
+        }
     }
 
     /// Test diagnostic logging during tick timing (integration).
