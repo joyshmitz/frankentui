@@ -263,4 +263,11 @@ impl A11yNodeInfo {
         self.parent = Some(parent);
         self
     }
+
+    /// Builder-style setter for the state flags.
+    #[inline]
+    pub fn with_state(mut self, state: A11yState) -> Self {
+        self.state = state;
+        self
+    }
 }

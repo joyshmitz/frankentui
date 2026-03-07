@@ -822,3 +822,276 @@ fn all_roles_have_display() {
         assert!(!s.is_empty(), "Role {role:?} has empty Display");
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// Diff tests for description, shortcut, and parent changes
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn diff_detects_description_change() {
+    let mut b1 = A11yTreeBuilder::new();
+    b1.add_node(
+        A11yNodeInfo::new(1, A11yRole::Button, Rect::new(0, 0, 10, 1))
+            .with_name("Save")
+            .with_description("Save the current file"),
+    );
+    b1.set_root(1);
+    let tree1 = b1.build();
+
+    let mut b2 = A11yTreeBuilder::new();
+    b2.add_node(
+        A11yNodeInfo::new(1, A11yRole::Button, Rect::new(0, 0, 10, 1))
+            .with_name("Save")
+            .with_description("Save all open files"),
+    );
+    b2.set_root(1);
+    let tree2 = b2.build();
+
+    let diff = tree2.diff(&tree1);
+    let changes = &diff.changed.iter().find(|(id, _)| *id == 1).unwrap().1;
+    assert!(changes.iter().any(|c| matches!(
+        c,
+        A11yChange::DescriptionChanged {
+            old: Some(old),
+            new: Some(new),
+        } if old == "Save the current file" && new == "Save all open files"
+    )));
+}
+
+#[test]
+fn diff_detects_description_added() {
+    let mut b1 = A11yTreeBuilder::new();
+    b1.add_node(
+        A11yNodeInfo::new(1, A11yRole::Button, Rect::new(0, 0, 10, 1))
+            .with_name("Save"),
+    );
+    b1.set_root(1);
+    let tree1 = b1.build();
+
+    let mut b2 = A11yTreeBuilder::new();
+    b2.add_node(
+        A11yNodeInfo::new(1, A11yRole::Button, Rect::new(0, 0, 10, 1))
+            .with_name("Save")
+            .with_description("Save the file"),
+    );
+    b2.set_root(1);
+    let tree2 = b2.build();
+
+    let diff = tree2.diff(&tree1);
+    let changes = &diff.changed.iter().find(|(id, _)| *id == 1).unwrap().1;
+    assert!(changes.iter().any(|c| matches!(
+        c,
+        A11yChange::DescriptionChanged {
+            old: None,
+            new: Some(_),
+        }
+    )));
+}
+
+#[test]
+fn diff_detects_shortcut_change() {
+    let mut b1 = A11yTreeBuilder::new();
+    b1.add_node(
+        A11yNodeInfo::new(1, A11yRole::Button, Rect::new(0, 0, 10, 1))
+            .with_name("Save")
+            .with_shortcut("Ctrl+S"),
+    );
+    b1.set_root(1);
+    let tree1 = b1.build();
+
+    let mut b2 = A11yTreeBuilder::new();
+    b2.add_node(
+        A11yNodeInfo::new(1, A11yRole::Button, Rect::new(0, 0, 10, 1))
+            .with_name("Save")
+            .with_shortcut("Cmd+S"),
+    );
+    b2.set_root(1);
+    let tree2 = b2.build();
+
+    let diff = tree2.diff(&tree1);
+    let changes = &diff.changed.iter().find(|(id, _)| *id == 1).unwrap().1;
+    assert!(changes.iter().any(|c| matches!(
+        c,
+        A11yChange::ShortcutChanged {
+            old: Some(old),
+            new: Some(new),
+        } if old == "Ctrl+S" && new == "Cmd+S"
+    )));
+}
+
+#[test]
+fn diff_detects_shortcut_removed() {
+    let mut b1 = A11yTreeBuilder::new();
+    b1.add_node(
+        A11yNodeInfo::new(1, A11yRole::Button, Rect::new(0, 0, 10, 1))
+            .with_name("Save")
+            .with_shortcut("Ctrl+S"),
+    );
+    b1.set_root(1);
+    let tree1 = b1.build();
+
+    let mut b2 = A11yTreeBuilder::new();
+    b2.add_node(
+        A11yNodeInfo::new(1, A11yRole::Button, Rect::new(0, 0, 10, 1))
+            .with_name("Save"),
+        // no shortcut
+    );
+    b2.set_root(1);
+    let tree2 = b2.build();
+
+    let diff = tree2.diff(&tree1);
+    let changes = &diff.changed.iter().find(|(id, _)| *id == 1).unwrap().1;
+    assert!(changes.iter().any(|c| matches!(
+        c,
+        A11yChange::ShortcutChanged {
+            old: Some(_),
+            new: None,
+        }
+    )));
+}
+
+#[test]
+fn diff_detects_parent_change() {
+    let mut b1 = A11yTreeBuilder::new();
+    b1.add_node(
+        A11yNodeInfo::new(1, A11yRole::Window, Rect::new(0, 0, 80, 24))
+            .with_children(vec![2]),
+    );
+    b1.add_node(
+        A11yNodeInfo::new(2, A11yRole::Button, Rect::new(0, 0, 10, 1))
+            .with_name("OK")
+            .with_parent(1),
+    );
+    b1.add_node(
+        A11yNodeInfo::new(3, A11yRole::Group, Rect::new(0, 0, 40, 24)),
+    );
+    b1.set_root(1);
+    let tree1 = b1.build();
+
+    let mut b2 = A11yTreeBuilder::new();
+    b2.add_node(
+        A11yNodeInfo::new(1, A11yRole::Window, Rect::new(0, 0, 80, 24)),
+    );
+    b2.add_node(
+        A11yNodeInfo::new(2, A11yRole::Button, Rect::new(0, 0, 10, 1))
+            .with_name("OK")
+            .with_parent(3), // reparented from 1 to 3
+    );
+    b2.add_node(
+        A11yNodeInfo::new(3, A11yRole::Group, Rect::new(0, 0, 40, 24))
+            .with_children(vec![2]),
+    );
+    b2.set_root(1);
+    let tree2 = b2.build();
+
+    let diff = tree2.diff(&tree1);
+    let changes = &diff.changed.iter().find(|(id, _)| *id == 2).unwrap().1;
+    assert!(changes.iter().any(|c| matches!(
+        c,
+        A11yChange::ParentChanged {
+            old: Some(1),
+            new: Some(3),
+        }
+    )));
+}
+
+#[test]
+fn diff_detects_parent_removed() {
+    let mut b1 = A11yTreeBuilder::new();
+    b1.add_node(
+        A11yNodeInfo::new(1, A11yRole::Window, Rect::new(0, 0, 80, 24))
+            .with_children(vec![2]),
+    );
+    b1.add_node(
+        A11yNodeInfo::new(2, A11yRole::Button, Rect::new(0, 0, 10, 1))
+            .with_parent(1),
+    );
+    b1.set_root(1);
+    let tree1 = b1.build();
+
+    let mut b2 = A11yTreeBuilder::new();
+    b2.add_node(
+        A11yNodeInfo::new(1, A11yRole::Window, Rect::new(0, 0, 80, 24)),
+    );
+    b2.add_node(
+        A11yNodeInfo::new(2, A11yRole::Button, Rect::new(0, 0, 10, 1)),
+        // no parent
+    );
+    b2.set_root(1);
+    let tree2 = b2.build();
+
+    let diff = tree2.diff(&tree1);
+    let changes = &diff.changed.iter().find(|(id, _)| *id == 2).unwrap().1;
+    assert!(changes.iter().any(|c| matches!(
+        c,
+        A11yChange::ParentChanged {
+            old: Some(1),
+            new: None,
+        }
+    )));
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// with_state builder method test
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn node_with_state_builder() {
+    let state = A11yState {
+        focused: true,
+        disabled: false,
+        checked: Some(true),
+        ..A11yState::default()
+    };
+    let node = A11yNodeInfo::new(1, A11yRole::Checkbox, Rect::new(0, 0, 3, 1))
+        .with_name("Accept")
+        .with_state(state);
+
+    assert!(node.state.focused);
+    assert!(!node.state.disabled);
+    assert_eq!(node.state.checked, Some(true));
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Cycle protection in ancestors()
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn ancestors_cycle_protection() {
+    // Build a tree with a cyclic parent chain: 1 -> 2 -> 1.
+    let mut b = A11yTreeBuilder::new();
+    b.add_node(
+        A11yNodeInfo::new(1, A11yRole::Group, Rect::new(0, 0, 80, 24))
+            .with_parent(2)
+            .with_children(vec![2]),
+    );
+    b.add_node(
+        A11yNodeInfo::new(2, A11yRole::Group, Rect::new(0, 0, 40, 12))
+            .with_parent(1)
+            .with_children(vec![1]),
+    );
+    b.set_root(1);
+    let tree = b.build();
+
+    // Without cycle protection this would loop forever.
+    // With protection it should stop after visiting each node once.
+    let path = tree.ancestors(1);
+    assert!(path.len() <= 2, "cycle should be broken, got {:?}", path);
+    assert!(path.contains(&1));
+    assert!(path.contains(&2));
+}
+
+#[test]
+fn ancestors_self_cycle_protection() {
+    // A node that is its own parent.
+    let mut b = A11yTreeBuilder::new();
+    b.add_node(
+        A11yNodeInfo::new(1, A11yRole::Window, Rect::new(0, 0, 80, 24))
+            .with_parent(1),
+    );
+    b.set_root(1);
+    let tree = b.build();
+
+    let path = tree.ancestors(1);
+    assert_eq!(path, vec![1], "self-cycle should stop after one visit");
+}

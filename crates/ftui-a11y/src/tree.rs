@@ -175,10 +175,18 @@ impl A11yTree {
 
     /// Walk ancestors from `id` up to the root (inclusive), returning
     /// their IDs. Returns an empty vec if `id` is not found.
+    ///
+    /// Includes cycle protection: stops after visiting 1000 nodes to
+    /// prevent infinite loops on malformed cyclic parent chains.
     pub fn ancestors(&self, id: u64) -> Vec<u64> {
+        const MAX_DEPTH: usize = 1000;
         let mut path = Vec::new();
+        let mut visited = ahash::AHashSet::new();
         let mut current = Some(id);
         while let Some(cid) = current {
+            if path.len() >= MAX_DEPTH || !visited.insert(cid) {
+                break;
+            }
             if let Some(node) = self.nodes.get(&cid) {
                 path.push(cid);
                 current = node.parent;
@@ -292,6 +300,21 @@ pub enum A11yChange {
         old: Option<LiveRegion>,
         new: Option<LiveRegion>,
     },
+    /// The accessible description changed.
+    DescriptionChanged {
+        old: Option<String>,
+        new: Option<String>,
+    },
+    /// The keyboard shortcut hint changed.
+    ShortcutChanged {
+        old: Option<String>,
+        new: Option<String>,
+    },
+    /// The parent node ID changed.
+    ParentChanged {
+        old: Option<u64>,
+        new: Option<u64>,
+    },
 }
 
 // ── Internal diff helpers ──────────────────────────────────────────────
@@ -325,6 +348,27 @@ fn diff_node(old: &A11yNodeInfo, new: &A11yNodeInfo) -> Vec<A11yChange> {
         changes.push(A11yChange::LiveRegionChanged {
             old: old.live_region,
             new: new.live_region,
+        });
+    }
+
+    if old.description != new.description {
+        changes.push(A11yChange::DescriptionChanged {
+            old: old.description.clone(),
+            new: new.description.clone(),
+        });
+    }
+
+    if old.shortcut != new.shortcut {
+        changes.push(A11yChange::ShortcutChanged {
+            old: old.shortcut.clone(),
+            new: new.shortcut.clone(),
+        });
+    }
+
+    if old.parent != new.parent {
+        changes.push(A11yChange::ParentChanged {
+            old: old.parent,
+            new: new.parent,
         });
     }
 
