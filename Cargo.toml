@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/doctor_frankentui",
     "crates/ftui",
+    "crates/ftui-a11y",
     "crates/ftui-backend",
     "crates/ftui-core",
     "crates/ftui-demo-showcase",
