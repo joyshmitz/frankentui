@@ -841,6 +841,9 @@ impl VirtualizedSearch {
             self.scroll_offset = self.selected;
         }
         let vh = self.viewport_height.get();
+        if vh == 0 {
+            return;
+        }
         if self.selected >= self.scroll_offset + vh {
             self.scroll_offset = self.selected.saturating_sub(vh - 1);
         }

@@ -414,6 +414,13 @@ impl LogViewer {
     /// Scroll up by N lines. Disables follow mode.
     pub fn scroll_up(&mut self, lines: usize) {
         if self.filtered_indices.is_some() {
+            // Clamp usize::MAX sentinel (set by scroll_to_bottom when viewport unknown)
+            if let Some(filtered_total) = self.filtered_indices.as_ref().map(Vec::len) {
+                let max = filtered_total.saturating_sub(1);
+                if self.filtered_scroll_offset > max {
+                    self.filtered_scroll_offset = max;
+                }
+            }
             self.filtered_scroll_offset = self.filtered_scroll_offset.saturating_sub(lines);
             self.virt.set_follow(false);
         } else {
@@ -428,15 +435,20 @@ impl LogViewer {
             if filtered_total == 0 {
                 self.filtered_scroll_offset = 0;
             } else {
+                // Clamp usize::MAX sentinel before arithmetic
+                let visible_count = self.virt.visible_count();
+                let max_offset = filtered_total.saturating_sub(visible_count.max(1));
+                if self.filtered_scroll_offset > max_offset {
+                    self.filtered_scroll_offset = max_offset;
+                }
                 self.filtered_scroll_offset = self.filtered_scroll_offset.saturating_add(lines);
-                let max_offset = filtered_total.saturating_sub(1);
                 if self.filtered_scroll_offset > max_offset {
                     self.filtered_scroll_offset = max_offset;
                 }
             }
             // Re-enable follow if we scrolled to the bottom of the filtered set.
-            let visible_count = self.virt.visible_count();
-            if self.is_filtered_at_bottom(filtered_total, visible_count) {
+            let vc = self.virt.visible_count();
+            if self.is_filtered_at_bottom(filtered_total, vc) {
                 self.virt.set_follow(true);
             }
         } else {
@@ -984,7 +996,10 @@ impl LogViewer {
     }
 
     fn is_filtered_at_bottom(&self, total: usize, visible_count: usize) -> bool {
-        if total == 0 || visible_count == 0 {
+        if visible_count == 0 {
+            return false;
+        }
+        if total == 0 {
             return true;
         }
         self.filtered_scroll_offset >= total.saturating_sub(visible_count)
