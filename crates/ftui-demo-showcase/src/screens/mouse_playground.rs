@@ -41,7 +41,9 @@ use ftui_style::{Style, StyleFlags};
 use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
 use ftui_widgets::borders::{BorderType, Borders};
-use ftui_widgets::diagnostics::{self, DiagnosticRecord};
+use ftui_widgets::diagnostics::{
+    self, DiagnosticHookDispatch, DiagnosticRecord, DiagnosticSupport,
+};
 use ftui_widgets::paragraph::Paragraph;
 
 use super::{HelpEntry, Screen};
@@ -457,7 +459,7 @@ impl TelemetryHooks {
     }
 
     /// Dispatch an entry to relevant hooks.
-    fn dispatch(&self, entry: &DiagnosticEntry) {
+    fn dispatch_entry(&self, entry: &DiagnosticEntry) {
         if let Some(ref cb) = self.on_any_event {
             cb(entry);
         }
@@ -480,6 +482,23 @@ impl TelemetryHooks {
             }
             _ => {}
         }
+    }
+}
+
+impl std::fmt::Debug for TelemetryHooks {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TelemetryHooks")
+            .field("on_hit_test", &self.on_hit_test.is_some())
+            .field("on_hover_change", &self.on_hover_change.is_some())
+            .field("on_target_click", &self.on_target_click.is_some())
+            .field("on_any_event", &self.on_any_event.is_some())
+            .finish()
+    }
+}
+
+impl DiagnosticHookDispatch<DiagnosticEntry> for TelemetryHooks {
+    fn dispatch(&self, entry: &DiagnosticEntry) {
+        self.dispatch_entry(entry);
     }
 }
 
@@ -575,10 +594,8 @@ pub struct MousePlayground {
     last_mouse_pos: Option<(u16, u16)>,
     /// Last rendered grid area for hit testing.
     last_grid_area: Cell<Rect>,
-    /// Diagnostic log for telemetry (bd-bksf.5).
-    diagnostic_log: Option<DiagnosticLog>,
-    /// Telemetry hooks for external observers (bd-bksf.5).
-    telemetry_hooks: Option<TelemetryHooks>,
+    /// Shared diagnostic support (optional log + optional telemetry hooks).
+    diagnostics: DiagnosticSupport<DiagnosticEntry, TelemetryHooks>,
     /// Current panel focus (bd-bksf.6 UX/A11y).
     focus: Focus,
     /// Keyboard-focused target index (0-based, for Targets panel).
@@ -601,10 +618,10 @@ impl MousePlayground {
         }
 
         // Enable diagnostic log if diagnostics are enabled
-        let diagnostic_log = if diagnostics_enabled() {
-            Some(DiagnosticLog::new().with_stderr())
+        let diagnostics = if diagnostics_enabled() {
+            DiagnosticSupport::new().with_log(DiagnosticLog::new().with_stderr())
         } else {
-            None
+            DiagnosticSupport::new()
         };
 
         Self {
@@ -617,8 +634,7 @@ impl MousePlayground {
             show_jitter_stats: false,
             last_mouse_pos: None,
             last_grid_area: Cell::new(Rect::default()),
-            diagnostic_log,
-            telemetry_hooks: None,
+            diagnostics,
             focus: Focus::default(),
             focused_target_index: 0,
         }
@@ -627,40 +643,30 @@ impl MousePlayground {
     /// Create with diagnostic log enabled (for testing).
     #[must_use]
     pub fn with_diagnostics(mut self) -> Self {
-        self.diagnostic_log = Some(DiagnosticLog::new());
+        self.diagnostics.set_log(DiagnosticLog::new());
         self
     }
 
     /// Create with telemetry hooks.
     #[must_use]
     pub fn with_telemetry_hooks(mut self, hooks: TelemetryHooks) -> Self {
-        self.telemetry_hooks = Some(hooks);
+        self.diagnostics.set_hooks(hooks);
         self
     }
 
     /// Get the diagnostic log (for testing).
     pub fn diagnostic_log(&self) -> Option<&DiagnosticLog> {
-        self.diagnostic_log.as_ref()
+        self.diagnostics.log()
     }
 
     /// Get mutable diagnostic log (for testing).
     pub fn diagnostic_log_mut(&mut self) -> Option<&mut DiagnosticLog> {
-        self.diagnostic_log.as_mut()
+        self.diagnostics.log_mut()
     }
 
     /// Record a diagnostic entry and dispatch to hooks.
     fn record_diagnostic(&mut self, entry: DiagnosticEntry) {
-        let entry = entry.with_checksum();
-
-        // Dispatch to hooks first (immutable reference)
-        if let Some(ref hooks) = self.telemetry_hooks {
-            hooks.dispatch(&entry);
-        }
-
-        // Then record to log
-        if let Some(ref mut log) = self.diagnostic_log {
-            log.record(entry);
-        }
+        self.diagnostics.record(entry.with_checksum());
     }
 
     /// Log a mouse event.

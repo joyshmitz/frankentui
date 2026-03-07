@@ -33,7 +33,7 @@ use ftui_render::cell::{Cell, PackedRgba};
 use ftui_render::frame::{Frame, HitCell, HitData, HitId, HitRegion};
 use ftui_text::display_width;
 
-use crate::diagnostics::{self, DiagnosticRecord};
+use crate::diagnostics::{self, DiagnosticHookDispatch, DiagnosticRecord, DiagnosticSupport};
 use crate::{draw_text_span, set_style_area, Widget};
 use ftui_style::Style;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -425,7 +425,7 @@ impl TelemetryHooks {
     }
 
     /// Dispatch an entry to relevant hooks.
-    fn dispatch(&self, entry: &DiagnosticEntry) {
+    fn dispatch_entry(&self, entry: &DiagnosticEntry) {
         if let Some(ref cb) = self.on_any_event {
             cb(entry);
         }
@@ -453,6 +453,12 @@ impl TelemetryHooks {
             }
             _ => {}
         }
+    }
+}
+
+impl DiagnosticHookDispatch<DiagnosticEntry> for TelemetryHooks {
+    fn dispatch(&self, entry: &DiagnosticEntry) {
+        self.dispatch_entry(entry);
     }
 }
 
@@ -654,28 +660,26 @@ pub struct InspectorState {
     pub show_names: bool,
     /// Toggle for render time display.
     pub show_times: bool,
-    /// Diagnostic log for telemetry (bd-17h9.8).
-    diagnostic_log: Option<DiagnosticLog>,
-    /// Telemetry hooks for external observers (bd-17h9.8).
-    telemetry_hooks: Option<TelemetryHooks>,
+    /// Shared diagnostic support (optional log + optional telemetry hooks).
+    diagnostics: DiagnosticSupport<DiagnosticEntry, TelemetryHooks>,
 }
 
 impl InspectorState {
     /// Create a new inspector state.
     #[must_use]
     pub fn new() -> Self {
-        let diagnostic_log = if diagnostics_enabled() {
-            Some(DiagnosticLog::new().with_max_entries(5000).with_stderr())
+        let diagnostics = if diagnostics_enabled() {
+            DiagnosticSupport::new()
+                .with_log(DiagnosticLog::new().with_max_entries(5000).with_stderr())
         } else {
-            None
+            DiagnosticSupport::new()
         };
         Self {
             show_hits: true,
             show_bounds: true,
             show_names: true,
             show_times: false,
-            diagnostic_log,
-            telemetry_hooks: None,
+            diagnostics,
             ..Default::default()
         }
     }
@@ -683,32 +687,33 @@ impl InspectorState {
     /// Create with diagnostic log enabled (for testing).
     #[must_use]
     pub fn with_diagnostics(mut self) -> Self {
-        self.diagnostic_log = Some(DiagnosticLog::new().with_max_entries(5000));
+        self.diagnostics
+            .set_log(DiagnosticLog::new().with_max_entries(5000));
         self
     }
 
     /// Create with telemetry hooks.
     #[must_use]
     pub fn with_telemetry_hooks(mut self, hooks: TelemetryHooks) -> Self {
-        self.telemetry_hooks = Some(hooks);
+        self.diagnostics.set_hooks(hooks);
         self
     }
 
     /// Get the diagnostic log (for testing).
     #[must_use = "use the diagnostic log (if enabled)"]
     pub fn diagnostic_log(&self) -> Option<&DiagnosticLog> {
-        self.diagnostic_log.as_ref()
+        self.diagnostics.log()
     }
 
     /// Get mutable diagnostic log (for testing).
     #[must_use = "use the diagnostic log (if enabled)"]
     pub fn diagnostic_log_mut(&mut self) -> Option<&mut DiagnosticLog> {
-        self.diagnostic_log.as_mut()
+        self.diagnostics.log_mut()
     }
 
     #[inline]
     fn diagnostics_active(&self) -> bool {
-        self.diagnostic_log.is_some() || self.telemetry_hooks.is_some()
+        self.diagnostics.is_active()
     }
 
     /// Toggle the inspector on/off.
@@ -877,18 +882,10 @@ impl InspectorState {
     }
 
     fn record_diagnostic(&mut self, entry: DiagnosticEntry) {
-        if self.diagnostic_log.is_none() && self.telemetry_hooks.is_none() {
+        if !self.diagnostics.is_active() {
             return;
         }
-        let entry = entry.with_checksum();
-
-        if let Some(ref hooks) = self.telemetry_hooks {
-            hooks.dispatch(&entry);
-        }
-
-        if let Some(ref mut log) = self.diagnostic_log {
-            log.record(entry);
-        }
+        self.diagnostics.record(entry.with_checksum());
     }
 
     /// Check if we should render hit regions.

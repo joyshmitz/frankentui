@@ -678,13 +678,6 @@ impl CellAttrs {
     pub fn has_flag(self, flag: StyleFlags) -> bool {
         self.flags().contains(flag)
     }
-
-    /// Return a copy with the given flags OR-ed onto the existing flags.
-    #[inline]
-    #[must_use]
-    pub fn merged_flags(self, extra: StyleFlags) -> Self {
-        self.with_flags(self.flags() | extra)
-    }
 }
 
 #[cfg(test)]

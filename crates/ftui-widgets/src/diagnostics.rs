@@ -54,6 +54,13 @@ pub trait DiagnosticRecord: fmt::Debug + Clone {
     fn to_jsonl(&self) -> String;
 }
 
+/// Trait implemented by telemetry hook collections that can observe
+/// diagnostic entries of type `E`.
+pub trait DiagnosticHookDispatch<E>: fmt::Debug {
+    /// Dispatch a single diagnostic entry to any registered hooks.
+    fn dispatch(&self, entry: &E);
+}
+
 // =============================================================================
 // DiagnosticLog<E>
 // =============================================================================
@@ -148,6 +155,102 @@ impl<E: DiagnosticRecord> DiagnosticLog<E> {
     /// Whether the log is empty.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+}
+
+// =============================================================================
+// DiagnosticSupport<E, H>
+// =============================================================================
+
+/// Shared state for optional diagnostic logging plus optional telemetry hooks.
+///
+/// This is the reusable control-flow skeleton shared by diagnostic-enabled
+/// widgets and screens:
+///
+/// - optional bounded log
+/// - optional hook collection
+/// - shared `record()` ordering: hooks first, then log
+pub struct DiagnosticSupport<E: DiagnosticRecord, H: DiagnosticHookDispatch<E>> {
+    log: Option<DiagnosticLog<E>>,
+    hooks: Option<H>,
+}
+
+impl<E: DiagnosticRecord, H: DiagnosticHookDispatch<E>> Default for DiagnosticSupport<E, H> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<E: DiagnosticRecord, H: DiagnosticHookDispatch<E>> fmt::Debug for DiagnosticSupport<E, H> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DiagnosticSupport")
+            .field("log", &self.log)
+            .field("hooks", &self.hooks)
+            .finish()
+    }
+}
+
+impl<E: DiagnosticRecord, H: DiagnosticHookDispatch<E>> DiagnosticSupport<E, H> {
+    /// Create an empty diagnostic support bundle with no log and no hooks.
+    pub fn new() -> Self {
+        Self {
+            log: None,
+            hooks: None,
+        }
+    }
+
+    /// Enable logging with the provided diagnostic log.
+    #[must_use]
+    pub fn with_log(mut self, log: DiagnosticLog<E>) -> Self {
+        self.log = Some(log);
+        self
+    }
+
+    /// Enable telemetry hooks with the provided hook set.
+    #[must_use]
+    pub fn with_hooks(mut self, hooks: H) -> Self {
+        self.hooks = Some(hooks);
+        self
+    }
+
+    /// Replace the diagnostic log.
+    pub fn set_log(&mut self, log: DiagnosticLog<E>) {
+        self.log = Some(log);
+    }
+
+    /// Replace the telemetry hooks.
+    pub fn set_hooks(&mut self, hooks: H) {
+        self.hooks = Some(hooks);
+    }
+
+    /// Borrow the diagnostic log, if enabled.
+    pub fn log(&self) -> Option<&DiagnosticLog<E>> {
+        self.log.as_ref()
+    }
+
+    /// Mutably borrow the diagnostic log, if enabled.
+    pub fn log_mut(&mut self) -> Option<&mut DiagnosticLog<E>> {
+        self.log.as_mut()
+    }
+
+    /// Borrow the telemetry hooks, if enabled.
+    pub fn hooks(&self) -> Option<&H> {
+        self.hooks.as_ref()
+    }
+
+    /// Returns true when either logging or hooks are enabled.
+    pub fn is_active(&self) -> bool {
+        self.log.is_some() || self.hooks.is_some()
+    }
+
+    /// Dispatch an entry to hooks first, then record it to the log.
+    pub fn record(&mut self, entry: E) {
+        if let Some(ref hooks) = self.hooks {
+            hooks.dispatch(&entry);
+        }
+        if let Some(ref mut log) = self.log {
+            log.record(entry);
+        }
     }
 }
 

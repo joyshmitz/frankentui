@@ -158,6 +158,19 @@ fn screen_init_logger() -> Option<&'static JsonlLogger> {
     demo_logger(&LOGGER, "demo_screen_init", &[])
 }
 
+/// Initialize diagnostics subsystems that are configured via environment flags.
+///
+/// This centralizes startup-time env-gated diagnostics wiring so individual
+/// screens/widgets do not each need to remember to bootstrap their globals.
+fn init_showcase_diagnostics() {
+    ftui_widgets::inspector::init_diagnostics();
+    screens::advanced_text_editor::init_diagnostics();
+    screens::log_search::init_diagnostics();
+    screens::mouse_playground::init_diagnostics();
+    screens::theme_studio::init_diagnostics();
+    screens::virtualized_search::init_diagnostics();
+}
+
 fn emit_screen_init_log(
     screen: ScreenId,
     init_ms: u64,
@@ -2737,6 +2750,7 @@ impl AppModel {
         let deterministic_mode = determinism::is_demo_deterministic();
         let deterministic_tick_ms = determinism::demo_tick_ms_override();
         let exit_after_ticks = determinism::demo_exit_after_ticks();
+        init_showcase_diagnostics();
         let mut app = Self {
             current_screen: ScreenId::Dashboard,
             tour: GuidedTourState::new(),

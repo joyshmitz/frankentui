@@ -559,6 +559,23 @@ pub(crate) fn set_style_area(buf: &mut Buffer, area: Rect, style: Style) {
     }
 }
 
+/// Build a text cell that inherits existing visual styling from the buffer.
+///
+/// This preserves foreground/background/style flags applied by prior area-wide
+/// overlays (for example selection/highlight passes) while intentionally
+/// dropping any stale hyperlink ID before new text is written.
+fn inherited_text_cell(
+    frame: &Frame,
+    x: u16,
+    y: u16,
+    content: ftui_render::cell::CellContent,
+) -> Cell {
+    let mut cell = frame.buffer.get(x, y).copied().unwrap_or_default();
+    cell.content = content;
+    cell.attrs = ftui_render::cell::CellAttrs::new(cell.attrs.flags(), 0);
+    cell
+}
+
 /// Draw a text span into a frame at the given position.
 ///
 /// Returns the x position after the last drawn character.
@@ -595,7 +612,7 @@ pub(crate) fn draw_text_span(
             continue;
         };
 
-        let mut cell = Cell::new(cell_content);
+        let mut cell = inherited_text_cell(frame, x, y, cell_content);
         apply_style(&mut cell, style);
 
         // set_fast() skips scissor/opacity/compositing checks for common
@@ -683,7 +700,7 @@ pub(crate) fn draw_text_span_scrolled(
             continue;
         };
 
-        let mut cell = Cell::new(cell_content);
+        let mut cell = inherited_text_cell(frame, x, y, cell_content);
         apply_style(&mut cell, style);
 
         // Apply link ID if present
@@ -966,6 +983,47 @@ mod tests {
             frame.buffer.get(0, 0).unwrap().fg,
             PackedRgba::rgb(255, 128, 0)
         );
+    }
+
+    #[test]
+    fn draw_text_span_preserves_existing_overlay_fg_and_bg() {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(3, 1, &mut pool);
+        frame
+            .buffer
+            .set(0, 0, Cell::from_char('x').with_fg(PackedRgba::rgb(200, 40, 10)));
+        set_style_area(
+            &mut frame.buffer,
+            Rect::new(0, 0, 1, 1),
+            Style::new().bg(PackedRgba::rgb(20, 30, 40)),
+        );
+
+        draw_text_span(&mut frame, 0, 0, "A", Style::default(), 1);
+
+        let cell = frame.buffer.get(0, 0).unwrap();
+        assert_eq!(cell.content.as_char(), Some('A'));
+        assert_eq!(cell.fg, PackedRgba::rgb(200, 40, 10));
+        assert_eq!(cell.bg, PackedRgba::rgb(20, 30, 40));
+    }
+
+    #[test]
+    fn draw_text_span_drops_stale_link_id_but_keeps_style_flags() {
+        use ftui_render::cell::{CellAttrs, StyleFlags as CellFlags};
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(3, 1, &mut pool);
+        frame.buffer.set(
+            0,
+            0,
+            Cell::from_char('x').with_attrs(CellAttrs::new(CellFlags::UNDERLINE, 42)),
+        );
+
+        draw_text_span(&mut frame, 0, 0, "A", Style::default(), 1);
+
+        let cell = frame.buffer.get(0, 0).unwrap();
+        assert_eq!(cell.content.as_char(), Some('A'));
+        assert!(cell.attrs.has_flag(CellFlags::UNDERLINE));
+        assert_eq!(cell.attrs.link_id(), 0);
     }
 
     #[test]
