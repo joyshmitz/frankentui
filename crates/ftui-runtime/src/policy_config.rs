@@ -511,6 +511,7 @@ impl PolicyConfig {
                 EvidenceSinkDestination::Stdout
             },
             flush_on_write: self.evidence.flush_on_write,
+            max_bytes: crate::evidence_sink::DEFAULT_MAX_EVIDENCE_BYTES,
         }
     }
 
