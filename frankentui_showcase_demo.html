@@ -190,7 +190,20 @@
 </head>
 <body>
 <div id="container">
-  <canvas id="terminal-canvas" tabindex="0"></canvas>
+  <canvas id="terminal-canvas" tabindex="0" role="application" aria-label="FrankenTUI terminal interface"></canvas>
+  <!-- Semantic proxy layer: screen-reader-accessible description of the
+       active TUI state. The WASM runtime should update this div with
+       semantic HTML elements that mirror the accessibility tree (A11yTree)
+       built on each render pass. This makes the canvas content visible to
+       assistive technology (AT) via the browser's accessibility API.
+       See: https://github.com/Dicklesworthstone/frankentui/issues/44 -->
+  <div id="a11y-proxy"
+       role="document"
+       aria-label="Terminal content (accessible proxy)"
+       aria-live="polite"
+       style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;">
+    <p>FrankenTUI demo application. Use Tab and Shift+Tab to navigate between screens. Press ? for help.</p>
+  </div>
 </div>
 <textarea
   id="mobile-kb-proxy"
