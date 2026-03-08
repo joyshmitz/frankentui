@@ -821,8 +821,10 @@ impl ftui_a11y::Accessible for Paragraph<'_> {
         let name: String = self
             .text
             .lines()
+            .iter()
             .map(|line| {
                 line.spans()
+                    .iter()
                     .map(|span| span.content.as_ref())
                     .collect::<Vec<_>>()
                     .join("")
