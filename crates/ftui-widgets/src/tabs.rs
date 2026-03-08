@@ -508,6 +508,31 @@ impl Widget for Tabs<'_> {
     }
 }
 
+impl ftui_a11y::Accessible for Tabs<'_> {
+    fn accessibility_nodes(&self, area: Rect) -> Vec<ftui_a11y::node::A11yNodeInfo> {
+        use ftui_a11y::node::{A11yNodeInfo, A11yRole};
+
+        let base_id = crate::a11y_node_id(area);
+        let tab_count = self.tabs.len();
+        let child_ids: Vec<u64> = (0..tab_count).map(|i| base_id + 1 + i as u64).collect();
+
+        let group_node = A11yNodeInfo::new(base_id, A11yRole::Group, area)
+            .with_name(format!("{tab_count} tabs"))
+            .with_children(child_ids);
+
+        let mut nodes = vec![group_node];
+        for (i, tab) in self.tabs.iter().enumerate() {
+            let tab_id = base_id + 1 + i as u64;
+            nodes.push(
+                A11yNodeInfo::new(tab_id, A11yRole::Tab, area)
+                    .with_name(&tab.title)
+                    .with_parent(base_id),
+            );
+        }
+        nodes
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -196,6 +196,33 @@ impl MeasurableWidget for ProgressBar<'_> {
 }
 
 // ---------------------------------------------------------------------------
+// Accessibility
+// ---------------------------------------------------------------------------
+
+impl ftui_a11y::Accessible for ProgressBar<'_> {
+    fn accessibility_nodes(&self, area: Rect) -> Vec<ftui_a11y::node::A11yNodeInfo> {
+        use ftui_a11y::node::{A11yNodeInfo, A11yRole, A11yState};
+
+        let id = crate::a11y_node_id(area);
+        let pct = (self.ratio * 100.0).round() as u32;
+        let name = self
+            .label
+            .map(String::from)
+            .unwrap_or_else(|| format!("{pct}%"));
+
+        let mut state = A11yState::default();
+        state.value_now = Some(self.ratio);
+        state.value_min = Some(0.0);
+        state.value_max = Some(1.0);
+        state.value_text = Some(format!("{pct}%"));
+
+        vec![A11yNodeInfo::new(id, A11yRole::ProgressBar, area)
+            .with_name(name)
+            .with_state(state)]
+    }
+}
+
+// ---------------------------------------------------------------------------
 // MiniBar
 // ---------------------------------------------------------------------------
 

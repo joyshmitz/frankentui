@@ -259,6 +259,9 @@ pub use notification_queue::{
     NotificationPriority, NotificationQueue, QueueAction, QueueConfig, QueueStats,
 };
 
+// Re-export accessibility trait and types for widget implementations.
+pub use ftui_a11y::Accessible;
+
 // Shared mouse result type for widget mouse handling
 pub use mouse::MouseResult;
 
@@ -319,6 +322,28 @@ use ftui_render::cell::Cell;
 use ftui_render::frame::{Frame, WidgetSignal};
 use ftui_style::Style;
 use ftui_text::grapheme_width;
+
+/// Generate a deterministic accessibility node ID from a widget's bounding rect.
+///
+/// Uses FNV-1a to hash the area coordinates. Stable across frames for widgets
+/// rendered at the same position, enabling efficient A11yTree diffing.
+#[must_use]
+pub(crate) fn a11y_node_id(area: Rect) -> u64 {
+    // FNV-1a 64-bit
+    const FNV_OFFSET: u64 = 14_695_981_039_346_656_037;
+    const FNV_PRIME: u64 = 1_099_511_628_211;
+    let mut h = FNV_OFFSET;
+    for byte in area.x.to_le_bytes()
+        .iter()
+        .chain(&area.y.to_le_bytes())
+        .chain(&area.width.to_le_bytes())
+        .chain(&area.height.to_le_bytes())
+    {
+        h ^= u64::from(*byte);
+        h = h.wrapping_mul(FNV_PRIME);
+    }
+    h
+}
 
 /// A widget that can render itself into a [`Frame`].
 ///

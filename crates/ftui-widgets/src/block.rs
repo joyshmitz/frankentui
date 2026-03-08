@@ -88,6 +88,12 @@ impl<'a> Block<'a> {
         self
     }
 
+    /// Return the title text, if any.
+    #[must_use]
+    pub fn title_text(&self) -> Option<&str> {
+        self.title
+    }
+
     /// Set the horizontal alignment of the title.
     #[must_use]
     pub fn title_alignment(mut self, alignment: Alignment) -> Self {

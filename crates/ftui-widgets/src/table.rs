@@ -328,6 +328,30 @@ impl<'a> Widget for Table<'a> {
     }
 }
 
+impl ftui_a11y::Accessible for Table<'_> {
+    fn accessibility_nodes(&self, area: Rect) -> Vec<ftui_a11y::node::A11yNodeInfo> {
+        use ftui_a11y::node::{A11yNodeInfo, A11yRole};
+
+        let base_id = crate::a11y_node_id(area);
+        let row_count = self.rows.len();
+        let col_count = self.widths.len();
+
+        let title = self
+            .block
+            .as_ref()
+            .and_then(|b| b.title_text())
+            .unwrap_or_default();
+
+        let mut table_node = A11yNodeInfo::new(base_id, A11yRole::Table, area)
+            .with_description(format!("{row_count} rows, {col_count} columns"));
+        if !title.is_empty() {
+            table_node = table_node.with_name(title);
+        }
+
+        vec![table_node]
+    }
+}
+
 pub type CachedTableDisplayIndices = (u64, String, Option<usize>, bool, std::sync::Arc<[usize]>);
 
 /// Mutable state for a [`Table`] widget.

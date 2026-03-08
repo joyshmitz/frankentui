@@ -1136,6 +1136,42 @@ impl Widget for TextInput {
 }
 
 // ============================================================================
+// Accessibility
+// ============================================================================
+
+impl ftui_a11y::Accessible for TextInput {
+    fn accessibility_nodes(&self, area: Rect) -> Vec<ftui_a11y::node::A11yNodeInfo> {
+        use ftui_a11y::node::{A11yNodeInfo, A11yRole, A11yState};
+
+        let id = crate::a11y_node_id(area);
+        let name = if self.value.is_empty() {
+            self.placeholder.clone()
+        } else if self.mask_char.is_some() {
+            // Don't expose masked values to screen readers.
+            String::from("password field")
+        } else {
+            self.value.clone()
+        };
+
+        let mut state = A11yState::default();
+        state.focused = self.focused;
+        if self.max_length == Some(0) {
+            state.disabled = true;
+        }
+
+        let mut node = A11yNodeInfo::new(id, A11yRole::TextInput, area).with_state(state);
+        if !name.is_empty() {
+            node = node.with_name(name);
+        }
+        if self.mask_char.is_some() {
+            node = node.with_description("password input");
+        }
+
+        vec![node]
+    }
+}
+
+// ============================================================================
 // Undo Support Implementation
 // ============================================================================
 

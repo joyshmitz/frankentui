@@ -966,6 +966,50 @@ impl<'a> Widget for List<'a> {
     }
 }
 
+impl ftui_a11y::Accessible for List<'_> {
+    fn accessibility_nodes(&self, area: Rect) -> Vec<ftui_a11y::node::A11yNodeInfo> {
+        use ftui_a11y::node::{A11yNodeInfo, A11yRole};
+
+        let base_id = crate::a11y_node_id(area);
+        let item_count = self.items.len();
+        let child_ids: Vec<u64> = (0..item_count).map(|i| base_id + 1 + i as u64).collect();
+
+        let title = self
+            .block
+            .as_ref()
+            .and_then(|b| b.title_text())
+            .unwrap_or_default();
+
+        let mut list_node = A11yNodeInfo::new(base_id, A11yRole::List, area)
+            .with_children(child_ids);
+        if !title.is_empty() {
+            list_node = list_node.with_name(title);
+        }
+        list_node = list_node
+            .with_description(format!("{item_count} items"));
+
+        let mut nodes = vec![list_node];
+        for (i, item) in self.items.iter().enumerate() {
+            let item_id = base_id + 1 + i as u64;
+            let item_text = item
+                .content
+                .lines()
+                .first()
+                .map(|line| line.to_plain_text())
+                .unwrap_or_default();
+            let item_node =
+                A11yNodeInfo::new(item_id, A11yRole::ListItem, area).with_parent(base_id);
+            let item_node = if item_text.is_empty() {
+                item_node
+            } else {
+                item_node.with_name(item_text)
+            };
+            nodes.push(item_node);
+        }
+        nodes
+    }
+}
+
 impl MeasurableWidget for ListItem<'_> {
     fn measure(&self, _available: Size) -> SizeConstraints {
         // ListItem is a single line of text with optional marker
