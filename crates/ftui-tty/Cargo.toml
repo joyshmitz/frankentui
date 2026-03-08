@@ -8,6 +8,8 @@ repository = "https://github.com/Dicklesworthstone/frankentui"
 homepage = "https://github.com/Dicklesworthstone/frankentui"
 documentation = "https://docs.rs/ftui-tty"
 readme = "../../README.md"
+keywords = ["tui", "terminal", "ui", "ftui", "frankentui"]
+categories = ["command-line-interface", "gui"]
 
 [dependencies]
 ftui-backend = { path = "../ftui-backend", version = "0.2.1" }

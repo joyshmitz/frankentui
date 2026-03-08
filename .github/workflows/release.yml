@@ -1,0 +1,131 @@
+# FrankenTUI Release & Publish Pipeline
+#
+# Publishes all workspace crates to crates.io on version tags.
+# Crates are published in dependency order with delays between each.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g., v0.2.2)'
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ==========================================================================
+  # Verify: ensure the tag matches Cargo.toml version
+  # ==========================================================================
+  verify:
+    name: Verify tag matches version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Check version consistency
+        id: check
+        run: |
+          # For tag pushes, GITHUB_REF_NAME is the tag. For workflow_dispatch,
+          # use the explicit input (GITHUB_REF_NAME is the branch).
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          TAG_VERSION="${TAG#v}"
+          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "Tag version: $TAG_VERSION"
+          echo "Cargo version: $CARGO_VERSION"
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "ERROR: Tag $TAG_VERSION does not match Cargo.toml $CARGO_VERSION"
+            exit 1
+          fi
+          echo "version=$TAG_VERSION" >> "$GITHUB_OUTPUT"
+
+  # ==========================================================================
+  # Publish: push crates to crates.io in dependency order
+  # ==========================================================================
+  publish-crates:
+    name: Publish to crates.io
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Skip pre-release tags (containing '-', e.g. v0.3.0-rc1)
+    if: ${{ !contains(needs.verify.outputs.version, '-') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Publish crates in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        if: ${{ env.CARGO_REGISTRY_TOKEN != '' }}
+        run: |
+          set -e
+          publish() {
+            local crate=$1
+            echo "::group::Publishing $crate"
+            local output
+            if output=$(cargo publish -p "$crate" 2>&1); then
+              echo "$output"
+              echo "$crate published successfully."
+            elif echo "$output" | grep -q "already uploaded"; then
+              echo "$crate already published, skipping."
+            else
+              echo "$output"
+              echo "::error::Failed to publish $crate"
+              exit 1
+            fi
+            echo "::endgroup::"
+            # crates.io index needs time to update between publishes
+            sleep 20
+          }
+
+          # Layer 0: no internal deps
+          publish ftui-simd
+          publish ftui-i18n
+
+          # Layer 1: depends on nothing internal
+          publish ftui-core
+
+          # Layer 2: depends on ftui-core only
+          publish ftui-render
+          publish ftui-pty
+          publish ftui-a11y
+
+          # Layer 3: depends on ftui-core + ftui-render
+          publish ftui-layout
+          publish ftui-style
+          publish ftui-backend
+
+          # Layer 4: depends on layers above (text needs layout + style)
+          publish ftui-text
+          publish ftui-tty
+
+          # Layer 5: runtime needs backend + core + i18n + layout + render + style + text
+          publish ftui-runtime
+
+          # Layer 6: widgets needs runtime
+          publish ftui-widgets
+
+          # Layer 7: depend on widgets + runtime + extras ecosystem
+          publish ftui-extras
+          publish ftui-harness
+          publish ftui-web
+
+          # Layer 8: facade crate (depends on everything)
+          publish ftui
+
+          echo "All crates published successfully!"

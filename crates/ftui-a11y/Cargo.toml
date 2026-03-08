@@ -2,7 +2,7 @@
 name = "ftui-a11y"
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license-file = "../../LICENSE"
 description = "Accessibility layer for FrankenTUI"
 repository = "https://github.com/Dicklesworthstone/frankentui"
 homepage = "https://github.com/Dicklesworthstone/frankentui"

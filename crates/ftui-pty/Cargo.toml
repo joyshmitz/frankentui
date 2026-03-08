@@ -2,7 +2,7 @@
 name = "ftui-pty"
 version = "0.2.2"
 edition = "2024"
-license = "MIT"
+license-file = "../../LICENSE"
 description = "PTY-backed test utilities for FrankenTUI."
 repository = "https://github.com/Dicklesworthstone/frankentui"
 homepage = "https://github.com/Dicklesworthstone/frankentui"
