@@ -806,3 +806,48 @@ mod tests {
         assert_eq!(a, b);
     }
 }
+
+// ============================================================================
+// Accessibility
+// ============================================================================
+
+impl ftui_a11y::Accessible for Paragraph<'_> {
+    fn accessibility_nodes(&self, area: Rect) -> Vec<ftui_a11y::node::A11yNodeInfo> {
+        use ftui_a11y::node::{A11yNodeInfo, A11yRole};
+
+        let id = crate::a11y_node_id(area);
+
+        // Extract the plain-text content for the accessible name.
+        let name: String = self
+            .text
+            .lines()
+            .map(|line| {
+                line.spans()
+                    .map(|span| span.content.as_ref())
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let block_title = self.block.as_ref().and_then(|b| b.title_text());
+
+        let mut node = A11yNodeInfo::new(id, A11yRole::Label, area);
+        if let Some(title) = block_title {
+            node = node.with_name(title);
+            if !name.is_empty() {
+                node = node.with_description(name);
+            }
+        } else if !name.is_empty() {
+            // Truncate very long text to keep a11y nodes manageable.
+            let truncated = if name.len() > 200 {
+                format!("{}...", &name[..197])
+            } else {
+                name
+            };
+            node = node.with_name(truncated);
+        }
+
+        vec![node]
+    }
+}

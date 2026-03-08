@@ -1044,3 +1044,30 @@ mod tests {
         assert_eq!(result, MouseResult::Ignored);
     }
 }
+
+// ============================================================================
+// Accessibility
+// ============================================================================
+
+impl ftui_a11y::Accessible for Scrollbar<'_> {
+    fn accessibility_nodes(&self, area: Rect) -> Vec<ftui_a11y::node::A11yNodeInfo> {
+        use ftui_a11y::node::{A11yNodeInfo, A11yRole, A11yState};
+
+        let id = crate::a11y_node_id(area);
+        let orientation = match self.orientation {
+            ScrollbarOrientation::VerticalRight | ScrollbarOrientation::VerticalLeft => "vertical",
+            ScrollbarOrientation::HorizontalBottom | ScrollbarOrientation::HorizontalTop => {
+                "horizontal"
+            }
+        };
+        let name = format!("{orientation} scrollbar");
+        let node = A11yNodeInfo::new(id, A11yRole::ScrollBar, area)
+            .with_name(name)
+            .with_state(A11yState {
+                // Scrollbars are always interactive but don't themselves hold focus;
+                // the viewport they scroll is the focusable element.
+                ..A11yState::default()
+            });
+        vec![node]
+    }
+}

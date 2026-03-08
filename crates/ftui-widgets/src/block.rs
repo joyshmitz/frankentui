@@ -984,3 +984,20 @@ mod tests {
         assert_eq!(a, b);
     }
 }
+
+// ============================================================================
+// Accessibility
+// ============================================================================
+
+impl ftui_a11y::Accessible for Block<'_> {
+    fn accessibility_nodes(&self, area: Rect) -> Vec<ftui_a11y::node::A11yNodeInfo> {
+        use ftui_a11y::node::{A11yNodeInfo, A11yRole};
+
+        let id = crate::a11y_node_id(area);
+        let mut node = A11yNodeInfo::new(id, A11yRole::Group, area);
+        if let Some(title) = self.title_text() {
+            node = node.with_name(title);
+        }
+        vec![node]
+    }
+}
