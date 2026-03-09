@@ -137,13 +137,14 @@ fn scan_row_changes_range(
     for block_idx in 0..blocks {
         let base = block_idx * BLOCK_SIZE;
         let base_x = x_offset + base as u16;
-        let old_block = &old_row[base..base + BLOCK_SIZE];
-        let new_block = &new_row[base..base + BLOCK_SIZE];
+        if cell_quad_bits_eq(old_row, new_row, base) {
+            continue;
+        }
 
         // Compare each cell and push changes directly.
         // We use a constant loop which the compiler will unroll.
         for i in 0..BLOCK_SIZE {
-            if !old_block[i].bits_eq(&new_block[i]) {
+            if !old_row[base + i].bits_eq(&new_row[base + i]) {
                 changes.push((base_x + i as u16, y));
             }
         }
@@ -157,6 +158,14 @@ fn scan_row_changes_range(
             changes.push((rem_base_x + i as u16, y));
         }
     }
+}
+
+#[inline(always)]
+fn cell_quad_bits_eq(old_row: &[Cell], new_row: &[Cell], base: usize) -> bool {
+    old_row[base].bits_eq(&new_row[base])
+        & old_row[base + 1].bits_eq(&new_row[base + 1])
+        & old_row[base + 2].bits_eq(&new_row[base + 2])
+        & old_row[base + 3].bits_eq(&new_row[base + 3])
 }
 
 /// Scan a row pair for changed cells, appending positions to `changes`.
@@ -186,9 +195,6 @@ fn scan_row_changes_blockwise(
         let base = block_idx * ROW_BLOCK_SIZE;
         let old_block = &old_row[base..base + ROW_BLOCK_SIZE];
         let new_block = &new_row[base..base + ROW_BLOCK_SIZE];
-        if old_block == new_block {
-            continue;
-        }
         scan_row_changes_range(old_block, new_block, y, base as u16, changes);
     }
 
@@ -196,9 +202,7 @@ fn scan_row_changes_blockwise(
         let base = blocks * ROW_BLOCK_SIZE;
         let old_block = &old_row[base..base + remainder];
         let new_block = &new_row[base..base + remainder];
-        if old_block != new_block {
-            scan_row_changes_range(old_block, new_block, y, base as u16, changes);
-        }
+        scan_row_changes_range(old_block, new_block, y, base as u16, changes);
     }
 }
 
@@ -1502,6 +1506,18 @@ mod tests {
     }
     use super::*;
     use crate::cell::{Cell, PackedRgba};
+
+    #[test]
+    fn scan_row_changes_range_reports_late_change_after_equal_quad() {
+        let old = vec![Cell::default(); 8];
+        let mut new = old.clone();
+        let mut changes = Vec::new();
+
+        new[7] = Cell::from_char('X');
+        scan_row_changes_range(&old, &new, 4, 10, &mut changes);
+
+        assert_eq!(changes, vec![(17, 4)]);
+    }
 
     #[test]
     fn empty_diff_when_buffers_identical() {
@@ -3869,6 +3885,48 @@ mod tests {
         assert_eq!(dirty_diff.len(), 1);
         assert!(stats.skipped_tiles > 0, "should skip clean tiles");
         assert_eq!(stats.dirty_tiles, 1, "only one tile should be dirty");
+    }
+
+    #[test]
+    fn accumulate_tile_counts_range_single_cell_range() {
+        let mut tile_counts = vec![0u32; 4];
+        let dirty_bits = vec![0, 0, 1, 0, 0, 0, 0, 0];
+        let mut scanned_cells = 0usize;
+
+        accumulate_tile_counts_range(
+            &mut tile_counts,
+            &dirty_bits,
+            0,
+            4,
+            2,
+            2..3,
+            &mut scanned_cells,
+        )
+        .unwrap();
+
+        assert_eq!(scanned_cells, 1);
+        assert_eq!(tile_counts, vec![0, 1, 0, 0]);
+    }
+
+    #[test]
+    fn accumulate_tile_counts_range_single_tile_multi_cell_range() {
+        let mut tile_counts = vec![0u32; 4];
+        let dirty_bits = vec![0, 1, 0, 1, 1, 0, 0, 0];
+        let mut scanned_cells = 0usize;
+
+        accumulate_tile_counts_range(
+            &mut tile_counts,
+            &dirty_bits,
+            0,
+            4,
+            2,
+            4..6,
+            &mut scanned_cells,
+        )
+        .unwrap();
+
+        assert_eq!(scanned_cells, 2);
+        assert_eq!(tile_counts, vec![0, 0, 1, 0]);
     }
 
     // =========================================================================

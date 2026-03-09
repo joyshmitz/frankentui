@@ -137,23 +137,24 @@ mod cost_model {
             return 0;
         }
 
-        let cup = cup_cost(to_y, to_x);
-
         match (from_x, from_y) {
             (Some(fx), Some(fy)) if fy == to_y => {
-                // Same row: compare CHA, CUF, CUB, and CUP
+                // On the same row, CHA strictly dominates CUP because CUP always
+                // pays the extra row field (`CSI row;col H`) while CHA only
+                // updates the column (`CSI col G`). Therefore the optimal move
+                // on a shared row is always CHA or a relative move.
                 let cha = cha_cost(to_x);
                 if to_x > fx {
                     let cuf = cuf_cost(to_x - fx);
-                    cup.min(cha).min(cuf)
+                    cha.min(cuf)
                 } else if to_x < fx {
                     let cub = cub_cost(fx - to_x);
-                    cup.min(cha).min(cub)
+                    cha.min(cub)
                 } else {
                     0
                 }
             }
-            _ => cup,
+            _ => cup_cost(to_y, to_x),
         }
     }
 
@@ -236,6 +237,21 @@ mod cost_model {
 
         let row_y = row_runs[0].y;
         let run_count = row_runs.len();
+
+        if run_count == 1 {
+            let run = row_runs[0];
+            let mut spans: SmallVec<[RowSpan; 8]> = SmallVec::new();
+            spans.push(RowSpan {
+                y: row_y,
+                x0: run.x0,
+                x1: run.x1,
+            });
+            return RowPlan {
+                spans,
+                total_cost: cheapest_move_cost(prev_x, prev_y, run.x0, row_y)
+                    .saturating_add(run.len()),
+            };
+        }
 
         // Resize scratch buffers (no-op if already large enough).
         scratch.prefix_cells.clear();
@@ -341,7 +357,16 @@ impl PreparedContent {
         if let Some(grapheme_id) = content.grapheme_id() {
             (Self::Grapheme(grapheme_id), content.width())
         } else if let Some(ch) = content.as_char() {
-            (Self::Char(ch), char_width(ch))
+            let width = if ch.is_ascii() {
+                match ch {
+                    '\t' | '\n' | '\r' => 1,
+                    ' '..='~' => 1,
+                    _ => 0,
+                }
+            } else {
+                char_width(ch)
+            };
+            (Self::Char(ch), width)
         } else {
             (Self::Empty, 0)
         }
@@ -386,6 +411,8 @@ pub struct Presenter<W: Write> {
     viewport_offset_y: u16,
     /// Terminal capabilities for conditional output.
     capabilities: TerminalCapabilities,
+    /// Cached hyperlink policy for the lifetime of this presenter.
+    hyperlinks_enabled: bool,
     /// Reusable scratch buffers for the cost-model DP, avoiding per-row
     /// heap allocations in the hot presentation path.
     plan_scratch: cost_model::RowPlanScratch,
@@ -403,6 +430,7 @@ impl<W: Write> Presenter<W> {
             cursor_x: None,
             cursor_y: None,
             viewport_offset_y: 0,
+            hyperlinks_enabled: capabilities.use_hyperlinks(),
             capabilities,
             plan_scratch: cost_model::RowPlanScratch::default(),
             runs_buf: Vec::new(),
@@ -992,7 +1020,10 @@ impl<W: Write> Presenter<W> {
     fn emit_link_changes(&mut self, cell: &Cell, links: Option<&LinkRegistry>) -> io::Result<()> {
         // Respect capability policy so callers running in mux contexts don't
         // emit OSC 8 sequences even if the raw capability flag is set.
-        if !self.capabilities.use_hyperlinks() {
+        if !self.hyperlinks_enabled {
+            if self.current_link.is_none() {
+                return Ok(());
+            }
             if self.current_link.is_some() {
                 ansi::hyperlink_end(&mut self.writer)?;
             }
@@ -1959,6 +1990,25 @@ mod tests {
             "tmux policy should suppress OSC 8 sequences"
         );
         assert!(output_str.contains('L'));
+    }
+
+    #[test]
+    fn hyperlink_disabled_policy_noops_when_no_link_is_open() {
+        let mut presenter = test_presenter();
+        presenter
+            .emit_link_changes(&Cell::from_char('X'), None)
+            .unwrap();
+        assert!(presenter.into_inner().unwrap().is_empty());
+    }
+
+    #[test]
+    fn hyperlink_disabled_policy_still_closes_stale_open_link() {
+        let mut presenter = test_presenter();
+        presenter.current_link = Some(7);
+        presenter
+            .emit_link_changes(&Cell::from_char('X'), None)
+            .unwrap();
+        assert_eq!(presenter.into_inner().unwrap(), b"\x1b]8;;\x07");
     }
 
     #[test]
@@ -3653,11 +3703,21 @@ mod tests {
 
     #[test]
     fn cost_cheapest_move_backward_same_row() {
-        // Moving backward on same row: CHA or CUP, whichever is cheaper
+        // On the same row, CUP is strictly dominated by CHA.
         let cost = cost_model::cheapest_move_cost(Some(50), Some(0), 5, 0);
         let cha = cost_model::cha_cost(5);
-        let cup = cost_model::cup_cost(0, 5);
-        assert_eq!(cost, cha.min(cup));
+        let cub = cost_model::cub_cost(45);
+        assert_eq!(cost, cha.min(cub));
+        assert!(cost_model::cup_cost(0, 5) > cha);
+    }
+
+    #[test]
+    fn cost_cheapest_move_forward_same_row() {
+        let cost = cost_model::cheapest_move_cost(Some(5), Some(0), 50, 0);
+        let cha = cost_model::cha_cost(50);
+        let cuf = cost_model::cuf_cost(45);
+        assert_eq!(cost, cha.min(cuf));
+        assert!(cost_model::cup_cost(0, 50) > cha);
     }
 
     #[test]
@@ -3734,6 +3794,19 @@ mod tests {
         let mut scratch = cost_model::RowPlanScratch::default();
         let plan2 = cost_model::plan_row_reuse(&runs, Some(0), Some(5), &mut scratch);
         assert_eq!(plan1, plan2);
+    }
+
+    #[test]
+    fn plan_row_reuse_single_run_matches_plan_row() {
+        let runs = [ChangeRun::new(7, 18, 24)];
+        let plan1 = cost_model::plan_row(&runs, Some(2), Some(7));
+        let mut scratch = cost_model::RowPlanScratch::default();
+        let plan2 = cost_model::plan_row_reuse(&runs, Some(2), Some(7), &mut scratch);
+        assert_eq!(plan1, plan2);
+        assert_eq!(
+            plan2.total_cost(),
+            cost_model::cheapest_move_cost(Some(2), Some(7), 18, 7) + runs[0].len()
+        );
     }
 
     #[test]
@@ -4097,6 +4170,32 @@ mod tests {
             .unwrap();
         let output = presenter.into_inner().unwrap();
         assert_eq!(output, b" ");
+    }
+
+    #[test]
+    fn prepared_content_ascii_widths_match_char_width_contract() {
+        for ch in ['A', ' ', '\n', '\r', '\x1f', '\x7f'] {
+            let cell = Cell::from_char(ch);
+            let (prepared, width) = PreparedContent::from_cell(&cell);
+            assert_eq!(prepared, PreparedContent::Char(ch));
+            assert_eq!(width, char_width(ch), "width mismatch for {ch:?}");
+        }
+    }
+
+    #[test]
+    fn prepared_content_tab_uses_canonicalized_space() {
+        let cell = Cell::from_char('\t');
+        let (prepared, width) = PreparedContent::from_cell(&cell);
+        assert_eq!(prepared, PreparedContent::Char(' '));
+        assert_eq!(width, 1);
+    }
+
+    #[test]
+    fn prepared_content_nul_uses_empty_cell_representation() {
+        let cell = Cell::from_char('\0');
+        let (prepared, width) = PreparedContent::from_cell(&cell);
+        assert_eq!(prepared, PreparedContent::Empty);
+        assert_eq!(width, 0);
     }
 
     #[test]
