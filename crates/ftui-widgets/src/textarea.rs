@@ -784,8 +784,23 @@ impl TextArea {
     /// Page up (move viewport and cursor up by viewport height).
     pub fn page_up(&mut self, state: &TextAreaState) {
         let page = state.last_viewport_height.max(1) as usize;
-        for _ in 0..page {
-            self.editor.move_up();
+        let text_area_width = state
+            .last_viewport_width
+            .saturating_sub(self.gutter_width());
+        self.last_viewport_height.set(page);
+        self.last_viewport_width.set(text_area_width as usize);
+        if self.soft_wrap {
+            if text_area_width > 0 {
+                self.move_cursor_visual_up(page, false);
+            } else {
+                for _ in 0..page {
+                    self.editor.move_up();
+                }
+            }
+        } else {
+            for _ in 0..page {
+                self.editor.move_up();
+            }
         }
         self.ensure_cursor_visible();
     }
@@ -793,8 +808,23 @@ impl TextArea {
     /// Page down (move viewport and cursor down by viewport height).
     pub fn page_down(&mut self, state: &TextAreaState) {
         let page = state.last_viewport_height.max(1) as usize;
-        for _ in 0..page {
-            self.editor.move_down();
+        let text_area_width = state
+            .last_viewport_width
+            .saturating_sub(self.gutter_width());
+        self.last_viewport_height.set(page);
+        self.last_viewport_width.set(text_area_width as usize);
+        if self.soft_wrap {
+            if text_area_width > 0 {
+                self.move_cursor_visual_down(page, false);
+            } else {
+                for _ in 0..page {
+                    self.editor.move_down();
+                }
+            }
+        } else {
+            for _ in 0..page {
+                self.editor.move_down();
+            }
         }
         self.ensure_cursor_visible();
     }

@@ -210,15 +210,19 @@ impl ftui_a11y::Accessible for ProgressBar<'_> {
             .map(String::from)
             .unwrap_or_else(|| format!("{pct}%"));
 
-        let mut state = A11yState::default();
-        state.value_now = Some(self.ratio);
-        state.value_min = Some(0.0);
-        state.value_max = Some(1.0);
-        state.value_text = Some(format!("{pct}%"));
+        let state = A11yState {
+            value_now: Some(self.ratio),
+            value_min: Some(0.0),
+            value_max: Some(1.0),
+            value_text: Some(format!("{pct}%")),
+            ..A11yState::default()
+        };
 
-        vec![A11yNodeInfo::new(id, A11yRole::ProgressBar, area)
-            .with_name(name)
-            .with_state(state)]
+        vec![
+            A11yNodeInfo::new(id, A11yRole::ProgressBar, area)
+                .with_name(name)
+                .with_state(state),
+        ]
     }
 }
 
@@ -449,7 +453,14 @@ impl Widget for MiniBar {
         if !deg.render_decorative() {
             if self.show_percent {
                 let pct = format!("{:3.0}%", value * 100.0);
-                crate::draw_text_span(frame, area.x, area.y, &pct, Style::default(), area.right());
+                crate::draw_text_span(
+                    frame,
+                    area.x,
+                    area.y,
+                    pct.trim_start(),
+                    Style::default(),
+                    area.right(),
+                );
             }
             return;
         }
@@ -457,8 +468,10 @@ impl Widget for MiniBar {
         let mut bar_width = self.width.min(area.width) as usize;
         let mut render_percent = false;
         let mut percent_text = String::new();
+        let mut percent_only_text = String::new();
         let percent_width = if self.show_percent {
             percent_text = format!(" {:3.0}%", value * 100.0);
+            percent_only_text = percent_text.trim_start().to_owned();
             render_percent = true;
             display_width(&percent_text) as u16
         } else {
@@ -480,7 +493,7 @@ impl Widget for MiniBar {
                     frame,
                     area.x,
                     area.y,
-                    &percent_text,
+                    &percent_only_text,
                     Style::default(),
                     area.right(),
                 );
@@ -1145,6 +1158,32 @@ mod tests {
         // Area of width 5, percent takes 5 (" XXX%"), bar_width gets 0
         let area = Rect::new(0, 0, 5, 1);
         Widget::render(&bar, area, &mut frame);
+        assert_eq!(cell_at(&frame, 0, 0).content.as_char(), Some('5'));
+    }
+
+    #[test]
+    fn minibar_render_percent_only_starts_with_digits_in_tight_widths() {
+        let bar = MiniBar::new(0.5, 10).show_percent(true);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(2, 1, &mut pool);
+        Widget::render(&bar, Rect::new(0, 0, 2, 1), &mut frame);
+
+        assert_eq!(cell_at(&frame, 0, 0).content.as_char(), Some('5'));
+        assert_eq!(cell_at(&frame, 1, 0).content.as_char(), Some('0'));
+    }
+
+    #[test]
+    fn minibar_essential_only_percent_starts_with_digits_in_tight_widths() {
+        use ftui_render::budget::DegradationLevel;
+
+        let bar = MiniBar::new(0.5, 10).show_percent(true);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(2, 1, &mut pool);
+        frame.buffer.degradation = DegradationLevel::EssentialOnly;
+        Widget::render(&bar, Rect::new(0, 0, 2, 1), &mut frame);
+
+        assert_eq!(cell_at(&frame, 0, 0).content.as_char(), Some('5'));
+        assert_eq!(cell_at(&frame, 1, 0).content.as_char(), Some('0'));
     }
 
     #[test]

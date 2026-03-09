@@ -268,8 +268,10 @@ impl<'a> Block<'a> {
                 return;
             }
 
-            let title_width = text_width(title);
-            let display_width = title_width.min(available_width);
+            let display_width = fitted_text_width(title, available_width);
+            if display_width == 0 {
+                return;
+            }
 
             let x = match self.title_alignment {
                 Alignment::Left => area.x.saturating_add(1),
@@ -347,8 +349,10 @@ impl Widget for Block<'_> {
             {
                 let available_width = area.width.saturating_sub(2) as usize;
                 if available_width > 0 {
-                    let title_width = text_width(title);
-                    let display_width = title_width.min(available_width);
+                    let display_width = fitted_text_width(title, available_width);
+                    if display_width == 0 {
+                        return;
+                    }
                     let x = match self.title_alignment {
                         Alignment::Left => area.x.saturating_add(1),
                         Alignment::Center => area.x.saturating_add(1).saturating_add(
@@ -360,6 +364,12 @@ impl Widget for Block<'_> {
                             .saturating_sub(display_width as u16),
                     };
                     let max_x = area.right().saturating_sub(1);
+                    // draw_text_span() preserves existing cell styles. Clear the
+                    // title span first so NoStyling truly drops border styling.
+                    frame.buffer.fill(
+                        Rect::new(x, area.y, display_width as u16, 1),
+                        Cell::default(),
+                    );
                     draw_text_span(frame, x, area.y, title, Style::default(), max_x);
                 }
             }
@@ -385,11 +395,36 @@ impl MeasurableWidget for Block<'_> {
     }
 }
 
-fn text_width(text: &str) -> usize {
-    if text.is_ascii() {
-        return text.len();
+fn fitted_text_width(text: &str, max_width: usize) -> usize {
+    let mut width = 0usize;
+    for grapheme in graphemes(text) {
+        let w = grapheme_width(grapheme);
+        if w == 0 {
+            continue;
+        }
+        if width.saturating_add(w) > max_width {
+            break;
+        }
+        width += w;
     }
-    graphemes(text).map(grapheme_width).sum()
+    width
+}
+
+// ============================================================================
+// Accessibility
+// ============================================================================
+
+impl ftui_a11y::Accessible for Block<'_> {
+    fn accessibility_nodes(&self, area: Rect) -> Vec<ftui_a11y::node::A11yNodeInfo> {
+        use ftui_a11y::node::{A11yNodeInfo, A11yRole};
+
+        let id = crate::a11y_node_id(area);
+        let mut node = A11yNodeInfo::new(id, A11yRole::Group, area);
+        if let Some(title) = self.title_text() {
+            node = node.with_name(title);
+        }
+        vec![node]
+    }
 }
 
 #[cfg(test)]
@@ -695,6 +730,27 @@ mod tests {
     }
 
     #[test]
+    fn render_title_right_aligned_truncated_wide_grapheme_uses_fitted_width() {
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .title("界界")
+            .title_alignment(Alignment::Right);
+        let area = Rect::new(0, 0, 5, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(5, 3, &mut pool);
+        block.render(area, &mut frame);
+
+        let buf = &frame.buffer;
+        let cell = buf.get(2, 0).unwrap();
+        assert!(
+            cell.content.as_char() == Some('界') || cell.content.is_grapheme(),
+            "expected fitted wide title to be right aligned"
+        );
+        assert!(buf.get(3, 0).unwrap().is_continuation());
+        assert_eq!(buf.get(1, 0).unwrap().content.as_char(), Some('─'));
+    }
+
+    #[test]
     fn render_multi_title_alignment_uses_last_title_and_alignment() {
         let block = Block::new()
             .borders(Borders::ALL)
@@ -821,6 +877,32 @@ mod tests {
         let default_fg = Cell::default().fg;
         assert_eq!(buf.get(1, 0).unwrap().content.as_char(), Some('H'));
         assert_eq!(buf.get(1, 0).unwrap().fg, default_fg);
+    }
+
+    #[test]
+    fn degradation_no_styling_keeps_border_when_title_does_not_fit() {
+        use ftui_render::budget::DegradationLevel;
+
+        let titled = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Square)
+            .title("界");
+        let plain = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Square);
+        let area = Rect::new(0, 0, 3, 3);
+
+        let mut titled_pool = GraphemePool::new();
+        let mut titled_frame = Frame::new(3, 3, &mut titled_pool);
+        titled_frame.set_degradation(DegradationLevel::NoStyling);
+        titled.render(area, &mut titled_frame);
+
+        let mut plain_pool = GraphemePool::new();
+        let mut plain_frame = Frame::new(3, 3, &mut plain_pool);
+        plain_frame.set_degradation(DegradationLevel::NoStyling);
+        plain.render(area, &mut plain_frame);
+
+        assert_eq!(titled_frame.buffer.get(1, 0), plain_frame.buffer.get(1, 0));
     }
 
     #[test]
@@ -982,22 +1064,5 @@ mod tests {
         let a = block.measure(Size::new(100, 50));
         let b = block.measure(Size::new(100, 50));
         assert_eq!(a, b);
-    }
-}
-
-// ============================================================================
-// Accessibility
-// ============================================================================
-
-impl ftui_a11y::Accessible for Block<'_> {
-    fn accessibility_nodes(&self, area: Rect) -> Vec<ftui_a11y::node::A11yNodeInfo> {
-        use ftui_a11y::node::{A11yNodeInfo, A11yRole};
-
-        let id = crate::a11y_node_id(area);
-        let mut node = A11yNodeInfo::new(id, A11yRole::Group, area);
-        if let Some(title) = self.title_text() {
-            node = node.with_name(title);
-        }
-        vec![node]
     }
 }

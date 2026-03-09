@@ -168,6 +168,29 @@ impl<'a> Widget for Spinner<'a> {
     }
 }
 
+// ============================================================================
+// Accessibility
+// ============================================================================
+
+impl ftui_a11y::Accessible for Spinner<'_> {
+    fn accessibility_nodes(&self, area: Rect) -> Vec<ftui_a11y::node::A11yNodeInfo> {
+        use ftui_a11y::node::{A11yNodeInfo, A11yRole, A11yState};
+
+        let id = crate::a11y_node_id(area);
+        let name = self
+            .label
+            .map(|l| format!("Loading: {l}"))
+            .unwrap_or_else(|| "Loading...".to_owned());
+        let node = A11yNodeInfo::new(id, A11yRole::ProgressBar, area)
+            .with_name(name)
+            .with_state(A11yState {
+                busy: true,
+                ..A11yState::default()
+            });
+        vec![node]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,28 +451,5 @@ mod tests {
 
         // Should use the first DOTS frame '⠋'
         assert_eq!(cell_char(&frame.buffer, 0, 0), Some('⠋'));
-    }
-}
-
-// ============================================================================
-// Accessibility
-// ============================================================================
-
-impl ftui_a11y::Accessible for Spinner<'_> {
-    fn accessibility_nodes(&self, area: Rect) -> Vec<ftui_a11y::node::A11yNodeInfo> {
-        use ftui_a11y::node::{A11yNodeInfo, A11yRole, A11yState};
-
-        let id = crate::a11y_node_id(area);
-        let name = self
-            .label
-            .map(|l| format!("Loading: {l}"))
-            .unwrap_or_else(|| "Loading...".to_owned());
-        let node = A11yNodeInfo::new(id, A11yRole::ProgressBar, area)
-            .with_name(name)
-            .with_state(A11yState {
-                busy: true,
-                ..A11yState::default()
-            });
-        vec![node]
     }
 }

@@ -598,6 +598,94 @@ fn page_down_at_bottom_stays_at_bottom() {
 }
 
 #[test]
+fn page_navigation_without_soft_wrap_uses_state_viewport_height() {
+    let mut ta = TextArea::new().with_text("aaa\nbbb\nccc");
+    ta.move_to_document_start();
+
+    let state = TextAreaState {
+        last_viewport_height: 1,
+        last_viewport_width: 3,
+    };
+
+    ta.page_down(&state);
+    assert_eq!(ta.cursor().line, 1);
+    assert_eq!(render_cell_char(&ta, 3, 1, 0, 0), Some('b'));
+
+    ta.page_down(&state);
+    assert_eq!(ta.cursor().line, 2);
+    assert_eq!(render_cell_char(&ta, 3, 1, 0, 0), Some('c'));
+}
+
+#[test]
+fn page_navigation_with_line_numbers_uses_text_area_width() {
+    let mut ta = TextArea::new()
+        .with_text("0123456789\nabcdefghij")
+        .with_line_numbers(true)
+        .with_focus(true);
+    ta.move_to_document_start();
+    for _ in 0..9 {
+        ta.move_right();
+    }
+
+    let state = TextAreaState {
+        last_viewport_height: 1,
+        last_viewport_width: 8,
+    };
+
+    ta.page_down(&state);
+
+    assert_eq!(ta.cursor().line, 1);
+    assert!(render_has_cursor(&ta, 8, 1));
+}
+
+#[test]
+fn soft_wrap_page_navigation_moves_by_visual_rows() {
+    let mut ta = TextArea::new()
+        .with_text("01234567890123456789")
+        .with_soft_wrap(true);
+    ta.move_to_document_start();
+    for _ in 0..5 {
+        ta.move_right();
+    }
+    assert_eq!(ta.cursor().visual_col, 5);
+
+    let state = TextAreaState {
+        last_viewport_height: 1,
+        last_viewport_width: 10,
+    };
+
+    ta.page_down(&state);
+    assert_eq!(ta.cursor().line, 0);
+    assert_eq!(ta.cursor().visual_col, 15);
+
+    ta.page_up(&state);
+    assert_eq!(ta.cursor().line, 0);
+    assert_eq!(ta.cursor().visual_col, 5);
+}
+
+#[test]
+fn soft_wrap_page_navigation_uses_text_width_without_render() {
+    let mut ta = TextArea::new()
+        .with_text("01234567")
+        .with_soft_wrap(true)
+        .with_line_numbers(true);
+    ta.move_to_document_start();
+
+    let state = TextAreaState {
+        last_viewport_height: 1,
+        last_viewport_width: 8,
+    };
+
+    ta.page_down(&state);
+    assert_eq!(ta.cursor().line, 0);
+    assert_eq!(ta.cursor().visual_col, 5);
+
+    ta.page_up(&state);
+    assert_eq!(ta.cursor().line, 0);
+    assert_eq!(ta.cursor().visual_col, 0);
+}
+
+#[test]
 fn horizontal_scroll_on_long_line() {
     let mut ta = TextArea::new().with_text(&"a".repeat(200));
     ta.move_to_document_end();

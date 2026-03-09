@@ -6,7 +6,7 @@ use crate::{Widget, draw_text_span_scrolled, draw_text_span_with_link, set_style
 use ftui_core::geometry::{Rect, Size};
 use ftui_render::frame::Frame;
 use ftui_style::Style;
-use ftui_text::{Line, Span, Text as FtuiText, WrapMode, display_width};
+use ftui_text::{Line, Span, Text as FtuiText, WrapMode, display_width, graphemes};
 
 type Text = FtuiText<'static>;
 
@@ -384,6 +384,71 @@ fn align_x(area: Rect, line_width: usize, alignment: Alignment) -> u16 {
         Alignment::Right => area
             .x
             .saturating_add(area.width.saturating_sub(line_width_u16)),
+    }
+}
+
+fn truncate_accessible_text(text: &str) -> String {
+    const ACCESSIBLE_TEXT_LIMIT: usize = 200;
+    const ACCESSIBLE_TEXT_PREFIX_LIMIT: usize = 197;
+
+    if text.chars().count() <= ACCESSIBLE_TEXT_LIMIT {
+        text.to_owned()
+    } else {
+        let mut prefix = String::new();
+        let mut prefix_chars = 0usize;
+
+        for grapheme in graphemes(text) {
+            let grapheme_chars = grapheme.chars().count();
+            if prefix_chars + grapheme_chars > ACCESSIBLE_TEXT_PREFIX_LIMIT {
+                break;
+            }
+            prefix.push_str(grapheme);
+            prefix_chars += grapheme_chars;
+        }
+
+        format!("{prefix}...")
+    }
+}
+
+// ============================================================================
+// Accessibility
+// ============================================================================
+
+impl ftui_a11y::Accessible for Paragraph<'_> {
+    fn accessibility_nodes(&self, area: Rect) -> Vec<ftui_a11y::node::A11yNodeInfo> {
+        use ftui_a11y::node::{A11yNodeInfo, A11yRole};
+
+        let id = crate::a11y_node_id(area);
+
+        // Extract the plain-text content for the accessible name.
+        let name: String = self
+            .text
+            .lines()
+            .iter()
+            .map(|line| {
+                line.spans()
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let block_title = self.block.as_ref().and_then(|b| b.title_text());
+        let truncated_name = truncate_accessible_text(&name);
+
+        let mut node = A11yNodeInfo::new(id, A11yRole::Label, area);
+        if let Some(title) = block_title {
+            node = node.with_name(title);
+            if !name.is_empty() {
+                node = node.with_description(truncated_name);
+            }
+        } else if !name.is_empty() {
+            node = node.with_name(truncated_name);
+        }
+
+        vec![node]
     }
 }
 
@@ -805,51 +870,71 @@ mod tests {
         let b = para.measure(Size::new(100, 50));
         assert_eq!(a, b);
     }
-}
 
-// ============================================================================
-// Accessibility
-// ============================================================================
+    #[test]
+    fn accessibility_truncates_long_unicode_without_panicking() {
+        use ftui_a11y::Accessible;
 
-impl ftui_a11y::Accessible for Paragraph<'_> {
-    fn accessibility_nodes(&self, area: Rect) -> Vec<ftui_a11y::node::A11yNodeInfo> {
-        use ftui_a11y::node::{A11yNodeInfo, A11yRole};
+        let para = Paragraph::new(Text::raw("界".repeat(210)));
+        let nodes = para.accessibility_nodes(Rect::new(0, 0, 10, 1));
+        let name = nodes[0]
+            .name
+            .as_deref()
+            .expect("paragraph should have a name");
 
-        let id = crate::a11y_node_id(area);
+        assert!(name.ends_with("..."));
+        assert_eq!(name.chars().count(), 200);
+    }
 
-        // Extract the plain-text content for the accessible name.
-        let name: String = self
-            .text
-            .lines()
-            .iter()
-            .map(|line| {
-                line.spans()
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect::<Vec<_>>()
-                    .join("")
-            })
-            .collect::<Vec<_>>()
-            .join(" ");
+    #[test]
+    fn accessibility_truncates_description_when_block_title_present() {
+        use ftui_a11y::Accessible;
 
-        let block_title = self.block.as_ref().and_then(|b| b.title_text());
+        let para =
+            Paragraph::new(Text::raw("界".repeat(210))).block(Block::bordered().title("Body"));
+        let nodes = para.accessibility_nodes(Rect::new(0, 0, 10, 1));
+        let node = &nodes[0];
 
-        let mut node = A11yNodeInfo::new(id, A11yRole::Label, area);
-        if let Some(title) = block_title {
-            node = node.with_name(title);
-            if !name.is_empty() {
-                node = node.with_description(name);
-            }
-        } else if !name.is_empty() {
-            // Truncate very long text to keep a11y nodes manageable.
-            let truncated = if name.len() > 200 {
-                format!("{}...", &name[..197])
-            } else {
-                name
-            };
-            node = node.with_name(truncated);
-        }
+        assert_eq!(node.name.as_deref(), Some("Body"));
+        let description = node
+            .description
+            .as_deref()
+            .expect("paragraph should have a description");
+        assert!(description.ends_with("..."));
+        assert_eq!(description.chars().count(), 200);
+    }
 
-        vec![node]
+    #[test]
+    fn accessibility_preserves_exactly_200_chars_without_ellipsis() {
+        use ftui_a11y::Accessible;
+
+        let para = Paragraph::new(Text::raw("界".repeat(200)));
+        let nodes = para.accessibility_nodes(Rect::new(0, 0, 10, 1));
+        let name = nodes[0]
+            .name
+            .as_deref()
+            .expect("paragraph should have a name");
+
+        assert!(!name.ends_with("..."));
+        assert_eq!(name.chars().count(), 200);
+    }
+
+    #[test]
+    fn accessibility_truncates_on_grapheme_boundaries() {
+        use ftui_a11y::Accessible;
+
+        let para = Paragraph::new(Text::raw("e\u{301}".repeat(210)));
+        let nodes = para.accessibility_nodes(Rect::new(0, 0, 10, 1));
+        let name = nodes[0]
+            .name
+            .as_deref()
+            .expect("paragraph should have a name");
+
+        let prefix = name
+            .strip_suffix("...")
+            .expect("paragraph should be truncated");
+        assert!(name.chars().count() <= 200);
+        assert_eq!(ftui_text::graphemes(prefix).count(), 98);
+        assert!(prefix.ends_with("e\u{301}"));
     }
 }

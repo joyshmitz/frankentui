@@ -1153,11 +1153,11 @@ impl ftui_a11y::Accessible for TextInput {
             self.value.clone()
         };
 
-        let mut state = A11yState::default();
-        state.focused = self.focused;
-        if self.max_length == Some(0) {
-            state.disabled = true;
-        }
+        let state = A11yState {
+            focused: self.focused,
+            disabled: self.max_length == Some(0),
+            ..A11yState::default()
+        };
 
         let mut node = A11yNodeInfo::new(id, A11yRole::TextInput, area).with_state(state);
         if !name.is_empty() {

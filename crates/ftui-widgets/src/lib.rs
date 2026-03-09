@@ -333,7 +333,9 @@ pub(crate) fn a11y_node_id(area: Rect) -> u64 {
     const FNV_OFFSET: u64 = 14_695_981_039_346_656_037;
     const FNV_PRIME: u64 = 1_099_511_628_211;
     let mut h = FNV_OFFSET;
-    for byte in area.x.to_le_bytes()
+    for byte in area
+        .x
+        .to_le_bytes()
         .iter()
         .chain(&area.y.to_le_bytes())
         .chain(&area.width.to_le_bytes())
@@ -559,26 +561,32 @@ pub(crate) fn set_style_area(buf: &mut Buffer, area: Rect, style: Style) {
     if style.is_empty() {
         return;
     }
-    let fg = style.fg;
-    let bg = style.bg;
-    let attrs = style.attrs;
-    for y in area.y..area.bottom() {
-        for x in area.x..area.right() {
-            if let Some(cell) = buf.get_mut(x, y) {
-                if let Some(fg) = fg {
-                    cell.fg = fg;
+    let clipped = area.intersection(&buf.current_scissor());
+    if clipped.is_empty() {
+        return;
+    }
+
+    let opacity = buf.current_opacity();
+    let fg = style.fg.map(|fg| fg.with_opacity(opacity));
+    let bg = style.bg.map(|bg| bg.with_opacity(opacity));
+    let attrs = style.attrs.map(ftui_render::cell::StyleFlags::from);
+    for y in clipped.y..clipped.bottom() {
+        let Some(row) = buf.row_cells_mut_span(y, clipped.x, clipped.right()) else {
+            continue;
+        };
+        for cell in row {
+            if let Some(fg) = fg {
+                cell.fg = fg;
+            }
+            if let Some(bg) = bg {
+                match bg.a() {
+                    0 => {}                          // Fully transparent: no-op
+                    255 => cell.bg = bg,             // Fully opaque: replace
+                    _ => cell.bg = bg.over(cell.bg), // Composite src-over-dst
                 }
-                if let Some(bg) = bg {
-                    match bg.a() {
-                        0 => {}                          // Fully transparent: no-op
-                        255 => cell.bg = bg,             // Fully opaque: replace
-                        _ => cell.bg = bg.over(cell.bg), // Composite src-over-dst
-                    }
-                }
-                if let Some(attrs) = attrs {
-                    let cell_flags: ftui_render::cell::StyleFlags = attrs.into();
-                    cell.attrs = cell.attrs.merged_flags(cell_flags);
-                }
+            }
+            if let Some(attrs) = attrs {
+                cell.attrs = cell.attrs.merged_flags(attrs);
             }
         }
     }
@@ -950,6 +958,41 @@ mod tests {
         // Should not have changed
         assert_eq!(buf.get(0, 0).unwrap().fg, original_fg);
         assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('A'));
+    }
+
+    #[test]
+    fn set_style_area_respects_scissor() {
+        let mut buf = Buffer::new(3, 3);
+        let style = Style::new().bg(PackedRgba::rgb(10, 20, 30));
+
+        buf.push_scissor(Rect::new(1, 1, 1, 1));
+        set_style_area(&mut buf, Rect::new(0, 0, 3, 3), style);
+
+        assert_eq!(buf.get(1, 1).unwrap().bg, PackedRgba::rgb(10, 20, 30));
+        assert_ne!(buf.get(0, 1).unwrap().bg, PackedRgba::rgb(10, 20, 30));
+        assert_ne!(buf.get(1, 0).unwrap().bg, PackedRgba::rgb(10, 20, 30));
+        assert_ne!(buf.get(2, 2).unwrap().bg, PackedRgba::rgb(10, 20, 30));
+    }
+
+    #[test]
+    fn set_style_area_respects_opacity_stack() {
+        let mut buf = Buffer::new(1, 1);
+        let base_fg = PackedRgba::rgb(20, 30, 40);
+        let base_bg = PackedRgba::rgb(50, 60, 70);
+        buf.set(0, 0, Cell::from_char('X').with_fg(base_fg).with_bg(base_bg));
+
+        let overlay_fg = PackedRgba::rgb(200, 100, 0);
+        let overlay_bg = PackedRgba::rgb(0, 0, 200);
+        buf.push_opacity(0.5);
+        set_style_area(
+            &mut buf,
+            Rect::new(0, 0, 1, 1),
+            Style::new().fg(overlay_fg).bg(overlay_bg),
+        );
+
+        let cell = buf.get(0, 0).unwrap();
+        assert_eq!(cell.fg, overlay_fg.with_opacity(0.5));
+        assert_eq!(cell.bg, overlay_bg.with_opacity(0.5).over(base_bg));
     }
 
     #[test]

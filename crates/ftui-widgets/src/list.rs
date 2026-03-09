@@ -980,13 +980,12 @@ impl ftui_a11y::Accessible for List<'_> {
             .and_then(|b| b.title_text())
             .unwrap_or_default();
 
-        let mut list_node = A11yNodeInfo::new(base_id, A11yRole::List, area)
-            .with_children(child_ids);
+        let mut list_node =
+            A11yNodeInfo::new(base_id, A11yRole::List, area).with_children(child_ids);
         if !title.is_empty() {
             list_node = list_node.with_name(title);
         }
-        list_node = list_node
-            .with_description(format!("{item_count} items"));
+        list_node = list_node.with_description(format!("{item_count} items"));
 
         let mut nodes = vec![list_node];
         for (i, item) in self.items.iter().enumerate() {
