@@ -26,9 +26,8 @@ struct FakeList {
 impl Accessible for FakeList {
     fn accessibility_nodes(&self, area: Rect) -> Vec<A11yNodeInfo> {
         let child_ids: Vec<u64> = self.items.iter().map(|(id, _)| *id).collect();
-        let mut nodes = vec![
-            A11yNodeInfo::new(self.id, A11yRole::List, area).with_children(child_ids),
-        ];
+        let mut nodes =
+            vec![A11yNodeInfo::new(self.id, A11yRole::List, area).with_children(child_ids)];
         for (i, (item_id, label)) in self.items.iter().enumerate() {
             let item_rect = Rect::new(area.x, area.y + i as u16, area.width, 1);
             nodes.push(
@@ -154,7 +153,11 @@ fn builder_empty_produces_empty_tree() {
 #[test]
 fn builder_with_capacity_works() {
     let mut builder = A11yTreeBuilder::with_capacity(16);
-    builder.add_node(A11yNodeInfo::new(1, A11yRole::Window, Rect::new(0, 0, 80, 24)));
+    builder.add_node(A11yNodeInfo::new(
+        1,
+        A11yRole::Window,
+        Rect::new(0, 0, 80, 24),
+    ));
     let tree = builder.build();
     assert_eq!(tree.node_count(), 1);
 }
@@ -247,7 +250,10 @@ fn tree_children_of() {
     let tree = build_sample_tree();
     let children = tree.children_of(1);
     assert_eq!(children.len(), 2);
-    let names: Vec<_> = children.iter().map(|n| n.name.as_deref().unwrap()).collect();
+    let names: Vec<_> = children
+        .iter()
+        .map(|n| n.name.as_deref().unwrap())
+        .collect();
     assert!(names.contains(&"Sidebar"));
     assert!(names.contains(&"Main"));
 }
@@ -330,9 +336,7 @@ fn diff_detects_added_nodes() {
     for node in tree1.nodes() {
         b.add_node(node.clone());
     }
-    b.add_node(
-        A11yNodeInfo::new(5, A11yRole::Label, Rect::new(0, 23, 20, 1)).with_name("Status"),
-    );
+    b.add_node(A11yNodeInfo::new(5, A11yRole::Label, Rect::new(0, 23, 20, 1)).with_name("Status"));
     b.set_root(1);
     b.set_focused(Some(4));
     let tree2 = b.build();
@@ -442,7 +446,11 @@ fn diff_detects_bounds_change() {
 
     let diff = tree2.diff(&tree1);
     let changes = &diff.changed.iter().find(|(id, _)| *id == 4).unwrap().1;
-    assert!(changes.iter().any(|c| matches!(c, A11yChange::BoundsChanged)));
+    assert!(
+        changes
+            .iter()
+            .any(|c| matches!(c, A11yChange::BoundsChanged))
+    );
 }
 
 #[test]
@@ -459,16 +467,18 @@ fn diff_detects_children_change() {
             b.add_node(node.clone());
         }
     }
-    b.add_node(
-        A11yNodeInfo::new(5, A11yRole::Label, Rect::new(0, 0, 10, 1)).with_parent(1),
-    );
+    b.add_node(A11yNodeInfo::new(5, A11yRole::Label, Rect::new(0, 0, 10, 1)).with_parent(1));
     b.set_root(1);
     b.set_focused(Some(4));
     let tree2 = b.build();
 
     let diff = tree2.diff(&tree1);
     let changes = &diff.changed.iter().find(|(id, _)| *id == 1).unwrap().1;
-    assert!(changes.iter().any(|c| matches!(c, A11yChange::ChildrenChanged)));
+    assert!(
+        changes
+            .iter()
+            .any(|c| matches!(c, A11yChange::ChildrenChanged))
+    );
 }
 
 #[test]
@@ -501,16 +511,16 @@ fn diff_detects_state_change_focused() {
 #[test]
 fn diff_detects_state_change_checked() {
     let mut b1 = A11yTreeBuilder::new();
-    let mut cb = A11yNodeInfo::new(1, A11yRole::Checkbox, Rect::new(0, 0, 3, 1))
-        .with_name("Accept");
+    let mut cb =
+        A11yNodeInfo::new(1, A11yRole::Checkbox, Rect::new(0, 0, 3, 1)).with_name("Accept");
     cb.state.checked = Some(false);
     b1.add_node(cb);
     b1.set_root(1);
     let tree1 = b1.build();
 
     let mut b2 = A11yTreeBuilder::new();
-    let mut cb2 = A11yNodeInfo::new(1, A11yRole::Checkbox, Rect::new(0, 0, 3, 1))
-        .with_name("Accept");
+    let mut cb2 =
+        A11yNodeInfo::new(1, A11yRole::Checkbox, Rect::new(0, 0, 3, 1)).with_name("Accept");
     cb2.state.checked = Some(true);
     b2.add_node(cb2);
     b2.set_root(1);
@@ -527,8 +537,8 @@ fn diff_detects_state_change_checked() {
 #[test]
 fn diff_detects_state_change_value() {
     let mut b1 = A11yTreeBuilder::new();
-    let mut slider = A11yNodeInfo::new(1, A11yRole::Slider, Rect::new(0, 0, 20, 1))
-        .with_name("Volume");
+    let mut slider =
+        A11yNodeInfo::new(1, A11yRole::Slider, Rect::new(0, 0, 20, 1)).with_name("Volume");
     slider.state.value_now = Some(50.0);
     slider.state.value_min = Some(0.0);
     slider.state.value_max = Some(100.0);
@@ -538,8 +548,8 @@ fn diff_detects_state_change_value() {
     let tree1 = b1.build();
 
     let mut b2 = A11yTreeBuilder::new();
-    let mut slider2 = A11yNodeInfo::new(1, A11yRole::Slider, Rect::new(0, 0, 20, 1))
-        .with_name("Volume");
+    let mut slider2 =
+        A11yNodeInfo::new(1, A11yRole::Slider, Rect::new(0, 0, 20, 1)).with_name("Volume");
     slider2.state.value_now = Some(75.0);
     slider2.state.value_min = Some(0.0);
     slider2.state.value_max = Some(100.0);
@@ -610,13 +620,21 @@ fn diff_detects_focus_change() {
 #[test]
 fn diff_detects_focus_gained() {
     let mut b1 = A11yTreeBuilder::new();
-    b1.add_node(A11yNodeInfo::new(1, A11yRole::Button, Rect::new(0, 0, 5, 1)));
+    b1.add_node(A11yNodeInfo::new(
+        1,
+        A11yRole::Button,
+        Rect::new(0, 0, 5, 1),
+    ));
     b1.set_root(1);
     // no focus set
     let tree1 = b1.build();
 
     let mut b2 = A11yTreeBuilder::new();
-    b2.add_node(A11yNodeInfo::new(1, A11yRole::Button, Rect::new(0, 0, 5, 1)));
+    b2.add_node(A11yNodeInfo::new(
+        1,
+        A11yRole::Button,
+        Rect::new(0, 0, 5, 1),
+    ));
     b2.set_root(1);
     b2.set_focused(Some(1));
     let tree2 = b2.build();
@@ -628,13 +646,21 @@ fn diff_detects_focus_gained() {
 #[test]
 fn diff_detects_focus_lost() {
     let mut b1 = A11yTreeBuilder::new();
-    b1.add_node(A11yNodeInfo::new(1, A11yRole::Button, Rect::new(0, 0, 5, 1)));
+    b1.add_node(A11yNodeInfo::new(
+        1,
+        A11yRole::Button,
+        Rect::new(0, 0, 5, 1),
+    ));
     b1.set_root(1);
     b1.set_focused(Some(1));
     let tree1 = b1.build();
 
     let mut b2 = A11yTreeBuilder::new();
-    b2.add_node(A11yNodeInfo::new(1, A11yRole::Button, Rect::new(0, 0, 5, 1)));
+    b2.add_node(A11yNodeInfo::new(
+        1,
+        A11yRole::Button,
+        Rect::new(0, 0, 5, 1),
+    ));
     b2.set_root(1);
     // no focus
     let tree2 = b2.build();
@@ -683,15 +709,19 @@ fn accessible_button_returns_single_node() {
 fn accessible_list_returns_parent_and_children() {
     let list = FakeList {
         id: 200,
-        items: vec![(201, "Alpha".into()), (202, "Beta".into()), (203, "Gamma".into())],
+        items: vec![
+            (201, "Alpha".into()),
+            (202, "Beta".into()),
+            (203, "Gamma".into()),
+        ],
     };
     let nodes = list.accessibility_nodes(Rect::new(0, 0, 30, 10));
     assert_eq!(nodes.len(), 4); // 1 list + 3 items
     assert_eq!(nodes[0].role, A11yRole::List);
     assert_eq!(nodes[0].children, vec![201, 202, 203]);
-    for i in 1..4 {
-        assert_eq!(nodes[i].role, A11yRole::ListItem);
-        assert_eq!(nodes[i].parent, Some(200));
+    for node in nodes.iter().skip(1).take(3) {
+        assert_eq!(node.role, A11yRole::ListItem);
+        assert_eq!(node.parent, Some(200));
     }
 }
 
@@ -724,7 +754,11 @@ fn accessible_widget_integrates_with_tree_builder() {
 #[test]
 fn tree_focused_id_points_to_nonexistent_node() {
     let mut b = A11yTreeBuilder::new();
-    b.add_node(A11yNodeInfo::new(1, A11yRole::Window, Rect::new(0, 0, 80, 24)));
+    b.add_node(A11yNodeInfo::new(
+        1,
+        A11yRole::Window,
+        Rect::new(0, 0, 80, 24),
+    ));
     b.set_root(1);
     b.set_focused(Some(999)); // node 999 doesn't exist
     let tree = b.build();
@@ -736,7 +770,11 @@ fn tree_focused_id_points_to_nonexistent_node() {
 #[test]
 fn tree_root_id_points_to_nonexistent_node() {
     let mut b = A11yTreeBuilder::new();
-    b.add_node(A11yNodeInfo::new(1, A11yRole::Window, Rect::new(0, 0, 80, 24)));
+    b.add_node(A11yNodeInfo::new(
+        1,
+        A11yRole::Window,
+        Rect::new(0, 0, 80, 24),
+    ));
     b.set_root(999);
     let tree = b.build();
 
@@ -747,8 +785,7 @@ fn tree_root_id_points_to_nonexistent_node() {
 #[test]
 fn diff_multiple_state_changes_on_same_node() {
     let mut b1 = A11yTreeBuilder::new();
-    let mut n = A11yNodeInfo::new(1, A11yRole::Checkbox, Rect::new(0, 0, 3, 1))
-        .with_name("Option");
+    let mut n = A11yNodeInfo::new(1, A11yRole::Checkbox, Rect::new(0, 0, 3, 1)).with_name("Option");
     n.state.checked = Some(false);
     n.state.disabled = false;
     n.state.focused = false;
@@ -757,8 +794,8 @@ fn diff_multiple_state_changes_on_same_node() {
     let tree1 = b1.build();
 
     let mut b2 = A11yTreeBuilder::new();
-    let mut n2 = A11yNodeInfo::new(1, A11yRole::Checkbox, Rect::new(0, 0, 3, 1))
-        .with_name("Option");
+    let mut n2 =
+        A11yNodeInfo::new(1, A11yRole::Checkbox, Rect::new(0, 0, 3, 1)).with_name("Option");
     n2.state.checked = Some(true);
     n2.state.disabled = true;
     n2.state.focused = true;
@@ -861,10 +898,7 @@ fn diff_detects_description_change() {
 #[test]
 fn diff_detects_description_added() {
     let mut b1 = A11yTreeBuilder::new();
-    b1.add_node(
-        A11yNodeInfo::new(1, A11yRole::Button, Rect::new(0, 0, 10, 1))
-            .with_name("Save"),
-    );
+    b1.add_node(A11yNodeInfo::new(1, A11yRole::Button, Rect::new(0, 0, 10, 1)).with_name("Save"));
     b1.set_root(1);
     let tree1 = b1.build();
 
@@ -932,8 +966,7 @@ fn diff_detects_shortcut_removed() {
 
     let mut b2 = A11yTreeBuilder::new();
     b2.add_node(
-        A11yNodeInfo::new(1, A11yRole::Button, Rect::new(0, 0, 10, 1))
-            .with_name("Save"),
+        A11yNodeInfo::new(1, A11yRole::Button, Rect::new(0, 0, 10, 1)).with_name("Save"),
         // no shortcut
     );
     b2.set_root(1);
@@ -954,32 +987,34 @@ fn diff_detects_shortcut_removed() {
 fn diff_detects_parent_change() {
     let mut b1 = A11yTreeBuilder::new();
     b1.add_node(
-        A11yNodeInfo::new(1, A11yRole::Window, Rect::new(0, 0, 80, 24))
-            .with_children(vec![2]),
+        A11yNodeInfo::new(1, A11yRole::Window, Rect::new(0, 0, 80, 24)).with_children(vec![2]),
     );
     b1.add_node(
         A11yNodeInfo::new(2, A11yRole::Button, Rect::new(0, 0, 10, 1))
             .with_name("OK")
             .with_parent(1),
     );
-    b1.add_node(
-        A11yNodeInfo::new(3, A11yRole::Group, Rect::new(0, 0, 40, 24)),
-    );
+    b1.add_node(A11yNodeInfo::new(
+        3,
+        A11yRole::Group,
+        Rect::new(0, 0, 40, 24),
+    ));
     b1.set_root(1);
     let tree1 = b1.build();
 
     let mut b2 = A11yTreeBuilder::new();
-    b2.add_node(
-        A11yNodeInfo::new(1, A11yRole::Window, Rect::new(0, 0, 80, 24)),
-    );
+    b2.add_node(A11yNodeInfo::new(
+        1,
+        A11yRole::Window,
+        Rect::new(0, 0, 80, 24),
+    ));
     b2.add_node(
         A11yNodeInfo::new(2, A11yRole::Button, Rect::new(0, 0, 10, 1))
             .with_name("OK")
             .with_parent(3), // reparented from 1 to 3
     );
     b2.add_node(
-        A11yNodeInfo::new(3, A11yRole::Group, Rect::new(0, 0, 40, 24))
-            .with_children(vec![2]),
+        A11yNodeInfo::new(3, A11yRole::Group, Rect::new(0, 0, 40, 24)).with_children(vec![2]),
     );
     b2.set_root(1);
     let tree2 = b2.build();
@@ -999,20 +1034,18 @@ fn diff_detects_parent_change() {
 fn diff_detects_parent_removed() {
     let mut b1 = A11yTreeBuilder::new();
     b1.add_node(
-        A11yNodeInfo::new(1, A11yRole::Window, Rect::new(0, 0, 80, 24))
-            .with_children(vec![2]),
+        A11yNodeInfo::new(1, A11yRole::Window, Rect::new(0, 0, 80, 24)).with_children(vec![2]),
     );
-    b1.add_node(
-        A11yNodeInfo::new(2, A11yRole::Button, Rect::new(0, 0, 10, 1))
-            .with_parent(1),
-    );
+    b1.add_node(A11yNodeInfo::new(2, A11yRole::Button, Rect::new(0, 0, 10, 1)).with_parent(1));
     b1.set_root(1);
     let tree1 = b1.build();
 
     let mut b2 = A11yTreeBuilder::new();
-    b2.add_node(
-        A11yNodeInfo::new(1, A11yRole::Window, Rect::new(0, 0, 80, 24)),
-    );
+    b2.add_node(A11yNodeInfo::new(
+        1,
+        A11yRole::Window,
+        Rect::new(0, 0, 80, 24),
+    ));
     b2.add_node(
         A11yNodeInfo::new(2, A11yRole::Button, Rect::new(0, 0, 10, 1)),
         // no parent
@@ -1085,10 +1118,7 @@ fn ancestors_cycle_protection() {
 fn ancestors_self_cycle_protection() {
     // A node that is its own parent.
     let mut b = A11yTreeBuilder::new();
-    b.add_node(
-        A11yNodeInfo::new(1, A11yRole::Window, Rect::new(0, 0, 80, 24))
-            .with_parent(1),
-    );
+    b.add_node(A11yNodeInfo::new(1, A11yRole::Window, Rect::new(0, 0, 80, 24)).with_parent(1));
     b.set_root(1);
     let tree = b.build();
 

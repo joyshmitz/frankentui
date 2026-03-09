@@ -281,16 +281,10 @@ pub enum A11yChange {
         new: Option<String>,
     },
     /// The role changed (unusual but possible during dynamic UIs).
-    RoleChanged {
-        old: A11yRole,
-        new: A11yRole,
-    },
+    RoleChanged { old: A11yRole, new: A11yRole },
     /// A state flag changed. `field` is the flag name, `description`
     /// is a human-readable summary of the new value.
-    StateChanged {
-        field: String,
-        description: String,
-    },
+    StateChanged { field: String, description: String },
     /// The bounding rectangle moved or resized.
     BoundsChanged,
     /// The set of child IDs changed.
@@ -311,10 +305,7 @@ pub enum A11yChange {
         new: Option<String>,
     },
     /// The parent node ID changed.
-    ParentChanged {
-        old: Option<u64>,
-        new: Option<u64>,
-    },
+    ParentChanged { old: Option<u64>, new: Option<u64> },
 }
 
 // ── Internal diff helpers ──────────────────────────────────────────────
@@ -420,11 +411,7 @@ fn diff_state(
     if old.value_text != new.value_text {
         changes.push(A11yChange::StateChanged {
             field: "value_text".to_owned(),
-            description: new
-                .value_text
-                .as_deref()
-                .unwrap_or("<none>")
-                .to_owned(),
+            description: new.value_text.as_deref().unwrap_or("<none>").to_owned(),
         });
     }
 }
