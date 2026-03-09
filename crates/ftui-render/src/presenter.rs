@@ -728,8 +728,11 @@ impl<W: Write> Presenter<W> {
         // Emit style changes if needed
         self.emit_style_changes(cell)?;
 
-        // Emit link changes if needed
-        self.emit_link_changes(cell, links)?;
+        // Skip hyperlink bookkeeping entirely when the frame has no registry
+        // and no link state is currently active.
+        if links.is_some() || self.current_link.is_some() {
+            self.emit_link_changes(cell, links)?;
+        }
 
         // Calculate effective width and check for zero-width content (e.g. combining marks)
         // stored as standalone cells. These must be replaced to maintain grid alignment.
@@ -770,7 +773,9 @@ impl<W: Write> Presenter<W> {
     ) -> io::Result<()> {
         let blank = Cell::default();
         self.emit_style_changes(&blank)?;
-        self.emit_link_changes(&blank, links)?;
+        if links.is_some() || self.current_link.is_some() {
+            self.emit_link_changes(&blank, links)?;
+        }
         self.writer.write_all(b" ")?;
         self.cursor_x = Some(x.saturating_add(1));
         Ok(())
