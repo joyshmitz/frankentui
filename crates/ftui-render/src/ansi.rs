@@ -113,6 +113,27 @@ fn write_u8_dec(buf: &mut [u8], n: u8) -> usize {
 }
 
 #[inline]
+fn write_u32_dec(buf: &mut [u8], mut n: u32) -> usize {
+    let mut rev = [0u8; 10];
+    let mut len = 0usize;
+
+    loop {
+        rev[len] = (n % 10) as u8;
+        len += 1;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
+    }
+
+    for i in 0..len {
+        buf[i] = b'0' + rev[len - 1 - i];
+    }
+
+    len
+}
+
+#[inline]
 fn write_sgr_code<W: Write>(w: &mut W, code: u8) -> io::Result<()> {
     let mut buf = [0u8; 6];
     buf[0] = 0x1b;
@@ -261,14 +282,48 @@ pub fn sgr_flags_off<W: Write>(
     Ok(collateral)
 }
 
+const SGR_FG_RGB_PREFIX: &[u8] = b"\x1b[38;2;";
+const SGR_BG_RGB_PREFIX: &[u8] = b"\x1b[48;2;";
+
+#[inline]
+fn write_sgr_rgb_seq<W: Write>(w: &mut W, prefix: &[u8], r: u8, g: u8, b: u8) -> io::Result<()> {
+    let mut buf = [0u8; 20];
+    let mut idx = 0usize;
+
+    buf[..prefix.len()].copy_from_slice(prefix);
+    idx += prefix.len();
+
+    idx += write_u8_dec(&mut buf[idx..], r);
+    buf[idx] = b';';
+    idx += 1;
+    idx += write_u8_dec(&mut buf[idx..], g);
+    buf[idx] = b';';
+    idx += 1;
+    idx += write_u8_dec(&mut buf[idx..], b);
+    buf[idx] = b'm';
+    idx += 1;
+
+    w.write_all(&buf[..idx])
+}
+
+#[inline]
+fn write_csi_u32_suffix<W: Write>(w: &mut W, value: u32, suffix: u8) -> io::Result<()> {
+    let mut buf = [0u8; 16];
+    buf[0] = 0x1b;
+    buf[1] = b'[';
+    let len = write_u32_dec(&mut buf[2..], value);
+    buf[2 + len] = suffix;
+    w.write_all(&buf[..3 + len])
+}
+
 /// Write SGR sequence for true color foreground: `CSI 38;2;r;g;b m`
 pub fn sgr_fg_rgb<W: Write>(w: &mut W, r: u8, g: u8, b: u8) -> io::Result<()> {
-    write!(w, "\x1b[38;2;{r};{g};{b}m")
+    write_sgr_rgb_seq(w, SGR_FG_RGB_PREFIX, r, g, b)
 }
 
 /// Write SGR sequence for true color background: `CSI 48;2;r;g;b m`
 pub fn sgr_bg_rgb<W: Write>(w: &mut W, r: u8, g: u8, b: u8) -> io::Result<()> {
-    write!(w, "\x1b[48;2;{r};{g};{b}m")
+    write_sgr_rgb_seq(w, SGR_BG_RGB_PREFIX, r, g, b)
 }
 
 /// Write SGR sequence for 256-color foreground: `CSI 38;5;n m`
@@ -344,14 +399,27 @@ pub fn sgr_bg_packed<W: Write>(w: &mut W, color: PackedRgba) -> io::Result<()> {
 /// Moves cursor to absolute position. Row and col are 0-indexed input,
 /// converted to 1-indexed for ANSI.
 pub fn cup<W: Write>(w: &mut W, row: u16, col: u16) -> io::Result<()> {
-    write!(w, "\x1b[{};{}H", (row as u32) + 1, (col as u32) + 1)
+    let mut buf = [0u8; 16];
+    let mut idx = 0usize;
+
+    buf[idx] = 0x1b;
+    buf[idx + 1] = b'[';
+    idx += 2;
+    idx += write_u32_dec(&mut buf[idx..], (row as u32) + 1);
+    buf[idx] = b';';
+    idx += 1;
+    idx += write_u32_dec(&mut buf[idx..], (col as u32) + 1);
+    buf[idx] = b'H';
+    idx += 1;
+
+    w.write_all(&buf[..idx])
 }
 
 /// CUP to column only: `CSI col G` (1-indexed)
 ///
 /// Moves cursor to column on current row.
 pub fn cha<W: Write>(w: &mut W, col: u16) -> io::Result<()> {
-    write!(w, "\x1b[{}G", (col as u32) + 1)
+    write_csi_u32_suffix(w, (col as u32) + 1, b'G')
 }
 
 /// Move cursor up: `CSI n A`
@@ -362,7 +430,7 @@ pub fn cuu<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     if n == 1 {
         w.write_all(b"\x1b[A")
     } else {
-        write!(w, "\x1b[{n}A")
+        write_csi_u32_suffix(w, n as u32, b'A')
     }
 }
 
@@ -374,7 +442,7 @@ pub fn cud<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     if n == 1 {
         w.write_all(b"\x1b[B")
     } else {
-        write!(w, "\x1b[{n}B")
+        write_csi_u32_suffix(w, n as u32, b'B')
     }
 }
 
@@ -386,7 +454,7 @@ pub fn cuf<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     if n == 1 {
         w.write_all(b"\x1b[C")
     } else {
-        write!(w, "\x1b[{n}C")
+        write_csi_u32_suffix(w, n as u32, b'C')
     }
 }
 
@@ -398,7 +466,7 @@ pub fn cub<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     if n == 1 {
         w.write_all(b"\x1b[D")
     } else {
-        write!(w, "\x1b[{n}D")
+        write_csi_u32_suffix(w, n as u32, b'D')
     }
 }
 
@@ -712,6 +780,20 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_sgr_rgb_matches_reference_formatting() {
+        for (r, g, b) in [(0, 0, 0), (1, 2, 3), (9, 10, 99), (100, 200, 255)] {
+            assert_eq!(
+                to_bytes(|w| sgr_fg_rgb(w, r, g, b)),
+                format!("\x1b[38;2;{r};{g};{b}m").into_bytes()
+            );
+            assert_eq!(
+                to_bytes(|w| sgr_bg_rgb(w, r, g, b)),
+                format!("\x1b[48;2;{r};{g};{b}m").into_bytes()
+            );
+        }
+    }
+
+    #[test]
     fn sgr_fg_256_bytes() {
         assert_eq!(to_bytes(|w| sgr_fg_256(w, 196)), b"\x1b[38;5;196m");
     }
@@ -804,6 +886,59 @@ mod tests {
         assert_eq!(to_bytes(|w| cud(w, 0)), b"");
         assert_eq!(to_bytes(|w| cuf(w, 0)), b"");
         assert_eq!(to_bytes(|w| cub(w, 0)), b"");
+    }
+
+    #[test]
+    fn dynamic_cursor_sequences_match_reference_formatting() {
+        for (row, col) in [(0, 0), (23, 79), (999, 999), (u16::MAX, u16::MAX)] {
+            assert_eq!(
+                to_bytes(|w| cup(w, row, col)),
+                format!("\x1b[{};{}H", (row as u32) + 1, (col as u32) + 1).into_bytes()
+            );
+        }
+
+        for col in [0, 79, 999, u16::MAX] {
+            assert_eq!(
+                to_bytes(|w| cha(w, col)),
+                format!("\x1b[{}G", (col as u32) + 1).into_bytes()
+            );
+        }
+
+        for n in [0, 1, 2, 10, 999, u16::MAX] {
+            let expected_up = if n == 0 {
+                Vec::new()
+            } else if n == 1 {
+                b"\x1b[A".to_vec()
+            } else {
+                format!("\x1b[{n}A").into_bytes()
+            };
+            let expected_down = if n == 0 {
+                Vec::new()
+            } else if n == 1 {
+                b"\x1b[B".to_vec()
+            } else {
+                format!("\x1b[{n}B").into_bytes()
+            };
+            let expected_forward = if n == 0 {
+                Vec::new()
+            } else if n == 1 {
+                b"\x1b[C".to_vec()
+            } else {
+                format!("\x1b[{n}C").into_bytes()
+            };
+            let expected_back = if n == 0 {
+                Vec::new()
+            } else if n == 1 {
+                b"\x1b[D".to_vec()
+            } else {
+                format!("\x1b[{n}D").into_bytes()
+            };
+
+            assert_eq!(to_bytes(|w| cuu(w, n)), expected_up);
+            assert_eq!(to_bytes(|w| cud(w, n)), expected_down);
+            assert_eq!(to_bytes(|w| cuf(w, n)), expected_forward);
+            assert_eq!(to_bytes(|w| cub(w, n)), expected_back);
+        }
     }
 
     #[test]

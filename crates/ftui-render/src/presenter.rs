@@ -166,11 +166,12 @@ mod cost_model {
 
     /// Row emission plan (possibly multiple merged spans).
     ///
-    /// Uses SmallVec<[RowSpan; 4]> to avoid heap allocation for the common case
-    /// of 1-4 spans per row. RowSpan is 6 bytes, so 4 spans = 24 bytes inline.
+    /// Uses SmallVec<[RowSpan; 8]> to avoid heap allocation for the common case
+    /// of sparse rows with several isolated runs. RowSpan is 6 bytes, so
+    /// 8 spans = 48 bytes inline.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct RowPlan {
-        spans: SmallVec<[RowSpan; 4]>,
+        spans: SmallVec<[RowSpan; 8]>,
         total_cost: usize,
     }
 
@@ -291,7 +292,7 @@ mod cost_model {
         }
 
         // Reconstruct spans from back to front.
-        let mut spans: SmallVec<[RowSpan; 4]> = SmallVec::new();
+        let mut spans: SmallVec<[RowSpan; 8]> = SmallVec::new();
         let mut j = run_count - 1;
         loop {
             let i = scratch.prev[j];
