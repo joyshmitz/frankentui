@@ -36,7 +36,8 @@ use std::io::{self, BufWriter, Write};
 
 use crate::ansi::{self, EraseLineMode};
 use crate::buffer::Buffer;
-use crate::cell::{Cell, CellAttrs, PackedRgba, StyleFlags};
+use crate::cell::{Cell, CellAttrs, GraphemeId, PackedRgba, StyleFlags};
+use crate::char_width;
 use crate::counting_writer::{CountingWriter, PresentStats, StatsCollector};
 use crate::diff::{BufferDiff, ChangeRun};
 use crate::grapheme_pool::GraphemePool;
@@ -73,16 +74,19 @@ mod cost_model {
     /// Number of decimal digits needed to represent `n`.
     #[inline]
     fn digit_count(n: u16) -> usize {
-        if n >= 10000 {
-            5
-        } else if n >= 1000 {
-            4
-        } else if n >= 100 {
-            3
-        } else if n >= 10 {
-            2
-        } else {
+        // Terminal coordinates and relative deltas are overwhelmingly small.
+        // Check the common low ranges first so the planner pays fewer compares
+        // on its hottest cost-model path.
+        if n < 10 {
             1
+        } else if n < 100 {
+            2
+        } else if n < 1000 {
+            3
+        } else if n < 10000 {
+            4
+        } else {
+            5
         }
     }
 
@@ -321,6 +325,27 @@ struct CellStyle {
     fg: PackedRgba,
     bg: PackedRgba,
     attrs: StyleFlags,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreparedContent {
+    Empty,
+    Char(char),
+    Grapheme(GraphemeId),
+}
+
+impl PreparedContent {
+    #[inline]
+    fn from_cell(cell: &Cell) -> (Self, usize) {
+        let content = cell.content;
+        if let Some(grapheme_id) = content.grapheme_id() {
+            (Self::Grapheme(grapheme_id), content.width())
+        } else if let Some(ch) = content.as_char() {
+            (Self::Char(ch), char_width(ch))
+        } else {
+            (Self::Empty, 0)
+        }
+    }
 }
 
 impl Default for CellStyle {
@@ -728,15 +753,13 @@ impl<W: Write> Presenter<W> {
         // Emit style changes if needed
         self.emit_style_changes(cell)?;
 
-        // Skip hyperlink bookkeeping entirely when the frame has no registry
-        // and no link state is currently active.
-        if links.is_some() || self.current_link.is_some() {
-            self.emit_link_changes(cell, links)?;
-        }
+        // Emit link changes if needed
+        self.emit_link_changes(cell, links)?;
+
+        let (prepared_content, raw_width) = PreparedContent::from_cell(cell);
 
         // Calculate effective width and check for zero-width content (e.g. combining marks)
         // stored as standalone cells. These must be replaced to maintain grid alignment.
-        let raw_width = cell.content.width();
         let is_zero_width_content = raw_width == 0 && !cell.is_empty() && !cell.is_continuation();
 
         if is_zero_width_content {
@@ -744,7 +767,7 @@ impl<W: Write> Presenter<W> {
             self.writer.write_all(b"\xEF\xBF\xBD")?;
         } else {
             // Emit normal content
-            self.emit_content(cell, pool)?;
+            self.emit_content(prepared_content, raw_width, pool)?;
         }
 
         // Update cursor position (character output advances cursor)
@@ -773,9 +796,7 @@ impl<W: Write> Presenter<W> {
     ) -> io::Result<()> {
         let blank = Cell::default();
         self.emit_style_changes(&blank)?;
-        if links.is_some() || self.current_link.is_some() {
-            self.emit_link_changes(&blank, links)?;
-        }
+        self.emit_link_changes(&blank, links)?;
         self.writer.write_all(b" ")?;
         self.cursor_x = Some(x.saturating_add(1));
         Ok(())
@@ -796,8 +817,7 @@ impl<W: Write> Presenter<W> {
 
         match self.current_style {
             None => {
-                // No known state - must do full apply (but skip reset if we haven't
-                // emitted anything yet, the frame-start reset handles that).
+                // No known style state: re-establish a full terminal style baseline.
                 self.emit_style_full(new_style)?;
             }
             Some(old_style) => {
@@ -1013,39 +1033,55 @@ impl<W: Write> Presenter<W> {
         Ok(())
     }
 
-    /// Emit cell content (character or grapheme).
-    fn emit_content(&mut self, cell: &Cell, pool: Option<&GraphemePool>) -> io::Result<()> {
-        // Check if this is a grapheme reference
-        if let Some(grapheme_id) = cell.content.grapheme_id() {
-            if let Some(pool) = pool
-                && let Some(text) = pool.get(grapheme_id)
-            {
-                let safe = sanitize(text);
-                if !safe.is_empty() {
-                    return self.writer.write_all(safe.as_bytes());
+    /// Emit cell content after width/content classification.
+    fn emit_content(
+        &mut self,
+        content: PreparedContent,
+        raw_width: usize,
+        pool: Option<&GraphemePool>,
+    ) -> io::Result<()> {
+        match content {
+            PreparedContent::Grapheme(grapheme_id) => {
+                if let Some(pool) = pool
+                    && let Some(text) = pool.get(grapheme_id)
+                {
+                    let safe = sanitize(text);
+                    if !safe.is_empty() {
+                        return self.writer.write_all(safe.as_bytes());
+                    }
                 }
-            }
-            // Fallback: emit replacement characters matching expected width
-            // to maintain cursor synchronization.
-            let width = cell.content.width();
-            if width > 0 {
-                for _ in 0..width {
-                    self.writer.write_all(b"?")?;
+                // Fallback: emit replacement characters matching expected width
+                // to maintain cursor synchronization.
+                if raw_width > 0 {
+                    for _ in 0..raw_width {
+                        self.writer.write_all(b"?")?;
+                    }
                 }
+                Ok(())
             }
-            return Ok(());
-        }
-
-        // Regular character content
-        if let Some(ch) = cell.content.as_char() {
-            // Sanitize control characters that would break the grid.
-            let safe_ch = if ch.is_control() { ' ' } else { ch };
-            let mut buf = [0u8; 4];
-            let encoded = safe_ch.encode_utf8(&mut buf);
-            self.writer.write_all(encoded.as_bytes())
-        } else {
-            // Empty cell - emit space
-            self.writer.write_all(b" ")
+            PreparedContent::Char(ch) => {
+                if ch.is_ascii() {
+                    // Width-0 ASCII controls are filtered earlier via the
+                    // replacement-character path. The remaining ASCII controls
+                    // here are width-1 (`\n`/`\r`) and must still sanitize to
+                    // a visually neutral single cell.
+                    let byte = if ch.is_ascii_control() {
+                        b' '
+                    } else {
+                        ch as u8
+                    };
+                    return self.writer.write_all(&[byte]);
+                }
+                // Sanitize control characters that would break the grid.
+                let safe_ch = if ch.is_control() { ' ' } else { ch };
+                let mut buf = [0u8; 4];
+                let encoded = safe_ch.encode_utf8(&mut buf);
+                self.writer.write_all(encoded.as_bytes())
+            }
+            PreparedContent::Empty => {
+                // Empty cell - emit space
+                self.writer.write_all(b" ")
+            }
         }
     }
 
@@ -4041,6 +4077,26 @@ mod tests {
         presenter.emit_cell(0, &cell, None, None).unwrap();
         let output = presenter.into_inner().unwrap();
         assert!(output.contains(&b' '), "Empty cell should emit space");
+    }
+
+    #[test]
+    fn emit_content_ascii_char_emits_single_byte() {
+        let mut presenter = test_presenter();
+        presenter
+            .emit_content(PreparedContent::Char('A'), 1, None)
+            .unwrap();
+        let output = presenter.into_inner().unwrap();
+        assert_eq!(output, b"A");
+    }
+
+    #[test]
+    fn emit_content_ascii_control_sanitizes_to_space() {
+        let mut presenter = test_presenter();
+        presenter
+            .emit_content(PreparedContent::Char('\n'), 1, None)
+            .unwrap();
+        let output = presenter.into_inner().unwrap();
+        assert_eq!(output, b" ");
     }
 
     #[test]
