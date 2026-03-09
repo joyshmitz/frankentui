@@ -3716,13 +3716,14 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
         };
         self.execute_cmd(cmd)?;
 
-        // Reconcile initial subscriptions
-        self.reconcile_subscriptions();
-
-        // Initial render
-        self.render_frame()?;
-
         let mut termination_signal = check_termination_signal();
+        if self.running && termination_signal.is_none() {
+            // Reconcile initial subscriptions
+            self.reconcile_subscriptions();
+
+            // Initial render
+            self.render_frame()?;
+        }
 
         // Main loop
         let mut loop_count: u64 = 0;
@@ -3752,6 +3753,9 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             if poll_result {
                 self.drain_ready_events()?;
             }
+            if !self.running {
+                break;
+            }
             termination_signal = termination_signal.or_else(check_termination_signal);
             if termination_signal.is_some() {
                 self.running = false;
@@ -3760,12 +3764,21 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
 
             // Process subscription messages
             self.process_subscription_messages()?;
+            if !self.running {
+                break;
+            }
 
             // Process background task results
             self.process_task_results()?;
             self.reap_finished_tasks();
+            if !self.running {
+                break;
+            }
 
             self.process_resize_coalescer()?;
+            if !self.running {
+                break;
+            }
             termination_signal = termination_signal.or_else(check_termination_signal);
             if termination_signal.is_some() {
                 self.running = false;
@@ -3848,6 +3861,10 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
                     }
                 }
 
+                if used_screen_dispatch {
+                    self.reconcile_subscriptions();
+                }
+
                 if !used_screen_dispatch {
                     // Monolithic model path does not expose active-screen
                     // transitions, so clear dispatch-local transition state.
@@ -3871,7 +3888,9 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
                     };
                     self.mark_dirty();
                     self.execute_cmd(cmd)?;
-                    self.reconcile_subscriptions();
+                    if self.running {
+                        self.reconcile_subscriptions();
+                    }
                 }
             }
 
@@ -3952,6 +3971,9 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
         loop {
             if let Some(event) = self.events.read_event()? {
                 self.handle_event(event)?;
+                if !self.running {
+                    break;
+                }
             }
 
             let budget_exhausted = (zero_polls_in_burst_window as usize) >= zero_poll_limit
@@ -4138,7 +4160,9 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
         };
         self.mark_dirty();
         self.execute_cmd(cmd)?;
-        self.reconcile_subscriptions();
+        if self.running {
+            self.reconcile_subscriptions();
+        }
 
         // Track input event processing for fairness.
         self.fairness_guard.event_processed(
@@ -4223,8 +4247,11 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             };
             self.mark_dirty();
             self.execute_cmd(cmd)?;
+            if !self.running {
+                break;
+            }
         }
-        if self.dirty {
+        if self.running && self.dirty {
             self.reconcile_subscriptions();
         }
         Ok(())
@@ -4252,8 +4279,11 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             };
             self.mark_dirty();
             self.execute_cmd(cmd)?;
+            if !self.running {
+                break;
+            }
         }
-        if self.dirty {
+        if self.running && self.dirty {
             self.reconcile_subscriptions();
         }
         Ok(())
@@ -4396,8 +4426,13 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
         }
 
         // D.3: Force-tick the newly active screen immediately.
+        let mut force_ticked = false;
         if let Some(dispatch) = self.model.as_screen_tick_dispatch() {
             dispatch.tick_screen(&current_active, self.tick_count);
+            force_ticked = true;
+        }
+        if force_ticked {
+            self.reconcile_subscriptions();
         }
 
         self.last_active_screen_for_strategy = Some(current_active);
@@ -4988,7 +5023,11 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
         let elapsed_us = start.elapsed().as_micros() as u64;
         self.last_update_us = Some(elapsed_us);
         self.mark_dirty();
-        self.execute_cmd(cmd)
+        self.execute_cmd(cmd)?;
+        if self.running && self.dirty {
+            self.reconcile_subscriptions();
+        }
+        Ok(())
     }
 
     // removed: resize placeholder rendering (continuous reflow preferred)
@@ -8124,6 +8163,74 @@ mod tests {
     }
 
     #[test]
+    fn headless_apply_resize_reconciles_subscriptions() {
+        use crate::subscription::{StopSignal, SubId, Subscription};
+
+        struct ResizeSubModel {
+            subscribed: bool,
+        }
+
+        #[derive(Debug)]
+        enum ResizeSubMsg {
+            Resize,
+            Other,
+        }
+
+        impl From<Event> for ResizeSubMsg {
+            fn from(event: Event) -> Self {
+                match event {
+                    Event::Resize { .. } => Self::Resize,
+                    _ => Self::Other,
+                }
+            }
+        }
+
+        impl Model for ResizeSubModel {
+            type Message = ResizeSubMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                if matches!(msg, ResizeSubMsg::Resize) {
+                    self.subscribed = true;
+                }
+                Cmd::none()
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+
+            fn subscriptions(&self) -> Vec<Box<dyn Subscription<Self::Message>>> {
+                if self.subscribed {
+                    vec![Box::new(ResizeSubscription)]
+                } else {
+                    vec![]
+                }
+            }
+        }
+
+        struct ResizeSubscription;
+
+        impl Subscription<ResizeSubMsg> for ResizeSubscription {
+            fn id(&self) -> SubId {
+                1
+            }
+
+            fn run(&self, _sender: mpsc::Sender<ResizeSubMsg>, _stop: StopSignal) {}
+        }
+
+        let mut program = headless_program_with_config(
+            ResizeSubModel { subscribed: false },
+            ProgramConfig::default(),
+        );
+
+        assert_eq!(program.subscriptions.active_count(), 0);
+        program
+            .apply_resize(120, 40, Duration::ZERO, false)
+            .expect("resize");
+
+        assert!(program.model().subscribed);
+        assert_eq!(program.subscriptions.active_count(), 1);
+    }
+
+    #[test]
     fn headless_execute_cmd_log_writes_output() {
         let mut program =
             headless_program_with_config(TestModel { value: 0 }, ProgramConfig::default());
@@ -8235,6 +8342,79 @@ mod tests {
     }
 
     #[test]
+    fn run_quit_from_init_skips_initial_render_and_subscription_start() {
+        use crate::subscription::{StopSignal, SubId, Subscription};
+
+        struct InitQuitModel {
+            render_calls: Arc<AtomicUsize>,
+            subscription_starts: Arc<AtomicUsize>,
+        }
+
+        #[derive(Debug, Clone, Copy)]
+        enum InitQuitMsg {
+            Noop,
+        }
+
+        impl From<Event> for InitQuitMsg {
+            fn from(_: Event) -> Self {
+                Self::Noop
+            }
+        }
+
+        impl Model for InitQuitModel {
+            type Message = InitQuitMsg;
+
+            fn init(&mut self) -> Cmd<Self::Message> {
+                Cmd::quit()
+            }
+
+            fn update(&mut self, _: Self::Message) -> Cmd<Self::Message> {
+                Cmd::none()
+            }
+
+            fn view(&self, _frame: &mut Frame) {
+                self.render_calls.fetch_add(1, Ordering::SeqCst);
+            }
+
+            fn subscriptions(&self) -> Vec<Box<dyn Subscription<Self::Message>>> {
+                vec![Box::new(InitQuitSubscription {
+                    starts: Arc::clone(&self.subscription_starts),
+                })]
+            }
+        }
+
+        struct InitQuitSubscription {
+            starts: Arc<AtomicUsize>,
+        }
+
+        impl Subscription<InitQuitMsg> for InitQuitSubscription {
+            fn id(&self) -> SubId {
+                1
+            }
+
+            fn run(&self, _sender: mpsc::Sender<InitQuitMsg>, stop: StopSignal) {
+                self.starts.fetch_add(1, Ordering::SeqCst);
+                let _ = stop.wait_timeout(Duration::from_millis(10));
+            }
+        }
+
+        let render_calls = Arc::new(AtomicUsize::new(0));
+        let subscription_starts = Arc::new(AtomicUsize::new(0));
+        let mut program = headless_program_with_config(
+            InitQuitModel {
+                render_calls: Arc::clone(&render_calls),
+                subscription_starts: Arc::clone(&subscription_starts),
+            },
+            ProgramConfig::default(),
+        );
+
+        program.run().expect("program run");
+
+        assert_eq!(render_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(subscription_starts.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
     fn run_invokes_on_shutdown_before_returning_signal_error() {
         use std::sync::{
             Arc,
@@ -8290,6 +8470,78 @@ mod tests {
 
         assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
         assert_eq!(signal_termination_from_error(&err), Some(2));
+        assert_eq!(check_termination_signal(), None);
+    }
+
+    #[test]
+    fn run_pending_signal_skips_initial_render_and_subscription_start() {
+        use crate::subscription::{StopSignal, SubId, Subscription};
+
+        struct SignalStopModel {
+            render_calls: Arc<AtomicUsize>,
+            subscription_starts: Arc<AtomicUsize>,
+        }
+
+        #[derive(Debug, Clone, Copy)]
+        enum SignalStopMsg {
+            Noop,
+        }
+
+        impl From<Event> for SignalStopMsg {
+            fn from(_: Event) -> Self {
+                Self::Noop
+            }
+        }
+
+        impl Model for SignalStopModel {
+            type Message = SignalStopMsg;
+
+            fn update(&mut self, _: Self::Message) -> Cmd<Self::Message> {
+                Cmd::none()
+            }
+
+            fn view(&self, _frame: &mut Frame) {
+                self.render_calls.fetch_add(1, Ordering::SeqCst);
+            }
+
+            fn subscriptions(&self) -> Vec<Box<dyn Subscription<Self::Message>>> {
+                vec![Box::new(SignalStopSubscription {
+                    starts: Arc::clone(&self.subscription_starts),
+                })]
+            }
+        }
+
+        struct SignalStopSubscription {
+            starts: Arc<AtomicUsize>,
+        }
+
+        impl Subscription<SignalStopMsg> for SignalStopSubscription {
+            fn id(&self) -> SubId {
+                11
+            }
+
+            fn run(&self, _sender: mpsc::Sender<SignalStopMsg>, stop: StopSignal) {
+                self.starts.fetch_add(1, Ordering::SeqCst);
+                let _ = stop.wait_timeout(Duration::from_millis(10));
+            }
+        }
+
+        let render_calls = Arc::new(AtomicUsize::new(0));
+        let subscription_starts = Arc::new(AtomicUsize::new(0));
+        let mut program = headless_program_with_config(
+            SignalStopModel {
+                render_calls: Arc::clone(&render_calls),
+                subscription_starts: Arc::clone(&subscription_starts),
+            },
+            ProgramConfig::default(),
+        );
+
+        ftui_core::shutdown_signal::record_pending_termination_signal(15);
+        let err = program.run().expect_err("signal should stop runtime");
+
+        assert_eq!(signal_termination_from_error(&err), Some(15));
+        assert_eq!(render_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(subscription_starts.load(Ordering::SeqCst), 0);
         assert_eq!(check_termination_signal(), None);
     }
 
@@ -8515,6 +8767,91 @@ mod tests {
         assert_eq!(program.model().last_resize, Some((10, 5)));
         assert_eq!(program.width, 10);
         assert_eq!(program.height, 5);
+    }
+
+    #[test]
+    fn headless_handle_event_quit_skips_subscription_reconcile() {
+        use crate::subscription::{StopSignal, SubId, Subscription};
+
+        struct QuitSubModel {
+            quitting: bool,
+            subscription_starts: Arc<AtomicUsize>,
+        }
+
+        #[derive(Debug)]
+        enum QuitSubMsg {
+            Quit,
+            Other,
+        }
+
+        impl From<Event> for QuitSubMsg {
+            fn from(event: Event) -> Self {
+                match event {
+                    Event::Key(_) => Self::Quit,
+                    _ => Self::Other,
+                }
+            }
+        }
+
+        impl Model for QuitSubModel {
+            type Message = QuitSubMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    QuitSubMsg::Quit => {
+                        self.quitting = true;
+                        Cmd::quit()
+                    }
+                    QuitSubMsg::Other => Cmd::none(),
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+
+            fn subscriptions(&self) -> Vec<Box<dyn Subscription<Self::Message>>> {
+                if self.quitting {
+                    vec![Box::new(QuitSubSubscription {
+                        starts: Arc::clone(&self.subscription_starts),
+                    })]
+                } else {
+                    vec![]
+                }
+            }
+        }
+
+        struct QuitSubSubscription {
+            starts: Arc<AtomicUsize>,
+        }
+
+        impl Subscription<QuitSubMsg> for QuitSubSubscription {
+            fn id(&self) -> SubId {
+                7
+            }
+
+            fn run(&self, _sender: mpsc::Sender<QuitSubMsg>, stop: StopSignal) {
+                self.starts.fetch_add(1, Ordering::SeqCst);
+                let _ = stop.wait_timeout(Duration::from_millis(10));
+            }
+        }
+
+        let subscription_starts = Arc::new(AtomicUsize::new(0));
+        let mut program = headless_program_with_config(
+            QuitSubModel {
+                quitting: false,
+                subscription_starts: Arc::clone(&subscription_starts),
+            },
+            ProgramConfig::default(),
+        );
+
+        program
+            .handle_event(Event::Key(ftui_core::event::KeyEvent::new(
+                ftui_core::event::KeyCode::Char('q'),
+            )))
+            .expect("handle event");
+
+        assert!(!program.is_running());
+        assert_eq!(program.subscriptions.active_count(), 0);
+        assert_eq!(subscription_starts.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -9787,6 +10124,105 @@ mod tests {
         assert!(stats.max_zero_timeout_polls_in_burst <= 1);
     }
 
+    #[test]
+    fn quit_stops_draining_remaining_burst_events() {
+        use ftui_core::event::{KeyCode, KeyEvent};
+
+        struct QuitBurstModel {
+            processed: usize,
+            quit_after: usize,
+        }
+
+        #[derive(Debug)]
+        #[allow(dead_code)]
+        enum QuitBurstMsg {
+            Event(Event),
+        }
+
+        impl From<Event> for QuitBurstMsg {
+            fn from(event: Event) -> Self {
+                Self::Event(event)
+            }
+        }
+
+        impl Model for QuitBurstModel {
+            type Message = QuitBurstMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    QuitBurstMsg::Event(_) => {
+                        self.processed = self.processed.saturating_add(1);
+                        if self.processed >= self.quit_after {
+                            Cmd::quit()
+                        } else {
+                            Cmd::none()
+                        }
+                    }
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        struct QuitBurstSource {
+            queue: VecDeque<Event>,
+        }
+
+        impl BackendEventSource for QuitBurstSource {
+            type Error = io::Error;
+
+            fn size(&self) -> Result<(u16, u16), Self::Error> {
+                Ok((80, 24))
+            }
+
+            fn set_features(&mut self, _features: BackendFeatures) -> Result<(), Self::Error> {
+                Ok(())
+            }
+
+            fn poll_event(&mut self, _timeout: Duration) -> Result<bool, Self::Error> {
+                Ok(!self.queue.is_empty())
+            }
+
+            fn read_event(&mut self) -> Result<Option<Event>, Self::Error> {
+                Ok(self.queue.pop_front())
+            }
+        }
+
+        let total_events = 8usize;
+        let quit_after = 3usize;
+        let mut queue = VecDeque::new();
+        for _ in 0..total_events {
+            queue.push_back(Event::Key(KeyEvent::new(KeyCode::Char('q'))));
+        }
+
+        let writer = TerminalWriter::new(
+            Vec::<u8>::new(),
+            ScreenMode::AltScreen,
+            UiAnchor::Bottom,
+            TerminalCapabilities::dumb(),
+        );
+        let config = ProgramConfig::default()
+            .with_forced_size(80, 24)
+            .with_signal_interception(false)
+            .with_immediate_drain(ImmediateDrainConfig {
+                max_zero_timeout_polls_per_burst: 64,
+                max_burst_duration: Duration::from_secs(1),
+                backoff_timeout: Duration::from_millis(1),
+            });
+        let model = QuitBurstModel {
+            processed: 0,
+            quit_after,
+        };
+        let events = QuitBurstSource { queue };
+
+        let mut program =
+            Program::with_event_source(model, events, BackendFeatures::default(), writer, config)
+                .expect("program creation");
+        program.run().expect("run burst quit");
+
+        assert_eq!(program.model().processed, quit_after);
+    }
+
     // =========================================================================
     // Program helper methods (bd-2yjus)
     // =========================================================================
@@ -10878,6 +11314,130 @@ mod tests {
 
         // Force-tick should use the current tick_count.
         assert_eq!(prog.model.ticked_screens[0].1, 42);
+    }
+
+    #[test]
+    fn check_screen_transition_reconciles_subscriptions_after_force_tick() {
+        use crate::subscription::{StopSignal, SubId, Subscription};
+
+        struct TransitionSubModel {
+            active: String,
+            screens: Vec<String>,
+            subscribed: bool,
+        }
+
+        #[derive(Debug)]
+        #[allow(dead_code)]
+        enum TransitionSubMsg {
+            Event(Event),
+        }
+
+        impl From<Event> for TransitionSubMsg {
+            fn from(event: Event) -> Self {
+                Self::Event(event)
+            }
+        }
+
+        impl Model for TransitionSubModel {
+            type Message = TransitionSubMsg;
+
+            fn update(&mut self, _msg: Self::Message) -> Cmd<Self::Message> {
+                Cmd::none()
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+
+            fn subscriptions(&self) -> Vec<Box<dyn Subscription<Self::Message>>> {
+                if self.subscribed {
+                    vec![Box::new(TransitionSubscription)]
+                } else {
+                    vec![]
+                }
+            }
+
+            fn as_screen_tick_dispatch(
+                &mut self,
+            ) -> Option<&mut dyn crate::tick_strategy::ScreenTickDispatch> {
+                Some(self)
+            }
+        }
+
+        impl crate::tick_strategy::ScreenTickDispatch for TransitionSubModel {
+            fn screen_ids(&self) -> Vec<String> {
+                self.screens.clone()
+            }
+
+            fn active_screen_id(&self) -> String {
+                self.active.clone()
+            }
+
+            fn tick_screen(&mut self, screen_id: &str, _tick_count: u64) {
+                if screen_id == self.active {
+                    self.subscribed = true;
+                }
+            }
+        }
+
+        struct TransitionSubscription;
+
+        impl Subscription<TransitionSubMsg> for TransitionSubscription {
+            fn id(&self) -> SubId {
+                1
+            }
+
+            fn run(&self, _sender: mpsc::Sender<TransitionSubMsg>, _stop: StopSignal) {}
+        }
+
+        struct TransitionStrategy;
+
+        impl crate::tick_strategy::TickStrategy for TransitionStrategy {
+            fn should_tick(
+                &mut self,
+                _screen_id: &str,
+                _tick_count: u64,
+                _active_screen: &str,
+            ) -> crate::tick_strategy::TickDecision {
+                crate::tick_strategy::TickDecision::Skip
+            }
+
+            fn on_screen_transition(&mut self, _from: &str, _to: &str) {}
+
+            fn name(&self) -> &str {
+                "TransitionStrategy"
+            }
+
+            fn debug_stats(&self) -> Vec<(String, String)> {
+                vec![]
+            }
+        }
+
+        let model = TransitionSubModel {
+            active: "A".to_owned(),
+            screens: vec!["A".to_owned(), "B".to_owned()],
+            subscribed: false,
+        };
+        let events = HeadlessEventSource::new(80, 24, BackendFeatures::default());
+        let writer = TerminalWriter::new(
+            Vec::<u8>::new(),
+            ScreenMode::AltScreen,
+            UiAnchor::Bottom,
+            TerminalCapabilities::dumb(),
+        );
+        let config = ProgramConfig::default().with_forced_size(80, 24);
+
+        let mut program =
+            Program::with_event_source(model, events, BackendFeatures::default(), writer, config)
+                .expect("program creation");
+        program.tick_strategy = Some(Box::new(TransitionStrategy));
+
+        program.check_screen_transition();
+        assert_eq!(program.subscriptions.active_count(), 0);
+
+        program.model.active = "B".to_owned();
+        program.check_screen_transition();
+
+        assert!(program.model().subscribed);
+        assert_eq!(program.subscriptions.active_count(), 1);
     }
 
     #[test]

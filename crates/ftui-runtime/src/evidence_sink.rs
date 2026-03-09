@@ -131,6 +131,8 @@ struct EvidenceSinkInner {
     flush_on_write: bool,
     /// Maximum bytes allowed. `0` means unlimited.
     max_bytes: u64,
+    /// Whether the size cap is enforced for this sink.
+    cap_enabled: bool,
     /// Approximate total bytes written so far (including the initial file size).
     bytes_written: u64,
     /// Set to true once the cap is hit; prevents further writes.
@@ -164,20 +166,21 @@ impl EvidenceSink {
         let (writer, existing_bytes): (Box<dyn Write + Send>, u64) = match &config.destination {
             EvidenceSinkDestination::Stdout => (Box::new(io::stdout()), 0),
             EvidenceSinkDestination::File(path) => {
-                let existing_size = std::fs::metadata(path)
-                    .map(|m| m.len())
-                    .unwrap_or(0);
+                let existing_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
                 let file = OpenOptions::new().create(true).append(true).open(path)?;
                 (Box::new(file), existing_size)
             }
         };
 
-        let already_capped = config.max_bytes > 0 && existing_bytes >= config.max_bytes;
+        let cap_enabled = matches!(&config.destination, EvidenceSinkDestination::File(_));
+        let already_capped =
+            cap_enabled && config.max_bytes > 0 && existing_bytes >= config.max_bytes;
 
         let inner = EvidenceSinkInner {
             writer: BufWriter::new(writer),
             flush_on_write: config.flush_on_write,
             max_bytes: config.max_bytes,
+            cap_enabled,
             bytes_written: existing_bytes,
             capped: already_capped,
         };
@@ -205,7 +208,10 @@ impl EvidenceSink {
         let line_bytes = line.len() as u64 + 1; // +1 for newline
 
         // Check whether this write would exceed the cap.
-        if inner.max_bytes > 0 && inner.bytes_written + line_bytes > inner.max_bytes {
+        if inner.cap_enabled
+            && inner.max_bytes > 0
+            && inner.bytes_written + line_bytes > inner.max_bytes
+        {
             inner.capped = true;
             // Best-effort: flush what we have so the file ends cleanly.
             let _ = inner.writer.flush();
