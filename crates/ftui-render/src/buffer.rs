@@ -1199,6 +1199,38 @@ impl Buffer {
         &self.cells[start..start + self.width as usize]
     }
 
+    /// Get mutable cells for a contiguous span on a row.
+    ///
+    /// The requested range is treated as half-open `[x0, x1)` and clamped to
+    /// the buffer width. The span is marked dirty once before returning the
+    /// mutable slice.
+    ///
+    /// This is a raw bulk-mutation helper: callers must already have applied
+    /// any required scissor/opacity clipping and must not use it for writes
+    /// that can change cell-content width invariants.
+    #[inline]
+    pub fn row_cells_mut_span(&mut self, y: u16, x0: u16, x1: u16) -> Option<&mut [Cell]> {
+        if y >= self.height {
+            return None;
+        }
+        if x0 >= x1 {
+            return None;
+        }
+
+        let start = x0.min(self.width);
+        let end = x1.min(self.width);
+        if start >= end {
+            return None;
+        }
+
+        self.mark_dirty_span(y, start, end);
+
+        let row_start = y as usize * self.width as usize;
+        let slice_start = row_start + start as usize;
+        let slice_end = row_start + end as usize;
+        Some(&mut self.cells[slice_start..slice_end])
+    }
+
     // ========== Scissor Stack ==========
 
     /// Push a scissor (clipping) region onto the stack.
@@ -2554,6 +2586,64 @@ mod tests {
         let row = buf.row_cells(1);
         assert_eq!(row.len(), 5);
         assert_eq!(row[2].content.as_char(), Some('R'));
+    }
+
+    #[test]
+    fn row_cells_mut_span_marks_once_and_returns_slice() {
+        let mut buf = Buffer::new(5, 3);
+        buf.clear_dirty();
+
+        let row = buf
+            .row_cells_mut_span(1, 1, 4)
+            .expect("row span should be in bounds");
+        assert_eq!(row.len(), 3);
+        row[0] = Cell::from_char('A');
+        row[1] = Cell::from_char('B');
+        row[2] = Cell::from_char('C');
+
+        assert!(buf.is_row_dirty(1));
+        let spans = buf.dirty_span_row(1).expect("dirty span row").spans();
+        assert_eq!(spans, &[DirtySpan::new(1, 4)]);
+        assert_eq!(buf.get(1, 1).unwrap().content.as_char(), Some('A'));
+        assert_eq!(buf.get(2, 1).unwrap().content.as_char(), Some('B'));
+        assert_eq!(buf.get(3, 1).unwrap().content.as_char(), Some('C'));
+    }
+
+    #[test]
+    fn row_cells_mut_span_clamps_to_buffer_width() {
+        let mut buf = Buffer::new(5, 1);
+        buf.clear_dirty();
+
+        let row = buf
+            .row_cells_mut_span(0, 3, 99)
+            .expect("row span should clamp");
+        assert_eq!(row.len(), 2);
+        row[0] = Cell::from_char('X');
+        row[1] = Cell::from_char('Y');
+
+        let spans = buf.dirty_span_row(0).expect("dirty span row").spans();
+        assert_eq!(spans, &[DirtySpan::new(3, 5)]);
+        assert_eq!(buf.get(3, 0).unwrap().content.as_char(), Some('X'));
+        assert_eq!(buf.get(4, 0).unwrap().content.as_char(), Some('Y'));
+    }
+
+    #[test]
+    fn row_cells_mut_span_rejects_reversed_ranges() {
+        let mut buf = Buffer::new(5, 1);
+        buf.clear_dirty();
+
+        assert!(buf.row_cells_mut_span(0, 4, 2).is_none());
+        assert!(
+            !buf.is_row_dirty(0),
+            "reversed ranges should not mark rows dirty"
+        );
+        assert!(
+            buf.dirty_span_row(0)
+                .expect("dirty span row")
+                .spans()
+                .is_empty(),
+            "reversed ranges should not add dirty spans"
+        );
     }
 
     #[test]
