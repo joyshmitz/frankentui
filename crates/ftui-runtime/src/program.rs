@@ -3861,7 +3861,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
                     }
                 }
 
-                if used_screen_dispatch {
+                if used_screen_dispatch && self.running {
                     self.reconcile_subscriptions();
                 }
 
@@ -4431,7 +4431,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             dispatch.tick_screen(&current_active, self.tick_count);
             force_ticked = true;
         }
-        if force_ticked {
+        if force_ticked && self.running {
             self.reconcile_subscriptions();
         }
 

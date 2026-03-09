@@ -337,6 +337,52 @@ fn div_ceil_usize(n: usize, d: usize) -> usize {
     n.div_ceil(d)
 }
 
+#[inline]
+fn accumulate_tile_counts_range(
+    tile_counts: &mut [u32],
+    dirty_row_bits: &[u8],
+    tile_row_base: usize,
+    tiles_x: usize,
+    tile_w: usize,
+    range: core::ops::Range<usize>,
+    scanned_cells: &mut usize,
+) -> Result<(), ()> {
+    let start = range.start;
+    let end = range.end;
+    if start >= end || start >= dirty_row_bits.len() {
+        return Ok(());
+    }
+
+    let end = end.min(dirty_row_bits.len());
+    *scanned_cells = scanned_cells.saturating_add(end.saturating_sub(start));
+
+    let tile_x_start = start / tile_w;
+    let tile_x_end = (end - 1) / tile_w;
+    for tile_x in tile_x_start..=tile_x_end {
+        if tile_x >= tiles_x {
+            break;
+        }
+
+        let seg_start = start.max(tile_x * tile_w);
+        let seg_end = end.min((tile_x + 1) * tile_w);
+        let count = dirty_row_bits[seg_start..seg_end]
+            .iter()
+            .filter(|&&bit| bit != 0)
+            .count();
+        if count == 0 {
+            continue;
+        }
+
+        let tile_idx = tile_row_base + tile_x;
+        match tile_counts[tile_idx].checked_add(count as u32) {
+            Some(value) => tile_counts[tile_idx] = value,
+            None => return Err(()),
+        }
+    }
+
+    Ok(())
+}
+
 /// Configuration for tile-based diff skipping.
 #[derive(Debug, Clone)]
 pub struct TileDiffConfig {
@@ -729,6 +775,227 @@ impl TileDiffBuilder {
             sat: &self.sat,
         })
     }
+
+    fn build_from_buffer<'a>(
+        &'a mut self,
+        config: &TileDiffConfig,
+        buffer: &Buffer,
+    ) -> TileDiffBuild<'a> {
+        let width = buffer.width();
+        let height = buffer.height();
+        let dirty_rows = buffer.dirty_rows();
+        let dirty_bits = buffer.dirty_bits();
+        let dirty_cells = buffer.dirty_cell_count();
+        let dirty_all = buffer.dirty_all();
+
+        let tile_w = clamp_tile_size(config.tile_w);
+        let tile_h = clamp_tile_size(config.tile_h);
+        let width_usize = width as usize;
+        let height_usize = height as usize;
+        let tiles_x = div_ceil_usize(width_usize, tile_w as usize);
+        let tiles_y = div_ceil_usize(height_usize, tile_h as usize);
+        let total_tiles = tiles_x * tiles_y;
+        let total_cells = width_usize * height_usize;
+        let dirty_cell_ratio = if total_cells == 0 {
+            0.0
+        } else {
+            dirty_cells as f64 / total_cells as f64
+        };
+
+        let mut stats = TileDiffStats {
+            width,
+            height,
+            tile_w,
+            tile_h,
+            tiles_x,
+            tiles_y,
+            total_tiles,
+            dirty_cells,
+            dirty_tiles: 0,
+            dirty_cell_ratio,
+            dirty_tile_ratio: 0.0,
+            scanned_tiles: 0,
+            skipped_tiles: total_tiles,
+            sat_build_cells: 0,
+            scan_cells_estimate: 0,
+            fallback: None,
+        };
+
+        if !config.enabled {
+            stats.fallback = Some(TileDiffFallback::Disabled);
+            return TileDiffBuild::Fallback(stats);
+        }
+
+        if total_cells < config.min_cells_for_tiles {
+            stats.fallback = Some(TileDiffFallback::SmallScreen);
+            return TileDiffBuild::Fallback(stats);
+        }
+
+        if dirty_all {
+            stats.fallback = Some(TileDiffFallback::DirtyAll);
+            return TileDiffBuild::Fallback(stats);
+        }
+
+        if dirty_cell_ratio >= config.dense_cell_ratio {
+            stats.fallback = Some(TileDiffFallback::DenseCells);
+            return TileDiffBuild::Fallback(stats);
+        }
+
+        if total_tiles > config.max_tiles {
+            stats.fallback = Some(TileDiffFallback::TooManyTiles);
+            return TileDiffBuild::Fallback(stats);
+        }
+
+        debug_assert_eq!(dirty_bits.len(), total_cells);
+        if dirty_bits.len() < total_cells {
+            stats.fallback = Some(TileDiffFallback::Overflow);
+            return TileDiffBuild::Fallback(stats);
+        }
+
+        self.tile_counts.resize(total_tiles, 0);
+        self.tile_counts.fill(0);
+        self.dirty_tiles.resize(total_tiles, false);
+        self.dirty_tiles.fill(false);
+
+        let tile_w_usize = tile_w as usize;
+        let tile_h_usize = tile_h as usize;
+        let mut overflow = false;
+        let mut scanned_cells = 0usize;
+
+        debug_assert_eq!(dirty_rows.len(), height_usize);
+        for y in 0..height_usize {
+            let row_dirty = if config.skip_clean_rows {
+                dirty_rows.get(y).copied().unwrap_or(true)
+            } else {
+                true
+            };
+            if !row_dirty {
+                continue;
+            }
+
+            let row_start = y * width_usize;
+            let row_bits = &dirty_bits[row_start..row_start + width_usize];
+            let tile_y = y / tile_h_usize;
+            let tile_row_base = tile_y * tiles_x;
+
+            let row_result = match buffer.dirty_span_row(y as u16) {
+                Some(span_row) if !span_row.is_full() => {
+                    let spans = span_row.spans();
+                    if spans.is_empty() {
+                        accumulate_tile_counts_range(
+                            &mut self.tile_counts,
+                            row_bits,
+                            tile_row_base,
+                            tiles_x,
+                            tile_w_usize,
+                            0..width_usize,
+                            &mut scanned_cells,
+                        )
+                    } else {
+                        let mut result = Ok(());
+                        for span in spans {
+                            result = accumulate_tile_counts_range(
+                                &mut self.tile_counts,
+                                row_bits,
+                                tile_row_base,
+                                tiles_x,
+                                tile_w_usize,
+                                span.x0 as usize..span.x1 as usize,
+                                &mut scanned_cells,
+                            );
+                            if result.is_err() {
+                                break;
+                            }
+                        }
+                        result
+                    }
+                }
+                _ => accumulate_tile_counts_range(
+                    &mut self.tile_counts,
+                    row_bits,
+                    tile_row_base,
+                    tiles_x,
+                    tile_w_usize,
+                    0..width_usize,
+                    &mut scanned_cells,
+                ),
+            };
+
+            if row_result.is_err() {
+                overflow = true;
+                break;
+            }
+        }
+
+        if overflow {
+            stats.fallback = Some(TileDiffFallback::Overflow);
+            return TileDiffBuild::Fallback(stats);
+        }
+
+        let mut dirty_tiles = 0usize;
+        for (idx, count) in self.tile_counts.iter().enumerate() {
+            if *count > 0 {
+                self.dirty_tiles[idx] = true;
+                dirty_tiles += 1;
+            }
+        }
+
+        stats.dirty_tiles = dirty_tiles;
+        stats.dirty_tile_ratio = if total_tiles == 0 {
+            0.0
+        } else {
+            dirty_tiles as f64 / total_tiles as f64
+        };
+        stats.scanned_tiles = dirty_tiles;
+        stats.skipped_tiles = total_tiles.saturating_sub(dirty_tiles);
+        stats.sat_build_cells = scanned_cells;
+        stats.scan_cells_estimate = dirty_tiles * tile_w_usize * tile_h_usize;
+
+        if stats.dirty_tile_ratio >= config.dense_tile_ratio {
+            stats.fallback = Some(TileDiffFallback::DenseTiles);
+            return TileDiffBuild::Fallback(stats);
+        }
+
+        let sat_w = tiles_x + 1;
+        let sat_h = tiles_y + 1;
+        let sat_len = sat_w * sat_h;
+        self.sat.resize(sat_len, 0);
+        self.sat.fill(0);
+
+        for ty in 0..tiles_y {
+            let row_base = (ty + 1) * sat_w;
+            let prev_base = ty * sat_w;
+            for tx in 0..tiles_x {
+                let count = self.tile_counts[ty * tiles_x + tx] as u64;
+                let above = self.sat[prev_base + tx + 1] as u64;
+                let left = self.sat[row_base + tx] as u64;
+                let diag = self.sat[prev_base + tx] as u64;
+                let value = count + above + left - diag;
+                if value > u32::MAX as u64 {
+                    stats.fallback = Some(TileDiffFallback::Overflow);
+                    return TileDiffBuild::Fallback(stats);
+                }
+                self.sat[row_base + tx + 1] = value as u32;
+            }
+        }
+
+        let params = TileParams {
+            width,
+            height,
+            tile_w,
+            tile_h,
+            tiles_x,
+            tiles_y,
+        };
+
+        TileDiffBuild::UseTiles(TileDiffPlan {
+            params,
+            stats,
+            dirty_tiles: &self.dirty_tiles,
+            tile_counts: &self.tile_counts,
+            sat: &self.sat,
+        })
+    }
 }
 
 #[inline]
@@ -799,17 +1066,7 @@ fn compute_dirty_changes(
     let dirty = new.dirty_rows();
 
     *tile_stats_out = None;
-    let tile_build = tile_builder.build(
-        tile_config,
-        TileDiffInput {
-            width,
-            height,
-            dirty_rows: dirty,
-            dirty_bits: new.dirty_bits(),
-            dirty_cells: new.dirty_cell_count(),
-            dirty_all: new.dirty_all(),
-        },
-    );
+    let tile_build = tile_builder.build_from_buffer(tile_config, new);
 
     if let TileDiffBuild::UseTiles(plan) = tile_build {
         *tile_stats_out = Some(plan.stats);
@@ -3563,6 +3820,10 @@ mod tests {
         let full = BufferDiff::compute(&old, &new);
 
         assert!(stats.fallback.is_none(), "tile path should be used");
+        assert_eq!(
+            stats.sat_build_cells, 3,
+            "span-aware tile build should only scan covered span cells"
+        );
         assert_eq!(full.changes(), dirty_diff.changes());
         assert_eq!(dirty_diff.len(), 3);
     }
