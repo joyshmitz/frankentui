@@ -720,10 +720,7 @@ impl<H: AnsiHandler> Perform for VteAdapter<'_, H> {
         // Convert vte::Params to Vec<i64>
         let params: Vec<i64> = params
             .iter()
-            .map(|subparams| {
-                // Take the first value of each subparam group (handles colon-separated params)
-                subparams.first().copied().map(i64::from).unwrap_or(0)
-            })
+            .flat_map(|subparams| subparams.iter().map(|&v| i64::from(v)))
             .collect();
         let intermediates = intermediates.to_vec();
         let event = CsiHookEvent {
@@ -772,7 +769,7 @@ impl<H: AnsiHandler> Perform for VteAdapter<'_, H> {
     fn hook(&mut self, params: &vte::Params, intermediates: &[u8], _ignore: bool, c: char) {
         let params: Vec<i64> = params
             .iter()
-            .map(|subparams| subparams.first().copied().map(i64::from).unwrap_or(0))
+            .flat_map(|subparams| subparams.iter().map(|&v| i64::from(v)))
             .collect();
         let intermediates = intermediates.to_vec();
         let event = DcsHookEvent::Hook {
