@@ -336,15 +336,13 @@ fn build_app_smoke_command(
 fn run_app_smoke_fallback(args: &DoctorArgs, ui: &CliOutput) -> Result<AppSmokeResult> {
     const APP_SMOKE_TIMEOUT_SECONDS: u64 = 20;
 
-    let run_dir = args.run_root.join("doctor_app_smoke");
-    ensure_dir(&run_dir)?;
-    let stdout_log = run_dir.join("stdout.log");
-    let stderr_log = run_dir.join("stderr.log");
-    let summary_path = run_dir.join("summary.json");
+    let smoke_paths = app_smoke_paths(&args.run_root);
+    ensure_dir(&smoke_paths.run_dir)?;
 
     ui.info("running app launch smoke fallback");
 
-    let mut command = build_app_smoke_command(args, &stdout_log, &stderr_log)?;
+    let mut command =
+        build_app_smoke_command(args, &smoke_paths.stdout_log, &smoke_paths.stderr_log)?;
     let mut child = command.spawn()?;
 
     let timeout = Duration::from_secs(APP_SMOKE_TIMEOUT_SECONDS);
@@ -372,29 +370,49 @@ fn run_app_smoke_fallback(args: &DoctorArgs, ui: &CliOutput) -> Result<AppSmokeR
         "timed_out": timed_out,
         "timeout_seconds": APP_SMOKE_TIMEOUT_SECONDS,
         "exit_code": exit_code,
-        "stdout_log": stdout_log.display().to_string(),
-        "stderr_log": stderr_log.display().to_string(),
+        "stdout_log": smoke_paths.stdout_log.display().to_string(),
+        "stderr_log": smoke_paths.stderr_log.display().to_string(),
     });
-    write_string(&summary_path, &serde_json::to_string_pretty(&summary)?)?;
+    write_string(
+        &smoke_paths.summary_path,
+        &serde_json::to_string_pretty(&summary)?,
+    )?;
 
     if !timed_out && exit_code != Some(0) {
         return Err(DoctorError::exit(
             exit_code.unwrap_or(1),
             format!(
                 "app launch smoke failed; see logs at {} and {}",
-                stdout_log.display(),
-                stderr_log.display()
+                smoke_paths.stdout_log.display(),
+                smoke_paths.stderr_log.display()
             ),
         ));
     }
 
     Ok(AppSmokeResult {
-        summary_path,
-        stdout_log,
-        stderr_log,
+        summary_path: smoke_paths.summary_path,
+        stdout_log: smoke_paths.stdout_log,
+        stderr_log: smoke_paths.stderr_log,
         timed_out,
         exit_code,
     })
+}
+
+struct AppSmokePaths {
+    run_dir: PathBuf,
+    summary_path: PathBuf,
+    stdout_log: PathBuf,
+    stderr_log: PathBuf,
+}
+
+fn app_smoke_paths(run_root: &Path) -> AppSmokePaths {
+    let run_dir = run_root.join("doctor_app_smoke");
+    AppSmokePaths {
+        summary_path: run_dir.join("summary.json"),
+        stdout_log: run_dir.join("stdout.log"),
+        stderr_log: run_dir.join("stderr.log"),
+        run_dir,
+    }
 }
 
 pub fn run_doctor(args: DoctorArgs) -> Result<()> {
@@ -453,6 +471,7 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
     let mut app_smoke_summary: Option<String> = None;
     let mut app_smoke_stdout_log: Option<String> = None;
     let mut app_smoke_stderr_log: Option<String> = None;
+    let mut terminal_error: Option<DoctorError> = None;
 
     ui.rule(Some("script help checks"));
     run_help_check(&current_exe, "plan")?;
@@ -504,22 +523,42 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
                 ui.warning(reason);
             }
 
-            let smoke = run_app_smoke_fallback(&args, &ui)?;
-            app_smoke_summary = Some(smoke.summary_path.display().to_string());
-            app_smoke_stdout_log = Some(smoke.stdout_log.display().to_string());
-            app_smoke_stderr_log = Some(smoke.stderr_log.display().to_string());
-            ui.success(&format!(
-                "app launch smoke fallback passed (timed_out={}, exit_code={})",
-                smoke.timed_out,
-                smoke
-                    .exit_code
-                    .map_or_else(|| "none".to_string(), |value| value.to_string())
-            ));
-            ui.info(&format!(
-                "app smoke logs: stdout={}, stderr={}",
-                smoke.stdout_log.display(),
-                smoke.stderr_log.display()
-            ));
+            let smoke_paths = app_smoke_paths(&args.run_root);
+            match run_app_smoke_fallback(&args, &ui) {
+                Ok(smoke) => {
+                    app_smoke_summary = Some(smoke.summary_path.display().to_string());
+                    app_smoke_stdout_log = Some(smoke.stdout_log.display().to_string());
+                    app_smoke_stderr_log = Some(smoke.stderr_log.display().to_string());
+                    ui.success(&format!(
+                        "app launch smoke fallback passed (timed_out={}, exit_code={})",
+                        smoke.timed_out,
+                        smoke
+                            .exit_code
+                            .map_or_else(|| "none".to_string(), |value| value.to_string())
+                    ));
+                    ui.info(&format!(
+                        "app smoke logs: stdout={}, stderr={}",
+                        smoke.stdout_log.display(),
+                        smoke.stderr_log.display()
+                    ));
+                }
+                Err(error) => {
+                    app_smoke_summary = smoke_paths
+                        .summary_path
+                        .exists()
+                        .then(|| smoke_paths.summary_path.display().to_string());
+                    app_smoke_stdout_log = smoke_paths
+                        .stdout_log
+                        .exists()
+                        .then(|| smoke_paths.stdout_log.display().to_string());
+                    app_smoke_stderr_log = smoke_paths
+                        .stderr_log
+                        .exists()
+                        .then(|| smoke_paths.stderr_log.display().to_string());
+                    terminal_error = Some(error);
+                    ui.error("app launch smoke fallback failed");
+                }
+            }
         } else {
             ui.success("full capture smoke passed");
         }
@@ -557,6 +596,10 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
             "doctor_summary_path": doctor_summary_path.display().to_string(),
         });
         println!("{stdout_summary}");
+    }
+
+    if let Some(error) = terminal_error {
+        return Err(error);
     }
 
     if degraded_capture {
@@ -808,6 +851,29 @@ exit 1
         assert_eq!(
             super::doctor_summary_path(run_root),
             PathBuf::from("/tmp/doctor-run/meta/doctor_summary.json")
+        );
+    }
+
+    #[test]
+    fn app_smoke_paths_are_under_doctor_app_smoke_dir() {
+        let run_root = Path::new("/tmp/doctor-run");
+        let paths = super::app_smoke_paths(run_root);
+
+        assert_eq!(
+            paths.run_dir,
+            PathBuf::from("/tmp/doctor-run/doctor_app_smoke")
+        );
+        assert_eq!(
+            paths.summary_path,
+            PathBuf::from("/tmp/doctor-run/doctor_app_smoke/summary.json")
+        );
+        assert_eq!(
+            paths.stdout_log,
+            PathBuf::from("/tmp/doctor-run/doctor_app_smoke/stdout.log")
+        );
+        assert_eq!(
+            paths.stderr_log,
+            PathBuf::from("/tmp/doctor-run/doctor_app_smoke/stderr.log")
         );
     }
 

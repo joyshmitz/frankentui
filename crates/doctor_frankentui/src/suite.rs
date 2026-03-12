@@ -77,15 +77,19 @@ struct SuiteArtifactPaths<'a> {
     suite_dir: &'a std::path::Path,
     summary_path: &'a std::path::Path,
     manifest_path: &'a std::path::Path,
-    report_log_path: &'a std::path::Path,
-    report_json_path: &'a std::path::Path,
-    report_html_path: &'a std::path::Path,
 }
 
 struct SuiteCounts {
     success_count: usize,
     failure_count: usize,
     report_failed: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SuiteReportArtifacts {
+    report_log: Option<String>,
+    report_json: Option<String>,
+    report_html: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,6 +156,7 @@ fn build_suite_json_summary(
     integration: &OutputIntegration,
     suite_outcome: SuiteOutcome,
     paths: &SuiteArtifactPaths<'_>,
+    report_artifacts: &SuiteReportArtifacts,
     counts: SuiteCounts,
 ) -> serde_json::Value {
     serde_json::json!({
@@ -163,18 +168,9 @@ fn build_suite_json_summary(
             .manifest_path
             .exists()
             .then(|| paths.manifest_path.display().to_string()),
-        "report_log_path": paths
-            .report_log_path
-            .exists()
-            .then(|| paths.report_log_path.display().to_string()),
-        "report_json_path": paths
-            .report_json_path
-            .exists()
-            .then(|| paths.report_json_path.display().to_string()),
-        "report_html_path": paths
-            .report_html_path
-            .exists()
-            .then(|| paths.report_html_path.display().to_string()),
+        "report_log_path": report_artifacts.report_log,
+        "report_json_path": report_artifacts.report_json,
+        "report_html_path": report_artifacts.report_html,
         "success_count": counts.success_count,
         "failure_count": counts.failure_count,
         "report_failed": counts.report_failed,
@@ -363,6 +359,13 @@ fn run_suite_with_integration(args: SuiteArgs, integration: &OutputIntegration) 
     let report_json_path = suite_dir.join("report.json");
     let report_html_path = suite_dir.join("index.html");
     let report_log_path = suite_dir.join("suite_report.log");
+    let report_artifacts = SuiteReportArtifacts {
+        report_log: report_failed.then(|| report_log_path.display().to_string()),
+        report_json: (!args.skip_report && !report_failed && report_json_path.exists())
+            .then(|| report_json_path.display().to_string()),
+        report_html: (!args.skip_report && !report_failed && report_html_path.exists())
+            .then(|| report_html_path.display().to_string()),
+    };
 
     if !runs.is_empty() {
         let manifest = SuiteManifest {
@@ -373,15 +376,9 @@ fn run_suite_with_integration(args: SuiteArgs, integration: &OutputIntegration) 
             success_count,
             failure_count,
             summary_path: summary_path.display().to_string(),
-            report_log: report_log_path
-                .exists()
-                .then(|| report_log_path.display().to_string()),
-            report_json: report_json_path
-                .exists()
-                .then(|| report_json_path.display().to_string()),
-            report_html: report_html_path
-                .exists()
-                .then(|| report_html_path.display().to_string()),
+            report_log: report_artifacts.report_log.clone(),
+            report_json: report_artifacts.report_json.clone(),
+            report_html: report_artifacts.report_html.clone(),
             report_failed,
             runs,
         };
@@ -421,10 +418,8 @@ fn run_suite_with_integration(args: SuiteArgs, integration: &OutputIntegration) 
                 suite_dir: &suite_dir,
                 summary_path: &summary_path,
                 manifest_path: &manifest_path,
-                report_log_path: &report_log_path,
-                report_json_path: &report_json_path,
-                report_html_path: &report_html_path,
             },
+            &report_artifacts,
             SuiteCounts {
                 success_count,
                 failure_count,
@@ -826,7 +821,6 @@ mod tests {
         fs::create_dir_all(&suite_dir).expect("suite dir");
         let summary_path = suite_dir.join("suite_summary.txt");
         let manifest_path = suite_dir.join("suite_manifest.json");
-        let report_log_path = suite_dir.join("suite_report.log");
         let report_json_path = suite_dir.join("report.json");
         let report_html_path = suite_dir.join("index.html");
         fs::write(&summary_path, "summary").expect("write summary");
@@ -849,9 +843,11 @@ mod tests {
                 suite_dir: &suite_dir,
                 summary_path: &summary_path,
                 manifest_path: &manifest_path,
-                report_log_path: &report_log_path,
-                report_json_path: &report_json_path,
-                report_html_path: &report_html_path,
+            },
+            &super::SuiteReportArtifacts {
+                report_log: None,
+                report_json: Some(report_json_path.display().to_string()),
+                report_html: Some(report_html_path.display().to_string()),
             },
             super::SuiteCounts {
                 success_count: 2,
@@ -878,5 +874,50 @@ mod tests {
         assert_eq!(summary["success_count"], 2);
         assert_eq!(summary["failure_count"], 1);
         assert_eq!(summary["report_failed"], true);
+    }
+
+    #[test]
+    fn build_suite_json_summary_does_not_surface_stale_report_artifacts() {
+        let temp = tempdir().expect("tempdir");
+        let suite_dir = temp.path().join("suite");
+        fs::create_dir_all(&suite_dir).expect("suite dir");
+        let summary_path = suite_dir.join("suite_summary.txt");
+        let manifest_path = suite_dir.join("suite_manifest.json");
+        let report_log_path = suite_dir.join("suite_report.log");
+        let report_json_path = suite_dir.join("report.json");
+        let report_html_path = suite_dir.join("index.html");
+        fs::write(&summary_path, "summary").expect("write summary");
+        fs::write(&manifest_path, "{}").expect("write manifest");
+        fs::write(&report_log_path, "stale failure").expect("write stale report log");
+        fs::write(&report_json_path, "{}").expect("write stale report json");
+        fs::write(&report_html_path, "<html></html>").expect("write stale report html");
+
+        let integration = OutputIntegration {
+            fastapi_mode: "plain".to_string(),
+            fastapi_agent: false,
+            fastapi_ci: false,
+            fastapi_tty: false,
+            sqlmodel_mode: "json".to_string(),
+            sqlmodel_agent: false,
+        };
+        let summary = super::build_suite_json_summary(
+            &integration,
+            super::SuiteOutcome::Ok,
+            &super::SuiteArtifactPaths {
+                suite_dir: &suite_dir,
+                summary_path: &summary_path,
+                manifest_path: &manifest_path,
+            },
+            &super::SuiteReportArtifacts::default(),
+            super::SuiteCounts {
+                success_count: 1,
+                failure_count: 0,
+                report_failed: false,
+            },
+        );
+
+        assert!(summary["report_log_path"].is_null());
+        assert!(summary["report_json_path"].is_null());
+        assert!(summary["report_html_path"].is_null());
     }
 }
