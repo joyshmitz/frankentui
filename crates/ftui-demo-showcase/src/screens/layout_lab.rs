@@ -396,11 +396,9 @@ impl LayoutLab {
                     self.show_debug = !self.show_debug;
                 }
             }
-            MouseEventKind::Down(MouseButton::Right) => {
-                if preview.contains(x, y) {
-                    self.current_preset = (self.current_preset + 1) % PRESET_COUNT;
-                    self.selected_constraint = 0;
-                }
+            MouseEventKind::Down(MouseButton::Right) if preview.contains(x, y) => {
+                self.current_preset = (self.current_preset + 1) % PRESET_COUNT;
+                self.selected_constraint = 0;
             }
             MouseEventKind::ScrollUp => {
                 if preview.contains(x, y) {

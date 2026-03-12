@@ -108,19 +108,17 @@ impl VoiOverlayScreen {
                     self.focused_section = None;
                 }
             }
-            MouseEventKind::ScrollDown => {
+            MouseEventKind::ScrollDown
                 if self.layout_ledger.get().contains(x, y)
-                    || self.focused_section == Some(VoiSection::Ledger)
-                {
-                    self.selected_ledger_idx = self.selected_ledger_idx.saturating_add(1);
-                }
+                    || self.focused_section == Some(VoiSection::Ledger) =>
+            {
+                self.selected_ledger_idx = self.selected_ledger_idx.saturating_add(1);
             }
-            MouseEventKind::ScrollUp => {
+            MouseEventKind::ScrollUp
                 if self.layout_ledger.get().contains(x, y)
-                    || self.focused_section == Some(VoiSection::Ledger)
-                {
-                    self.selected_ledger_idx = self.selected_ledger_idx.saturating_sub(1);
-                }
+                    || self.focused_section == Some(VoiSection::Ledger) =>
+            {
+                self.selected_ledger_idx = self.selected_ledger_idx.saturating_sub(1);
             }
             _ => {}
         }

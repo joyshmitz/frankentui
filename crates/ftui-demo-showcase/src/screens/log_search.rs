@@ -855,33 +855,29 @@ impl LogSearch {
                     .with_query(&self.query);
                 self.record_diagnostic(diag);
             }
-            (KeyCode::Char('n'), Modifiers::NONE) => {
-                if !self.last_search.is_empty() {
-                    self.viewer.next_match();
+            (KeyCode::Char('n'), Modifiers::NONE) if !self.last_search.is_empty() => {
+                self.viewer.next_match();
 
-                    let (pos, total) = self.viewer.search_info().unwrap_or((0, 0));
-                    let diag =
-                        DiagnosticEntry::new(DiagnosticEventKind::MatchNavigation, self.tick_count)
-                            .with_direction("next")
-                            .with_match_position(pos)
-                            .with_result_count(total)
-                            .with_query(&self.last_search);
-                    self.record_diagnostic(diag);
-                }
+                let (pos, total) = self.viewer.search_info().unwrap_or((0, 0));
+                let diag =
+                    DiagnosticEntry::new(DiagnosticEventKind::MatchNavigation, self.tick_count)
+                        .with_direction("next")
+                        .with_match_position(pos)
+                        .with_result_count(total)
+                        .with_query(&self.last_search);
+                self.record_diagnostic(diag);
             }
-            (KeyCode::Char('N'), Modifiers::NONE) => {
-                if !self.last_search.is_empty() {
-                    self.viewer.prev_match();
+            (KeyCode::Char('N'), Modifiers::NONE) if !self.last_search.is_empty() => {
+                self.viewer.prev_match();
 
-                    let (pos, total) = self.viewer.search_info().unwrap_or((0, 0));
-                    let diag =
-                        DiagnosticEntry::new(DiagnosticEventKind::MatchNavigation, self.tick_count)
-                            .with_direction("prev")
-                            .with_match_position(pos)
-                            .with_result_count(total)
-                            .with_query(&self.last_search);
-                    self.record_diagnostic(diag);
-                }
+                let (pos, total) = self.viewer.search_info().unwrap_or((0, 0));
+                let diag =
+                    DiagnosticEntry::new(DiagnosticEventKind::MatchNavigation, self.tick_count)
+                        .with_direction("prev")
+                        .with_match_position(pos)
+                        .with_result_count(total)
+                        .with_query(&self.last_search);
+                self.record_diagnostic(diag);
             }
             (KeyCode::Char('F'), Modifiers::NONE) => {
                 self.viewer.set_filter(None);
@@ -992,62 +988,59 @@ impl LogSearch {
                 self.live_update();
                 self.emit_query_updated("ctrl+u clear");
             }
-            (KeyCode::Char('c'), m) if m.contains(Modifiers::CTRL) => {
-                if self.mode == UiMode::Search {
-                    self.search_config.case_sensitive = !self.search_config.case_sensitive;
-                    self.live_update();
+            (KeyCode::Char('c'), m)
+                if m.contains(Modifiers::CTRL) && self.mode == UiMode::Search =>
+            {
+                self.search_config.case_sensitive = !self.search_config.case_sensitive;
+                self.live_update();
 
-                    let diag =
-                        DiagnosticEntry::new(DiagnosticEventKind::QueryUpdated, self.tick_count)
-                            .with_query(&self.query)
-                            .with_case_sensitive(self.search_config.case_sensitive)
-                            .with_search_mode(match self.search_config.mode {
-                                SearchMode::Literal => "literal",
-                                SearchMode::Regex => "regex",
-                            })
-                            .with_context("case sensitivity toggled");
-                    self.record_diagnostic(diag);
-                }
+                let diag = DiagnosticEntry::new(DiagnosticEventKind::QueryUpdated, self.tick_count)
+                    .with_query(&self.query)
+                    .with_case_sensitive(self.search_config.case_sensitive)
+                    .with_search_mode(match self.search_config.mode {
+                        SearchMode::Literal => "literal",
+                        SearchMode::Regex => "regex",
+                    })
+                    .with_context("case sensitivity toggled");
+                self.record_diagnostic(diag);
             }
-            (KeyCode::Char('r'), m) if m.contains(Modifiers::CTRL) => {
-                if self.mode == UiMode::Search {
-                    self.search_config.mode = match self.search_config.mode {
-                        SearchMode::Literal => SearchMode::Regex,
-                        SearchMode::Regex => SearchMode::Literal,
-                    };
-                    self.live_update();
+            (KeyCode::Char('r'), m)
+                if m.contains(Modifiers::CTRL) && self.mode == UiMode::Search =>
+            {
+                self.search_config.mode = match self.search_config.mode {
+                    SearchMode::Literal => SearchMode::Regex,
+                    SearchMode::Regex => SearchMode::Literal,
+                };
+                self.live_update();
 
-                    let diag =
-                        DiagnosticEntry::new(DiagnosticEventKind::QueryUpdated, self.tick_count)
-                            .with_query(&self.query)
-                            .with_case_sensitive(self.search_config.case_sensitive)
-                            .with_search_mode(match self.search_config.mode {
-                                SearchMode::Literal => "literal",
-                                SearchMode::Regex => "regex",
-                            })
-                            .with_context("mode toggled");
-                    self.record_diagnostic(diag);
-                }
+                let diag = DiagnosticEntry::new(DiagnosticEventKind::QueryUpdated, self.tick_count)
+                    .with_query(&self.query)
+                    .with_case_sensitive(self.search_config.case_sensitive)
+                    .with_search_mode(match self.search_config.mode {
+                        SearchMode::Literal => "literal",
+                        SearchMode::Regex => "regex",
+                    })
+                    .with_context("mode toggled");
+                self.record_diagnostic(diag);
             }
-            (KeyCode::Char('x'), m) if m.contains(Modifiers::CTRL) => {
-                if self.mode == UiMode::Search {
-                    self.search_config.context_lines = match self.search_config.context_lines {
-                        0 => 1,
-                        1 => 2,
-                        2 => 5,
-                        _ => 0,
-                    };
-                    self.live_update();
+            (KeyCode::Char('x'), m)
+                if m.contains(Modifiers::CTRL) && self.mode == UiMode::Search =>
+            {
+                self.search_config.context_lines = match self.search_config.context_lines {
+                    0 => 1,
+                    1 => 2,
+                    2 => 5,
+                    _ => 0,
+                };
+                self.live_update();
 
-                    let diag =
-                        DiagnosticEntry::new(DiagnosticEventKind::QueryUpdated, self.tick_count)
-                            .with_query(&self.query)
-                            .with_context(format!(
-                                "context lines: {}",
-                                self.search_config.context_lines
-                            ));
-                    self.record_diagnostic(diag);
-                }
+                let diag = DiagnosticEntry::new(DiagnosticEventKind::QueryUpdated, self.tick_count)
+                    .with_query(&self.query)
+                    .with_context(format!(
+                        "context lines: {}",
+                        self.search_config.context_lines
+                    ));
+                self.record_diagnostic(diag);
             }
             (KeyCode::Char(ch), _) => {
                 self.query.push(ch);
@@ -1169,21 +1162,17 @@ impl LogSearch {
         if let Event::Mouse(mouse) = event {
             let log_area = self.last_log_area.get();
             match mouse.kind {
-                MouseEventKind::Down(MouseButton::Left) => {
-                    if log_area.contains(mouse.x, mouse.y) && self.mode != UiMode::Normal {
-                        // Click log area while in search/filter mode: return to normal
-                        self.mode = UiMode::Normal;
-                    }
+                MouseEventKind::Down(MouseButton::Left)
+                    if log_area.contains(mouse.x, mouse.y) && self.mode != UiMode::Normal =>
+                {
+                    // Click log area while in search/filter mode: return to normal
+                    self.mode = UiMode::Normal;
                 }
-                MouseEventKind::ScrollUp => {
-                    if log_area.contains(mouse.x, mouse.y) {
-                        self.viewer.scroll_up(3);
-                    }
+                MouseEventKind::ScrollUp if log_area.contains(mouse.x, mouse.y) => {
+                    self.viewer.scroll_up(3);
                 }
-                MouseEventKind::ScrollDown => {
-                    if log_area.contains(mouse.x, mouse.y) {
-                        self.viewer.scroll_down(3);
-                    }
+                MouseEventKind::ScrollDown if log_area.contains(mouse.x, mouse.y) => {
+                    self.viewer.scroll_down(3);
                 }
                 _ => {}
             }

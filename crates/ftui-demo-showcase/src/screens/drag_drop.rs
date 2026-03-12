@@ -527,34 +527,32 @@ impl Screen for DragDropDemo {
                 // List navigation
                 (KeyCode::Up | KeyCode::Char('k'), _) => self.select_up(),
                 (KeyCode::Down | KeyCode::Char('j'), _) => self.select_down(),
-                (KeyCode::Left | KeyCode::Char('h'), _) => {
-                    if self.mode == DemoMode::CrossContainer {
-                        self.switch_list();
-                    }
+                (KeyCode::Left | KeyCode::Char('h'), _)
+                    if self.mode == DemoMode::CrossContainer =>
+                {
+                    self.switch_list();
                 }
-                (KeyCode::Right | KeyCode::Char('l'), _) => {
-                    if self.mode == DemoMode::CrossContainer {
-                        self.switch_list();
-                    }
+                (KeyCode::Right | KeyCode::Char('l'), _)
+                    if self.mode == DemoMode::CrossContainer =>
+                {
+                    self.switch_list();
                 }
 
                 // Reorder within list (sortable mode)
-                (KeyCode::Char('K'), true) | (KeyCode::Char('u'), _) => {
-                    if self.mode == DemoMode::SortableList {
-                        self.move_item_up();
-                    }
+                (KeyCode::Char('K'), true) | (KeyCode::Char('u'), _)
+                    if self.mode == DemoMode::SortableList =>
+                {
+                    self.move_item_up();
                 }
-                (KeyCode::Char('J'), true) | (KeyCode::Char('d'), _) => {
-                    if self.mode == DemoMode::SortableList {
-                        self.move_item_down();
-                    }
+                (KeyCode::Char('J'), true) | (KeyCode::Char('d'), _)
+                    if self.mode == DemoMode::SortableList =>
+                {
+                    self.move_item_down();
                 }
 
                 // Transfer between lists (cross-container mode)
-                (KeyCode::Enter, false) => {
-                    if self.mode == DemoMode::CrossContainer {
-                        self.transfer_item();
-                    }
+                (KeyCode::Enter, false) if self.mode == DemoMode::CrossContainer => {
+                    self.transfer_item();
                 }
 
                 _ => {}
@@ -1013,15 +1011,11 @@ impl DragDropDemo {
                     }
                 }
             }
-            MouseEventKind::ScrollUp => {
-                if left.contains(x, y) || right.contains(x, y) {
-                    self.select_up();
-                }
+            MouseEventKind::ScrollUp if left.contains(x, y) || right.contains(x, y) => {
+                self.select_up();
             }
-            MouseEventKind::ScrollDown => {
-                if left.contains(x, y) || right.contains(x, y) {
-                    self.select_down();
-                }
+            MouseEventKind::ScrollDown if left.contains(x, y) || right.contains(x, y) => {
+                self.select_down();
             }
             MouseEventKind::Down(MouseButton::Right) => {
                 // Right-click in sortable mode: move selected item up

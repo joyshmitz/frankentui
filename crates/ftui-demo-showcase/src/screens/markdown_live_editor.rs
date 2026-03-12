@@ -550,19 +550,17 @@ impl Screen for MarkdownLiveEditor {
                         self.sync_focus();
                     }
                 }
-                MouseEventKind::ScrollUp => {
+                MouseEventKind::ScrollUp
                     if self.focus == Focus::Preview
-                        || self.layout_preview.get().contains(mouse.x, mouse.y)
-                    {
-                        self.preview_scroll = self.preview_scroll.saturating_sub(1);
-                    }
+                        || self.layout_preview.get().contains(mouse.x, mouse.y) =>
+                {
+                    self.preview_scroll = self.preview_scroll.saturating_sub(1);
                 }
-                MouseEventKind::ScrollDown => {
+                MouseEventKind::ScrollDown
                     if self.focus == Focus::Preview
-                        || self.layout_preview.get().contains(mouse.x, mouse.y)
-                    {
-                        self.preview_scroll = self.preview_scroll.saturating_add(1);
-                    }
+                        || self.layout_preview.get().contains(mouse.x, mouse.y) =>
+                {
+                    self.preview_scroll = self.preview_scroll.saturating_add(1);
                 }
                 _ => {}
             }

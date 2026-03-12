@@ -1742,16 +1742,14 @@ impl Screen for TerminalCapabilitiesScreen {
                     self.diagnostic_log.record(entry);
                 }
                 // 0 resets to detected profile
-                KeyCode::Char('0') => {
-                    if old_profile.is_some() {
-                        let old_profile_label =
-                            old_profile.map(Self::profile_label).unwrap_or("detected");
-                        self.reset_profile();
-                        let entry = DiagnosticEntry::new(DiagnosticEventKind::ProfileReset)
-                            .with_detail("from", old_profile_label)
-                            .with_detail("via", "key_0");
-                        self.diagnostic_log.record(entry);
-                    }
+                KeyCode::Char('0') if old_profile.is_some() => {
+                    let old_profile_label =
+                        old_profile.map(Self::profile_label).unwrap_or("detected");
+                    self.reset_profile();
+                    let entry = DiagnosticEntry::new(DiagnosticEventKind::ProfileReset)
+                        .with_detail("from", old_profile_label)
+                        .with_detail("via", "key_0");
+                    self.diagnostic_log.record(entry);
                 }
                 _ => {}
             }

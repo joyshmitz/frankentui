@@ -456,27 +456,23 @@ impl FormValidationDemo {
             let form_area = self.last_form_area.get();
             let error_area = self.last_error_area.get();
             match mouse.kind {
-                MouseEventKind::Down(MouseButton::Left) => {
-                    if error_area.contains(mouse.x, mouse.y) {
-                        self.toggle_validation_mode();
+                MouseEventKind::Down(MouseButton::Left)
+                    if error_area.contains(mouse.x, mouse.y) =>
+                {
+                    self.toggle_validation_mode();
+                }
+                MouseEventKind::ScrollDown if form_area.contains(mouse.x, mouse.y) => {
+                    let mut state = self.form_state.borrow_mut();
+                    let count = self.form.field_count();
+                    if count > 0 {
+                        state.focused = (state.focused + 1) % count;
                     }
                 }
-                MouseEventKind::ScrollDown => {
-                    if form_area.contains(mouse.x, mouse.y) {
-                        let mut state = self.form_state.borrow_mut();
-                        let count = self.form.field_count();
-                        if count > 0 {
-                            state.focused = (state.focused + 1) % count;
-                        }
-                    }
-                }
-                MouseEventKind::ScrollUp => {
-                    if form_area.contains(mouse.x, mouse.y) {
-                        let mut state = self.form_state.borrow_mut();
-                        let count = self.form.field_count();
-                        if count > 0 {
-                            state.focused = (state.focused + count - 1) % count;
-                        }
+                MouseEventKind::ScrollUp if form_area.contains(mouse.x, mouse.y) => {
+                    let mut state = self.form_state.borrow_mut();
+                    let count = self.form.field_count();
+                    if count > 0 {
+                        state.focused = (state.focused + count - 1) % count;
                     }
                 }
                 _ => {}

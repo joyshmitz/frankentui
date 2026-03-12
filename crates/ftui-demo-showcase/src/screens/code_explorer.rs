@@ -780,15 +780,11 @@ impl Screen for CodeExplorer {
                         self.set_current_match(idx);
                     }
                 }
-                MouseEventKind::ScrollUp => {
-                    if self.focus == FocusPanel::Code {
-                        self.scroll_by(-3);
-                    }
+                MouseEventKind::ScrollUp if self.focus == FocusPanel::Code => {
+                    self.scroll_by(-3);
                 }
-                MouseEventKind::ScrollDown => {
-                    if self.focus == FocusPanel::Code {
-                        self.scroll_by(3);
-                    }
+                MouseEventKind::ScrollDown if self.focus == FocusPanel::Code => {
+                    self.scroll_by(3);
                 }
                 _ => {}
             }
@@ -908,11 +904,9 @@ impl Screen for CodeExplorer {
                             self.scroll_to(hotspot.line.saturating_sub(3));
                         }
                     }
-                    FocusPanel::Radar => {
-                        if !self.search_matches.is_empty() {
-                            let line = self.search_matches[self.current_match];
-                            self.scroll_to(line.saturating_sub(3));
-                        }
+                    FocusPanel::Radar if !self.search_matches.is_empty() => {
+                        let line = self.search_matches[self.current_match];
+                        self.scroll_to(line.saturating_sub(3));
                     }
                     _ => {}
                 },

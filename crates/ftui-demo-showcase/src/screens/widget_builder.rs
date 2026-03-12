@@ -730,21 +730,17 @@ impl Screen for WidgetBuilder {
         }
 
         match code {
-            KeyCode::Char('j') | KeyCode::Down => {
-                if !self.widgets.is_empty() {
-                    self.selected_widget = (self.selected_widget + 1) % self.widgets.len();
-                    self.clamp_selection();
-                }
+            KeyCode::Char('j') | KeyCode::Down if !self.widgets.is_empty() => {
+                self.selected_widget = (self.selected_widget + 1) % self.widgets.len();
+                self.clamp_selection();
             }
-            KeyCode::Char('k') | KeyCode::Up => {
-                if !self.widgets.is_empty() {
-                    self.selected_widget = if self.selected_widget == 0 {
-                        self.widgets.len() - 1
-                    } else {
-                        self.selected_widget - 1
-                    };
-                    self.clamp_selection();
-                }
+            KeyCode::Char('k') | KeyCode::Up if !self.widgets.is_empty() => {
+                self.selected_widget = if self.selected_widget == 0 {
+                    self.widgets.len() - 1
+                } else {
+                    self.selected_widget - 1
+                };
+                self.clamp_selection();
             }
             KeyCode::Char('p') => {
                 let next = (self.active_preset + 1) % self.presets.len();

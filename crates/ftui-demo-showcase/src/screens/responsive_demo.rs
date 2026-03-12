@@ -66,17 +66,13 @@ impl ResponsiveDemo {
     fn handle_mouse(&mut self, kind: MouseEventKind, x: u16, y: u16) {
         let indicator = self.layout_indicator.get();
         match kind {
-            MouseEventKind::Down(MouseButton::Left) => {
-                if indicator.contains(x, y) {
-                    self.use_custom_breakpoints = !self.use_custom_breakpoints;
-                }
+            MouseEventKind::Down(MouseButton::Left) if indicator.contains(x, y) => {
+                self.use_custom_breakpoints = !self.use_custom_breakpoints;
             }
-            MouseEventKind::Down(MouseButton::Right) => {
-                if indicator.contains(x, y) {
-                    // Reset to defaults
-                    self.use_custom_breakpoints = false;
-                    self.width = 80;
-                }
+            MouseEventKind::Down(MouseButton::Right) if indicator.contains(x, y) => {
+                // Reset to defaults
+                self.use_custom_breakpoints = false;
+                self.width = 80;
             }
             MouseEventKind::ScrollUp => {
                 self.width = self.width.saturating_add(10).min(300);

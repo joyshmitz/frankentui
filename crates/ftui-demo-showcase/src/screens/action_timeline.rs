@@ -733,31 +733,27 @@ impl ActionTimeline {
         if let Event::Mouse(mouse) = event {
             let timeline_area = self.last_timeline_area.get();
             match mouse.kind {
-                MouseEventKind::Down(MouseButton::Left) => {
-                    if timeline_area.contains(mouse.x, mouse.y) {
-                        let relative_y = mouse.y.saturating_sub(timeline_area.y);
-                        let clicked_index = self.scroll_offset + relative_y as usize;
-                        let filtered = self.filtered_indices();
-                        if clicked_index < filtered.len() {
-                            self.follow = false;
-                            self.selected = clicked_index;
-                            self.sync_selection();
-                        }
-                    }
-                }
-                MouseEventKind::ScrollUp => {
-                    if timeline_area.contains(mouse.x, mouse.y) {
+                MouseEventKind::Down(MouseButton::Left)
+                    if timeline_area.contains(mouse.x, mouse.y) =>
+                {
+                    let relative_y = mouse.y.saturating_sub(timeline_area.y);
+                    let clicked_index = self.scroll_offset + relative_y as usize;
+                    let filtered = self.filtered_indices();
+                    if clicked_index < filtered.len() {
                         self.follow = false;
-                        self.selected = self.selected.saturating_sub(3);
+                        self.selected = clicked_index;
                         self.sync_selection();
                     }
                 }
-                MouseEventKind::ScrollDown => {
-                    if timeline_area.contains(mouse.x, mouse.y) {
-                        self.follow = false;
-                        self.selected = self.selected.saturating_add(3);
-                        self.sync_selection();
-                    }
+                MouseEventKind::ScrollUp if timeline_area.contains(mouse.x, mouse.y) => {
+                    self.follow = false;
+                    self.selected = self.selected.saturating_sub(3);
+                    self.sync_selection();
+                }
+                MouseEventKind::ScrollDown if timeline_area.contains(mouse.x, mouse.y) => {
+                    self.follow = false;
+                    self.selected = self.selected.saturating_add(3);
+                    self.sync_selection();
                 }
                 _ => {}
             }

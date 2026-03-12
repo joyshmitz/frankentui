@@ -4754,28 +4754,22 @@ impl Screen for VisualEffectsScreen {
                     }
                     // Canvas mode key handling (original behavior)
                     match code {
-                        KeyCode::Left | KeyCode::Char('h') => {
-                            if is_press || is_repeat {
-                                let effect = self.effect.prev();
-                                self.switch_effect(effect);
-                            }
+                        KeyCode::Left | KeyCode::Char('h') if is_press || is_repeat => {
+                            let effect = self.effect.prev();
+                            self.switch_effect(effect);
                         }
-                        KeyCode::Right | KeyCode::Char('l') | KeyCode::Char(' ') => {
-                            if is_press || is_repeat {
-                                let effect = self.effect.next();
-                                self.switch_effect(effect);
-                            }
+                        KeyCode::Right | KeyCode::Char('l') | KeyCode::Char(' ')
+                            if is_press || is_repeat =>
+                        {
+                            let effect = self.effect.next();
+                            self.switch_effect(effect);
                         }
                         KeyCode::Char('p') => match self.effect {
-                            EffectType::Shape3D => {
-                                if is_press {
-                                    self.shape3d.shape = self.shape3d.shape.next();
-                                }
+                            EffectType::Shape3D if is_press => {
+                                self.shape3d.shape = self.shape3d.shape.next();
                             }
-                            EffectType::Plasma => {
-                                if is_press {
-                                    self.cycle_plasma_palette();
-                                }
+                            EffectType::Plasma if is_press => {
+                                self.cycle_plasma_palette();
                             }
                             _ => {}
                         },
@@ -4836,32 +4830,24 @@ impl Screen for VisualEffectsScreen {
                             }
                         }
                         // Space cycles effects within tab
-                        KeyCode::Char(' ') | KeyCode::Right => {
-                            if is_press || is_repeat {
-                                self.text_effects_mut().next_effect();
-                                self.start_text_effects_transition();
-                            }
+                        KeyCode::Char(' ') | KeyCode::Right if is_press || is_repeat => {
+                            self.text_effects_mut().next_effect();
+                            self.start_text_effects_transition();
                         }
-                        KeyCode::Left => {
-                            if is_press || is_repeat {
-                                self.text_effects_mut().prev_effect();
-                                self.start_text_effects_transition();
-                            }
+                        KeyCode::Left if is_press || is_repeat => {
+                            self.text_effects_mut().prev_effect();
+                            self.start_text_effects_transition();
                         }
                         // 'e' cycles easing functions
-                        KeyCode::Char('e') => {
-                            if is_press {
-                                let text_effects = self.text_effects_mut();
-                                text_effects.easing_mode = !text_effects.easing_mode;
-                                text_effects.next_easing();
-                            }
+                        KeyCode::Char('e') if is_press => {
+                            let text_effects = self.text_effects_mut();
+                            text_effects.easing_mode = !text_effects.easing_mode;
+                            text_effects.next_easing();
                         }
                         // 'c' jumps to combinations tab
-                        KeyCode::Char('c') => {
-                            if is_press {
-                                self.set_text_effects_tab(TextEffectsTab::Combinations);
-                                self.start_text_effects_transition();
-                            }
+                        KeyCode::Char('c') if is_press => {
+                            self.set_text_effects_tab(TextEffectsTab::Combinations);
+                            self.start_text_effects_transition();
                         }
                         _ => {}
                     }

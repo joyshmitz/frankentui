@@ -91,3 +91,7 @@ harness = false
 [[bench]]
 name = "perf_hud_bench"
 harness = false
+
+[[bench]]
+name = "demo_pipeline_bench"
+harness = false

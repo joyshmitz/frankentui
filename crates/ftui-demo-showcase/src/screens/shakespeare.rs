@@ -510,15 +510,11 @@ impl Screen for Shakespeare {
                         }
                     }
                 }
-                MouseEventKind::ScrollUp => {
-                    if self.focus == FocusPanel::Text {
-                        self.scroll_by(-3);
-                    }
+                MouseEventKind::ScrollUp if self.focus == FocusPanel::Text => {
+                    self.scroll_by(-3);
                 }
-                MouseEventKind::ScrollDown => {
-                    if self.focus == FocusPanel::Text {
-                        self.scroll_by(3);
-                    }
+                MouseEventKind::ScrollDown if self.focus == FocusPanel::Text => {
+                    self.scroll_by(3);
                 }
                 _ => {}
             }

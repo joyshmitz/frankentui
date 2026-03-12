@@ -148,19 +148,17 @@ impl Notifications {
                         self.queue.dismiss_all();
                     }
                 }
-                MouseEventKind::ScrollUp => {
+                MouseEventKind::ScrollUp
                     if instructions.contains(mouse.x, mouse.y)
-                        || notifications.contains(mouse.x, mouse.y)
-                    {
-                        self.push_info();
-                    }
+                        || notifications.contains(mouse.x, mouse.y) =>
+                {
+                    self.push_info();
                 }
-                MouseEventKind::ScrollDown => {
+                MouseEventKind::ScrollDown
                     if instructions.contains(mouse.x, mouse.y)
-                        || notifications.contains(mouse.x, mouse.y)
-                    {
-                        self.push_success();
-                    }
+                        || notifications.contains(mouse.x, mouse.y) =>
+                {
+                    self.push_success();
                 }
                 _ => {}
             }

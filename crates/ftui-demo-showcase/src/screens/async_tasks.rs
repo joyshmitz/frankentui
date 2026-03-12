@@ -2005,31 +2005,27 @@ impl Screen for AsyncTaskManager {
         if let Event::Mouse(mouse) = event {
             let list_inner = self.layout_task_list_inner.get();
             match mouse.kind {
-                MouseEventKind::Down(MouseButton::Left) => {
-                    if list_inner.contains(mouse.x, mouse.y) {
-                        // Calculate which task row was clicked.
-                        let row_offset = (mouse.y - list_inner.y) as usize;
-                        let visible_count = list_inner.height as usize;
-                        let scroll_offset = if self.selected >= visible_count {
-                            self.selected - visible_count + 1
-                        } else {
-                            0
-                        };
-                        let task_idx = scroll_offset + row_offset;
-                        if task_idx < self.tasks.len() {
-                            self.selected = task_idx;
-                        }
+                MouseEventKind::Down(MouseButton::Left)
+                    if list_inner.contains(mouse.x, mouse.y) =>
+                {
+                    // Calculate which task row was clicked.
+                    let row_offset = (mouse.y - list_inner.y) as usize;
+                    let visible_count = list_inner.height as usize;
+                    let scroll_offset = if self.selected >= visible_count {
+                        self.selected - visible_count + 1
+                    } else {
+                        0
+                    };
+                    let task_idx = scroll_offset + row_offset;
+                    if task_idx < self.tasks.len() {
+                        self.selected = task_idx;
                     }
                 }
-                MouseEventKind::ScrollUp => {
-                    if list_inner.contains(mouse.x, mouse.y) {
-                        self.select_prev();
-                    }
+                MouseEventKind::ScrollUp if list_inner.contains(mouse.x, mouse.y) => {
+                    self.select_prev();
                 }
-                MouseEventKind::ScrollDown => {
-                    if list_inner.contains(mouse.x, mouse.y) {
-                        self.select_next();
-                    }
+                MouseEventKind::ScrollDown if list_inner.contains(mouse.x, mouse.y) => {
+                    self.select_next();
                 }
                 _ => {}
             }

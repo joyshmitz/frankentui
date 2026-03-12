@@ -400,15 +400,11 @@ impl Screen for InlineModeStory {
                         self.paused = !self.paused;
                     }
                 }
-                MouseEventKind::ScrollUp => {
-                    if content.contains(mouse.x, mouse.y) {
-                        self.cycle_log_rate();
-                    }
+                MouseEventKind::ScrollUp if content.contains(mouse.x, mouse.y) => {
+                    self.cycle_log_rate();
                 }
-                MouseEventKind::ScrollDown => {
-                    if content.contains(mouse.x, mouse.y) {
-                        self.cycle_log_rate_down();
-                    }
+                MouseEventKind::ScrollDown if content.contains(mouse.x, mouse.y) => {
+                    self.cycle_log_rate_down();
                 }
                 _ => {}
             }

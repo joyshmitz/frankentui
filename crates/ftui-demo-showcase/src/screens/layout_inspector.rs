@@ -506,10 +506,10 @@ impl Screen for LayoutInspector {
                         self.step_idx = (self.step_idx + 1) % STEP_COUNT;
                     }
                 }
-                MouseEventKind::Down(MouseButton::Right) => {
-                    if self.layout_viz.get().contains(x, y) {
-                        self.show_overlay = !self.show_overlay;
-                    }
+                MouseEventKind::Down(MouseButton::Right)
+                    if self.layout_viz.get().contains(x, y) =>
+                {
+                    self.show_overlay = !self.show_overlay;
                 }
                 MouseEventKind::ScrollDown => {
                     self.scenario_idx = (self.scenario_idx + 1) % SCENARIO_COUNT;

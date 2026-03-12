@@ -6205,21 +6205,17 @@ impl Screen for Dashboard {
                     self.focus_from_point(mouse.x, mouse.y);
                     self.hover = self.focus;
                 }
-                MouseEventKind::Drag(MouseButton::Left) => {
-                    if self.active_splitter_drag.is_some() {
-                        self.update_bottom_splitter_drag(mouse.x);
-                        self.hover = DashboardFocus::None;
-                    }
+                MouseEventKind::Drag(MouseButton::Left) if self.active_splitter_drag.is_some() => {
+                    self.update_bottom_splitter_drag(mouse.x);
+                    self.hover = DashboardFocus::None;
                 }
-                MouseEventKind::Up(button) => {
-                    if self.active_splitter_drag.is_some() {
-                        if button == MouseButton::Left {
-                            self.update_bottom_splitter_drag(mouse.x);
-                        }
-                        self.active_splitter_drag = None;
-                        self.hover = self.panel_from_point(mouse.x, mouse.y);
-                        return Cmd::None;
+                MouseEventKind::Up(button) if self.active_splitter_drag.is_some() => {
+                    if button == MouseButton::Left {
+                        self.update_bottom_splitter_drag(mouse.x);
                     }
+                    self.active_splitter_drag = None;
+                    self.hover = self.panel_from_point(mouse.x, mouse.y);
+                    return Cmd::None;
                 }
                 MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                     let panel = self.panel_from_point(mouse.x, mouse.y);

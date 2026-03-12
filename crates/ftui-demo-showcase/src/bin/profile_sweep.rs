@@ -1,25 +1,29 @@
-//! Profile sweep binary for flamegraph / heaptrack analysis (bd-3jlw5.7, bd-3jlw5.8).
+//! Profile sweep binary for flamegraph / heaptrack analysis (bd-3jlw5.7, bd-3jlw5.8, bd-h0un4).
 //!
 //! Renders every demo screen at 80x24 and 120x40 in a tight loop.
 //! Designed to be run under `cargo flamegraph` or `heaptrack`:
 //!
-//!   cargo flamegraph --bin profile_sweep -p ftui-demo-showcase -- --cycles 100
-//!   heaptrack cargo run --release --bin profile_sweep -p ftui-demo-showcase -- --cycles 10
+//!   cargo flamegraph --bin profile_sweep -p ftui-demo-showcase -- --cycles 100 --render-mode pipeline
+//!   heaptrack cargo run --release --bin profile_sweep -p ftui-demo-showcase -- --cycles 10 --render-mode pipeline
 //!
 //! Arena comparison mode (bd-2alzw.3):
 //!
-//!   cargo run --release --bin profile_sweep -p ftui-demo-showcase -- --cycles 10 --arena-mode off --json
-//!   cargo run --release --bin profile_sweep -p ftui-demo-showcase -- --cycles 10 --arena-mode on  --json
+//!   cargo run --release --bin profile_sweep -p ftui-demo-showcase -- --cycles 10 --render-mode pipeline --arena-mode off --json
+//!   cargo run --release --bin profile_sweep -p ftui-demo-showcase -- --cycles 10 --render-mode pipeline --arena-mode on  --json
 
 use std::alloc::System;
 use std::time::Instant;
 
 use ftui_core::event::Event;
+use ftui_core::terminal_capabilities::TerminalCapabilities;
 use ftui_demo_showcase::app::AppModel;
 use ftui_demo_showcase::screens;
 use ftui_render::arena::FrameArena;
+use ftui_render::buffer::Buffer;
+use ftui_render::diff::BufferDiff;
 use ftui_render::frame::Frame;
 use ftui_render::grapheme_pool::GraphemePool;
+use ftui_render::presenter::Presenter;
 use ftui_runtime::{Cmd, Model};
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 
@@ -41,18 +45,34 @@ impl ArenaMode {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RenderMode {
+    View,
+    Pipeline,
+}
+
+impl RenderMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::View => "view",
+            Self::Pipeline => "pipeline",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Args {
     cycles: usize,
     arena_mode: ArenaMode,
+    render_mode: RenderMode,
     json: bool,
 }
 
 fn usage_and_exit(message: &str) -> ! {
     eprintln!("{message}");
     eprintln!(
-        "Usage: profile_sweep [--cycles N] [--arena-mode off|on] [--json]\n\
-         Example: profile_sweep --cycles 10 --arena-mode on --json"
+        "Usage: profile_sweep [--cycles N] [--render-mode view|pipeline] [--arena-mode off|on] [--json]\n\
+         Example: profile_sweep --cycles 10 --render-mode pipeline --arena-mode on --json"
     );
     std::process::exit(2);
 }
@@ -60,6 +80,7 @@ fn usage_and_exit(message: &str) -> ! {
 fn parse_args() -> Args {
     let mut cycles: usize = 50;
     let mut arena_mode = ArenaMode::Off;
+    let mut render_mode = RenderMode::Pipeline;
     let mut json = false;
 
     let mut it = std::env::args().skip(1);
@@ -83,6 +104,16 @@ fn parse_args() -> Args {
                     _ => usage_and_exit("Invalid value for --arena-mode (expected off|on)"),
                 };
             }
+            "--render-mode" => {
+                let Some(value) = it.next() else {
+                    usage_and_exit("Missing value after --render-mode");
+                };
+                render_mode = match value.as_str() {
+                    "view" => RenderMode::View,
+                    "pipeline" => RenderMode::Pipeline,
+                    _ => usage_and_exit("Invalid value for --render-mode (expected view|pipeline)"),
+                };
+            }
             "--json" => {
                 json = true;
             }
@@ -98,6 +129,7 @@ fn parse_args() -> Args {
     Args {
         cycles,
         arena_mode,
+        render_mode,
         json,
     }
 }
@@ -110,6 +142,66 @@ fn percentile(sorted: &[u64], p: f64) -> u64 {
     sorted[idx]
 }
 
+struct PipelineHarness {
+    current: Buffer,
+    scratch: Buffer,
+    diff: BufferDiff,
+    sink: Vec<u8>,
+    caps: TerminalCapabilities,
+}
+
+impl PipelineHarness {
+    fn new(cols: u16, rows: u16) -> Self {
+        let mut current = Buffer::new(cols, rows);
+        current.clear_dirty();
+        Self {
+            current,
+            scratch: Buffer::new(cols, rows),
+            diff: BufferDiff::new(),
+            sink: Vec::with_capacity((cols as usize * rows as usize).max(4096) * 8),
+            caps: TerminalCapabilities::default(),
+        }
+    }
+
+    fn render(
+        &mut self,
+        app: &mut AppModel,
+        cols: u16,
+        rows: u16,
+        pool: &mut GraphemePool,
+        arena: Option<&FrameArena>,
+    ) -> (u64, usize, u64) {
+        app.terminal_width = cols;
+        app.terminal_height = rows;
+        self.scratch.reset_for_frame();
+
+        let mut frame = Frame::from_buffer(std::mem::take(&mut self.scratch), pool);
+        if let Some(arena_ref) = arena {
+            frame.set_arena(arena_ref);
+        }
+        app.view(&mut frame);
+        self.scratch = frame.buffer;
+
+        self.diff.compute_dirty_into(&self.current, &self.scratch);
+
+        self.sink.clear();
+        let present = {
+            let mut presenter = Presenter::new(&mut self.sink, self.caps);
+            presenter
+                .present(&self.scratch, &self.diff)
+                .expect("profile_sweep present should succeed")
+        };
+
+        let bytes_emitted = present.bytes_emitted;
+        let changed_cells = present.cells_changed;
+        let present_us = present.duration.as_micros().min(u64::MAX as u128) as u64;
+
+        std::mem::swap(&mut self.current, &mut self.scratch);
+
+        (bytes_emitted, changed_cells, present_us)
+    }
+}
+
 fn main() {
     let args = parse_args();
 
@@ -119,11 +211,12 @@ fn main() {
 
     if !args.json {
         eprintln!(
-            "Profile sweep: {} screens x {} sizes x {} cycles = {} renders (arena_mode={})",
+            "Profile sweep: {} screens x {} sizes x {} cycles = {} renders (render_mode={}, arena_mode={})",
             screen_ids.len(),
             sizes.len(),
             args.cycles,
             total_frames,
+            args.render_mode.as_str(),
             args.arena_mode.as_str()
         );
     }
@@ -137,6 +230,9 @@ fn main() {
     let mut total_alloc_bytes = 0usize;
     let mut total_reallocs = 0usize;
     let mut total_deallocs = 0usize;
+    let mut per_frame_changed_cells = Vec::with_capacity(total_frames);
+    let mut per_frame_present_us = Vec::with_capacity(total_frames);
+    let mut per_frame_bytes = Vec::with_capacity(total_frames);
     let mut arena = (args.arena_mode == ArenaMode::On).then(|| FrameArena::new(256 * 1024));
     let mut arena_peak_bytes = 0usize;
 
@@ -144,6 +240,7 @@ fn main() {
         let mut app = AppModel::new();
         let _: Cmd<_> = app.init();
         let _: Cmd<_> = app.update(Event::Tick.into());
+        let mut pipeline = PipelineHarness::new(cols, rows);
 
         for cycle in 0..args.cycles {
             for &screen in screen_ids.iter() {
@@ -153,13 +250,27 @@ fn main() {
                 let alloc_region = Region::new(GLOBAL);
 
                 {
-                    let mut frame = Frame::new(cols, rows, &mut pool);
-                    if let Some(arena_ref) = arena.as_ref() {
-                        frame.set_arena(arena_ref);
+                    match args.render_mode {
+                        RenderMode::View => {
+                            app.terminal_width = cols;
+                            app.terminal_height = rows;
+                            let mut frame = Frame::new(cols, rows, &mut pool);
+                            if let Some(arena_ref) = arena.as_ref() {
+                                frame.set_arena(arena_ref);
+                            }
+                            app.view(&mut frame);
+                            // Ensure the optimizer doesn't elide the render.
+                            std::hint::black_box(&frame);
+                        }
+                        RenderMode::Pipeline => {
+                            let (bytes_emitted, changed_cells, present_us) =
+                                pipeline.render(&mut app, cols, rows, &mut pool, arena.as_ref());
+                            per_frame_bytes.push(bytes_emitted);
+                            per_frame_changed_cells.push(changed_cells as u64);
+                            per_frame_present_us.push(present_us);
+                            std::hint::black_box(bytes_emitted);
+                        }
                     }
-                    app.view(&mut frame);
-                    // Ensure the optimizer doesn't elide the render.
-                    std::hint::black_box(&frame);
                 }
 
                 let alloc_delta = alloc_region.change();
@@ -212,10 +323,17 @@ fn main() {
     let alloc_bytes_p95 = percentile(&sorted_alloc_bytes, 0.95);
     let alloc_bytes_p99 = percentile(&sorted_alloc_bytes, 0.99);
     let alloc_bytes_max = sorted_alloc_bytes.last().copied().unwrap_or(0);
+    let mut sorted_present_us = per_frame_present_us.clone();
+    sorted_present_us.sort_unstable();
+    let mut sorted_changed_cells = per_frame_changed_cells.clone();
+    sorted_changed_cells.sort_unstable();
+    let mut sorted_bytes = per_frame_bytes.clone();
+    sorted_bytes.sort_unstable();
 
     if args.json {
         let summary = serde_json::json!({
             "arena_mode": args.arena_mode.as_str(),
+            "render_mode": args.render_mode.as_str(),
             "cycles": args.cycles,
             "screen_count": screen_ids.len(),
             "sizes": sizes.iter().map(|(w, h)| serde_json::json!({"cols": w, "rows": h})).collect::<Vec<_>>(),
@@ -248,14 +366,35 @@ fn main() {
                     "max": alloc_bytes_max
                 }
             },
-            "arena_peak_bytes": arena_peak_bytes
+            "arena_peak_bytes": arena_peak_bytes,
+            "pipeline": {
+                "changed_cells_per_frame": {
+                    "p50": percentile(&sorted_changed_cells, 0.50),
+                    "p95": percentile(&sorted_changed_cells, 0.95),
+                    "p99": percentile(&sorted_changed_cells, 0.99),
+                    "max": sorted_changed_cells.last().copied().unwrap_or(0)
+                },
+                "present_us": {
+                    "p50": percentile(&sorted_present_us, 0.50),
+                    "p95": percentile(&sorted_present_us, 0.95),
+                    "p99": percentile(&sorted_present_us, 0.99),
+                    "max": sorted_present_us.last().copied().unwrap_or(0)
+                },
+                "bytes_emitted": {
+                    "p50": percentile(&sorted_bytes, 0.50),
+                    "p95": percentile(&sorted_bytes, 0.95),
+                    "p99": percentile(&sorted_bytes, 0.99),
+                    "max": sorted_bytes.last().copied().unwrap_or(0)
+                }
+            }
         });
         println!("{summary}");
     } else {
         eprintln!(
-            "\nDone in {:.2}s ({:.1} renders/sec) | frame_us p50={} p95={} p99={} max={} | allocs/frame p50={} p95={} p99={} max={} | arena_peak_bytes={}",
+            "\nDone in {:.2}s ({:.1} renders/sec) | mode={} | frame_us p50={} p95={} p99={} max={} | allocs/frame p50={} p95={} p99={} max={} | bytes/frame p50={} p95={} p99={} max={} | changed_cells/frame p50={} p95={} p99={} max={} | present_us p50={} p95={} p99={} max={} | arena_peak_bytes={}",
             elapsed_secs,
             renders_per_sec,
+            args.render_mode.as_str(),
             p50_us,
             p95_us,
             p99_us,
@@ -264,6 +403,18 @@ fn main() {
             alloc_p95,
             alloc_p99,
             alloc_max,
+            percentile(&sorted_bytes, 0.50),
+            percentile(&sorted_bytes, 0.95),
+            percentile(&sorted_bytes, 0.99),
+            sorted_bytes.last().copied().unwrap_or(0),
+            percentile(&sorted_changed_cells, 0.50),
+            percentile(&sorted_changed_cells, 0.95),
+            percentile(&sorted_changed_cells, 0.99),
+            sorted_changed_cells.last().copied().unwrap_or(0),
+            percentile(&sorted_present_us, 0.50),
+            percentile(&sorted_present_us, 0.95),
+            percentile(&sorted_present_us, 0.99),
+            sorted_present_us.last().copied().unwrap_or(0),
             arena_peak_bytes
         );
     }

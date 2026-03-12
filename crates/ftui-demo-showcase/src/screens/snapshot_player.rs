@@ -1218,10 +1218,10 @@ impl SnapshotPlayer {
                     self.timeline_scrubbing = false;
                 }
             }
-            MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Moved => {
-                if self.timeline_scrubbing {
-                    self.scrub_timeline_to_x(timeline, x, "drag_timeline");
-                }
+            MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Moved
+                if self.timeline_scrubbing =>
+            {
+                self.scrub_timeline_to_x(timeline, x, "drag_timeline");
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 if self.timeline_scrubbing {

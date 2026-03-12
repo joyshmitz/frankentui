@@ -674,11 +674,9 @@ impl ThemeStudioDemo {
                     }
                 }
             }
-            MouseEventKind::Down(MouseButton::Right) => {
-                if presets.contains(x, y) {
-                    self.focus = Focus::Presets;
-                    self.apply_preset();
-                }
+            MouseEventKind::Down(MouseButton::Right) if presets.contains(x, y) => {
+                self.focus = Focus::Presets;
+                self.apply_preset();
             }
             MouseEventKind::ScrollUp => {
                 if presets.contains(x, y) {
@@ -1186,21 +1184,16 @@ impl Screen for ThemeStudioDemo {
                     }
                 },
                 // Apply preset
-                KeyCode::Enter => {
-                    if self.focus == Focus::Presets {
-                        self.apply_preset();
-                        let theme_name = theme::current_theme().name();
-                        self.export_status = Some(format!("Applied theme: {theme_name}"));
-                        self.record_diagnostic(
-                            DiagnosticEntry::new(
-                                DiagnosticEventKind::ThemeApplied,
-                                self.tick_count,
-                            )
+                KeyCode::Enter if self.focus == Focus::Presets => {
+                    self.apply_preset();
+                    let theme_name = theme::current_theme().name();
+                    self.export_status = Some(format!("Applied theme: {theme_name}"));
+                    self.record_diagnostic(
+                        DiagnosticEntry::new(DiagnosticEventKind::ThemeApplied, self.tick_count)
                             .with_focus(self.focus.as_str())
                             .with_preset(theme_name)
                             .with_preset_index(self.preset_index),
-                        );
-                    }
+                    );
                 }
                 // Cycle theme globally (Ctrl+T)
                 KeyCode::Char('t') if modifiers.contains(Modifiers::CTRL) => {

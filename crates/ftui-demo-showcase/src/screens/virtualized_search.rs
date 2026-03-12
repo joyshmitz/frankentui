@@ -1222,18 +1222,13 @@ impl VirtualizedSearch {
                         }
                     }
                 }
-                MouseEventKind::ScrollUp => {
-                    if list_area.contains(mouse.x, mouse.y) {
-                        self.selected = self.selected.saturating_sub(3);
-                        self.ensure_visible();
-                    }
+                MouseEventKind::ScrollUp if list_area.contains(mouse.x, mouse.y) => {
+                    self.selected = self.selected.saturating_sub(3);
+                    self.ensure_visible();
                 }
-                MouseEventKind::ScrollDown => {
-                    if list_area.contains(mouse.x, mouse.y) {
-                        self.selected =
-                            (self.selected + 3).min(self.filtered.len().saturating_sub(1));
-                        self.ensure_visible();
-                    }
+                MouseEventKind::ScrollDown if list_area.contains(mouse.x, mouse.y) => {
+                    self.selected = (self.selected + 3).min(self.filtered.len().saturating_sub(1));
+                    self.ensure_visible();
                 }
                 _ => {}
             }
@@ -1301,20 +1296,16 @@ impl Screen for VirtualizedSearch {
                                 .with_context("search -> list (enter)");
                         self.record_diagnostic(diag);
                     }
-                    KeyCode::Backspace => {
-                        if !self.query.is_empty() {
-                            self.query.pop();
-                            self.update_filter();
+                    KeyCode::Backspace if !self.query.is_empty() => {
+                        self.query.pop();
+                        self.update_filter();
 
-                            let diag = DiagnosticEntry::new(
-                                DiagnosticEventKind::QueryChange,
-                                self.tick_count,
-                            )
-                            .with_query(&self.query)
-                            .with_filtered_count(self.filtered.len())
-                            .with_context("backspace");
-                            self.record_diagnostic(diag);
-                        }
+                        let diag =
+                            DiagnosticEntry::new(DiagnosticEventKind::QueryChange, self.tick_count)
+                                .with_query(&self.query)
+                                .with_filtered_count(self.filtered.len())
+                                .with_context("backspace");
+                        self.record_diagnostic(diag);
                     }
                     KeyCode::Char(c) => {
                         self.query.push(*c);
@@ -1340,20 +1331,16 @@ impl Screen for VirtualizedSearch {
                                 .with_context("list -> search");
                         self.record_diagnostic(diag);
                     }
-                    KeyCode::Escape => {
-                        if !self.query.is_empty() {
-                            self.query.clear();
-                            self.update_filter();
+                    KeyCode::Escape if !self.query.is_empty() => {
+                        self.query.clear();
+                        self.update_filter();
 
-                            let diag = DiagnosticEntry::new(
-                                DiagnosticEventKind::QueryChange,
-                                self.tick_count,
-                            )
-                            .with_query("")
-                            .with_filtered_count(self.filtered.len())
-                            .with_context("cleared via escape (from list)");
-                            self.record_diagnostic(diag);
-                        }
+                        let diag =
+                            DiagnosticEntry::new(DiagnosticEventKind::QueryChange, self.tick_count)
+                                .with_query("")
+                                .with_filtered_count(self.filtered.len())
+                                .with_context("cleared via escape (from list)");
+                        self.record_diagnostic(diag);
                     }
                     KeyCode::Char('j') | KeyCode::Down => {
                         self.select_next();
