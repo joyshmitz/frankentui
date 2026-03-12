@@ -57,6 +57,29 @@ fn html_escape(value: &str) -> String {
     v_htmlescape::escape(value).to_string()
 }
 
+fn push_optional_artifact_link(
+    html: &mut String,
+    suite_dir: &Path,
+    label: &str,
+    path_value: Option<&str>,
+) {
+    let Some(path_value) = path_value.filter(|value| !value.is_empty()) else {
+        return;
+    };
+    let path = PathBuf::from(path_value);
+    if !path.exists() {
+        return;
+    }
+
+    let rel = relative_to(suite_dir, &path).unwrap_or(path.clone());
+    html.push_str(&format!(
+        "<div class=\"row\"><span class=\"label\">{}</span><a href=\"{}\">{}</a></div>\n",
+        html_escape(label),
+        html_escape(&rel.display().to_string()),
+        html_escape(&rel.display().to_string())
+    ));
+}
+
 fn render_html(summary: &ReportSummary, suite_dir: &Path) -> String {
     let mut html = String::new();
 
@@ -131,6 +154,46 @@ fn render_html(summary: &ReportSummary, suite_dir: &Path) -> String {
             run.vhs_exit_code
                 .map_or_else(|| "null".to_string(), |value| value.to_string())
         ));
+        if let Some(trace_id) = run.trace_id.as_deref().filter(|value| !value.is_empty()) {
+            html.push_str(&format!(
+                "<div class=\"row\"><span class=\"label\">trace_id</span>{}</div>\n",
+                html_escape(trace_id)
+            ));
+        }
+        if let Some(fallback_reason) = run
+            .fallback_reason
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            html.push_str(&format!(
+                "<div class=\"row\"><span class=\"label\">fallback_reason</span>{}</div>\n",
+                html_escape(fallback_reason)
+            ));
+        }
+        push_optional_artifact_link(
+            &mut html,
+            suite_dir,
+            "evidence_ledger",
+            run.evidence_ledger.as_deref(),
+        );
+        push_optional_artifact_link(
+            &mut html,
+            suite_dir,
+            "ttyd_shim_log",
+            run.ttyd_shim_log.as_deref(),
+        );
+        push_optional_artifact_link(
+            &mut html,
+            suite_dir,
+            "ttyd_runtime_log",
+            run.ttyd_runtime_log.as_deref(),
+        );
+        push_optional_artifact_link(
+            &mut html,
+            suite_dir,
+            "vhs_docker_log",
+            run.vhs_docker_log.as_deref(),
+        );
 
         if !run.output.is_empty() && Path::new(&run.output).exists() {
             html.push_str(&format!(
@@ -461,6 +524,49 @@ mod tests {
         // Ensure the file-exists conditionals emit links when the artifacts exist.
         assert!(html.contains("video file"));
         assert!(html.contains("snapshot file"));
+    }
+
+    #[test]
+    fn run_report_html_surfaces_evidence_links_and_fallback_metadata() {
+        let temp = tempdir().expect("tempdir");
+        let suite_dir = temp.path().join("suite");
+        let run_dir = suite_dir.join("run_01");
+        fs::create_dir_all(&run_dir).expect("mkdir");
+
+        let evidence_ledger = run_dir.join("evidence_ledger.jsonl");
+        let ttyd_runtime_log = run_dir.join("ttyd-runtime.log");
+        fs::write(&evidence_ledger, b"{}\n").expect("write ledger");
+        fs::write(&ttyd_runtime_log, b"log").expect("write runtime log");
+
+        RunMeta {
+            status: "degraded".to_string(),
+            started_at: "2026-02-17T00:00:00Z".to_string(),
+            profile: "analytics-empty".to_string(),
+            run_dir: run_dir.display().to_string(),
+            trace_id: Some("trace-123".to_string()),
+            fallback_reason: Some("capture timed out".to_string()),
+            evidence_ledger: Some(evidence_ledger.display().to_string()),
+            ttyd_runtime_log: Some(ttyd_runtime_log.display().to_string()),
+            ..RunMeta::default()
+        }
+        .write_to_path(&run_dir.join("run_meta.json"))
+        .expect("write run meta");
+
+        run_report(ReportArgs {
+            suite_dir: suite_dir.clone(),
+            output_html: None,
+            output_json: None,
+            title: "Artifact Report".to_string(),
+        })
+        .expect("run report");
+
+        let html = fs::read_to_string(suite_dir.join("index.html")).expect("read html");
+        assert!(html.contains("trace-123"));
+        assert!(html.contains("capture timed out"));
+        assert!(html.contains("evidence_ledger"));
+        assert!(html.contains("evidence_ledger.jsonl"));
+        assert!(html.contains("ttyd_runtime_log"));
+        assert!(html.contains("ttyd-runtime.log"));
     }
 
     #[test]

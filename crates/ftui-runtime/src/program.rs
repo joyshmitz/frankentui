@@ -2495,6 +2495,141 @@ impl<M: Send + 'static> Drop for EffectQueue<M> {
     }
 }
 
+struct SpawnTaskExecutor<M: Send + 'static> {
+    result_sender: mpsc::Sender<M>,
+    handles: Vec<JoinHandle<()>>,
+}
+
+impl<M: Send + 'static> SpawnTaskExecutor<M> {
+    const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+    const SHUTDOWN_POLL: Duration = Duration::from_millis(10);
+
+    fn new(result_sender: mpsc::Sender<M>) -> Self {
+        Self {
+            result_sender,
+            handles: Vec::new(),
+        }
+    }
+
+    fn submit(&mut self, task: Box<dyn FnOnce() -> M + Send>) {
+        let sender = self.result_sender.clone();
+        let handle = thread::spawn(move || {
+            let start = Instant::now();
+            let msg = task();
+            let duration_us = start.elapsed().as_micros() as u64;
+            tracing::debug!(
+                target: "ftui.effect",
+                command_type = "task",
+                duration_us = duration_us,
+                effect_duration_us = duration_us,
+                "task effect completed on background thread"
+            );
+            let _ = sender.send(msg);
+        });
+        self.handles.push(handle);
+    }
+
+    fn reap_finished(&mut self) {
+        if self.handles.is_empty() {
+            return;
+        }
+
+        let mut i = 0;
+        while i < self.handles.len() {
+            if self.handles[i].is_finished() {
+                let handle = self.handles.swap_remove(i);
+                if let Err(payload) = handle.join() {
+                    let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+                        (*s).to_owned()
+                    } else if let Some(s) = payload.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "unknown panic payload".to_owned()
+                    };
+                    #[cfg(feature = "tracing")]
+                    tracing::error!("spawned task panicked: {msg}");
+                    #[cfg(not(feature = "tracing"))]
+                    eprintln!("ftui: spawned task panicked: {msg}");
+                }
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    fn shutdown(&mut self) {
+        let start = Instant::now();
+        while self.handles.iter().any(|handle| !handle.is_finished()) {
+            if start.elapsed() >= Self::SHUTDOWN_TIMEOUT {
+                tracing::warn!(
+                    timeout_ms = Self::SHUTDOWN_TIMEOUT.as_millis() as u64,
+                    pending_handles = self
+                        .handles
+                        .iter()
+                        .filter(|handle| !handle.is_finished())
+                        .count(),
+                    "Background task threads did not stop within timeout; detaching"
+                );
+                self.handles.clear();
+                return;
+            }
+            thread::sleep(Self::SHUTDOWN_POLL);
+        }
+        self.reap_finished();
+    }
+}
+
+enum TaskExecutor<M: Send + 'static> {
+    Spawned(SpawnTaskExecutor<M>),
+    Queued(EffectQueue<M>),
+}
+
+impl<M: Send + 'static> TaskExecutor<M> {
+    fn new(
+        config: &EffectQueueConfig,
+        result_sender: mpsc::Sender<M>,
+        evidence_sink: Option<EvidenceSink>,
+    ) -> io::Result<Self> {
+        if config.enabled {
+            Ok(Self::Queued(EffectQueue::start(
+                config.clone(),
+                result_sender,
+                evidence_sink,
+            )?))
+        } else {
+            Ok(Self::Spawned(SpawnTaskExecutor::new(result_sender)))
+        }
+    }
+
+    fn submit(&mut self, spec: TaskSpec, task: Box<dyn FnOnce() -> M + Send>) {
+        match self {
+            Self::Spawned(executor) => executor.submit(task),
+            Self::Queued(queue) => queue.enqueue(spec, task),
+        }
+    }
+
+    fn reap_finished(&mut self) {
+        if let Self::Spawned(executor) = self {
+            executor.reap_finished();
+        }
+    }
+
+    fn shutdown(&mut self) {
+        match self {
+            Self::Spawned(executor) => executor.shutdown(),
+            Self::Queued(queue) => queue.shutdown(),
+        }
+    }
+
+    #[cfg(test)]
+    fn kind_name(&self) -> &'static str {
+        match self {
+            Self::Spawned(_) => "spawned",
+            Self::Queued(_) => "queued",
+        }
+    }
+}
+
 fn effect_queue_loop<M: Send + 'static>(
     config: EffectQueueConfig,
     rx: mpsc::Receiver<EffectCommand<M>>,
@@ -3311,13 +3446,12 @@ pub struct Program<M: Model, E: BackendEventSource<Error = io::Error>, W: Write 
     /// Subscription lifecycle manager.
     subscriptions: SubscriptionManager<M::Message>,
     /// Channel for receiving messages from background tasks.
+    #[cfg(test)]
     task_sender: std::sync::mpsc::Sender<M::Message>,
     /// Channel for receiving messages from background tasks.
     task_receiver: std::sync::mpsc::Receiver<M::Message>,
-    /// Join handles for background tasks; reaped opportunistically.
-    task_handles: Vec<std::thread::JoinHandle<()>>,
-    /// Optional effect queue scheduler for background tasks.
-    effect_queue: Option<EffectQueue<M::Message>>,
+    /// Internal task execution substrate behind `Cmd::Task`.
+    task_executor: TaskExecutor<M::Message>,
     /// Optional state registry for widget persistence.
     state_registry: Option<std::sync::Arc<StateRegistry>>,
     /// Persistence configuration.
@@ -3424,15 +3558,11 @@ impl<M: Model> Program<M, CrosstermEventSource, Stdout> {
             .inline_auto_remeasure
             .clone()
             .map(InlineAutoRemeasureState::new);
-        let effect_queue = if config.effect_queue.enabled {
-            Some(EffectQueue::start(
-                config.effect_queue.clone(),
-                task_sender.clone(),
-                evidence_sink.clone(),
-            )?)
-        } else {
-            None
-        };
+        let task_executor = TaskExecutor::new(
+            &config.effect_queue,
+            task_sender.clone(),
+            evidence_sink.clone(),
+        )?;
         let guardrails = FrameGuardrails::new(config.guardrails);
 
         Ok(Self {
@@ -3469,10 +3599,10 @@ impl<M: Model> Program<M, CrosstermEventSource, Stdout> {
             fairness_guard: InputFairnessGuard::new(),
             event_recorder: None,
             subscriptions,
+            #[cfg(test)]
             task_sender,
             task_receiver,
-            task_handles: Vec::new(),
-            effect_queue,
+            task_executor,
             state_registry: config.persistence.registry.clone(),
             persistence_config: config.persistence,
             last_checkpoint: Instant::now(),
@@ -3550,15 +3680,11 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             .inline_auto_remeasure
             .clone()
             .map(InlineAutoRemeasureState::new);
-        let effect_queue = if config.effect_queue.enabled {
-            Some(EffectQueue::start(
-                config.effect_queue.clone(),
-                task_sender.clone(),
-                evidence_sink.clone(),
-            )?)
-        } else {
-            None
-        };
+        let task_executor = TaskExecutor::new(
+            &config.effect_queue,
+            task_sender.clone(),
+            evidence_sink.clone(),
+        )?;
 
         let guardrails = FrameGuardrails::new(config.guardrails);
 
@@ -3596,10 +3722,10 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             fairness_guard: InputFairnessGuard::new(),
             event_recorder: None,
             subscriptions,
+            #[cfg(test)]
             task_sender,
             task_receiver,
-            task_handles: Vec::new(),
-            effect_queue,
+            task_executor,
             state_registry: config.persistence.registry.clone(),
             persistence_config: config.persistence,
             last_checkpoint: Instant::now(),
@@ -3934,6 +4060,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
 
         // Stop all subscriptions on exit
         self.subscriptions.stop_all();
+        self.task_executor.shutdown();
         self.reap_finished_tasks();
 
         if let Some(signal) = termination_signal {
@@ -4341,25 +4468,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             }
             Cmd::Task(spec, f) => {
                 crate::effect_system::record_command_effect("task", 0);
-                if let Some(ref queue) = self.effect_queue {
-                    queue.enqueue(spec, f);
-                } else {
-                    let sender = self.task_sender.clone();
-                    let handle = std::thread::spawn(move || {
-                        let start = Instant::now();
-                        let msg = f();
-                        let duration_us = start.elapsed().as_micros() as u64;
-                        tracing::debug!(
-                            target: "ftui.effect",
-                            command_type = "task",
-                            duration_us = duration_us,
-                            effect_duration_us = duration_us,
-                            "task effect completed on background thread"
-                        );
-                        let _ = sender.send(msg);
-                    });
-                    self.task_handles.push(handle);
-                }
+                self.task_executor.submit(spec, f);
             }
             Cmd::SaveState => {
                 self.save_state();
@@ -4440,31 +4549,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
     }
 
     fn reap_finished_tasks(&mut self) {
-        if self.task_handles.is_empty() {
-            return;
-        }
-
-        let mut i = 0;
-        while i < self.task_handles.len() {
-            if self.task_handles[i].is_finished() {
-                let handle = self.task_handles.swap_remove(i);
-                if let Err(payload) = handle.join() {
-                    let msg = if let Some(s) = payload.downcast_ref::<&str>() {
-                        (*s).to_owned()
-                    } else if let Some(s) = payload.downcast_ref::<String>() {
-                        s.clone()
-                    } else {
-                        "unknown panic payload".to_owned()
-                    };
-                    #[cfg(feature = "tracing")]
-                    tracing::error!("spawned task panicked: {msg}");
-                    #[cfg(not(feature = "tracing"))]
-                    eprintln!("ftui: spawned task panicked: {msg}");
-                }
-            } else {
-                i += 1;
-            }
-        }
+        self.task_executor.reap_finished();
     }
 
     /// Render a frame with budget tracking.
@@ -8042,6 +8127,8 @@ mod tests {
             .clone()
             .map(InlineAutoRemeasureState::new);
         let guardrails = FrameGuardrails::new(config.guardrails);
+        let task_executor = TaskExecutor::new(&config.effect_queue, task_sender.clone(), None)
+            .expect("task executor");
 
         Program {
             model,
@@ -8077,10 +8164,10 @@ mod tests {
             fairness_guard: InputFairnessGuard::new(),
             event_recorder: None,
             subscriptions,
+            #[cfg(test)]
             task_sender,
             task_receiver,
-            task_handles: Vec::new(),
-            effect_queue: None,
+            task_executor,
             state_registry: config.persistence.registry.clone(),
             persistence_config: config.persistence,
             last_checkpoint: Instant::now(),
@@ -9073,6 +9160,13 @@ mod tests {
     }
 
     #[test]
+    fn headless_default_task_executor_is_spawned() {
+        let program =
+            headless_program_with_config(TestModel { value: 0 }, ProgramConfig::default());
+        assert_eq!(program.task_executor.kind_name(), "spawned");
+    }
+
+    #[test]
     fn headless_persistence_commands_with_registry() {
         use crate::state_persistence::{MemoryStorage, StateRegistry};
         use std::sync::Arc;
@@ -9309,6 +9403,7 @@ mod tests {
             program.model().done,
             "effect queue task result did not arrive in time"
         );
+        assert_eq!(program.task_executor.kind_name(), "queued");
     }
 
     // =========================================================================

@@ -53,6 +53,41 @@ struct AppSmokeResult {
 
 const DEGRADED_CAPTURE_EXIT_CODE: i32 = 30;
 
+fn doctor_summary_path(run_root: &Path) -> PathBuf {
+    run_root.join("meta").join("doctor_summary.json")
+}
+
+fn build_doctor_summary(
+    args: &DoctorArgs,
+    integration: &OutputIntegration,
+    status: &str,
+    capture_stack_health: &str,
+    degraded_capture: bool,
+    degraded_reason: Option<&str>,
+    app_smoke_summary: Option<&str>,
+) -> serde_json::Value {
+    json!({
+        "command": "doctor",
+        "status": status,
+        "generated_at": crate::util::now_utc_iso(),
+        "project_dir": args.project_dir.display().to_string(),
+        "run_root": args.run_root.display().to_string(),
+        "capture_timeout_seconds": args.capture_timeout_seconds,
+        "capture_stack_health": capture_stack_health,
+        "degraded_capture": degraded_capture,
+        "degraded_reason": degraded_reason,
+        "app_smoke_summary": app_smoke_summary,
+        "allow_degraded": args.allow_degraded,
+        "integration": integration,
+    })
+}
+
+fn write_doctor_summary(run_root: &Path, summary: &serde_json::Value) -> Result<PathBuf> {
+    let path = doctor_summary_path(run_root);
+    write_string(&path, &serde_json::to_string_pretty(summary)?)?;
+    Ok(path)
+}
+
 fn classify_capture_failure(
     status: Option<&str>,
     vhs_exit: Option<i64>,
@@ -478,23 +513,27 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
     } else {
         "healthy"
     };
+    let doctor_summary = build_doctor_summary(
+        &args,
+        &integration,
+        status,
+        capture_stack_health,
+        degraded_capture,
+        degraded_reason.as_deref(),
+        app_smoke_summary.as_deref(),
+    );
+    let doctor_summary_path = write_doctor_summary(&args.run_root, &doctor_summary)?;
+    ui.info(&format!(
+        "doctor summary: {}",
+        doctor_summary_path.display()
+    ));
 
     if integration.should_emit_json() {
-        println!(
-            "{}",
-            json!({
-                "command": "doctor",
-                "status": status,
-                "project_dir": args.project_dir.display().to_string(),
-                "run_root": args.run_root.display().to_string(),
-                "capture_stack_health": capture_stack_health,
-                "degraded_capture": degraded_capture,
-                "degraded_reason": degraded_reason,
-                "app_smoke_summary": app_smoke_summary,
-                "allow_degraded": args.allow_degraded,
-                "integration": integration,
-            })
-        );
+        let stdout_summary = json!({
+            "doctor_summary": doctor_summary,
+            "doctor_summary_path": doctor_summary_path.display().to_string(),
+        });
+        println!("{stdout_summary}");
     }
 
     if degraded_capture {
@@ -523,7 +562,7 @@ mod tests {
     use std::path::PathBuf;
     use std::process::Command;
 
-    use crate::util::CliOutput;
+    use crate::util::{CliOutput, OutputIntegration};
     use tempfile::tempdir;
 
     #[cfg(unix)]
@@ -546,6 +585,17 @@ mod tests {
             capture_timeout_seconds: 37,
             allow_degraded: false,
             run_root: PathBuf::from("/tmp/run-root"),
+        }
+    }
+
+    fn sample_integration() -> OutputIntegration {
+        OutputIntegration {
+            fastapi_mode: "plain".to_string(),
+            fastapi_agent: true,
+            fastapi_ci: false,
+            fastapi_tty: false,
+            sqlmodel_mode: "json".to_string(),
+            sqlmodel_agent: true,
         }
     }
 
@@ -727,5 +777,48 @@ exit 1
             super::run_app_smoke_fallback(&args, &ui).expect_err("fallback should fail cleanly");
 
         assert_eq!(error.exit_code(), 17);
+    }
+
+    #[test]
+    fn doctor_summary_path_is_under_meta_dir() {
+        let run_root = Path::new("/tmp/doctor-run");
+        assert_eq!(
+            super::doctor_summary_path(run_root),
+            PathBuf::from("/tmp/doctor-run/meta/doctor_summary.json")
+        );
+    }
+
+    #[test]
+    fn write_doctor_summary_persists_machine_readable_artifact() {
+        let temp = tempdir().expect("tempdir");
+        let args = super::DoctorArgs {
+            run_root: temp.path().to_path_buf(),
+            ..sample_args()
+        };
+        let integration = sample_integration();
+        let summary = super::build_doctor_summary(
+            &args,
+            &integration,
+            "degraded",
+            "unhealthy",
+            true,
+            Some("capture stack degraded"),
+            Some("/tmp/doctor-run/doctor_app_smoke/summary.json"),
+        );
+
+        let path = super::write_doctor_summary(temp.path(), &summary).expect("write summary");
+        let written = fs::read_to_string(&path).expect("read summary");
+        let parsed: serde_json::Value = serde_json::from_str(&written).expect("parse summary json");
+
+        assert_eq!(path, temp.path().join("meta/doctor_summary.json"));
+        assert_eq!(parsed["command"], "doctor");
+        assert_eq!(parsed["status"], "degraded");
+        assert_eq!(parsed["capture_stack_health"], "unhealthy");
+        assert_eq!(parsed["allow_degraded"], false);
+        assert_eq!(
+            parsed["app_smoke_summary"],
+            "/tmp/doctor-run/doctor_app_smoke/summary.json"
+        );
+        assert_eq!(parsed["integration"]["sqlmodel_mode"], "json");
     }
 }
