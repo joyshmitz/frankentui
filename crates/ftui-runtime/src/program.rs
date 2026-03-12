@@ -93,8 +93,10 @@ use ftui_render::diff_strategy::DiffStrategy;
 use ftui_render::frame::{Frame, HitData, HitId, HitRegion, WidgetBudget, WidgetSignal};
 use ftui_render::frame_guardrails::{FrameGuardrails, GuardrailsConfig};
 use ftui_render::sanitize::sanitize;
+use std::any::Any;
 use std::collections::HashMap;
 use std::io::{self, Stdout, Write};
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::Arc;
 
 /// Check for pending termination signal. Returns `None` when crossterm is not
@@ -2556,18 +2558,7 @@ impl<M: Send + 'static> SpawnTaskExecutor<M> {
         let sender = self.result_sender.clone();
         let evidence_sink = self.evidence_sink.clone();
         let handle = thread::spawn(move || {
-            let start = Instant::now();
-            let msg = task();
-            let duration_us = start.elapsed().as_micros() as u64;
-            tracing::debug!(
-                target: "ftui.effect",
-                command_type = "task",
-                duration_us = duration_us,
-                effect_duration_us = duration_us,
-                "task effect completed on background thread"
-            );
-            emit_task_executor_completion_evidence(evidence_sink.as_ref(), "spawned", duration_us);
-            let _ = sender.send(msg);
+            let _ = run_task_closure(task, "spawned", evidence_sink.as_ref(), &sender);
         });
         self.handles.push(handle);
     }
@@ -2581,19 +2572,7 @@ impl<M: Send + 'static> SpawnTaskExecutor<M> {
         while i < self.handles.len() {
             if self.handles[i].is_finished() {
                 let handle = self.handles.swap_remove(i);
-                if let Err(payload) = handle.join() {
-                    let msg = if let Some(s) = payload.downcast_ref::<&str>() {
-                        (*s).to_owned()
-                    } else if let Some(s) = payload.downcast_ref::<String>() {
-                        s.clone()
-                    } else {
-                        "unknown panic payload".to_owned()
-                    };
-                    #[cfg(feature = "tracing")]
-                    tracing::error!("spawned task panicked: {msg}");
-                    #[cfg(not(feature = "tracing"))]
-                    eprintln!("ftui: spawned task panicked: {msg}");
-                }
+                let _ = handle.join();
             } else {
                 i += 1;
             }
@@ -2661,23 +2640,7 @@ impl<M: Send + 'static> AsupersyncTaskExecutor<M> {
         let handle = self
             .runtime
             .spawn_blocking(move || {
-                let start = Instant::now();
-                let msg = task();
-                let duration_us = start.elapsed().as_micros() as u64;
-                tracing::debug!(
-                    target: "ftui.effect",
-                    command_type = "task",
-                    executor_backend = "asupersync",
-                    duration_us = duration_us,
-                    effect_duration_us = duration_us,
-                    "task effect completed on Asupersync blocking pool"
-                );
-                emit_task_executor_completion_evidence(
-                    evidence_sink.as_ref(),
-                    "asupersync",
-                    duration_us,
-                );
-                let _ = sender.send(msg);
+                let _ = run_task_closure(task, "asupersync", evidence_sink.as_ref(), &sender);
             })
             .expect("asupersync blocking pool must be configured");
         self.handles.push(handle);
@@ -2806,6 +2769,89 @@ fn emit_task_executor_completion_evidence(
     ));
 }
 
+fn emit_task_executor_panic_evidence(sink: Option<&EvidenceSink>, backend: &str, panic_msg: &str) {
+    let Some(sink) = sink else {
+        return;
+    };
+    let escaped = panic_msg
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t");
+    let _ = sink.write_jsonl(&format!(
+        r#"{{"event":"task_executor_panic","backend":"{backend}","panic_msg":"{escaped}"}}"#
+    ));
+}
+
+fn emit_task_executor_backpressure_evidence(
+    sink: Option<&EvidenceSink>,
+    backend: &str,
+    action: &str,
+    queue_length: usize,
+    max_queue_size: usize,
+    total_rejected: u64,
+) {
+    let Some(sink) = sink else {
+        return;
+    };
+    let _ = sink.write_jsonl(&format!(
+        r#"{{"event":"task_executor_backpressure","backend":"{backend}","action":"{action}","queue_length":{queue_length},"max_queue_size":{max_queue_size},"total_rejected":{total_rejected}}}"#
+    ));
+}
+
+fn panic_payload_message(payload: Box<dyn Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_owned()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic payload".to_owned()
+    }
+}
+
+fn log_task_executor_panic(backend: &str, panic_msg: &str) {
+    #[cfg(feature = "tracing")]
+    tracing::error!(
+        executor_backend = backend,
+        panic_msg,
+        "task executor task panicked"
+    );
+    #[cfg(not(feature = "tracing"))]
+    eprintln!("ftui: task executor task panicked ({backend}): {panic_msg}");
+}
+
+fn run_task_closure<M: Send + 'static>(
+    task: Box<dyn FnOnce() -> M + Send>,
+    backend: &str,
+    evidence_sink: Option<&EvidenceSink>,
+    result_sender: &mpsc::Sender<M>,
+) -> bool {
+    let start = Instant::now();
+    match panic::catch_unwind(AssertUnwindSafe(task)) {
+        Ok(msg) => {
+            let duration_us = start.elapsed().as_micros() as u64;
+            tracing::debug!(
+                target: "ftui.effect",
+                command_type = "task",
+                executor_backend = backend,
+                duration_us = duration_us,
+                effect_duration_us = duration_us,
+                "task effect completed"
+            );
+            emit_task_executor_completion_evidence(evidence_sink, backend, duration_us);
+            let _ = result_sender.send(msg);
+            true
+        }
+        Err(payload) => {
+            let panic_msg = panic_payload_message(payload);
+            log_task_executor_panic(backend, &panic_msg);
+            emit_task_executor_panic_evidence(evidence_sink, backend, &panic_msg);
+            false
+        }
+    }
+}
+
 fn effect_queue_loop<M: Send + 'static>(
     config: EffectQueueConfig,
     rx: mpsc::Receiver<EffectCommand<M>>,
@@ -2824,7 +2870,13 @@ fn effect_queue_loop<M: Send + 'static>(
             match rx.recv() {
                 Ok(cmd) => {
                     if matches!(
-                        handle_effect_command(cmd, &mut scheduler, &mut tasks, &result_sender),
+                        handle_effect_command(
+                            cmd,
+                            &mut scheduler,
+                            &mut tasks,
+                            &result_sender,
+                            evidence_sink.as_ref(),
+                        ),
                         EffectLoopControl::ShutdownRequested
                     ) {
                         shutdown_requested = true;
@@ -2836,7 +2888,13 @@ fn effect_queue_loop<M: Send + 'static>(
 
         while let Ok(cmd) = rx.try_recv() {
             if matches!(
-                handle_effect_command(cmd, &mut scheduler, &mut tasks, &result_sender),
+                handle_effect_command(
+                    cmd,
+                    &mut scheduler,
+                    &mut tasks,
+                    &result_sender,
+                    evidence_sink.as_ref(),
+                ),
                 EffectLoopControl::ShutdownRequested
             ) {
                 shutdown_requested = true;
@@ -2862,8 +2920,7 @@ fn effect_queue_loop<M: Send + 'static>(
         let completed = scheduler.tick(job.remaining_time);
         for job_id in completed {
             if let Some(task) = tasks.remove(&job_id) {
-                let msg = task();
-                let _ = result_sender.send(msg);
+                let _ = run_task_closure(task, "queued", evidence_sink.as_ref(), &result_sender);
             }
         }
     }
@@ -2874,6 +2931,7 @@ fn handle_effect_command<M: Send + 'static>(
     scheduler: &mut QueueingScheduler,
     tasks: &mut HashMap<u64, Box<dyn FnOnce() -> M + Send>>,
     result_sender: &mpsc::Sender<M>,
+    evidence_sink: Option<&EvidenceSink>,
 ) -> EffectLoopControl {
     match cmd {
         EffectCommand::Enqueue(spec, task) => {
@@ -2897,8 +2955,17 @@ fn handle_effect_command<M: Send + 'static>(
             if let Some(id) = id {
                 tasks.insert(id, task);
             } else {
-                let msg = task();
-                let _ = result_sender.send(msg);
+                let stats = scheduler.stats();
+                emit_task_executor_backpressure_evidence(
+                    evidence_sink,
+                    "queued",
+                    "inline_fallback",
+                    stats.queue_length,
+                    scheduler.max_queue_size(),
+                    stats.total_rejected,
+                );
+                let _ =
+                    run_task_closure(task, "queued-inline-fallback", evidence_sink, result_sender);
             }
             EffectLoopControl::Continue
         }
@@ -7116,7 +7183,7 @@ mod tests {
             }),
         );
 
-        let shutdown = handle_effect_command(cmd, &mut scheduler, &mut tasks, &result_tx);
+        let shutdown = handle_effect_command(cmd, &mut scheduler, &mut tasks, &result_tx, None);
         assert_eq!(shutdown, EffectLoopControl::Continue);
         assert_eq!(ran.load(Ordering::SeqCst), 0);
         assert_eq!(tasks.len(), 1);
@@ -7137,8 +7204,13 @@ mod tests {
             }),
         );
 
-        let shutdown_full =
-            handle_effect_command(cmd_full, &mut full_scheduler, &mut full_tasks, &result_tx);
+        let shutdown_full = handle_effect_command(
+            cmd_full,
+            &mut full_scheduler,
+            &mut full_tasks,
+            &result_tx,
+            None,
+        );
         assert_eq!(shutdown_full, EffectLoopControl::Continue);
         assert!(full_tasks.is_empty());
         assert_eq!(ran_full.load(Ordering::SeqCst), 1);
@@ -7152,8 +7224,49 @@ mod tests {
             &mut full_scheduler,
             &mut full_tasks,
             &result_tx,
+            None,
         );
         assert_eq!(shutdown, EffectLoopControl::ShutdownRequested);
+    }
+
+    #[test]
+    fn handle_effect_command_inline_fallback_writes_backpressure_evidence() {
+        let evidence_path = temp_evidence_path("task_executor_backpressure");
+        let sink_config = EvidenceSinkConfig::enabled_file(&evidence_path);
+        let sink = EvidenceSink::from_config(&sink_config)
+            .expect("evidence sink config")
+            .expect("evidence sink enabled");
+        let (result_tx, result_rx) = mpsc::channel::<u32>();
+        let mut scheduler = QueueingScheduler::new(SchedulerConfig {
+            max_queue_size: 0,
+            ..Default::default()
+        });
+        let mut tasks: HashMap<u64, Box<dyn FnOnce() -> u32 + Send>> = HashMap::new();
+
+        let shutdown = handle_effect_command(
+            EffectCommand::Enqueue(TaskSpec::default(), Box::new(|| 7)),
+            &mut scheduler,
+            &mut tasks,
+            &result_tx,
+            Some(&sink),
+        );
+
+        assert_eq!(shutdown, EffectLoopControl::Continue);
+        assert!(tasks.is_empty());
+        assert_eq!(
+            result_rx.recv_timeout(Duration::from_millis(200)).unwrap(),
+            7
+        );
+
+        let backpressure_line = read_evidence_event(&evidence_path, "task_executor_backpressure");
+        assert_eq!(backpressure_line["backend"], "queued");
+        assert_eq!(backpressure_line["action"], "inline_fallback");
+        assert_eq!(backpressure_line["max_queue_size"], 0);
+        assert_eq!(backpressure_line["total_rejected"], 1);
+
+        let completion_line = read_evidence_event(&evidence_path, "task_executor_complete");
+        assert_eq!(completion_line["backend"], "queued-inline-fallback");
+        assert!(completion_line["duration_us"].is_number());
     }
 
     #[test]
@@ -7238,6 +7351,47 @@ mod tests {
         handle
             .join()
             .expect("effect queue thread joins after draining");
+    }
+
+    #[test]
+    fn effect_queue_loop_survives_panicking_task_and_runs_later_work() {
+        let (cmd_tx, cmd_rx) = mpsc::channel::<EffectCommand<u32>>();
+        let (result_tx, result_rx) = mpsc::channel::<u32>();
+        let config = EffectQueueConfig {
+            enabled: true,
+            backend: TaskExecutorBackend::EffectQueue,
+            scheduler: SchedulerConfig {
+                preemptive: false,
+                ..Default::default()
+            },
+        };
+
+        let handle = std::thread::spawn(move || {
+            effect_queue_loop(config, cmd_rx, result_tx, None);
+        });
+
+        cmd_tx
+            .send(EffectCommand::Enqueue(
+                TaskSpec::new(3.0, 1.0).with_name("panic"),
+                Box::new(|| panic!("queued panic")),
+            ))
+            .unwrap();
+        cmd_tx
+            .send(EffectCommand::Enqueue(
+                TaskSpec::new(1.0, 5.0).with_name("after"),
+                Box::new(|| 99),
+            ))
+            .unwrap();
+
+        assert_eq!(
+            result_rx.recv_timeout(Duration::from_millis(500)).unwrap(),
+            99
+        );
+
+        cmd_tx.send(EffectCommand::Shutdown).unwrap();
+        handle
+            .join()
+            .expect("effect queue thread survives task panic");
     }
 
     #[test]
@@ -9731,6 +9885,71 @@ mod tests {
         let completion_line = read_evidence_event(&evidence_path, "task_executor_complete");
         assert_eq!(completion_line["backend"], "spawned");
         assert!(completion_line["duration_us"].is_number());
+    }
+
+    #[test]
+    fn headless_effect_queue_task_panic_writes_panic_evidence_and_continues() {
+        struct TaskModel {
+            done: bool,
+        }
+
+        #[derive(Debug)]
+        enum TaskMsg {
+            Done,
+        }
+
+        impl From<Event> for TaskMsg {
+            fn from(_: Event) -> Self {
+                TaskMsg::Done
+            }
+        }
+
+        impl Model for TaskModel {
+            type Message = TaskMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    TaskMsg::Done => {
+                        self.done = true;
+                        Cmd::none()
+                    }
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let evidence_path = temp_evidence_path("task_executor_queued_panic");
+        let sink_config = EvidenceSinkConfig::enabled_file(&evidence_path);
+        let config = ProgramConfig::default()
+            .with_evidence_sink(sink_config)
+            .with_effect_queue(
+                EffectQueueConfig::default().with_backend(TaskExecutorBackend::EffectQueue),
+            );
+        let mut program = headless_program_with_config(TaskModel { done: false }, config);
+
+        program
+            .execute_cmd(Cmd::task(|| -> TaskMsg { panic!("queued panic evidence") }))
+            .expect("panic task cmd");
+        program
+            .execute_cmd(Cmd::task(|| TaskMsg::Done))
+            .expect("follow-up task cmd");
+
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while !program.model().done && Instant::now() <= deadline {
+            program
+                .process_task_results()
+                .expect("process task results");
+        }
+
+        assert!(
+            program.model().done,
+            "effect queue should continue after a panicking task"
+        );
+
+        let panic_line = read_evidence_event(&evidence_path, "task_executor_panic");
+        assert_eq!(panic_line["backend"], "queued");
+        assert_eq!(panic_line["panic_msg"], "queued panic evidence");
     }
 
     #[cfg(feature = "asupersync-executor")]

@@ -53,6 +53,17 @@ struct AppSmokeResult {
 
 const DEGRADED_CAPTURE_EXIT_CODE: i32 = 30;
 
+struct DoctorSummaryInputs<'a> {
+    status: &'a str,
+    capture_stack_health: &'a str,
+    degraded_capture: bool,
+    degraded_reason: Option<&'a str>,
+    capture_smoke_detail: Option<&'a str>,
+    app_smoke_summary: Option<&'a str>,
+    app_smoke_stdout_log: Option<&'a str>,
+    app_smoke_stderr_log: Option<&'a str>,
+}
+
 fn doctor_summary_path(run_root: &Path) -> PathBuf {
     run_root.join("meta").join("doctor_summary.json")
 }
@@ -60,23 +71,22 @@ fn doctor_summary_path(run_root: &Path) -> PathBuf {
 fn build_doctor_summary(
     args: &DoctorArgs,
     integration: &OutputIntegration,
-    status: &str,
-    capture_stack_health: &str,
-    degraded_capture: bool,
-    degraded_reason: Option<&str>,
-    app_smoke_summary: Option<&str>,
+    inputs: &DoctorSummaryInputs<'_>,
 ) -> serde_json::Value {
     json!({
         "command": "doctor",
-        "status": status,
+        "status": inputs.status,
         "generated_at": crate::util::now_utc_iso(),
         "project_dir": args.project_dir.display().to_string(),
         "run_root": args.run_root.display().to_string(),
         "capture_timeout_seconds": args.capture_timeout_seconds,
-        "capture_stack_health": capture_stack_health,
-        "degraded_capture": degraded_capture,
-        "degraded_reason": degraded_reason,
-        "app_smoke_summary": app_smoke_summary,
+        "capture_stack_health": inputs.capture_stack_health,
+        "degraded_capture": inputs.degraded_capture,
+        "degraded_reason": inputs.degraded_reason,
+        "capture_smoke_detail": inputs.capture_smoke_detail,
+        "app_smoke_summary": inputs.app_smoke_summary,
+        "app_smoke_stdout_log": inputs.app_smoke_stdout_log,
+        "app_smoke_stderr_log": inputs.app_smoke_stderr_log,
         "allow_degraded": args.allow_degraded,
         "integration": integration,
     })
@@ -439,7 +449,10 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
     let current_exe = std::env::current_exe()?;
     let mut degraded_capture = false;
     let mut degraded_reason: Option<String> = None;
+    let mut capture_smoke_detail: Option<String> = None;
     let mut app_smoke_summary: Option<String> = None;
+    let mut app_smoke_stdout_log: Option<String> = None;
+    let mut app_smoke_stderr_log: Option<String> = None;
 
     ui.rule(Some("script help checks"));
     run_help_check(&current_exe, "plan")?;
@@ -480,7 +493,10 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
         if !full_status.success() {
             degraded_capture = true;
             let exit_code = full_status.code().unwrap_or(1);
-            degraded_reason = describe_capture_smoke_failure(&args.run_root, "doctor_full_run")
+            capture_smoke_detail =
+                describe_capture_smoke_failure(&args.run_root, "doctor_full_run");
+            degraded_reason = capture_smoke_detail
+                .as_deref()
                 .map(|detail| format!("full capture smoke failed with exit={exit_code}; {detail}"))
                 .or_else(|| Some(format!("full capture smoke failed with exit={exit_code}")));
             ui.warning("full capture smoke failed; attempting app launch fallback");
@@ -490,6 +506,8 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
 
             let smoke = run_app_smoke_fallback(&args, &ui)?;
             app_smoke_summary = Some(smoke.summary_path.display().to_string());
+            app_smoke_stdout_log = Some(smoke.stdout_log.display().to_string());
+            app_smoke_stderr_log = Some(smoke.stderr_log.display().to_string());
             ui.success(&format!(
                 "app launch smoke fallback passed (timed_out={}, exit_code={})",
                 smoke.timed_out,
@@ -516,11 +534,16 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
     let doctor_summary = build_doctor_summary(
         &args,
         &integration,
-        status,
-        capture_stack_health,
-        degraded_capture,
-        degraded_reason.as_deref(),
-        app_smoke_summary.as_deref(),
+        &DoctorSummaryInputs {
+            status,
+            capture_stack_health,
+            degraded_capture,
+            degraded_reason: degraded_reason.as_deref(),
+            capture_smoke_detail: capture_smoke_detail.as_deref(),
+            app_smoke_summary: app_smoke_summary.as_deref(),
+            app_smoke_stdout_log: app_smoke_stdout_log.as_deref(),
+            app_smoke_stderr_log: app_smoke_stderr_log.as_deref(),
+        },
     );
     let doctor_summary_path = write_doctor_summary(&args.run_root, &doctor_summary)?;
     ui.info(&format!(
@@ -799,11 +822,18 @@ exit 1
         let summary = super::build_doctor_summary(
             &args,
             &integration,
-            "degraded",
-            "unhealthy",
-            true,
-            Some("capture stack degraded"),
-            Some("/tmp/doctor-run/doctor_app_smoke/summary.json"),
+            &super::DoctorSummaryInputs {
+                status: "degraded",
+                capture_stack_health: "unhealthy",
+                degraded_capture: true,
+                degraded_reason: Some("capture stack degraded"),
+                capture_smoke_detail: Some(
+                    "/tmp/doctor-run/doctor_full_run (status=failed, diagnosis=vhs_capture_timeout)",
+                ),
+                app_smoke_summary: Some("/tmp/doctor-run/doctor_app_smoke/summary.json"),
+                app_smoke_stdout_log: Some("/tmp/doctor-run/doctor_app_smoke/stdout.log"),
+                app_smoke_stderr_log: Some("/tmp/doctor-run/doctor_app_smoke/stderr.log"),
+            },
         );
 
         let path = super::write_doctor_summary(temp.path(), &summary).expect("write summary");
@@ -816,8 +846,20 @@ exit 1
         assert_eq!(parsed["capture_stack_health"], "unhealthy");
         assert_eq!(parsed["allow_degraded"], false);
         assert_eq!(
+            parsed["capture_smoke_detail"],
+            "/tmp/doctor-run/doctor_full_run (status=failed, diagnosis=vhs_capture_timeout)"
+        );
+        assert_eq!(
             parsed["app_smoke_summary"],
             "/tmp/doctor-run/doctor_app_smoke/summary.json"
+        );
+        assert_eq!(
+            parsed["app_smoke_stdout_log"],
+            "/tmp/doctor-run/doctor_app_smoke/stdout.log"
+        );
+        assert_eq!(
+            parsed["app_smoke_stderr_log"],
+            "/tmp/doctor-run/doctor_app_smoke/stderr.log"
         );
         assert_eq!(parsed["integration"]["sqlmodel_mode"], "json");
     }

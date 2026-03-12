@@ -73,6 +73,21 @@ struct SuiteManifest {
     runs: Vec<RunMeta>,
 }
 
+struct SuiteArtifactPaths<'a> {
+    suite_dir: &'a std::path::Path,
+    summary_path: &'a std::path::Path,
+    manifest_path: &'a std::path::Path,
+    report_log_path: &'a std::path::Path,
+    report_json_path: &'a std::path::Path,
+    report_html_path: &'a std::path::Path,
+}
+
+struct SuiteCounts {
+    success_count: usize,
+    failure_count: usize,
+    report_failed: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SuiteOutcome {
     Ok,
@@ -136,28 +151,33 @@ fn suite_outcome_error(outcome: SuiteOutcome) -> Option<DoctorError> {
 fn build_suite_json_summary(
     integration: &OutputIntegration,
     suite_outcome: SuiteOutcome,
-    suite_dir: &std::path::Path,
-    summary_path: &std::path::Path,
-    manifest_path: &std::path::Path,
-    report_log_path: &std::path::Path,
-    report_json_path: &std::path::Path,
-    report_html_path: &std::path::Path,
-    success_count: usize,
-    failure_count: usize,
-    report_failed: bool,
+    paths: &SuiteArtifactPaths<'_>,
+    counts: SuiteCounts,
 ) -> serde_json::Value {
     serde_json::json!({
         "command": "suite",
         "status": suite_status_label(suite_outcome),
-        "suite_dir": suite_dir.display().to_string(),
-        "summary_path": summary_path.display().to_string(),
-        "manifest_path": manifest_path.exists().then(|| manifest_path.display().to_string()),
-        "report_log_path": report_log_path.exists().then(|| report_log_path.display().to_string()),
-        "report_json_path": report_json_path.exists().then(|| report_json_path.display().to_string()),
-        "report_html_path": report_html_path.exists().then(|| report_html_path.display().to_string()),
-        "success_count": success_count,
-        "failure_count": failure_count,
-        "report_failed": report_failed,
+        "suite_dir": paths.suite_dir.display().to_string(),
+        "summary_path": paths.summary_path.display().to_string(),
+        "manifest_path": paths
+            .manifest_path
+            .exists()
+            .then(|| paths.manifest_path.display().to_string()),
+        "report_log_path": paths
+            .report_log_path
+            .exists()
+            .then(|| paths.report_log_path.display().to_string()),
+        "report_json_path": paths
+            .report_json_path
+            .exists()
+            .then(|| paths.report_json_path.display().to_string()),
+        "report_html_path": paths
+            .report_html_path
+            .exists()
+            .then(|| paths.report_html_path.display().to_string()),
+        "success_count": counts.success_count,
+        "failure_count": counts.failure_count,
+        "report_failed": counts.report_failed,
         "integration": integration,
     })
 }
@@ -397,15 +417,19 @@ fn run_suite_with_integration(args: SuiteArgs, integration: &OutputIntegration) 
         let stdout_summary = build_suite_json_summary(
             integration,
             suite_outcome,
-            &suite_dir,
-            &summary_path,
-            &manifest_path,
-            &report_log_path,
-            &report_json_path,
-            &report_html_path,
-            success_count,
-            failure_count,
-            report_failed,
+            &SuiteArtifactPaths {
+                suite_dir: &suite_dir,
+                summary_path: &summary_path,
+                manifest_path: &manifest_path,
+                report_log_path: &report_log_path,
+                report_json_path: &report_json_path,
+                report_html_path: &report_html_path,
+            },
+            SuiteCounts {
+                success_count,
+                failure_count,
+                report_failed,
+            },
         );
         println!("{stdout_summary}");
     }
@@ -821,15 +845,19 @@ mod tests {
         let summary = super::build_suite_json_summary(
             &integration,
             super::SuiteOutcome::ReportFailed,
-            &suite_dir,
-            &summary_path,
-            &manifest_path,
-            &report_log_path,
-            &report_json_path,
-            &report_html_path,
-            2,
-            1,
-            true,
+            &super::SuiteArtifactPaths {
+                suite_dir: &suite_dir,
+                summary_path: &summary_path,
+                manifest_path: &manifest_path,
+                report_log_path: &report_log_path,
+                report_json_path: &report_json_path,
+                report_html_path: &report_html_path,
+            },
+            super::SuiteCounts {
+                success_count: 2,
+                failure_count: 1,
+                report_failed: true,
+            },
         );
 
         assert_eq!(summary["status"], "failed");

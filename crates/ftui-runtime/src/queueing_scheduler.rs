@@ -965,6 +965,12 @@ impl QueueingScheduler {
         stats
     }
 
+    /// Configured queue capacity used for backpressure decisions.
+    #[must_use]
+    pub const fn max_queue_size(&self) -> usize {
+        self.config.max_queue_size
+    }
+
     /// Cancel a job by ID.
     pub fn cancel(&mut self, job_id: u64) -> bool {
         // Check current job
