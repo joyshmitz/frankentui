@@ -49,6 +49,8 @@ telemetry = [
     "dep:tracing-opentelemetry",
     "dep:tracing-subscriber",
 ]
+# Enable Asupersync-backed blocking task execution behind the existing runtime APIs.
+asupersync-executor = ["dep:asupersync"]
 
 [dependencies]
 ftui-backend = { path = "../ftui-backend", version = "0.2.1" }
@@ -64,6 +66,7 @@ tracing = "0.1.41"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.2.2"
 web-time = "1.1.0"
+asupersync = { version = "0.2.7", optional = true }
 
 # Optional telemetry dependencies (feature-gated)
 opentelemetry = { version = "0.31", optional = true }

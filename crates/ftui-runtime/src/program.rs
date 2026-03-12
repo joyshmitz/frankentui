@@ -68,6 +68,8 @@ use crate::subscription::SubscriptionManager;
 use crate::terminal_writer::{RuntimeDiffConfig, ScreenMode, TerminalWriter, UiAnchor};
 use crate::voi_sampling::{VoiConfig, VoiSampler};
 use crate::{BucketKey, ConformalConfig, ConformalPrediction, ConformalPredictor};
+#[cfg(feature = "asupersync-executor")]
+use asupersync::runtime::{BlockingTaskHandle, Runtime as AsupersyncRuntime, RuntimeBuilder};
 use ftui_backend::{BackendEventSource, BackendFeatures};
 use ftui_core::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseButton, MouseEvent, MouseEventKind,
@@ -2012,10 +2014,27 @@ impl Default for WidgetRefreshConfig {
 }
 
 /// Configuration for effect queue scheduling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TaskExecutorBackend {
+    /// Spawn one native thread per task and reap finished handles on the main loop.
+    #[default]
+    Spawned,
+    /// Route tasks through the runtime's queueing scheduler.
+    EffectQueue,
+    /// Route blocking task closures through an Asupersync blocking pool.
+    #[cfg(feature = "asupersync-executor")]
+    Asupersync,
+}
+
 #[derive(Debug, Clone)]
 pub struct EffectQueueConfig {
     /// Whether effect queue scheduling is enabled.
+    ///
+    /// This legacy convenience flag is kept in sync with `backend`. New code
+    /// should prefer `backend` for executor selection.
     pub enabled: bool,
+    /// Which task executor backend to use for `Cmd::Task`.
+    pub backend: TaskExecutorBackend,
     /// Scheduler configuration (Smith's rule by default).
     pub scheduler: SchedulerConfig,
 }
@@ -2033,6 +2052,7 @@ impl Default for EffectQueueConfig {
         };
         Self {
             enabled: false,
+            backend: TaskExecutorBackend::Spawned,
             scheduler,
         }
     }
@@ -2043,6 +2063,19 @@ impl EffectQueueConfig {
     #[must_use]
     pub fn with_enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
+        self.backend = if enabled {
+            TaskExecutorBackend::EffectQueue
+        } else {
+            TaskExecutorBackend::Spawned
+        };
+        self
+    }
+
+    /// Select the task executor backend for `Cmd::Task`.
+    #[must_use]
+    pub fn with_backend(mut self, backend: TaskExecutorBackend) -> Self {
+        self.enabled = matches!(backend, TaskExecutorBackend::EffectQueue);
+        self.backend = backend;
         self
     }
 
@@ -2497,6 +2530,7 @@ impl<M: Send + 'static> Drop for EffectQueue<M> {
 
 struct SpawnTaskExecutor<M: Send + 'static> {
     result_sender: mpsc::Sender<M>,
+    evidence_sink: Option<EvidenceSink>,
     handles: Vec<JoinHandle<()>>,
 }
 
@@ -2504,15 +2538,17 @@ impl<M: Send + 'static> SpawnTaskExecutor<M> {
     const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
     const SHUTDOWN_POLL: Duration = Duration::from_millis(10);
 
-    fn new(result_sender: mpsc::Sender<M>) -> Self {
+    fn new(result_sender: mpsc::Sender<M>, evidence_sink: Option<EvidenceSink>) -> Self {
         Self {
             result_sender,
+            evidence_sink,
             handles: Vec::new(),
         }
     }
 
     fn submit(&mut self, task: Box<dyn FnOnce() -> M + Send>) {
         let sender = self.result_sender.clone();
+        let evidence_sink = self.evidence_sink.clone();
         let handle = thread::spawn(move || {
             let start = Instant::now();
             let msg = task();
@@ -2524,6 +2560,7 @@ impl<M: Send + 'static> SpawnTaskExecutor<M> {
                 effect_duration_us = duration_us,
                 "task effect completed on background thread"
             );
+            emit_task_executor_completion_evidence(evidence_sink.as_ref(), "spawned", duration_us);
             let _ = sender.send(msg);
         });
         self.handles.push(handle);
@@ -2579,9 +2616,98 @@ impl<M: Send + 'static> SpawnTaskExecutor<M> {
     }
 }
 
+#[cfg(feature = "asupersync-executor")]
+struct AsupersyncTaskExecutor<M: Send + 'static> {
+    result_sender: mpsc::Sender<M>,
+    evidence_sink: Option<EvidenceSink>,
+    runtime: AsupersyncRuntime,
+    handles: Vec<BlockingTaskHandle>,
+}
+
+#[cfg(feature = "asupersync-executor")]
+impl<M: Send + 'static> AsupersyncTaskExecutor<M> {
+    const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+
+    fn new(
+        result_sender: mpsc::Sender<M>,
+        evidence_sink: Option<EvidenceSink>,
+    ) -> io::Result<Self> {
+        let max_threads = thread::available_parallelism().map_or(1, |count| count.get().max(1));
+        let runtime = RuntimeBuilder::new()
+            .blocking_threads(1, max_threads)
+            .thread_name_prefix("ftui-asupersync-task")
+            .build()
+            .map_err(|error| {
+                io::Error::other(format!("asupersync runtime init failed: {error}"))
+            })?;
+
+        Ok(Self {
+            result_sender,
+            evidence_sink,
+            runtime,
+            handles: Vec::new(),
+        })
+    }
+
+    fn submit(&mut self, task: Box<dyn FnOnce() -> M + Send>) {
+        let sender = self.result_sender.clone();
+        let evidence_sink = self.evidence_sink.clone();
+        let handle = self
+            .runtime
+            .spawn_blocking(move || {
+                let start = Instant::now();
+                let msg = task();
+                let duration_us = start.elapsed().as_micros() as u64;
+                tracing::debug!(
+                    target: "ftui.effect",
+                    command_type = "task",
+                    executor_backend = "asupersync",
+                    duration_us = duration_us,
+                    effect_duration_us = duration_us,
+                    "task effect completed on Asupersync blocking pool"
+                );
+                emit_task_executor_completion_evidence(
+                    evidence_sink.as_ref(),
+                    "asupersync",
+                    duration_us,
+                );
+                let _ = sender.send(msg);
+            })
+            .expect("asupersync blocking pool must be configured");
+        self.handles.push(handle);
+    }
+
+    fn reap_finished(&mut self) {
+        self.handles.retain(|handle| !handle.is_done());
+    }
+
+    fn shutdown(&mut self) {
+        let deadline = Instant::now() + Self::SHUTDOWN_TIMEOUT;
+        for handle in &self.handles {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() || !handle.wait_timeout(remaining) {
+                tracing::warn!(
+                    timeout_ms = Self::SHUTDOWN_TIMEOUT.as_millis() as u64,
+                    pending_handles = self
+                        .handles
+                        .iter()
+                        .filter(|pending| !pending.is_done())
+                        .count(),
+                    "Asupersync blocking tasks did not stop within timeout; detaching"
+                );
+                self.handles.clear();
+                return;
+            }
+        }
+        self.handles.clear();
+    }
+}
+
 enum TaskExecutor<M: Send + 'static> {
     Spawned(SpawnTaskExecutor<M>),
     Queued(EffectQueue<M>),
+    #[cfg(feature = "asupersync-executor")]
+    Asupersync(AsupersyncTaskExecutor<M>),
 }
 
 impl<M: Send + 'static> TaskExecutor<M> {
@@ -2590,27 +2716,41 @@ impl<M: Send + 'static> TaskExecutor<M> {
         result_sender: mpsc::Sender<M>,
         evidence_sink: Option<EvidenceSink>,
     ) -> io::Result<Self> {
-        if config.enabled {
-            Ok(Self::Queued(EffectQueue::start(
+        let executor = match config.backend {
+            TaskExecutorBackend::Spawned => {
+                Self::Spawned(SpawnTaskExecutor::new(result_sender, evidence_sink.clone()))
+            }
+            TaskExecutorBackend::EffectQueue => Self::Queued(EffectQueue::start(
                 config.clone(),
                 result_sender,
-                evidence_sink,
-            )?))
-        } else {
-            Ok(Self::Spawned(SpawnTaskExecutor::new(result_sender)))
-        }
+                evidence_sink.clone(),
+            )?),
+            #[cfg(feature = "asupersync-executor")]
+            TaskExecutorBackend::Asupersync => Self::Asupersync(AsupersyncTaskExecutor::new(
+                result_sender,
+                evidence_sink.clone(),
+            )?),
+        };
+
+        emit_task_executor_backend_evidence(evidence_sink.as_ref(), executor.kind_name_for_logs());
+        Ok(executor)
     }
 
     fn submit(&mut self, spec: TaskSpec, task: Box<dyn FnOnce() -> M + Send>) {
         match self {
             Self::Spawned(executor) => executor.submit(task),
             Self::Queued(queue) => queue.enqueue(spec, task),
+            #[cfg(feature = "asupersync-executor")]
+            Self::Asupersync(executor) => executor.submit(task),
         }
     }
 
     fn reap_finished(&mut self) {
-        if let Self::Spawned(executor) = self {
-            executor.reap_finished();
+        match self {
+            Self::Spawned(executor) => executor.reap_finished(),
+            #[cfg(feature = "asupersync-executor")]
+            Self::Asupersync(executor) => executor.reap_finished(),
+            Self::Queued(_) => {}
         }
     }
 
@@ -2618,16 +2758,46 @@ impl<M: Send + 'static> TaskExecutor<M> {
         match self {
             Self::Spawned(executor) => executor.shutdown(),
             Self::Queued(queue) => queue.shutdown(),
+            #[cfg(feature = "asupersync-executor")]
+            Self::Asupersync(executor) => executor.shutdown(),
         }
     }
 
     #[cfg(test)]
     fn kind_name(&self) -> &'static str {
+        self.kind_name_for_logs()
+    }
+
+    fn kind_name_for_logs(&self) -> &'static str {
         match self {
             Self::Spawned(_) => "spawned",
             Self::Queued(_) => "queued",
+            #[cfg(feature = "asupersync-executor")]
+            Self::Asupersync(_) => "asupersync",
         }
     }
+}
+
+fn emit_task_executor_backend_evidence(sink: Option<&EvidenceSink>, backend: &str) {
+    let Some(sink) = sink else {
+        return;
+    };
+    let _ = sink.write_jsonl(&format!(
+        r#"{{"event":"task_executor_backend","backend":"{backend}"}}"#
+    ));
+}
+
+fn emit_task_executor_completion_evidence(
+    sink: Option<&EvidenceSink>,
+    backend: &str,
+    duration_us: u64,
+) {
+    let Some(sink) = sink else {
+        return;
+    };
+    let _ = sink.write_jsonl(&format!(
+        r#"{{"event":"task_executor_complete","backend":"{backend}","duration_us":{duration_us}}}"#
+    ));
 }
 
 fn effect_queue_loop<M: Send + 'static>(
@@ -6904,6 +7074,7 @@ mod tests {
     fn effect_queue_config_defaults_are_safe() {
         let config = EffectQueueConfig::default();
         assert!(!config.enabled);
+        assert_eq!(config.backend, TaskExecutorBackend::Spawned);
         assert!(config.scheduler.smith_enabled);
         assert!(!config.scheduler.preemptive);
         assert_eq!(config.scheduler.aging_factor, 0.0);
@@ -6972,6 +7143,7 @@ mod tests {
         let (result_tx, result_rx) = mpsc::channel::<u32>();
         let config = EffectQueueConfig {
             enabled: true,
+            backend: TaskExecutorBackend::EffectQueue,
             scheduler: SchedulerConfig {
                 preemptive: false,
                 ..Default::default()
@@ -8113,13 +8285,18 @@ mod tests {
             kitty_keyboard: config.kitty_keyboard,
         };
         let events = HeadlessEventSource::new(width, height, initial_features);
+        let evidence_sink = EvidenceSink::from_config(&config.evidence_sink)
+            .expect("headless evidence sink config");
 
         let budget = RenderBudget::from_config(&config.budget);
         let conformal_predictor = config.conformal_config.clone().map(ConformalPredictor::new);
         let locale_context = config.locale_context.clone();
         let locale_version = locale_context.version();
-        let resize_coalescer =
+        let mut resize_coalescer =
             ResizeCoalescer::new(config.resize_coalescer.clone(), (width, height));
+        if let Some(ref sink) = evidence_sink {
+            resize_coalescer = resize_coalescer.with_evidence_sink(sink.clone());
+        }
         let subscriptions = SubscriptionManager::new();
         let (task_sender, task_receiver) = std::sync::mpsc::channel();
         let inline_auto_remeasure = config
@@ -8127,8 +8304,12 @@ mod tests {
             .clone()
             .map(InlineAutoRemeasureState::new);
         let guardrails = FrameGuardrails::new(config.guardrails);
-        let task_executor = TaskExecutor::new(&config.effect_queue, task_sender.clone(), None)
-            .expect("task executor");
+        let task_executor = TaskExecutor::new(
+            &config.effect_queue,
+            task_sender.clone(),
+            evidence_sink.clone(),
+        )
+        .expect("task executor");
 
         Program {
             model,
@@ -8158,7 +8339,7 @@ mod tests {
             locale_context,
             locale_version,
             resize_coalescer,
-            evidence_sink: None,
+            evidence_sink,
             fairness_config_logged: false,
             resize_behavior: config.resize_behavior,
             fairness_guard: InputFairnessGuard::new(),
@@ -9167,6 +9348,27 @@ mod tests {
     }
 
     #[test]
+    fn headless_spawned_task_executor_writes_backend_evidence() {
+        let evidence_path = temp_evidence_path("task_executor_spawned_backend");
+        let sink_config = EvidenceSinkConfig::enabled_file(&evidence_path);
+        let config = ProgramConfig::default().with_evidence_sink(sink_config);
+        let _program = headless_program_with_config(TestModel { value: 0 }, config);
+
+        let backend_line = read_evidence_event(&evidence_path, "task_executor_backend");
+        assert_eq!(backend_line["backend"], "spawned");
+    }
+
+    #[cfg(feature = "asupersync-executor")]
+    #[test]
+    fn headless_asupersync_task_executor_is_selected() {
+        let config = ProgramConfig::default().with_effect_queue(
+            EffectQueueConfig::default().with_backend(TaskExecutorBackend::Asupersync),
+        );
+        let program = headless_program_with_config(TestModel { value: 0 }, config);
+        assert_eq!(program.task_executor.kind_name(), "asupersync");
+    }
+
+    #[test]
     fn headless_persistence_commands_with_registry() {
         use crate::state_persistence::{MemoryStorage, StateRegistry};
         use std::sync::Arc;
@@ -9380,6 +9582,7 @@ mod tests {
 
         let effect_queue = EffectQueueConfig {
             enabled: true,
+            backend: TaskExecutorBackend::EffectQueue,
             scheduler: SchedulerConfig {
                 max_queue_size: 0,
                 ..Default::default()
@@ -9404,6 +9607,189 @@ mod tests {
             "effect queue task result did not arrive in time"
         );
         assert_eq!(program.task_executor.kind_name(), "queued");
+    }
+
+    #[test]
+    fn headless_execute_cmd_task_with_spawned_backend_writes_completion_evidence() {
+        struct TaskModel {
+            done: bool,
+        }
+
+        #[derive(Debug)]
+        enum TaskMsg {
+            Done,
+        }
+
+        impl From<Event> for TaskMsg {
+            fn from(_: Event) -> Self {
+                TaskMsg::Done
+            }
+        }
+
+        impl Model for TaskModel {
+            type Message = TaskMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    TaskMsg::Done => {
+                        self.done = true;
+                        Cmd::none()
+                    }
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let evidence_path = temp_evidence_path("task_executor_spawned_complete");
+        let sink_config = EvidenceSinkConfig::enabled_file(&evidence_path);
+        let config = ProgramConfig::default().with_evidence_sink(sink_config);
+        let mut program = headless_program_with_config(TaskModel { done: false }, config);
+
+        program
+            .execute_cmd(Cmd::task(|| TaskMsg::Done))
+            .expect("task cmd");
+
+        let deadline = Instant::now() + Duration::from_millis(200);
+        while !program.model().done && Instant::now() <= deadline {
+            program
+                .process_task_results()
+                .expect("process task results");
+            program.reap_finished_tasks();
+        }
+
+        assert!(
+            program.model().done,
+            "spawned task result did not arrive in time"
+        );
+
+        let completion_line = read_evidence_event(&evidence_path, "task_executor_complete");
+        assert_eq!(completion_line["backend"], "spawned");
+        assert!(completion_line["duration_us"].is_number());
+    }
+
+    #[cfg(feature = "asupersync-executor")]
+    #[test]
+    fn headless_execute_cmd_task_with_asupersync_backend() {
+        struct TaskModel {
+            done: bool,
+        }
+
+        #[derive(Debug)]
+        enum TaskMsg {
+            Done,
+        }
+
+        impl From<Event> for TaskMsg {
+            fn from(_: Event) -> Self {
+                TaskMsg::Done
+            }
+        }
+
+        impl Model for TaskModel {
+            type Message = TaskMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    TaskMsg::Done => {
+                        self.done = true;
+                        Cmd::none()
+                    }
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let config = ProgramConfig::default().with_effect_queue(
+            EffectQueueConfig::default().with_backend(TaskExecutorBackend::Asupersync),
+        );
+        let mut program = headless_program_with_config(TaskModel { done: false }, config);
+
+        program
+            .execute_cmd(Cmd::task(|| TaskMsg::Done))
+            .expect("task cmd");
+
+        let deadline = Instant::now() + Duration::from_millis(200);
+        while !program.model().done && Instant::now() <= deadline {
+            program
+                .process_task_results()
+                .expect("process task results");
+            program.reap_finished_tasks();
+        }
+
+        assert!(
+            program.model().done,
+            "asupersync task result did not arrive in time"
+        );
+        assert_eq!(program.task_executor.kind_name(), "asupersync");
+    }
+
+    #[cfg(feature = "asupersync-executor")]
+    #[test]
+    fn headless_asupersync_task_executor_writes_backend_and_completion_evidence() {
+        struct TaskModel {
+            done: bool,
+        }
+
+        #[derive(Debug)]
+        enum TaskMsg {
+            Done,
+        }
+
+        impl From<Event> for TaskMsg {
+            fn from(_: Event) -> Self {
+                TaskMsg::Done
+            }
+        }
+
+        impl Model for TaskModel {
+            type Message = TaskMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    TaskMsg::Done => {
+                        self.done = true;
+                        Cmd::none()
+                    }
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let evidence_path = temp_evidence_path("task_executor_asupersync_complete");
+        let sink_config = EvidenceSinkConfig::enabled_file(&evidence_path);
+        let config = ProgramConfig::default()
+            .with_evidence_sink(sink_config)
+            .with_effect_queue(
+                EffectQueueConfig::default().with_backend(TaskExecutorBackend::Asupersync),
+            );
+        let mut program = headless_program_with_config(TaskModel { done: false }, config);
+
+        let backend_line = read_evidence_event(&evidence_path, "task_executor_backend");
+        assert_eq!(backend_line["backend"], "asupersync");
+
+        program
+            .execute_cmd(Cmd::task(|| TaskMsg::Done))
+            .expect("task cmd");
+
+        let deadline = Instant::now() + Duration::from_millis(200);
+        while !program.model().done && Instant::now() <= deadline {
+            program
+                .process_task_results()
+                .expect("process task results");
+            program.reap_finished_tasks();
+        }
+
+        assert!(
+            program.model().done,
+            "asupersync task result did not arrive in time"
+        );
+
+        let completion_line = read_evidence_event(&evidence_path, "task_executor_complete");
+        assert_eq!(completion_line["backend"], "asupersync");
+        assert!(completion_line["duration_us"].is_number());
     }
 
     // =========================================================================
@@ -9932,6 +10318,7 @@ mod tests {
     fn effect_queue_config_default() {
         let config = EffectQueueConfig::default();
         assert!(!config.enabled);
+        assert_eq!(config.backend, TaskExecutorBackend::Spawned);
         assert!(config.scheduler.smith_enabled);
         assert!(!config.scheduler.force_fifo);
         assert!(!config.scheduler.preemptive);
@@ -9941,6 +10328,22 @@ mod tests {
     fn effect_queue_config_with_enabled() {
         let config = EffectQueueConfig::default().with_enabled(true);
         assert!(config.enabled);
+        assert_eq!(config.backend, TaskExecutorBackend::EffectQueue);
+    }
+
+    #[test]
+    fn effect_queue_config_with_backend() {
+        let config = EffectQueueConfig::default().with_backend(TaskExecutorBackend::EffectQueue);
+        assert!(config.enabled);
+        assert_eq!(config.backend, TaskExecutorBackend::EffectQueue);
+    }
+
+    #[cfg(feature = "asupersync-executor")]
+    #[test]
+    fn effect_queue_config_with_asupersync_backend_disables_effect_queue_flag() {
+        let config = EffectQueueConfig::default().with_backend(TaskExecutorBackend::Asupersync);
+        assert!(!config.enabled);
+        assert_eq!(config.backend, TaskExecutorBackend::Asupersync);
     }
 
     #[test]
@@ -10482,6 +10885,10 @@ mod tests {
         let eqc = EffectQueueConfig::default().with_enabled(true);
         let config = ProgramConfig::default().with_effect_queue(eqc);
         assert!(config.effect_queue.enabled);
+        assert_eq!(
+            config.effect_queue.backend,
+            TaskExecutorBackend::EffectQueue
+        );
     }
 
     #[test]
