@@ -58,6 +58,7 @@ struct DoctorSummaryInputs<'a> {
     capture_stack_health: &'a str,
     degraded_capture: bool,
     degraded_reason: Option<&'a str>,
+    fallback_error: Option<&'a str>,
     capture_smoke_detail: Option<&'a str>,
     app_smoke_summary: Option<&'a str>,
     app_smoke_stdout_log: Option<&'a str>,
@@ -83,6 +84,7 @@ fn build_doctor_summary(
         "capture_stack_health": inputs.capture_stack_health,
         "degraded_capture": inputs.degraded_capture,
         "degraded_reason": inputs.degraded_reason,
+        "fallback_error": inputs.fallback_error,
         "capture_smoke_detail": inputs.capture_smoke_detail,
         "app_smoke_summary": inputs.app_smoke_summary,
         "app_smoke_stdout_log": inputs.app_smoke_stdout_log,
@@ -471,6 +473,7 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
     let mut app_smoke_summary: Option<String> = None;
     let mut app_smoke_stdout_log: Option<String> = None;
     let mut app_smoke_stderr_log: Option<String> = None;
+    let mut fallback_error: Option<String> = None;
     let mut terminal_error: Option<DoctorError> = None;
 
     ui.rule(Some("script help checks"));
@@ -555,6 +558,7 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
                         .stderr_log
                         .exists()
                         .then(|| smoke_paths.stderr_log.display().to_string());
+                    fallback_error = Some(error.to_string());
                     terminal_error = Some(error);
                     ui.error("app launch smoke fallback failed");
                 }
@@ -578,6 +582,7 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
             capture_stack_health,
             degraded_capture,
             degraded_reason: degraded_reason.as_deref(),
+            fallback_error: fallback_error.as_deref(),
             capture_smoke_detail: capture_smoke_detail.as_deref(),
             app_smoke_summary: app_smoke_summary.as_deref(),
             app_smoke_stdout_log: app_smoke_stdout_log.as_deref(),
@@ -893,6 +898,9 @@ exit 1
                 capture_stack_health: "unhealthy",
                 degraded_capture: true,
                 degraded_reason: Some("capture stack degraded"),
+                fallback_error: Some(
+                    "app launch smoke failed; see logs at /tmp/doctor-run/doctor_app_smoke/stdout.log and /tmp/doctor-run/doctor_app_smoke/stderr.log",
+                ),
                 capture_smoke_detail: Some(
                     "/tmp/doctor-run/doctor_full_run (status=failed, diagnosis=vhs_capture_timeout)",
                 ),
@@ -914,6 +922,10 @@ exit 1
         assert_eq!(
             parsed["capture_smoke_detail"],
             "/tmp/doctor-run/doctor_full_run (status=failed, diagnosis=vhs_capture_timeout)"
+        );
+        assert_eq!(
+            parsed["fallback_error"],
+            "app launch smoke failed; see logs at /tmp/doctor-run/doctor_app_smoke/stdout.log and /tmp/doctor-run/doctor_app_smoke/stderr.log"
         );
         assert_eq!(
             parsed["app_smoke_summary"],
