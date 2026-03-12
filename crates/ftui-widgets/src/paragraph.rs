@@ -3,12 +3,95 @@
 use crate::block::{Alignment, Block};
 use crate::measurable::{MeasurableWidget, SizeConstraints};
 use crate::{Widget, draw_text_span_scrolled, draw_text_span_with_link, set_style_area};
+use ahash::AHashMap;
 use ftui_core::geometry::{Rect, Size};
 use ftui_render::frame::Frame;
 use ftui_style::Style;
 use ftui_text::{Line, Span, Text as FtuiText, WrapMode, display_width, graphemes};
+use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::Arc;
 
 type Text = FtuiText<'static>;
+
+const PARAGRAPH_METRICS_CACHE_CAPACITY: usize = 256;
+const PARAGRAPH_WRAP_CACHE_CAPACITY: usize = 256;
+
+#[derive(Debug, Clone)]
+struct CachedParagraphMetrics {
+    text_width: usize,
+    text_height: usize,
+    min_width: usize,
+    line_widths: Arc<[usize]>,
+}
+
+#[derive(Debug, Clone)]
+struct CachedWrappedParagraph {
+    lines: Arc<[Line<'static>]>,
+    line_widths: Arc<[usize]>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ParagraphWrapCacheKey {
+    text_hash: u64,
+    wrap_mode: WrapMode,
+    width: usize,
+}
+
+#[derive(Debug, Default)]
+struct ParagraphCacheState {
+    metrics: AHashMap<u64, CachedParagraphMetrics>,
+    metrics_fifo: VecDeque<u64>,
+    wrapped: AHashMap<ParagraphWrapCacheKey, CachedWrappedParagraph>,
+    wrapped_fifo: VecDeque<ParagraphWrapCacheKey>,
+}
+
+impl ParagraphCacheState {
+    fn insert_metrics(&mut self, key: u64, value: CachedParagraphMetrics) {
+        cache_insert(
+            &mut self.metrics,
+            &mut self.metrics_fifo,
+            PARAGRAPH_METRICS_CACHE_CAPACITY,
+            key,
+            value,
+        );
+    }
+
+    fn insert_wrapped(&mut self, key: ParagraphWrapCacheKey, value: CachedWrappedParagraph) {
+        cache_insert(
+            &mut self.wrapped,
+            &mut self.wrapped_fifo,
+            PARAGRAPH_WRAP_CACHE_CAPACITY,
+            key,
+            value,
+        );
+    }
+}
+
+thread_local! {
+    static PARAGRAPH_CACHE: RefCell<ParagraphCacheState> = RefCell::new(ParagraphCacheState::default());
+}
+
+fn cache_insert<K, V>(
+    map: &mut AHashMap<K, V>,
+    fifo: &mut VecDeque<K>,
+    capacity: usize,
+    key: K,
+    value: V,
+) where
+    K: Copy + Eq + Hash,
+{
+    if !map.contains_key(&key) {
+        if map.len() >= capacity
+            && let Some(oldest) = fifo.pop_front()
+        {
+            map.remove(&oldest);
+        }
+        fifo.push_back(key);
+    }
+    map.insert(key, value);
+}
 
 fn text_into_owned(text: FtuiText<'_>) -> FtuiText<'static> {
     FtuiText::from_lines(
@@ -26,6 +109,31 @@ pub struct Paragraph<'a> {
     wrap: Option<WrapMode>,
     alignment: Alignment,
     scroll: (u16, u16),
+}
+
+fn hash_value<T: Hash>(value: &T) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn line_min_width(line: &Line<'_>) -> usize {
+    let mut max_word_width = 0;
+    let mut current_word_width = 0;
+
+    for span in line.spans() {
+        for grapheme in graphemes(span.content.as_ref()) {
+            let grapheme_width = display_width(grapheme);
+            if grapheme.chars().all(char::is_whitespace) {
+                max_word_width = max_word_width.max(current_word_width);
+                current_word_width = 0;
+            } else {
+                current_word_width += grapheme_width;
+            }
+        }
+    }
+
+    max_word_width.max(current_word_width)
 }
 
 impl<'a> Paragraph<'a> {
@@ -75,6 +183,92 @@ impl<'a> Paragraph<'a> {
     pub fn scroll(mut self, offset: (u16, u16)) -> Self {
         self.scroll = offset;
         self
+    }
+
+    fn text_hash(&self) -> u64 {
+        hash_value(&self.text)
+    }
+
+    fn cached_metrics(&self) -> CachedParagraphMetrics {
+        let text_hash = self.text_hash();
+        PARAGRAPH_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            if let Some(metrics) = cache.metrics.get(&text_hash) {
+                return metrics.clone();
+            }
+
+            let mut text_width = 0usize;
+            let mut min_width = 0usize;
+            let mut line_widths = Vec::with_capacity(self.text.lines().len());
+
+            for line in self.text.lines() {
+                let width = line.width();
+                text_width = text_width.max(width);
+                min_width = min_width.max(line_min_width(line));
+                line_widths.push(width);
+            }
+
+            let metrics = CachedParagraphMetrics {
+                text_width,
+                text_height: self.text.height(),
+                min_width: if min_width == 0 {
+                    text_width
+                } else {
+                    min_width
+                },
+                line_widths: Arc::from(line_widths),
+            };
+
+            cache.insert_metrics(text_hash, metrics.clone());
+            metrics
+        })
+    }
+
+    fn cached_wrapped_lines(&self, width: usize, wrap_mode: WrapMode) -> CachedWrappedParagraph {
+        let key = ParagraphWrapCacheKey {
+            text_hash: self.text_hash(),
+            wrap_mode,
+            width,
+        };
+
+        PARAGRAPH_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            if let Some(wrapped) = cache.wrapped.get(&key) {
+                return wrapped.clone();
+            }
+
+            let mut lines = Vec::new();
+            let mut line_widths = Vec::new();
+
+            for line in self.text.lines() {
+                let line_width = line.width();
+                if wrap_mode == WrapMode::None || line_width <= width {
+                    lines.push(line.clone());
+                    line_widths.push(line_width);
+                    continue;
+                }
+
+                let wrapped_lines = line.wrap(width, wrap_mode);
+                if wrapped_lines.is_empty() {
+                    lines.push(Line::new());
+                    line_widths.push(0);
+                    continue;
+                }
+
+                for wrapped_line in wrapped_lines {
+                    line_widths.push(wrapped_line.width());
+                    lines.push(wrapped_line);
+                }
+            }
+
+            let wrapped = CachedWrappedParagraph {
+                lines: Arc::from(lines),
+                line_widths: Arc::from(line_widths),
+            };
+
+            cache.insert_wrapped(key, wrapped.clone());
+            wrapped
+        })
     }
 }
 
@@ -140,10 +334,7 @@ impl Widget for Paragraph<'_> {
         let mut current_visual_line = 0;
         let scroll_offset = self.scroll.0 as usize;
 
-        let mut render_line = |line: &ftui_text::Line, y: u16| {
-            // Render spans with proper Unicode widths
-            let line_width: usize = line.width();
-
+        let mut render_line = |line: &ftui_text::Line, line_width: usize, y: u16| {
             let scroll_x = self.scroll.1;
             let start_x = align_x(text_area, line_width, self.alignment);
 
@@ -224,55 +415,46 @@ impl Widget for Paragraph<'_> {
             }
         };
 
-        for line in self.text.lines() {
-            if y >= text_area.bottom() {
-                break;
-            }
+        let metrics = self.cached_metrics();
+        let rendered_lines: Option<CachedWrappedParagraph> = self
+            .wrap
+            .map(|wrap_mode| self.cached_wrapped_lines(text_area.width as usize, wrap_mode));
 
-            // If wrapping is enabled and line is wider than area, wrap it
-            if let Some(wrap_mode) = self.wrap {
-                let line_width = line.width();
-                if line_width > text_area.width as usize {
-                    let wrapped = line.wrap(text_area.width as usize, wrap_mode);
-                    for wrapped_line in &wrapped {
-                        if current_visual_line < scroll_offset {
-                            current_visual_line += 1;
-                            continue;
-                        }
-
-                        if y >= text_area.bottom() {
-                            break;
-                        }
-
-                        render_line(wrapped_line, y);
-                        y += 1;
-                        current_visual_line += 1;
-                    }
+        if let Some(wrapped) = rendered_lines {
+            for (line, line_width) in wrapped.lines.iter().zip(wrapped.line_widths.iter()) {
+                if current_visual_line < scroll_offset {
+                    current_visual_line += 1;
                     continue;
                 }
-            }
-
-            // Non-wrapped line (or fits in width)
-            if current_visual_line < scroll_offset {
+                if y >= text_area.bottom() {
+                    break;
+                }
+                render_line(line, *line_width, y);
+                y = y.saturating_add(1);
                 current_visual_line += 1;
-                continue;
             }
-
-            render_line(line, y);
-            y = y.saturating_add(1);
-            current_visual_line += 1;
+        } else {
+            for (line, line_width) in self.text.lines().iter().zip(metrics.line_widths.iter()) {
+                if current_visual_line < scroll_offset {
+                    current_visual_line += 1;
+                    continue;
+                }
+                if y >= text_area.bottom() {
+                    break;
+                }
+                render_line(line, *line_width, y);
+                y = y.saturating_add(1);
+                current_visual_line += 1;
+            }
         }
     }
 }
 impl MeasurableWidget for Paragraph<'_> {
     fn measure(&self, available: Size) -> SizeConstraints {
-        // Calculate text measurements
-        let text_width = self.text.width();
-        let text_height = self.text.height();
-
-        // Find the minimum width (longest word or longest non-breakable segment)
-        // This requires iterating through the text to find word boundaries
-        let min_width = self.calculate_min_width();
+        let metrics = self.cached_metrics();
+        let text_width = metrics.text_width;
+        let text_height = metrics.text_height;
+        let min_width = metrics.min_width;
 
         // Get block chrome if present
         let (chrome_width, chrome_height) = self
@@ -290,8 +472,10 @@ impl MeasurableWidget for Paragraph<'_> {
                 1
             };
 
-            // Estimate wrapped height by calculating how text would wrap
-            let wrapped_height = self.estimate_wrapped_height(wrap_width);
+            let wrapped_height = self
+                .wrap
+                .map(|wrap_mode| self.cached_wrapped_lines(wrap_width, wrap_mode).lines.len())
+                .unwrap_or(text_height);
 
             // Preferred width is min(text_width, available_width - chrome)
             let pref_w = text_width.min(wrap_width);
@@ -327,49 +511,21 @@ impl MeasurableWidget for Paragraph<'_> {
 }
 
 impl Paragraph<'_> {
-    /// Calculate the minimum width needed (longest word).
+    #[cfg_attr(not(test), allow(dead_code))]
     fn calculate_min_width(&self) -> usize {
-        let mut max_word_width = 0;
-
-        for line in self.text.lines() {
-            let plain = line.to_plain_text();
-            // Split on whitespace to find words
-            for word in plain.split_whitespace() {
-                let word_width = display_width(word);
-                max_word_width = max_word_width.max(word_width);
-            }
-        }
-
-        // If there are no words, use the full text width
-        if max_word_width == 0 {
-            return self.text.width();
-        }
-
-        max_word_width
+        self.cached_metrics().min_width
     }
 
-    /// Estimate the height when text is wrapped at the given width.
+    #[cfg_attr(not(test), allow(dead_code))]
     fn estimate_wrapped_height(&self, wrap_width: usize) -> usize {
         if wrap_width == 0 {
-            return self.text.height();
+            return self.cached_metrics().text_height;
         }
 
-        let wrap_mode = self.wrap.unwrap_or(WrapMode::Word);
-        let mut total_lines = 0;
-
-        for line in self.text.lines() {
-            let line_width = line.width();
-            if wrap_mode == WrapMode::None || line_width <= wrap_width {
-                total_lines += 1;
-                continue;
-            }
-
-            // Wrap this line and count resulting lines (style-preserving path).
-            let wrapped = line.wrap(wrap_width, wrap_mode);
-            total_lines += wrapped.len().max(1);
-        }
-
-        total_lines.max(1)
+        self.wrap
+            .map(|wrap_mode| self.cached_wrapped_lines(wrap_width, wrap_mode).lines.len())
+            .unwrap_or_else(|| self.cached_metrics().text_height)
+            .max(1)
     }
 }
 
@@ -516,6 +672,28 @@ mod tests {
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(1, 1, &mut pool);
         para.render(area, &mut frame);
+    }
+
+    #[test]
+    fn line_min_width_tracks_words_across_spans() {
+        let line = Line::from_spans([
+            Span::raw("alpha"),
+            Span::styled(" ", Style::new().bold()),
+            Span::raw("beta"),
+            Span::raw("  "),
+            Span::raw("gamma"),
+        ]);
+
+        assert_eq!(line_min_width(&line), 5);
+    }
+
+    #[test]
+    fn measure_wrap_counts_cached_visual_lines() {
+        let para = Paragraph::new(Text::raw("hello world from cache")).wrap(WrapMode::Word);
+        let constraints = para.measure(Size::new(8, 10));
+
+        assert_eq!(constraints.preferred.height, 4);
+        assert_eq!(constraints.min.width, 5);
     }
 
     #[test]
