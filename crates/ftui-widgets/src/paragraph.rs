@@ -464,26 +464,27 @@ impl MeasurableWidget for Paragraph<'_> {
             .unwrap_or((0, 0));
 
         // If wrapping is enabled, calculate wrapped height
-        let (preferred_width, preferred_height) = if self.wrap.is_some() {
-            // When wrapping, preferred width is either the text width or available width
-            let wrap_width = if available.width > chrome_width {
-                (available.width - chrome_width) as usize
+        let (preferred_width, preferred_height) =
+            if self.wrap.is_some_and(|mode| mode != WrapMode::None) {
+                // When wrapping, preferred width is either the text width or available width
+                let wrap_width = if available.width > chrome_width {
+                    (available.width - chrome_width) as usize
+                } else {
+                    1
+                };
+
+                let wrapped_height = self
+                    .wrap
+                    .map(|wrap_mode| self.cached_wrapped_lines(wrap_width, wrap_mode).lines.len())
+                    .unwrap_or(text_height);
+
+                // Preferred width is min(text_width, available_width - chrome)
+                let pref_w = text_width.min(wrap_width);
+                (pref_w, wrapped_height)
             } else {
-                1
+                // No wrapping: preferred is natural text dimensions
+                (text_width, text_height)
             };
-
-            let wrapped_height = self
-                .wrap
-                .map(|wrap_mode| self.cached_wrapped_lines(wrap_width, wrap_mode).lines.len())
-                .unwrap_or(text_height);
-
-            // Preferred width is min(text_width, available_width - chrome)
-            let pref_w = text_width.min(wrap_width);
-            (pref_w, wrapped_height)
-        } else {
-            // No wrapping: preferred is natural text dimensions
-            (text_width, text_height)
-        };
 
         // Convert to u16, saturating at MAX
         let min_w = (min_width as u16).saturating_add(chrome_width);
@@ -694,6 +695,15 @@ mod tests {
 
         assert_eq!(constraints.preferred.height, 4);
         assert_eq!(constraints.min.width, 5);
+    }
+
+    #[test]
+    fn measure_wrap_none_preserves_natural_width() {
+        let para = Paragraph::new(Text::raw("abcdef")).wrap(WrapMode::None);
+        let constraints = para.measure(Size::new(3, 10));
+
+        assert_eq!(constraints.preferred.width, 6);
+        assert_eq!(constraints.preferred.height, 1);
     }
 
     #[test]

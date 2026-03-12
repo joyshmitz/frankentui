@@ -202,6 +202,38 @@ impl PipelineHarness {
     }
 }
 
+fn pipeline_metrics_json(
+    render_mode: RenderMode,
+    sorted_changed_cells: &[u64],
+    sorted_present_us: &[u64],
+    sorted_bytes: &[u64],
+) -> serde_json::Value {
+    if render_mode != RenderMode::Pipeline {
+        return serde_json::Value::Null;
+    }
+
+    serde_json::json!({
+        "changed_cells_per_frame": {
+            "p50": percentile(sorted_changed_cells, 0.50),
+            "p95": percentile(sorted_changed_cells, 0.95),
+            "p99": percentile(sorted_changed_cells, 0.99),
+            "max": sorted_changed_cells.last().copied().unwrap_or(0)
+        },
+        "present_us": {
+            "p50": percentile(sorted_present_us, 0.50),
+            "p95": percentile(sorted_present_us, 0.95),
+            "p99": percentile(sorted_present_us, 0.99),
+            "max": sorted_present_us.last().copied().unwrap_or(0)
+        },
+        "bytes_emitted": {
+            "p50": percentile(sorted_bytes, 0.50),
+            "p95": percentile(sorted_bytes, 0.95),
+            "p99": percentile(sorted_bytes, 0.99),
+            "max": sorted_bytes.last().copied().unwrap_or(0)
+        }
+    })
+}
+
 fn main() {
     let args = parse_args();
 
@@ -367,31 +399,17 @@ fn main() {
                 }
             },
             "arena_peak_bytes": arena_peak_bytes,
-            "pipeline": {
-                "changed_cells_per_frame": {
-                    "p50": percentile(&sorted_changed_cells, 0.50),
-                    "p95": percentile(&sorted_changed_cells, 0.95),
-                    "p99": percentile(&sorted_changed_cells, 0.99),
-                    "max": sorted_changed_cells.last().copied().unwrap_or(0)
-                },
-                "present_us": {
-                    "p50": percentile(&sorted_present_us, 0.50),
-                    "p95": percentile(&sorted_present_us, 0.95),
-                    "p99": percentile(&sorted_present_us, 0.99),
-                    "max": sorted_present_us.last().copied().unwrap_or(0)
-                },
-                "bytes_emitted": {
-                    "p50": percentile(&sorted_bytes, 0.50),
-                    "p95": percentile(&sorted_bytes, 0.95),
-                    "p99": percentile(&sorted_bytes, 0.99),
-                    "max": sorted_bytes.last().copied().unwrap_or(0)
-                }
-            }
+            "pipeline": pipeline_metrics_json(
+                args.render_mode,
+                &sorted_changed_cells,
+                &sorted_present_us,
+                &sorted_bytes
+            )
         });
         println!("{summary}");
     } else {
-        eprintln!(
-            "\nDone in {:.2}s ({:.1} renders/sec) | mode={} | frame_us p50={} p95={} p99={} max={} | allocs/frame p50={} p95={} p99={} max={} | bytes/frame p50={} p95={} p99={} max={} | changed_cells/frame p50={} p95={} p99={} max={} | present_us p50={} p95={} p99={} max={} | arena_peak_bytes={}",
+        let mut summary = format!(
+            "\nDone in {:.2}s ({:.1} renders/sec) | mode={} | frame_us p50={} p95={} p99={} max={} | allocs/frame p50={} p95={} p99={} max={} | arena_peak_bytes={}",
             elapsed_secs,
             renders_per_sec,
             args.render_mode.as_str(),
@@ -403,19 +421,25 @@ fn main() {
             alloc_p95,
             alloc_p99,
             alloc_max,
-            percentile(&sorted_bytes, 0.50),
-            percentile(&sorted_bytes, 0.95),
-            percentile(&sorted_bytes, 0.99),
-            sorted_bytes.last().copied().unwrap_or(0),
-            percentile(&sorted_changed_cells, 0.50),
-            percentile(&sorted_changed_cells, 0.95),
-            percentile(&sorted_changed_cells, 0.99),
-            sorted_changed_cells.last().copied().unwrap_or(0),
-            percentile(&sorted_present_us, 0.50),
-            percentile(&sorted_present_us, 0.95),
-            percentile(&sorted_present_us, 0.99),
-            sorted_present_us.last().copied().unwrap_or(0),
             arena_peak_bytes
         );
+        if args.render_mode == RenderMode::Pipeline {
+            summary.push_str(&format!(
+                " | bytes/frame p50={} p95={} p99={} max={} | changed_cells/frame p50={} p95={} p99={} max={} | present_us p50={} p95={} p99={} max={}",
+                percentile(&sorted_bytes, 0.50),
+                percentile(&sorted_bytes, 0.95),
+                percentile(&sorted_bytes, 0.99),
+                sorted_bytes.last().copied().unwrap_or(0),
+                percentile(&sorted_changed_cells, 0.50),
+                percentile(&sorted_changed_cells, 0.95),
+                percentile(&sorted_changed_cells, 0.99),
+                sorted_changed_cells.last().copied().unwrap_or(0),
+                percentile(&sorted_present_us, 0.50),
+                percentile(&sorted_present_us, 0.95),
+                percentile(&sorted_present_us, 0.99),
+                sorted_present_us.last().copied().unwrap_or(0),
+            ));
+        }
+        eprintln!("{summary}");
     }
 }
