@@ -174,10 +174,15 @@ impl Predictive {
         // Apply load decay to down-weight historical data.
         let factor = load_decay_factor.clamp(0.0, 1.0);
         if factor < 1.0 {
+            let total_before = strategy.predictor.counter().total();
             strategy.predictor.counter_mut().decay(factor);
+            let total_after = strategy.predictor.counter().total();
+            if (total_after - total_before).abs() > f64::EPSILON {
+                strategy.dirty = true;
+            }
             info!(
                 load_decay_factor = factor,
-                remaining_total = %strategy.predictor.counter().total(),
+                remaining_total = %total_after,
                 "tick_strategy.load_decay_applied"
             );
         }
@@ -327,18 +332,26 @@ impl TickStrategy for Predictive {
         // Periodic decay.
         if self.ticks_since_decay >= self.decay_interval {
             let entries_before = self.predictor.counter().state_ids().len();
+            let total_before = self.predictor.counter().total();
             self.predictor.counter_mut().decay(self.decay_factor);
             let entries_after = self.predictor.counter().state_ids().len();
+            let total_after = self.predictor.counter().total();
             debug!(
                 factor = self.decay_factor,
                 entries_before,
                 entries_after,
+                total_before = %total_before,
+                total_after = %total_after,
                 pruned = entries_before.saturating_sub(entries_after),
                 "tick_strategy.decay"
             );
             self.ticks_since_decay = 0;
             // Invalidate cache since probabilities changed.
             self.cached_for_screen = None;
+            if entries_after != entries_before || (total_after - total_before).abs() > f64::EPSILON
+            {
+                self.dirty = true;
+            }
         }
 
         // Periodic auto-save.
@@ -819,8 +832,9 @@ mod tests {
                 decay_interval: 9999,
                 ..PredictiveStrategyConfig::default()
             };
-            // Point at a non-existent directory.
-            let bad_path = std::path::PathBuf::from("/nonexistent/dir/transitions.json");
+            let dir = tempfile::tempdir().unwrap();
+            // Point at a child of a directory that does not exist.
+            let bad_path = dir.path().join("missing-parent").join("transitions.json");
             let mut s = Predictive::with_persistence(config, &bad_path, 1.0);
 
             s.on_screen_transition("a", "b");
@@ -832,6 +846,80 @@ mod tests {
 
             // dirty remains true because save failed.
             assert!(s.is_dirty());
+        }
+
+        #[test]
+        fn maintenance_decay_marks_strategy_dirty_and_persists_on_shutdown() {
+            use crate::tick_strategy::persistence::load_transitions;
+
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("decayed-on-shutdown.json");
+
+            let config = PredictiveStrategyConfig {
+                auto_save_interval: 99999,
+                min_observations: 5,
+                decay_interval: 1,
+                decay_factor: 0.5,
+                ..PredictiveStrategyConfig::default()
+            };
+            let mut s = Predictive::with_persistence(config, &path, 1.0);
+
+            for _ in 0..20 {
+                s.on_screen_transition("a", "b");
+            }
+            s.shutdown();
+            assert!(
+                !s.is_dirty(),
+                "initial shutdown should flush transition data"
+            );
+
+            s.maintenance_tick(0);
+            assert!(
+                s.is_dirty(),
+                "maintenance decay mutates persisted state and must mark it dirty"
+            );
+
+            s.shutdown();
+            let loaded = load_transitions(&path).unwrap();
+            assert!(
+                (loaded.total() - 10.0).abs() < 1e-9,
+                "expected decayed total to persist after shutdown, got {}",
+                loaded.total()
+            );
+        }
+
+        #[test]
+        fn load_decay_marks_strategy_dirty_until_persisted() {
+            use crate::tick_strategy::persistence::{load_transitions, save_transitions};
+
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("load-decay.json");
+
+            let mut counter = TransitionCounter::new();
+            for _ in 0..12 {
+                counter.record("a".to_owned(), "b".to_owned());
+            }
+            save_transitions(&counter, &path).unwrap();
+
+            let config = PredictiveStrategyConfig {
+                auto_save_interval: 99999,
+                min_observations: 5,
+                decay_interval: 9999,
+                ..PredictiveStrategyConfig::default()
+            };
+            let mut s = Predictive::with_persistence(config, &path, 0.5);
+            assert!(
+                s.is_dirty(),
+                "load-time decay changes the in-memory counter and should be persisted"
+            );
+
+            s.shutdown();
+            let loaded = load_transitions(&path).unwrap();
+            assert!(
+                (loaded.total() - 6.0).abs() < 1e-9,
+                "expected shutdown to persist the decayed total, got {}",
+                loaded.total()
+            );
         }
     }
 }

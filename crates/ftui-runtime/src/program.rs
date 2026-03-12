@@ -2887,6 +2887,10 @@ fn effect_queue_loop<M: Send + 'static>(
         }
 
         while let Ok(cmd) = rx.try_recv() {
+            if shutdown_requested && matches!(cmd, EffectCommand::Enqueue(_, _)) {
+                trace!("dropping queued task submitted after shutdown request");
+                continue;
+            }
             if matches!(
                 handle_effect_command(
                     cmd,
@@ -7392,6 +7396,54 @@ mod tests {
         handle
             .join()
             .expect("effect queue thread survives task panic");
+    }
+
+    #[test]
+    fn effect_queue_loop_rejects_tasks_submitted_after_shutdown_request() {
+        let (cmd_tx, cmd_rx) = mpsc::channel::<EffectCommand<u32>>();
+        let (result_tx, result_rx) = mpsc::channel::<u32>();
+        let config = EffectQueueConfig {
+            enabled: true,
+            backend: TaskExecutorBackend::EffectQueue,
+            scheduler: SchedulerConfig {
+                preemptive: false,
+                ..Default::default()
+            },
+        };
+
+        let handle = std::thread::spawn(move || {
+            effect_queue_loop(config, cmd_rx, result_tx, None);
+        });
+
+        cmd_tx
+            .send(EffectCommand::Enqueue(
+                TaskSpec::default().with_name("slow"),
+                Box::new(|| {
+                    std::thread::sleep(Duration::from_millis(20));
+                    10
+                }),
+            ))
+            .unwrap();
+        cmd_tx.send(EffectCommand::Shutdown).unwrap();
+        cmd_tx
+            .send(EffectCommand::Enqueue(
+                TaskSpec::new(1.0, 1.0).with_name("late"),
+                Box::new(|| 99),
+            ))
+            .unwrap();
+
+        assert_eq!(
+            result_rx.recv_timeout(Duration::from_millis(500)).unwrap(),
+            10
+        );
+        assert!(
+            result_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            "post-shutdown enqueue should not execute"
+        );
+
+        handle
+            .join()
+            .expect("effect queue thread joins after rejecting post-shutdown work");
     }
 
     #[test]
