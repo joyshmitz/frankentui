@@ -73,6 +73,14 @@ rustc-ice-*.txt
 # Beads history snapshots (JSONL export is tracked, history is local)
 .beads/.br_history/
 
+# Beads ephemeral DB artifacts (bad snapshots, rebuilds, recovery)
+.beads/.br_recovery/
+.beads/beads.db.bad_*
+.beads/beads.db-shm.bad_*
+.beads/beads.db-wal.bad_*
+.beads/beads.db.rebuild_*
+.beads/recovery_*/
+
 # Ephemeral debug/test output files (agent artifacts)
 row_skip_dy*
 --graph-format.svg
