@@ -133,6 +133,35 @@ fn suite_outcome_error(outcome: SuiteOutcome) -> Option<DoctorError> {
     }
 }
 
+fn build_suite_json_summary(
+    integration: &OutputIntegration,
+    suite_outcome: SuiteOutcome,
+    suite_dir: &std::path::Path,
+    summary_path: &std::path::Path,
+    manifest_path: &std::path::Path,
+    report_log_path: &std::path::Path,
+    report_json_path: &std::path::Path,
+    report_html_path: &std::path::Path,
+    success_count: usize,
+    failure_count: usize,
+    report_failed: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "command": "suite",
+        "status": suite_status_label(suite_outcome),
+        "suite_dir": suite_dir.display().to_string(),
+        "summary_path": summary_path.display().to_string(),
+        "manifest_path": manifest_path.exists().then(|| manifest_path.display().to_string()),
+        "report_log_path": report_log_path.exists().then(|| report_log_path.display().to_string()),
+        "report_json_path": report_json_path.exists().then(|| report_json_path.display().to_string()),
+        "report_html_path": report_html_path.exists().then(|| report_html_path.display().to_string()),
+        "success_count": success_count,
+        "failure_count": failure_count,
+        "report_failed": report_failed,
+        "integration": integration,
+    })
+}
+
 pub fn run_suite(args: SuiteArgs) -> Result<()> {
     let integration = OutputIntegration::detect();
     run_suite_with_integration(args, &integration)
@@ -365,18 +394,20 @@ fn run_suite_with_integration(args: SuiteArgs, integration: &OutputIntegration) 
     let suite_outcome = resolve_suite_outcome(failure_count, report_failed);
 
     if integration.should_emit_json() {
-        println!(
-            "{}",
-            serde_json::json!({
-                "command": "suite",
-                "status": suite_status_label(suite_outcome),
-                "suite_dir": suite_dir.display().to_string(),
-                "success_count": success_count,
-                "failure_count": failure_count,
-                "report_failed": report_failed,
-                "integration": integration,
-            })
+        let stdout_summary = build_suite_json_summary(
+            integration,
+            suite_outcome,
+            &suite_dir,
+            &summary_path,
+            &manifest_path,
+            &report_log_path,
+            &report_json_path,
+            &report_html_path,
+            success_count,
+            failure_count,
+            report_failed,
         );
+        println!("{stdout_summary}");
     }
 
     if let Some(error) = suite_outcome_error(suite_outcome) {
@@ -762,5 +793,62 @@ mod tests {
             sqlmodel_agent: false,
         };
         let _ = super::run_suite_with_integration(args, &integration);
+    }
+
+    #[test]
+    fn build_suite_json_summary_includes_generated_artifact_paths() {
+        let temp = tempdir().expect("tempdir");
+        let suite_dir = temp.path().join("suite");
+        fs::create_dir_all(&suite_dir).expect("suite dir");
+        let summary_path = suite_dir.join("suite_summary.txt");
+        let manifest_path = suite_dir.join("suite_manifest.json");
+        let report_log_path = suite_dir.join("suite_report.log");
+        let report_json_path = suite_dir.join("report.json");
+        let report_html_path = suite_dir.join("index.html");
+        fs::write(&summary_path, "summary").expect("write summary");
+        fs::write(&manifest_path, "{}").expect("write manifest");
+        fs::write(&report_json_path, "{}").expect("write report json");
+        fs::write(&report_html_path, "<html></html>").expect("write report html");
+
+        let integration = OutputIntegration {
+            fastapi_mode: "plain".to_string(),
+            fastapi_agent: false,
+            fastapi_ci: false,
+            fastapi_tty: false,
+            sqlmodel_mode: "json".to_string(),
+            sqlmodel_agent: false,
+        };
+        let summary = super::build_suite_json_summary(
+            &integration,
+            super::SuiteOutcome::ReportFailed,
+            &suite_dir,
+            &summary_path,
+            &manifest_path,
+            &report_log_path,
+            &report_json_path,
+            &report_html_path,
+            2,
+            1,
+            true,
+        );
+
+        assert_eq!(summary["status"], "failed");
+        assert_eq!(summary["summary_path"], summary_path.display().to_string());
+        assert_eq!(
+            summary["manifest_path"],
+            manifest_path.display().to_string()
+        );
+        assert!(summary["report_log_path"].is_null());
+        assert_eq!(
+            summary["report_json_path"],
+            report_json_path.display().to_string()
+        );
+        assert_eq!(
+            summary["report_html_path"],
+            report_html_path.display().to_string()
+        );
+        assert_eq!(summary["success_count"], 2);
+        assert_eq!(summary["failure_count"], 1);
+        assert_eq!(summary["report_failed"], true);
     }
 }
