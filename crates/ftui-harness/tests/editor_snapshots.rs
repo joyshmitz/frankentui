@@ -458,7 +458,7 @@ fn property_selection_in_bounds() {
     // Selection should cover entire text
     // anchor at start, head at end
     assert_eq!(sel.anchor.grapheme, 0);
-    assert_eq!(sel.head.grapheme as usize, char_count);
+    assert_eq!(sel.head.grapheme, char_count);
 }
 
 /// Invariant: cursor never exceeds document bounds
@@ -471,7 +471,7 @@ fn property_cursor_bounds() {
     for _ in 0..100 {
         ta.move_right();
     }
-    assert!(ta.cursor().grapheme as usize <= text_len);
+    assert!(ta.cursor().grapheme <= text_len);
 
     // Try to move before start
     for _ in 0..100 {

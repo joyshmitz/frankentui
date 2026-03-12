@@ -17,7 +17,7 @@
 //! CARGO_TARGET_DIR=/tmp/ftui-test-target cargo test -p ftui-harness --test e2e_conformance_suite
 //! ```
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -114,6 +114,25 @@ fn parse_fixture(value: &serde_json::Value) -> Option<VtFixture> {
     })
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct KnownMismatch {
+    fixture_id: String,
+    cols: u16,
+    rows: u16,
+    input_bytes_hex: String,
+    root_cause: String,
+}
+
+struct FixtureResult<'a> {
+    emulator: &'a str,
+    category: &'a str,
+    fixture: &'a VtFixture,
+    status: &'a str,
+    start: Instant,
+    mismatch: Option<String>,
+    known_mismatch: Option<&'a KnownMismatch>,
+}
+
 // ============================================================================
 // JSONL Evidence
 // ============================================================================
@@ -131,6 +150,10 @@ fn emit_jsonl(events: &[String], path: &Path) {
     }
 }
 
+fn push_event(events: &mut Vec<String>, event: serde_json::Value) {
+    events.push(serde_json::to_string(&event).expect("serialize JSONL event"));
+}
+
 // ============================================================================
 // Conformance Runner
 // ============================================================================
@@ -142,6 +165,7 @@ struct ConformanceRunner {
     known_exceptions: usize,
     failed: usize,
     failures: Vec<String>,
+    known_root_causes: BTreeMap<String, usize>,
 }
 
 impl ConformanceRunner {
@@ -153,6 +177,7 @@ impl ConformanceRunner {
             known_exceptions: 0,
             failed: 0,
             failures: Vec::new(),
+            known_root_causes: BTreeMap::new(),
         }
     }
 
@@ -161,7 +186,7 @@ impl ConformanceRunner {
         emulator: &str,
         category: &str,
         fixture: &VtFixture,
-        known_mismatches: &HashSet<String>,
+        known_mismatches: &HashMap<String, KnownMismatch>,
     ) {
         let start = Instant::now();
 
@@ -172,7 +197,15 @@ impl ConformanceRunner {
         let input = match decode_hex(&fixture.input_bytes_hex) {
             Ok(bytes) => bytes,
             Err(e) => {
-                self.record_result(emulator, category, &fixture.name, "fail", start, Some(e));
+                self.record_result(FixtureResult {
+                    emulator,
+                    category,
+                    fixture,
+                    status: "fail",
+                    start,
+                    mismatch: Some(e),
+                    known_mismatch: None,
+                });
                 return;
             }
         };
@@ -206,60 +239,77 @@ impl ConformanceRunner {
             }
         }
 
-        let is_known = known_mismatches.contains(&fixture.name);
-        let status = match (&mismatch, is_known) {
+        let known_mismatch = known_mismatches.get(&fixture.name);
+        let status = match (&mismatch, known_mismatch) {
             (None, _) => "pass",
-            (Some(_), true) => "known_exception",
-            (Some(_), false) => "fail",
+            (Some(_), Some(_)) => "known_exception",
+            (Some(_), None) => "fail",
         };
 
-        self.record_result(emulator, category, &fixture.name, status, start, mismatch);
+        self.record_result(FixtureResult {
+            emulator,
+            category,
+            fixture,
+            status,
+            start,
+            mismatch,
+            known_mismatch,
+        });
     }
 
-    fn record_result(
-        &mut self,
-        emulator: &str,
-        category: &str,
-        fixture_name: &str,
-        status: &str,
-        start: Instant,
-        mismatch: Option<String>,
-    ) {
+    fn record_result(&mut self, result: FixtureResult<'_>) {
+        let FixtureResult {
+            emulator,
+            category,
+            fixture,
+            status,
+            start,
+            mismatch,
+            known_mismatch,
+        } = result;
         let duration_us = start.elapsed().as_micros() as u64;
         self.timings_us.push(duration_us);
 
         match status {
             "pass" => self.passed += 1,
-            "known_exception" => self.known_exceptions += 1,
+            "known_exception" => {
+                self.known_exceptions += 1;
+                if let Some(known) = known_mismatch {
+                    *self
+                        .known_root_causes
+                        .entry(known.root_cause.clone())
+                        .or_insert(0) += 1;
+                }
+            }
             _ => {
                 self.failed += 1;
                 self.failures.push(format!(
                     "[{}] {}/{}: {}",
                     emulator,
                     category,
-                    fixture_name,
+                    fixture.name,
                     mismatch.as_deref().unwrap_or("unknown")
                 ));
             }
         }
 
-        let mismatch_field = mismatch.as_deref().map_or("null".to_string(), |m| {
-            format!("\"{}\"", m.replace('"', "'"))
-        });
-
-        let json = format!(
-            "{{\"event\":\"vt_conformance\",\"seq\":{},\"emulator\":\"{}\",\
-             \"category\":\"{}\",\"fixture\":\"{}\",\"status\":\"{}\",\
-             \"duration_us\":{},\"mismatch\":{}}}",
-            next_seq(),
-            emulator,
-            category,
-            fixture_name,
-            status,
-            duration_us,
-            mismatch_field
+        push_event(
+            &mut self.events,
+            serde_json::json!({
+                "event": "vt_conformance",
+                "seq": next_seq(),
+                "emulator": emulator,
+                "category": category,
+                "fixture": fixture.name,
+                "status": status,
+                "duration_us": duration_us,
+                "mismatch": mismatch,
+                "fixture_cols": fixture.initial_size[0],
+                "fixture_rows": fixture.initial_size[1],
+                "input_bytes_hex": fixture.input_bytes_hex,
+                "known_root_cause": known_mismatch.map(|entry| entry.root_cause.as_str()),
+            }),
         );
-        self.events.push(json);
     }
 
     fn record_render(
@@ -272,18 +322,18 @@ impl ConformanceRunner {
     ) {
         self.timings_us.push(duration_us);
 
-        let json = format!(
-            "{{\"event\":\"render_conformance\",\"seq\":{},\"emulator\":\"{}\",\
-             \"scenario\":\"{}\",\"checksum\":\"{}\",\"duration_us\":{},\
-             \"deterministic\":{}}}",
-            next_seq(),
-            emulator,
-            scenario,
-            checksum,
-            duration_us,
-            deterministic
+        push_event(
+            &mut self.events,
+            serde_json::json!({
+                "event": "render_conformance",
+                "seq": next_seq(),
+                "emulator": emulator,
+                "scenario": scenario,
+                "checksum": checksum,
+                "duration_us": duration_us,
+                "deterministic": deterministic,
+            }),
         );
-        self.events.push(json);
     }
 
     fn percentile(&self, pct: f64) -> u64 {
@@ -305,21 +355,35 @@ impl ConformanceRunner {
     }
 
     fn summary_json(&self, render_count: usize) -> String {
-        format!(
-            "{{\"event\":\"conformance_summary\",\"total_evaluations\":{},\
-             \"passed\":{},\"known_exceptions\":{},\"failed\":{},\
-             \"pass_rate\":{:.6},\"p50_us\":{},\"p99_us\":{},\"max_us\":{},\
-             \"render_scenarios\":{},\"emulators\":5}}",
-            self.passed + self.known_exceptions + self.failed,
-            self.passed,
-            self.known_exceptions,
-            self.failed,
-            self.pass_rate(),
-            self.percentile(50.0),
-            self.percentile(99.0),
-            self.percentile(100.0),
-            render_count
-        )
+        serde_json::json!({
+            "event": "conformance_summary",
+            "total_evaluations": self.passed + self.known_exceptions + self.failed,
+            "passed": self.passed,
+            "known_exceptions": self.known_exceptions,
+            "failed": self.failed,
+            "pass_rate": self.pass_rate(),
+            "p50_us": self.percentile(50.0),
+            "p99_us": self.percentile(99.0),
+            "max_us": self.percentile(100.0),
+            "render_scenarios": render_count,
+            "emulators": 5,
+            "known_root_causes": self.known_root_causes,
+        })
+        .to_string()
+    }
+
+    fn xterm_shared_fixture_differential_summary_json(&self) -> String {
+        serde_json::json!({
+            "event": "xterm_shared_fixture_differential_summary",
+            "emulator": "xterm-256color",
+            "total_fixtures": self.passed + self.known_exceptions + self.failed,
+            "passed": self.passed,
+            "known_exceptions": self.known_exceptions,
+            "failed": self.failed,
+            "pass_rate": self.pass_rate(),
+            "known_root_causes": self.known_root_causes,
+        })
+        .to_string()
     }
 }
 
@@ -331,20 +395,35 @@ fn fixture_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/vt-conformance")
 }
 
-fn load_known_mismatches() -> HashSet<String> {
+fn parse_known_mismatch_line(line: &str) -> Option<KnownMismatch> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+    let mut parts = trimmed.splitn(5, '|');
+    let fixture_id = parts.next()?.trim().to_string();
+    let cols = parts.next()?.trim().parse().ok()?;
+    let rows = parts.next()?.trim().parse().ok()?;
+    let input_bytes_hex = parts.next()?.trim().to_string();
+    let root_cause = parts.next()?.trim().to_string();
+    Some(KnownMismatch {
+        fixture_id,
+        cols,
+        rows,
+        input_bytes_hex,
+        root_cause,
+    })
+}
+
+fn load_known_mismatches() -> HashMap<String, KnownMismatch> {
     let path = fixture_root().join("differential/known_mismatches.tsv");
     let Ok(contents) = std::fs::read_to_string(&path) else {
-        return HashSet::new();
+        return HashMap::new();
     };
     contents
         .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                return None;
-            }
-            trimmed.split('|').next().map(str::to_string)
-        })
+        .filter_map(parse_known_mismatch_line)
+        .map(|entry| (entry.fixture_id.clone(), entry))
         .collect()
 }
 
@@ -729,8 +808,13 @@ fn conformance_report_generated() {
     }
 
     let summary_json = runner.summary_json(scenarios.len());
+    let xterm_diff_summary = runner.xterm_shared_fixture_differential_summary_json();
     let summary_path = std::env::temp_dir().join("e2e_conformance_summary.json");
-    std::fs::write(&summary_path, &summary_json).expect("write summary");
+    std::fs::write(
+        &summary_path,
+        format!("{summary_json}\n{xterm_diff_summary}\n"),
+    )
+    .expect("write summary");
 
     // Validate summary schema.
     let parsed: serde_json::Value =
@@ -743,6 +827,16 @@ fn conformance_report_generated() {
     assert!(parsed["p99_us"].is_u64());
     assert!(parsed["render_scenarios"].is_u64());
     assert!(parsed["emulators"].is_u64());
+    assert!(parsed["known_root_causes"].is_object());
+
+    let xterm_parsed: serde_json::Value =
+        serde_json::from_str(&xterm_diff_summary).expect("parse xterm diff summary");
+    assert_eq!(
+        xterm_parsed["event"],
+        "xterm_shared_fixture_differential_summary"
+    );
+    assert_eq!(xterm_parsed["emulator"], "xterm-256color");
+    assert!(xterm_parsed["known_root_causes"].is_object());
 
     eprintln!("Conformance report: {}", summary_json);
 }
@@ -870,6 +964,23 @@ fn conformance_fixture_schema_valid() {
     }
 }
 
+#[test]
+fn known_mismatch_tsv_line_parses_full_metadata() {
+    let entry = parse_known_mismatch_line(
+        "cup_large_clamp|5|3|1b5b3939393b393939485a|Cursor pending-wrap semantics diverge after large CUP clamp write",
+    )
+    .expect("known mismatch line should parse");
+
+    assert_eq!(entry.fixture_id, "cup_large_clamp");
+    assert_eq!(entry.cols, 5);
+    assert_eq!(entry.rows, 3);
+    assert_eq!(entry.input_bytes_hex, "1b5b3939393b393939485a");
+    assert_eq!(
+        entry.root_cause,
+        "Cursor pending-wrap semantics diverge after large CUP clamp write"
+    );
+}
+
 /// JSONL output schema compliance.
 #[test]
 fn conformance_jsonl_schema_compliance() {
@@ -911,6 +1022,50 @@ fn conformance_jsonl_schema_compliance() {
     }
 
     std::fs::remove_file(&jsonl_path).ok();
+}
+
+#[test]
+fn xterm_shared_fixture_summary_includes_known_root_causes() {
+    let mut runner = ConformanceRunner::new();
+    let known = KnownMismatch {
+        fixture_id: "cup_large_clamp".to_string(),
+        cols: 5,
+        rows: 3,
+        input_bytes_hex: "1b5b3939393b393939485a".to_string(),
+        root_cause: "Cursor pending-wrap semantics diverge after large CUP clamp write".to_string(),
+    };
+    let fixture = VtFixture {
+        name: known.fixture_id.clone(),
+        initial_size: [known.cols, known.rows],
+        input_bytes_hex: known.input_bytes_hex.clone(),
+        expected_cursor: (0, 0),
+        expected_cells: Vec::new(),
+    };
+
+    runner.record_result(FixtureResult {
+        emulator: "xterm-256color",
+        category: "cursor",
+        fixture: &fixture,
+        status: "known_exception",
+        start: Instant::now(),
+        mismatch: Some("cursor mismatch".to_string()),
+        known_mismatch: Some(&known),
+    });
+
+    let summary: serde_json::Value =
+        serde_json::from_str(&runner.xterm_shared_fixture_differential_summary_json())
+            .expect("summary JSON should parse");
+    assert_eq!(
+        summary["event"],
+        "xterm_shared_fixture_differential_summary"
+    );
+    assert_eq!(summary["emulator"], "xterm-256color");
+    assert_eq!(summary["known_exceptions"], 1);
+    assert_eq!(summary["failed"], 0);
+    assert_eq!(
+        summary["known_root_causes"]["Cursor pending-wrap semantics diverge after large CUP clamp write"],
+        1
+    );
 }
 
 /// No panics on extreme terminal sizes.
@@ -1019,9 +1174,11 @@ fn conformance_full_suite_gate() {
 
     // Generate final report.
     let summary_json = runner.summary_json(scenarios.len());
+    let xterm_diff_summary = runner.xterm_shared_fixture_differential_summary_json();
     let jsonl_path = std::env::temp_dir().join("e2e_conformance_gate.jsonl");
     let mut events = runner.events.clone();
     events.push(summary_json.clone());
+    events.push(xterm_diff_summary);
     emit_jsonl(&events, &jsonl_path);
 
     let total_vt = total_fixtures * profiles.len();
