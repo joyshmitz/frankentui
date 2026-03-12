@@ -5160,8 +5160,7 @@ fn render_debug_overlay(
 
     // Render each stat line.
     let content_x = px + 1;
-    let mut cy = py + 1;
-    for (label, value) in &lines {
+    for (cy, (label, value)) in (py + 1..).zip(lines.iter()) {
         let fg = if label.contains('!') {
             OVERLAY_WARN_FG
         } else {
@@ -5175,8 +5174,6 @@ fn render_debug_overlay(
             .with_fg(OVERLAY_VALUE_FG)
             .with_bg(OVERLAY_PANEL_BG);
         buf.print_text_clipped(val_x, cy, value, val_cell, px + panel_w - 1);
-
-        cy += 1;
     }
 
     // Draw faint bounding box outline around the diagram content area.

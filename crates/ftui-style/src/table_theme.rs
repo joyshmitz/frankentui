@@ -790,21 +790,17 @@ fn validate_effect_target(
 ) -> Result<(), TableThemeSpecError> {
     let base = format!("effects[{idx}].target");
     match *target {
-        TableEffectTarget::RowRange { start, end } => {
-            if start > end {
-                return Err(TableThemeSpecError::new(
-                    format!("{base}.row_range"),
-                    "start must be <= end",
-                ));
-            }
+        TableEffectTarget::RowRange { start, end } if start > end => {
+            return Err(TableThemeSpecError::new(
+                format!("{base}.row_range"),
+                "start must be <= end",
+            ));
         }
-        TableEffectTarget::ColumnRange { start, end } => {
-            if start > end {
-                return Err(TableThemeSpecError::new(
-                    format!("{base}.column_range"),
-                    "start must be <= end",
-                ));
-            }
+        TableEffectTarget::ColumnRange { start, end } if start > end => {
+            return Err(TableThemeSpecError::new(
+                format!("{base}.column_range"),
+                "start must be <= end",
+            ));
         }
         _ => {}
     }

@@ -3973,29 +3973,29 @@ pub fn normalize_ast_to_ir(
             Statement::ClassDef { span, .. }
             | Statement::ClassAssign { span, .. }
             | Statement::Style { span, .. }
-            | Statement::LinkStyle { span, .. } => {
-                if !config.enable_styles {
-                    apply_fallback_action(
-                        policy.unsupported_style,
-                        MermaidWarningCode::UnsupportedStyle,
-                        "styles disabled",
-                        *span,
-                        &mut warnings,
-                        &mut errors,
-                    );
-                }
+            | Statement::LinkStyle { span, .. }
+                if !config.enable_styles =>
+            {
+                apply_fallback_action(
+                    policy.unsupported_style,
+                    MermaidWarningCode::UnsupportedStyle,
+                    "styles disabled",
+                    *span,
+                    &mut warnings,
+                    &mut errors,
+                );
             }
-            Statement::Link { span, .. } => {
-                if !config.enable_links || config.link_mode == MermaidLinkMode::Off {
-                    apply_fallback_action(
-                        policy.unsupported_link,
-                        MermaidWarningCode::UnsupportedLink,
-                        "links disabled",
-                        *span,
-                        &mut warnings,
-                        &mut errors,
-                    );
-                }
+            Statement::Link { span, .. }
+                if !config.enable_links || config.link_mode == MermaidLinkMode::Off =>
+            {
+                apply_fallback_action(
+                    policy.unsupported_link,
+                    MermaidWarningCode::UnsupportedLink,
+                    "links disabled",
+                    *span,
+                    &mut warnings,
+                    &mut errors,
+                );
             }
             Statement::Raw { text, span } => {
                 let is_pie_meta = ast.diagram_type == DiagramType::Pie
@@ -4757,28 +4757,28 @@ pub fn normalize_ast_to_ir(
                     insertion_idx: idx,
                 });
             }
-            Statement::BlockDef(block) => {
-                if block.label.is_some() || !block.id.starts_with("__space_") {
-                    let label = block.label.as_deref().unwrap_or(&block.id);
-                    let class = if block.span_cols > 1 {
-                        format!("block_wide_{}", block.span_cols)
-                    } else {
-                        "block_cell".to_string()
-                    };
-                    let nid = upsert_node(
-                        &block.id,
-                        Some(label),
-                        NodeShape::Rect,
-                        block.span,
-                        false,
-                        idx,
-                        &mut node_map,
-                        &mut node_drafts,
-                        &mut implicit_warned,
-                        &mut warnings,
-                    );
-                    node_drafts[nid].classes.push(class);
-                }
+            Statement::BlockDef(block)
+                if block.label.is_some() || !block.id.starts_with("__space_") =>
+            {
+                let label = block.label.as_deref().unwrap_or(&block.id);
+                let class = if block.span_cols > 1 {
+                    format!("block_wide_{}", block.span_cols)
+                } else {
+                    "block_cell".to_string()
+                };
+                let nid = upsert_node(
+                    &block.id,
+                    Some(label),
+                    NodeShape::Rect,
+                    block.span,
+                    false,
+                    idx,
+                    &mut node_map,
+                    &mut node_drafts,
+                    &mut implicit_warned,
+                    &mut warnings,
+                );
+                node_drafts[nid].classes.push(class);
             }
             Statement::BlockColumns { .. }
             | Statement::BlockGroupStart { .. }
@@ -4959,10 +4959,8 @@ pub fn normalize_ast_to_ir(
                 quadrant,
                 label,
                 span,
-            } => {
-                if (1..=4).contains(quadrant) {
-                    quadrant_label_texts[(*quadrant as usize) - 1] = Some((label.clone(), *span));
-                }
+            } if (1..=4).contains(quadrant) => {
+                quadrant_label_texts[(*quadrant as usize) - 1] = Some((label.clone(), *span));
             }
             Statement::PacketField(pf) => {
                 packet_fields_out.push(IrPacketField {
@@ -5091,14 +5089,12 @@ pub fn normalize_ast_to_ir(
                 });
                 cluster_stack.push(cluster_drafts.len() - 1);
             }
-            Statement::SubgraphEnd { span } => {
-                if cluster_stack.pop().is_none() {
-                    warnings.push(MermaidWarning::new(
-                        MermaidWarningCode::UnsupportedFeature,
-                        "subgraph end without start; ignoring",
-                        *span,
-                    ));
-                }
+            Statement::SubgraphEnd { span } if cluster_stack.pop().is_none() => {
+                warnings.push(MermaidWarning::new(
+                    MermaidWarningCode::UnsupportedFeature,
+                    "subgraph end without start; ignoring",
+                    *span,
+                ));
             }
             Statement::ClassDeclaration { name, span } => {
                 let id = normalize_id(name);
@@ -5616,23 +5612,21 @@ pub fn compatibility_report(
             Statement::ClassDef { span, .. }
             | Statement::ClassAssign { span, .. }
             | Statement::Style { span, .. }
-            | Statement::LinkStyle { span, .. } => {
-                if !config.enable_styles {
-                    warnings.push(MermaidWarning::new(
-                        MermaidWarningCode::UnsupportedStyle,
-                        "styles disabled; ignoring",
-                        *span,
-                    ));
-                }
+            | Statement::LinkStyle { span, .. }
+                if !config.enable_styles =>
+            {
+                warnings.push(MermaidWarning::new(
+                    MermaidWarningCode::UnsupportedStyle,
+                    "styles disabled; ignoring",
+                    *span,
+                ));
             }
-            Statement::Link { span, .. } => {
-                if !config.enable_links {
-                    warnings.push(MermaidWarning::new(
-                        MermaidWarningCode::UnsupportedLink,
-                        "links disabled; ignoring",
-                        *span,
-                    ));
-                }
+            Statement::Link { span, .. } if !config.enable_links => {
+                warnings.push(MermaidWarning::new(
+                    MermaidWarningCode::UnsupportedLink,
+                    "links disabled; ignoring",
+                    *span,
+                ));
             }
             Statement::Raw { span, .. } => {
                 warnings.push(MermaidWarning::new(
@@ -7864,29 +7858,29 @@ pub fn validate_ast_with_policy_and_init(
             Statement::ClassDef { span, .. }
             | Statement::ClassAssign { span, .. }
             | Statement::Style { span, .. }
-            | Statement::LinkStyle { span, .. } => {
-                if !config.enable_styles {
-                    apply_fallback_action(
-                        policy.unsupported_style,
-                        MermaidWarningCode::UnsupportedStyle,
-                        "styles disabled",
-                        *span,
-                        &mut warnings,
-                        &mut errors,
-                    );
-                }
+            | Statement::LinkStyle { span, .. }
+                if !config.enable_styles =>
+            {
+                apply_fallback_action(
+                    policy.unsupported_style,
+                    MermaidWarningCode::UnsupportedStyle,
+                    "styles disabled",
+                    *span,
+                    &mut warnings,
+                    &mut errors,
+                );
             }
-            Statement::Link { span, .. } => {
-                if !config.enable_links || config.link_mode == MermaidLinkMode::Off {
-                    apply_fallback_action(
-                        policy.unsupported_link,
-                        MermaidWarningCode::UnsupportedLink,
-                        "links disabled",
-                        *span,
-                        &mut warnings,
-                        &mut errors,
-                    );
-                }
+            Statement::Link { span, .. }
+                if !config.enable_links || config.link_mode == MermaidLinkMode::Off =>
+            {
+                apply_fallback_action(
+                    policy.unsupported_link,
+                    MermaidWarningCode::UnsupportedLink,
+                    "links disabled",
+                    *span,
+                    &mut warnings,
+                    &mut errors,
+                );
             }
             Statement::Raw { text, span } => {
                 let is_pie_meta = ast.diagram_type == DiagramType::Pie

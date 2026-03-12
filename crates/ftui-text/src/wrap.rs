@@ -24,7 +24,7 @@ use std::borrow::Cow;
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Text wrapping mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum WrapMode {
     /// No wrapping - lines may exceed width.
     None,

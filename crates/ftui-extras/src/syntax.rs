@@ -569,13 +569,8 @@ impl GenericTokenizer {
     fn continue_block_comment(&self, line: &str, state_in: LineState) -> (Vec<Token>, LineState) {
         let initial_depth = match state_in {
             LineState::InComment(CommentKind::Nested(d)) => d,
-            LineState::InComment(CommentKind::Block) => {
-                if self.config.nested_comments {
-                    1
-                } else {
-                    0
-                }
-            }
+            LineState::InComment(CommentKind::Block) if self.config.nested_comments => 1,
+            LineState::InComment(CommentKind::Block) => 0,
             _ => 0,
         };
 

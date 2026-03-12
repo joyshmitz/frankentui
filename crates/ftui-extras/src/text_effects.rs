@@ -3596,19 +3596,15 @@ impl StyledText {
                         + (1.0 - min_brightness) * breathing_curve(cycle_t, *asymmetry);
                     alpha_multiplier *= brightness;
                 }
-                TextEffect::Typewriter { visible_chars } => {
-                    if (idx as f64) >= *visible_chars {
-                        return PackedRgba::TRANSPARENT;
-                    }
+                TextEffect::Typewriter { visible_chars } if (idx as f64) >= *visible_chars => {
+                    return PackedRgba::TRANSPARENT;
                 }
                 TextEffect::Reveal {
                     mode,
                     progress,
                     seed,
-                } => {
-                    if !mode.is_visible(idx, total, *progress, *seed, &self.text) {
-                        return PackedRgba::TRANSPARENT;
-                    }
+                } if !mode.is_visible(idx, total, *progress, *seed, &self.text) => {
+                    return PackedRgba::TRANSPARENT;
                 }
                 TextEffect::HorizontalGradient { gradient } => {
                     color = gradient.sample(t_x);
@@ -3652,14 +3648,12 @@ impl StyledText {
                     };
                     color = gradient.sample(normalized);
                 }
-                TextEffect::ColorCycle { colors, speed } => {
-                    if !colors.is_empty() {
-                        let t = (self.time * speed).rem_euclid(colors.len() as f64);
-                        let idx = t as usize % colors.len();
-                        let next = (idx + 1) % colors.len();
-                        let frac = t.fract();
-                        color = lerp_color(colors[idx], colors[next], frac);
-                    }
+                TextEffect::ColorCycle { colors, speed } if !colors.is_empty() => {
+                    let t = (self.time * speed).rem_euclid(colors.len() as f64);
+                    let idx = t as usize % colors.len();
+                    let next = (idx + 1) % colors.len();
+                    let frac = t.fract();
+                    color = lerp_color(colors[idx], colors[next], frac);
                 }
                 TextEffect::ColorWave {
                     color1,
@@ -3977,10 +3971,8 @@ impl StyledText {
                     }
                 }
 
-                TextEffect::Typewriter { visible_chars } => {
-                    if (idx as f64) >= *visible_chars {
-                        return ' ';
-                    }
+                TextEffect::Typewriter { visible_chars } if (idx as f64) >= *visible_chars => {
+                    return ' ';
                 }
 
                 TextEffect::ParticleDissolve {
@@ -9958,14 +9950,12 @@ impl StyledMultiLine {
                     let intensity = ((self.time * speed * TAU).sin() * 0.5 + 0.5) * 0.6;
                     color = lerp_color(color, *glow_color, intensity);
                 }
-                TextEffect::ColorCycle { colors, speed } => {
-                    if !colors.is_empty() {
-                        let t = (self.time * speed).rem_euclid(colors.len() as f64);
-                        let idx = t as usize % colors.len();
-                        let next = (idx + 1) % colors.len();
-                        let frac = t.fract();
-                        color = lerp_color(colors[idx], colors[next], frac);
-                    }
+                TextEffect::ColorCycle { colors, speed } if !colors.is_empty() => {
+                    let t = (self.time * speed).rem_euclid(colors.len() as f64);
+                    let idx = t as usize % colors.len();
+                    let next = (idx + 1) % colors.len();
+                    let frac = t.fract();
+                    color = lerp_color(colors[idx], colors[next], frac);
                 }
                 TextEffect::Scanline {
                     intensity,

@@ -40,7 +40,7 @@ use unicode_segmentation::UnicodeSegmentation;
 ///
 /// Span is a simple wrapper around text and optional style, providing
 /// an ergonomic builder for creating styled text units.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Span<'a> {
     /// The text content.
     pub content: Cow<'a, str>,
@@ -238,14 +238,14 @@ impl Default for Span<'_> {
 /// # Ownership
 /// `Text` supports borrowing via `Cow` in `Span`. Use `Text<'a>` to hold
 /// references, or `Text<'static>` (or just `Text` if aliased) for owned data.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Text<'a> {
     /// The lines of styled spans.
     lines: Vec<Line<'a>>,
 }
 
 /// A single line of styled spans.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Line<'a> {
     spans: Vec<Span<'a>>,
 }

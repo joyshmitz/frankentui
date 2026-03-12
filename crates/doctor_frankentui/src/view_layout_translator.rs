@@ -584,13 +584,11 @@ fn extract_props(node: &ViewNode, widget_type: WidgetType) -> Vec<WidgetProp> {
                 });
             }
         }
-        WidgetType::Paragraph => {
-            if !props.iter().any(|p| p.name == "wrap") {
-                props.push(WidgetProp {
-                    name: "wrap".to_string(),
-                    value: "WrapMode::Word".to_string(),
-                });
-            }
+        WidgetType::Paragraph if !props.iter().any(|p| p.name == "wrap") => {
+            props.push(WidgetProp {
+                name: "wrap".to_string(),
+                value: "WrapMode::Word".to_string(),
+            });
         }
         _ => {}
     }

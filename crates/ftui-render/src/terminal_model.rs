@@ -474,11 +474,9 @@ impl TerminalModel {
     fn handle_c0(&mut self, b: u8) {
         match b {
             0x07 => {} // BEL - ignored
-            0x08 => {
+            0x08 if self.cursor_x > 0 => {
                 // BS - backspace
-                if self.cursor_x > 0 {
-                    self.cursor_x -= 1;
-                }
+                self.cursor_x -= 1;
             }
             0x09 => {
                 // HT - tab (move to next 8-column stop)
@@ -487,11 +485,9 @@ impl TerminalModel {
                     self.cursor_x = self.width - 1;
                 }
             }
-            0x0A => {
+            0x0A if self.cursor_y + 1 < self.height => {
                 // LF - line feed
-                if self.cursor_y + 1 < self.height {
-                    self.cursor_y += 1;
-                }
+                self.cursor_y += 1;
             }
             0x0D => {
                 // CR - carriage return

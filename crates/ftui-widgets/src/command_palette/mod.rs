@@ -695,18 +695,16 @@ impl CommandPalette {
                 }
             }
 
-            KeyCode::Up => {
-                if self.selected > 0 {
-                    self.selected -= 1;
-                    self.adjust_scroll();
-                }
+            KeyCode::Up if self.selected > 0 => {
+                self.selected -= 1;
+                self.adjust_scroll();
             }
 
-            KeyCode::Down => {
-                if !self.filtered.is_empty() && self.selected < self.filtered.len() - 1 {
-                    self.selected += 1;
-                    self.adjust_scroll();
-                }
+            KeyCode::Down
+                if !self.filtered.is_empty() && self.selected < self.filtered.len() - 1 =>
+            {
+                self.selected += 1;
+                self.adjust_scroll();
             }
 
             KeyCode::PageUp => {
@@ -714,11 +712,9 @@ impl CommandPalette {
                 self.adjust_scroll();
             }
 
-            KeyCode::PageDown => {
-                if !self.filtered.is_empty() {
-                    self.selected = (self.selected + self.max_visible).min(self.filtered.len() - 1);
-                    self.adjust_scroll();
-                }
+            KeyCode::PageDown if !self.filtered.is_empty() => {
+                self.selected = (self.selected + self.max_visible).min(self.filtered.len() - 1);
+                self.adjust_scroll();
             }
 
             KeyCode::Home => {
@@ -726,64 +722,54 @@ impl CommandPalette {
                 self.scroll_offset = 0;
             }
 
-            KeyCode::End => {
-                if !self.filtered.is_empty() {
-                    self.selected = self.filtered.len() - 1;
-                    self.adjust_scroll();
-                }
+            KeyCode::End if !self.filtered.is_empty() => {
+                self.selected = self.filtered.len() - 1;
+                self.adjust_scroll();
             }
 
-            KeyCode::Backspace => {
-                if self.cursor > 0 {
-                    // Find the previous char boundary before the cursor and remove that char.
-                    let prev = self.query[..self.cursor]
-                        .char_indices()
-                        .next_back()
-                        .map(|(i, _)| i)
-                        .unwrap_or(0);
-                    self.query.drain(prev..self.cursor);
-                    self.cursor = prev;
-                    self.selected = 0;
-                    self.scroll_offset = 0;
-                    self.update_filtered(true);
-                }
+            KeyCode::Backspace if self.cursor > 0 => {
+                // Find the previous char boundary before the cursor and remove that char.
+                let prev = self.query[..self.cursor]
+                    .char_indices()
+                    .next_back()
+                    .map(|(i, _)| i)
+                    .unwrap_or(0);
+                self.query.drain(prev..self.cursor);
+                self.cursor = prev;
+                self.selected = 0;
+                self.scroll_offset = 0;
+                self.update_filtered(true);
             }
 
-            KeyCode::Delete => {
-                if self.cursor < self.query.len() {
-                    // Find the next char boundary after the cursor and remove that char.
-                    let next = self.query[self.cursor..]
-                        .char_indices()
-                        .nth(1)
-                        .map(|(i, _)| self.cursor + i)
-                        .unwrap_or(self.query.len());
-                    self.query.drain(self.cursor..next);
-                    self.selected = 0;
-                    self.scroll_offset = 0;
-                    self.update_filtered(true);
-                }
+            KeyCode::Delete if self.cursor < self.query.len() => {
+                // Find the next char boundary after the cursor and remove that char.
+                let next = self.query[self.cursor..]
+                    .char_indices()
+                    .nth(1)
+                    .map(|(i, _)| self.cursor + i)
+                    .unwrap_or(self.query.len());
+                self.query.drain(self.cursor..next);
+                self.selected = 0;
+                self.scroll_offset = 0;
+                self.update_filtered(true);
             }
 
-            KeyCode::Left => {
-                if self.cursor > 0 {
-                    // Move cursor to previous char boundary.
-                    self.cursor = self.query[..self.cursor]
-                        .char_indices()
-                        .next_back()
-                        .map(|(i, _)| i)
-                        .unwrap_or(0);
-                }
+            KeyCode::Left if self.cursor > 0 => {
+                // Move cursor to previous char boundary.
+                self.cursor = self.query[..self.cursor]
+                    .char_indices()
+                    .next_back()
+                    .map(|(i, _)| i)
+                    .unwrap_or(0);
             }
 
-            KeyCode::Right => {
-                if self.cursor < self.query.len() {
-                    // Move cursor to next char boundary.
-                    self.cursor = self.query[self.cursor..]
-                        .char_indices()
-                        .nth(1)
-                        .map(|(i, _)| self.cursor + i)
-                        .unwrap_or(self.query.len());
-                }
+            KeyCode::Right if self.cursor < self.query.len() => {
+                // Move cursor to next char boundary.
+                self.cursor = self.query[self.cursor..]
+                    .char_indices()
+                    .nth(1)
+                    .map(|(i, _)| self.cursor + i)
+                    .unwrap_or(self.query.len());
             }
 
             KeyCode::Char(c) => {

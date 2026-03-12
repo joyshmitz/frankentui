@@ -228,11 +228,9 @@ impl TerminalModel {
             0x1b => {
                 self.state = ParserState::Escape;
             }
-            0x0a => {
+            0x0a if self.cursor_y + 1 < self.height => {
                 // LF: move cursor down
-                if self.cursor_y + 1 < self.height {
-                    self.cursor_y += 1;
-                }
+                self.cursor_y += 1;
             }
             0x0d => {
                 // CR: move cursor to column 0
@@ -491,28 +489,24 @@ impl TerminalModel {
                 25 => self.current_style.blink = false,
                 27 => self.current_style.reverse = false,
                 29 => self.current_style.strikethrough = false,
-                38 => {
+                38 if i + 4 < self.csi_params.len() && self.csi_params[i + 1] == 2 => {
                     // Foreground: 38;2;r;g;b
-                    if i + 4 < self.csi_params.len() && self.csi_params[i + 1] == 2 {
-                        self.current_style.fg = Some(Rgb::new(
-                            self.csi_params[i + 2] as u8,
-                            self.csi_params[i + 3] as u8,
-                            self.csi_params[i + 4] as u8,
-                        ));
-                        i += 4;
-                    }
+                    self.current_style.fg = Some(Rgb::new(
+                        self.csi_params[i + 2] as u8,
+                        self.csi_params[i + 3] as u8,
+                        self.csi_params[i + 4] as u8,
+                    ));
+                    i += 4;
                 }
                 39 => self.current_style.fg = None,
-                48 => {
+                48 if i + 4 < self.csi_params.len() && self.csi_params[i + 1] == 2 => {
                     // Background: 48;2;r;g;b
-                    if i + 4 < self.csi_params.len() && self.csi_params[i + 1] == 2 {
-                        self.current_style.bg = Some(Rgb::new(
-                            self.csi_params[i + 2] as u8,
-                            self.csi_params[i + 3] as u8,
-                            self.csi_params[i + 4] as u8,
-                        ));
-                        i += 4;
-                    }
+                    self.current_style.bg = Some(Rgb::new(
+                        self.csi_params[i + 2] as u8,
+                        self.csi_params[i + 3] as u8,
+                        self.csi_params[i + 4] as u8,
+                    ));
+                    i += 4;
                 }
                 49 => self.current_style.bg = None,
                 _ => {}

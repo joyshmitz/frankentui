@@ -720,11 +720,9 @@ impl CapabilityProber {
             2004 => {
                 // Bracketed paste — informational, not tracked as ProbeableCapability.
             }
-            1004 => {
+            1004 if status == 1 || status == 2 || status == 3 || status == 4 => {
                 // Focus events
-                if status == 1 || status == 2 || status == 3 || status == 4 {
-                    self.confirm(ProbeableCapability::FocusEvents);
-                }
+                self.confirm(ProbeableCapability::FocusEvents);
             }
             _ => {}
         }
