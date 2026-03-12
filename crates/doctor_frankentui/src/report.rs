@@ -57,21 +57,40 @@ fn html_escape(value: &str) -> String {
     v_htmlescape::escape(value).to_string()
 }
 
+fn resolve_existing_artifact_path(run_dir: &Path, path_value: &str) -> Option<PathBuf> {
+    let trimmed = path_value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let path = PathBuf::from(trimmed);
+    if path.is_absolute() {
+        return path.exists().then_some(path);
+    }
+
+    let run_relative = run_dir.join(&path);
+    if run_relative.exists() {
+        return Some(run_relative);
+    }
+
+    path.exists().then_some(path)
+}
+
 fn push_optional_artifact_link(
     html: &mut String,
-    suite_dir: &Path,
+    link_base: &Path,
+    run_dir: &Path,
     label: &str,
     path_value: Option<&str>,
 ) {
     let Some(path_value) = path_value.filter(|value| !value.is_empty()) else {
         return;
     };
-    let path = PathBuf::from(path_value);
-    if !path.exists() {
+    let Some(path) = resolve_existing_artifact_path(run_dir, path_value) else {
         return;
-    }
+    };
 
-    let rel = relative_to(suite_dir, &path).unwrap_or(path.clone());
+    let rel = relative_to(link_base, &path).unwrap_or(path.clone());
     html.push_str(&format!(
         "<div class=\"row\"><span class=\"label\">{}</span><a href=\"{}\">{}</a></div>\n",
         html_escape(label),
@@ -80,7 +99,7 @@ fn push_optional_artifact_link(
     ));
 }
 
-fn render_html(summary: &ReportSummary, suite_dir: &Path) -> String {
+fn render_html(summary: &ReportSummary, link_base: &Path) -> String {
     let mut html = String::new();
 
     html.push_str(
@@ -112,14 +131,8 @@ fn render_html(summary: &ReportSummary, suite_dir: &Path) -> String {
             .file_name()
             .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
 
-        let output_path = PathBuf::from(&run.output);
-        let snapshot_path = PathBuf::from(&run.snapshot);
-
-        let output_rel = relative_to(suite_dir, &output_path).unwrap_or(output_path.clone());
-        let snapshot_rel = relative_to(suite_dir, &snapshot_path).unwrap_or(snapshot_path.clone());
-
-        let output_rel_str = output_rel.display().to_string();
-        let snapshot_rel_str = snapshot_rel.display().to_string();
+        let output_path = resolve_existing_artifact_path(&run_path, &run.output);
+        let snapshot_path = resolve_existing_artifact_path(&run_path, &run.snapshot);
 
         html.push_str(&format!("<section class=\"card {}\">\n", class_name));
         html.push_str(&format!(
@@ -172,30 +185,36 @@ fn render_html(summary: &ReportSummary, suite_dir: &Path) -> String {
         }
         push_optional_artifact_link(
             &mut html,
-            suite_dir,
+            link_base,
+            &run_path,
             "evidence_ledger",
             run.evidence_ledger.as_deref(),
         );
         push_optional_artifact_link(
             &mut html,
-            suite_dir,
+            link_base,
+            &run_path,
             "ttyd_shim_log",
             run.ttyd_shim_log.as_deref(),
         );
         push_optional_artifact_link(
             &mut html,
-            suite_dir,
+            link_base,
+            &run_path,
             "ttyd_runtime_log",
             run.ttyd_runtime_log.as_deref(),
         );
         push_optional_artifact_link(
             &mut html,
-            suite_dir,
+            link_base,
+            &run_path,
             "vhs_docker_log",
             run.vhs_docker_log.as_deref(),
         );
 
-        if !run.output.is_empty() && Path::new(&run.output).exists() {
+        if let Some(output_path) = output_path {
+            let output_rel = relative_to(link_base, &output_path).unwrap_or(output_path.clone());
+            let output_rel_str = output_rel.display().to_string();
             html.push_str(&format!(
                 "<div class=\"row\"><a href=\"{}\">video file</a></div>\n",
                 html_escape(&output_rel_str)
@@ -206,7 +225,10 @@ fn render_html(summary: &ReportSummary, suite_dir: &Path) -> String {
             ));
         }
 
-        if !run.snapshot.is_empty() && Path::new(&run.snapshot).exists() {
+        if let Some(snapshot_path) = snapshot_path {
+            let snapshot_rel =
+                relative_to(link_base, &snapshot_path).unwrap_or(snapshot_path.clone());
+            let snapshot_rel_str = snapshot_rel.display().to_string();
             html.push_str(&format!(
                 "<div class=\"row\"><a href=\"{}\">snapshot file</a></div>\n",
                 html_escape(&snapshot_rel_str)
@@ -275,7 +297,8 @@ fn run_report_with_integration(args: ReportArgs, integration: &OutputIntegration
     let json_content = serde_json::to_string_pretty(&summary)?;
     write_string(&output_json, &json_content)?;
 
-    let html = render_html(&summary, &args.suite_dir);
+    let link_base = output_html.parent().unwrap_or(args.suite_dir.as_path());
+    let html = render_html(&summary, link_base);
     write_string(&output_html, &html)?;
 
     ui.success(&format!("report JSON: {}", output_json.display()));
@@ -480,6 +503,54 @@ mod tests {
     }
 
     #[test]
+    fn run_report_uses_output_html_parent_for_relative_links() {
+        let temp = tempdir().expect("tempdir");
+        let suite_dir = temp.path().join("suite");
+        let run_dir = suite_dir.join("run_01");
+        fs::create_dir_all(&run_dir).expect("mkdir");
+
+        let output_path = run_dir.join("capture.mp4");
+        let snapshot_path = run_dir.join("snapshot.png");
+        fs::write(&output_path, b"dummy video").expect("write dummy video");
+        fs::write(&snapshot_path, b"dummy snapshot").expect("write dummy snapshot");
+
+        let run_meta = RunMeta {
+            status: "ok".to_string(),
+            started_at: "2026-02-17T00:00:00Z".to_string(),
+            profile: "analytics-empty".to_string(),
+            output: output_path.display().to_string(),
+            snapshot: snapshot_path.display().to_string(),
+            run_dir: run_dir.display().to_string(),
+            ..RunMeta::default()
+        };
+        run_meta
+            .write_to_path(&run_dir.join("run_meta.json"))
+            .expect("write run meta");
+
+        let report_dir = temp.path().join("reports").join("nested");
+        let output_html = report_dir.join("custom.html");
+        let output_json = report_dir.join("custom.json");
+
+        run_report(ReportArgs {
+            suite_dir: suite_dir.clone(),
+            output_html: Some(output_html.clone()),
+            output_json: Some(output_json),
+            title: "Custom Report".to_string(),
+        })
+        .expect("run report");
+
+        let html = fs::read_to_string(&output_html).expect("read html");
+        assert!(
+            html.contains(r#"href="..&#x2f;..&#x2f;suite&#x2f;run_01&#x2f;capture.mp4""#),
+            "expected video link relative to output html parent, got: {html}"
+        );
+        assert!(
+            html.contains(r#"src="..&#x2f;..&#x2f;suite&#x2f;run_01&#x2f;snapshot.png""#),
+            "expected snapshot link relative to output html parent, got: {html}"
+        );
+    }
+
+    #[test]
     fn run_report_escapes_html_title() {
         let temp = tempdir().expect("tempdir");
         let suite_dir = temp.path().join("suite");
@@ -567,6 +638,93 @@ mod tests {
         assert!(html.contains("evidence_ledger.jsonl"));
         assert!(html.contains("ttyd_runtime_log"));
         assert!(html.contains("ttyd-runtime.log"));
+    }
+
+    #[test]
+    fn run_report_resolves_run_local_relative_artifact_paths() {
+        let temp = tempdir().expect("tempdir");
+        let suite_dir = temp.path().join("suite");
+        let run_dir = suite_dir.join("run_01");
+        fs::create_dir_all(&run_dir).expect("mkdir");
+
+        fs::write(run_dir.join("capture.mp4"), b"dummy video").expect("write video");
+        fs::write(run_dir.join("snapshot.png"), b"dummy snapshot").expect("write snapshot");
+        fs::write(run_dir.join("evidence_ledger.jsonl"), b"{}\n").expect("write ledger");
+        fs::write(run_dir.join("ttyd-runtime.log"), b"log").expect("write runtime log");
+
+        RunMeta {
+            status: "ok".to_string(),
+            started_at: "2026-02-17T00:00:00Z".to_string(),
+            profile: "analytics-empty".to_string(),
+            output: "capture.mp4".to_string(),
+            snapshot: "snapshot.png".to_string(),
+            run_dir: run_dir.display().to_string(),
+            evidence_ledger: Some("evidence_ledger.jsonl".to_string()),
+            ttyd_runtime_log: Some("ttyd-runtime.log".to_string()),
+            ..RunMeta::default()
+        }
+        .write_to_path(&run_dir.join("run_meta.json"))
+        .expect("write run meta");
+
+        run_report(ReportArgs {
+            suite_dir: suite_dir.clone(),
+            output_html: None,
+            output_json: None,
+            title: "Relative Artifact Report".to_string(),
+        })
+        .expect("run report");
+
+        let html = fs::read_to_string(suite_dir.join("index.html")).expect("read html");
+        assert!(html.contains("video file"));
+        assert!(html.contains("snapshot file"));
+        assert!(html.contains("evidence_ledger.jsonl"));
+        assert!(html.contains("ttyd-runtime.log"));
+    }
+
+    #[test]
+    fn run_report_prefers_run_dir_for_relative_artifact_paths_over_cwd_collisions() {
+        let temp = tempdir().expect("tempdir");
+        let suite_dir = temp.path().join("suite");
+        let run_dir = suite_dir.join("run_01");
+        fs::create_dir_all(&run_dir).expect("mkdir");
+
+        fs::write(run_dir.join("capture.mp4"), b"run-local video").expect("write run video");
+
+        RunMeta {
+            status: "ok".to_string(),
+            started_at: "2026-02-17T00:00:00Z".to_string(),
+            profile: "analytics-empty".to_string(),
+            output: "capture.mp4".to_string(),
+            run_dir: run_dir.display().to_string(),
+            ..RunMeta::default()
+        }
+        .write_to_path(&run_dir.join("run_meta.json"))
+        .expect("write run meta");
+
+        let cwd_guard = tempdir().expect("cwd tempdir");
+        let original_cwd = std::env::current_dir().expect("capture cwd");
+        fs::write(cwd_guard.path().join("capture.mp4"), b"cwd collision").expect("write cwd file");
+        std::env::set_current_dir(cwd_guard.path()).expect("set cwd");
+
+        let report_result = run_report(ReportArgs {
+            suite_dir: suite_dir.clone(),
+            output_html: None,
+            output_json: None,
+            title: "CWD Collision Report".to_string(),
+        });
+
+        std::env::set_current_dir(&original_cwd).expect("restore cwd");
+        report_result.expect("run report");
+
+        let html = fs::read_to_string(suite_dir.join("index.html")).expect("read html");
+        assert!(
+            html.contains(r#"href="run_01&#x2f;capture.mp4""#),
+            "expected run-local relative path, got: {html}"
+        );
+        assert!(
+            !html.contains("../capture.mp4"),
+            "report should not resolve against cwd collision: {html}"
+        );
     }
 
     #[test]

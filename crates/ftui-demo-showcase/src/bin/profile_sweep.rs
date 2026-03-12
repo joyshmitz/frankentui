@@ -68,12 +68,18 @@ struct Args {
     json: bool,
 }
 
-fn usage_and_exit(message: &str) -> ! {
-    eprintln!("{message}");
-    eprintln!(
+fn print_usage_to(mut writer: impl std::io::Write) {
+    writeln!(
+        writer,
         "Usage: profile_sweep [--cycles N] [--render-mode view|pipeline] [--arena-mode off|on] [--json]\n\
          Example: profile_sweep --cycles 10 --render-mode pipeline --arena-mode on --json"
-    );
+    )
+    .expect("writing usage should succeed");
+}
+
+fn usage_error_and_exit(message: &str) -> ! {
+    eprintln!("{message}");
+    print_usage_to(std::io::stderr());
     std::process::exit(2);
 }
 
@@ -88,40 +94,43 @@ fn parse_args() -> Args {
         match arg.as_str() {
             "--cycles" => {
                 let Some(value) = it.next() else {
-                    usage_and_exit("Missing value after --cycles");
+                    usage_error_and_exit("Missing value after --cycles");
                 };
                 cycles = value
                     .parse()
-                    .unwrap_or_else(|_| usage_and_exit("Invalid value for --cycles"));
+                    .unwrap_or_else(|_| usage_error_and_exit("Invalid value for --cycles"));
             }
             "--arena-mode" => {
                 let Some(value) = it.next() else {
-                    usage_and_exit("Missing value after --arena-mode");
+                    usage_error_and_exit("Missing value after --arena-mode");
                 };
                 arena_mode = match value.as_str() {
                     "off" => ArenaMode::Off,
                     "on" => ArenaMode::On,
-                    _ => usage_and_exit("Invalid value for --arena-mode (expected off|on)"),
+                    _ => usage_error_and_exit("Invalid value for --arena-mode (expected off|on)"),
                 };
             }
             "--render-mode" => {
                 let Some(value) = it.next() else {
-                    usage_and_exit("Missing value after --render-mode");
+                    usage_error_and_exit("Missing value after --render-mode");
                 };
                 render_mode = match value.as_str() {
                     "view" => RenderMode::View,
                     "pipeline" => RenderMode::Pipeline,
-                    _ => usage_and_exit("Invalid value for --render-mode (expected view|pipeline)"),
+                    _ => usage_error_and_exit(
+                        "Invalid value for --render-mode (expected view|pipeline)",
+                    ),
                 };
             }
             "--json" => {
                 json = true;
             }
             "--help" | "-h" => {
-                usage_and_exit("Profile sweep help");
+                print_usage_to(std::io::stdout());
+                std::process::exit(0);
             }
             other => {
-                usage_and_exit(&format!("Unknown argument: {other}"));
+                usage_error_and_exit(&format!("Unknown argument: {other}"));
             }
         }
     }
