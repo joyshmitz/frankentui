@@ -65,6 +65,11 @@ struct SuiteManifest {
     finished_at: String,
     success_count: usize,
     failure_count: usize,
+    summary_path: String,
+    report_log: Option<String>,
+    report_json: Option<String>,
+    report_html: Option<String>,
+    report_failed: bool,
     runs: Vec<RunMeta>,
 }
 
@@ -289,20 +294,6 @@ fn run_suite_with_integration(args: SuiteArgs, integration: &OutputIntegration) 
         }
     }
 
-    if !runs.is_empty() {
-        let manifest = SuiteManifest {
-            suite_name: suite_name.clone(),
-            suite_dir: suite_dir.display().to_string(),
-            started_at,
-            finished_at,
-            success_count,
-            failure_count,
-            runs,
-        };
-        let content = serde_json::to_string_pretty(&manifest)?;
-        write_string(&suite_dir.join("suite_manifest.json"), &content)?;
-    }
-
     let mut report_failed = false;
     if !args.skip_report {
         let report_result = run_report(ReportArgs {
@@ -318,6 +309,35 @@ fn run_suite_with_integration(args: SuiteArgs, integration: &OutputIntegration) 
             write_string(&report_log, &message)?;
             ui.error(&message);
         }
+    }
+
+    let report_json_path = suite_dir.join("report.json");
+    let report_html_path = suite_dir.join("index.html");
+    let report_log_path = suite_dir.join("suite_report.log");
+
+    if !runs.is_empty() {
+        let manifest = SuiteManifest {
+            suite_name: suite_name.clone(),
+            suite_dir: suite_dir.display().to_string(),
+            started_at,
+            finished_at,
+            success_count,
+            failure_count,
+            summary_path: summary_path.display().to_string(),
+            report_log: report_log_path
+                .exists()
+                .then(|| report_log_path.display().to_string()),
+            report_json: report_json_path
+                .exists()
+                .then(|| report_json_path.display().to_string()),
+            report_html: report_html_path
+                .exists()
+                .then(|| report_html_path.display().to_string()),
+            report_failed,
+            runs,
+        };
+        let content = serde_json::to_string_pretty(&manifest)?;
+        write_string(&suite_dir.join("suite_manifest.json"), &content)?;
     }
 
     if report_failed {
@@ -338,9 +358,8 @@ fn run_suite_with_integration(args: SuiteArgs, integration: &OutputIntegration) 
     if manifest_path.exists() {
         ui.info(&format!("manifest={}", manifest_path.display()));
     }
-    let html_path = suite_dir.join("index.html");
-    if html_path.exists() {
-        ui.info(&format!("report={}", html_path.display()));
+    if report_html_path.exists() {
+        ui.info(&format!("report={}", report_html_path.display()));
     }
 
     let suite_outcome = resolve_suite_outcome(failure_count, report_failed);
@@ -703,6 +722,24 @@ mod tests {
         assert!(suite_dir.join("suite_manifest.json").exists());
         assert!(suite_dir.join("report.json").exists());
         assert!(suite_dir.join("index.html").exists());
+
+        let manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(suite_dir.join("suite_manifest.json")).expect("read manifest"),
+        )
+        .expect("parse manifest");
+        assert_eq!(
+            manifest["summary_path"],
+            suite_dir.join("suite_summary.txt").display().to_string()
+        );
+        assert_eq!(
+            manifest["report_json"],
+            suite_dir.join("report.json").display().to_string()
+        );
+        assert_eq!(
+            manifest["report_html"],
+            suite_dir.join("index.html").display().to_string()
+        );
+        assert_eq!(manifest["report_failed"], false);
     }
 
     #[test]

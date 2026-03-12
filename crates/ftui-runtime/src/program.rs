@@ -2470,6 +2470,12 @@ enum EffectCommand<M> {
     Shutdown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EffectLoopControl {
+    Continue,
+    ShutdownRequested,
+}
+
 struct EffectQueue<M: Send + 'static> {
     sender: mpsc::Sender<EffectCommand<M>>,
     handle: Option<JoinHandle<()>>,
@@ -2808,13 +2814,20 @@ fn effect_queue_loop<M: Send + 'static>(
 ) {
     let mut scheduler = QueueingScheduler::new(config.scheduler);
     let mut tasks: HashMap<u64, Box<dyn FnOnce() -> M + Send>> = HashMap::new();
+    let mut shutdown_requested = false;
 
     loop {
         if tasks.is_empty() {
+            if shutdown_requested {
+                return;
+            }
             match rx.recv() {
                 Ok(cmd) => {
-                    if handle_effect_command(cmd, &mut scheduler, &mut tasks, &result_sender) {
-                        return;
+                    if matches!(
+                        handle_effect_command(cmd, &mut scheduler, &mut tasks, &result_sender),
+                        EffectLoopControl::ShutdownRequested
+                    ) {
+                        shutdown_requested = true;
                     }
                 }
                 Err(_) => return,
@@ -2822,12 +2835,18 @@ fn effect_queue_loop<M: Send + 'static>(
         }
 
         while let Ok(cmd) = rx.try_recv() {
-            if handle_effect_command(cmd, &mut scheduler, &mut tasks, &result_sender) {
-                return;
+            if matches!(
+                handle_effect_command(cmd, &mut scheduler, &mut tasks, &result_sender),
+                EffectLoopControl::ShutdownRequested
+            ) {
+                shutdown_requested = true;
             }
         }
 
         if tasks.is_empty() {
+            if shutdown_requested {
+                return;
+            }
             continue;
         }
 
@@ -2855,7 +2874,7 @@ fn handle_effect_command<M: Send + 'static>(
     scheduler: &mut QueueingScheduler,
     tasks: &mut HashMap<u64, Box<dyn FnOnce() -> M + Send>>,
     result_sender: &mpsc::Sender<M>,
-) -> bool {
+) -> EffectLoopControl {
     match cmd {
         EffectCommand::Enqueue(spec, task) => {
             let weight_source = if spec.weight == DEFAULT_TASK_WEIGHT {
@@ -2881,9 +2900,9 @@ fn handle_effect_command<M: Send + 'static>(
                 let msg = task();
                 let _ = result_sender.send(msg);
             }
-            false
+            EffectLoopControl::Continue
         }
-        EffectCommand::Shutdown => true,
+        EffectCommand::Shutdown => EffectLoopControl::ShutdownRequested,
     }
 }
 
@@ -7098,7 +7117,7 @@ mod tests {
         );
 
         let shutdown = handle_effect_command(cmd, &mut scheduler, &mut tasks, &result_tx);
-        assert!(!shutdown);
+        assert_eq!(shutdown, EffectLoopControl::Continue);
         assert_eq!(ran.load(Ordering::SeqCst), 0);
         assert_eq!(tasks.len(), 1);
         assert!(result_rx.try_recv().is_err());
@@ -7120,7 +7139,7 @@ mod tests {
 
         let shutdown_full =
             handle_effect_command(cmd_full, &mut full_scheduler, &mut full_tasks, &result_tx);
-        assert!(!shutdown_full);
+        assert_eq!(shutdown_full, EffectLoopControl::Continue);
         assert!(full_tasks.is_empty());
         assert_eq!(ran_full.load(Ordering::SeqCst), 1);
         assert_eq!(
@@ -7134,7 +7153,7 @@ mod tests {
             &mut full_tasks,
             &result_tx,
         );
-        assert!(shutdown);
+        assert_eq!(shutdown, EffectLoopControl::ShutdownRequested);
     }
 
     #[test]
@@ -7173,6 +7192,52 @@ mod tests {
 
         cmd_tx.send(EffectCommand::Shutdown).unwrap();
         let _ = handle.join();
+    }
+
+    #[test]
+    fn effect_queue_loop_drains_queued_tasks_after_shutdown_request() {
+        let (cmd_tx, cmd_rx) = mpsc::channel::<EffectCommand<u32>>();
+        let (result_tx, result_rx) = mpsc::channel::<u32>();
+        let config = EffectQueueConfig {
+            enabled: true,
+            backend: TaskExecutorBackend::EffectQueue,
+            scheduler: SchedulerConfig {
+                preemptive: false,
+                ..Default::default()
+            },
+        };
+
+        let handle = std::thread::spawn(move || {
+            effect_queue_loop(config, cmd_rx, result_tx, None);
+        });
+
+        cmd_tx
+            .send(EffectCommand::Enqueue(
+                TaskSpec::default().with_name("slow"),
+                Box::new(|| {
+                    std::thread::sleep(Duration::from_millis(20));
+                    10
+                }),
+            ))
+            .unwrap();
+        cmd_tx
+            .send(EffectCommand::Enqueue(
+                TaskSpec::new(2.0, 5.0).with_name("fast"),
+                Box::new(|| 20),
+            ))
+            .unwrap();
+        cmd_tx.send(EffectCommand::Shutdown).unwrap();
+
+        let mut results = vec![
+            result_rx.recv_timeout(Duration::from_millis(500)).unwrap(),
+            result_rx.recv_timeout(Duration::from_millis(500)).unwrap(),
+        ];
+        results.sort_unstable();
+        assert_eq!(results, vec![10, 20]);
+
+        handle
+            .join()
+            .expect("effect queue thread joins after draining");
     }
 
     #[test]
