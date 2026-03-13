@@ -183,6 +183,26 @@ fn render_html(summary: &ReportSummary, link_base: &Path) -> String {
                 html_escape(fallback_reason)
             ));
         }
+        if let Some(tmux_session) = run
+            .tmux_session
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            html.push_str(&format!(
+                "<div class=\"row\"><span class=\"label\">tmux_session</span>{}</div>\n",
+                html_escape(tmux_session)
+            ));
+        }
+        if let Some(tmux_attach_command) = run
+            .tmux_attach_command
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            html.push_str(&format!(
+                "<div class=\"row\"><span class=\"label\">tmux_attach_command</span><code>{}</code></div>\n",
+                html_escape(tmux_attach_command)
+            ));
+        }
         push_optional_artifact_link(
             &mut html,
             link_base,
@@ -203,6 +223,27 @@ fn render_html(summary: &ReportSummary, link_base: &Path) -> String {
             &run_path,
             "ttyd_runtime_log",
             run.ttyd_runtime_log.as_deref(),
+        );
+        push_optional_artifact_link(
+            &mut html,
+            link_base,
+            &run_path,
+            "tmux_session_file",
+            run.tmux_session_file.as_deref(),
+        );
+        push_optional_artifact_link(
+            &mut html,
+            link_base,
+            &run_path,
+            "tmux_pane_capture",
+            run.tmux_pane_capture.as_deref(),
+        );
+        push_optional_artifact_link(
+            &mut html,
+            link_base,
+            &run_path,
+            "tmux_pane_log",
+            run.tmux_pane_log.as_deref(),
         );
         push_optional_artifact_link(
             &mut html,
@@ -606,8 +647,14 @@ mod tests {
 
         let evidence_ledger = run_dir.join("evidence_ledger.jsonl");
         let ttyd_runtime_log = run_dir.join("ttyd-runtime.log");
+        let tmux_session_file = run_dir.join("tmux_session.txt");
+        let tmux_pane_capture = run_dir.join("tmux_pane.txt");
+        let tmux_pane_log = run_dir.join("tmux_pane.log");
         fs::write(&evidence_ledger, b"{}\n").expect("write ledger");
         fs::write(&ttyd_runtime_log, b"log").expect("write runtime log");
+        fs::write(&tmux_session_file, b"session_name=tmux-demo\n").expect("write tmux session");
+        fs::write(&tmux_pane_capture, b"pane snapshot").expect("write tmux pane capture");
+        fs::write(&tmux_pane_log, b"pane log").expect("write tmux pane log");
 
         RunMeta {
             status: "degraded".to_string(),
@@ -616,6 +663,11 @@ mod tests {
             run_dir: run_dir.display().to_string(),
             trace_id: Some("trace-123".to_string()),
             fallback_reason: Some("capture timed out".to_string()),
+            tmux_session: Some("tmux-demo".to_string()),
+            tmux_attach_command: Some("tmux attach-session -t tmux-demo".to_string()),
+            tmux_session_file: Some(tmux_session_file.display().to_string()),
+            tmux_pane_capture: Some(tmux_pane_capture.display().to_string()),
+            tmux_pane_log: Some(tmux_pane_log.display().to_string()),
             evidence_ledger: Some(evidence_ledger.display().to_string()),
             ttyd_runtime_log: Some(ttyd_runtime_log.display().to_string()),
             ..RunMeta::default()
@@ -634,6 +686,14 @@ mod tests {
         let html = fs::read_to_string(suite_dir.join("index.html")).expect("read html");
         assert!(html.contains("trace-123"));
         assert!(html.contains("capture timed out"));
+        assert!(html.contains("tmux-demo"));
+        assert!(html.contains("tmux attach-session -t tmux-demo"));
+        assert!(html.contains("tmux_session_file"));
+        assert!(html.contains("tmux_session.txt"));
+        assert!(html.contains("tmux_pane_capture"));
+        assert!(html.contains("tmux_pane.txt"));
+        assert!(html.contains("tmux_pane_log"));
+        assert!(html.contains("tmux_pane.log"));
         assert!(html.contains("evidence_ledger"));
         assert!(html.contains("evidence_ledger.jsonl"));
         assert!(html.contains("ttyd_runtime_log"));

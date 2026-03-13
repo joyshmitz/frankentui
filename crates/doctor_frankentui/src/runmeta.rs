@@ -42,6 +42,11 @@ pub struct RunMeta {
     pub capture_error_reason: Option<String>,
     pub ttyd_shim_log: Option<String>,
     pub ttyd_runtime_log: Option<String>,
+    pub tmux_session: Option<String>,
+    pub tmux_attach_command: Option<String>,
+    pub tmux_session_file: Option<String>,
+    pub tmux_pane_capture: Option<String>,
+    pub tmux_pane_log: Option<String>,
     pub vhs_no_sandbox_forced: Option<bool>,
     pub policy_id: Option<String>,
     pub evidence_ledger: Option<String>,
@@ -102,6 +107,8 @@ mod tests {
             binary: "cargo run -q -p ftui-demo-showcase".to_string(),
             output: "/tmp/out.mp4".to_string(),
             run_dir: "/tmp/run".to_string(),
+            tmux_session: Some("capture-demo".to_string()),
+            tmux_attach_command: Some("tmux attach-session -t capture-demo".to_string()),
             fastapi_output_mode: Some("plain".to_string()),
             sqlmodel_output_mode: Some("json".to_string()),
             ..RunMeta::default()
@@ -118,6 +125,8 @@ mod tests {
         assert_eq!(decoded.binary, original.binary);
         assert_eq!(decoded.output, original.output);
         assert_eq!(decoded.run_dir, original.run_dir);
+        assert_eq!(decoded.tmux_session, original.tmux_session);
+        assert_eq!(decoded.tmux_attach_command, original.tmux_attach_command);
         assert_eq!(decoded.fastapi_output_mode, original.fastapi_output_mode);
         assert_eq!(decoded.sqlmodel_output_mode, original.sqlmodel_output_mode);
     }

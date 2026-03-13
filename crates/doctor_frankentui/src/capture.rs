@@ -25,6 +25,13 @@ use crate::util::{
 const POLICY_ID: &str = "doctor_frankentui/v1";
 const VHS_DOCKER_IMAGE: &str = "ghcr.io/charmbracelet/vhs:v0.10.1-devel";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+pub enum ObserveMode {
+    #[default]
+    None,
+    Tmux,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum VhsDriver {
     Auto,
@@ -157,6 +164,15 @@ pub struct CaptureArgs {
     #[arg(long = "vhs-driver", value_enum, default_value_t = VhsDriver::Auto)]
     pub vhs_driver: VhsDriver,
 
+    #[arg(long = "observe", value_enum, default_value_t = ObserveMode::None)]
+    pub observe: ObserveMode,
+
+    #[arg(long = "tmux-session-name")]
+    pub tmux_session_name: Option<String>,
+
+    #[arg(long = "tmux-keep-open")]
+    pub tmux_keep_open: bool,
+
     #[arg(long)]
     pub no_evidence_ledger: bool,
 }
@@ -203,6 +219,9 @@ struct ResolvedCaptureConfig {
     conservative: bool,
     capture_timeout_seconds: u64,
     vhs_driver: VhsDriver,
+    observe: ObserveMode,
+    tmux_session_name: Option<String>,
+    tmux_keep_open: bool,
     evidence_ledger: bool,
 }
 
@@ -249,6 +268,9 @@ impl ResolvedCaptureConfig {
             conservative: false,
             capture_timeout_seconds: 300,
             vhs_driver: VhsDriver::Auto,
+            observe: ObserveMode::None,
+            tmux_session_name: None,
+            tmux_keep_open: false,
             evidence_ledger: true,
         }
     }
@@ -430,9 +452,171 @@ impl ResolvedCaptureConfig {
             self.capture_timeout_seconds = value;
         }
         self.vhs_driver = args.vhs_driver;
+        self.observe = args.observe;
+        self.tmux_session_name = args.tmux_session_name.clone();
+        self.tmux_keep_open = args.tmux_keep_open;
         if args.no_evidence_ledger {
             self.evidence_ledger = false;
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TmuxObserveArtifacts {
+    session_name: String,
+    attach_command: String,
+    session_file: PathBuf,
+    pane_capture: PathBuf,
+    pane_log: PathBuf,
+}
+
+fn tmux_observe_paths(run_dir: &Path) -> TmuxObserveArtifacts {
+    let session_name = format!("capture-{}", now_compact_timestamp());
+    TmuxObserveArtifacts {
+        attach_command: format!("tmux attach-session -t {session_name}"),
+        session_file: run_dir.join("tmux_session.txt"),
+        pane_capture: run_dir.join("tmux_pane.txt"),
+        pane_log: run_dir.join("tmux_pane.log"),
+        session_name,
+    }
+}
+
+fn tmux_target(session_name: &str) -> String {
+    format!("{session_name}:0.0")
+}
+
+fn kill_tmux_session(session_name: &str) {
+    let _ = Command::new("tmux")
+        .args(["kill-session", "-t", session_name])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+fn start_tmux_observer(
+    cfg: &ResolvedCaptureConfig,
+    run_dir: &Path,
+    ui: &CliOutput,
+) -> Result<Option<TmuxObserveArtifacts>> {
+    if cfg.observe != ObserveMode::Tmux {
+        return Ok(None);
+    }
+
+    require_command("tmux")?;
+    if using_legacy_binary(cfg) {
+        return Err(DoctorError::invalid(
+            "--observe tmux is only supported when replay uses --app-command directly",
+        ));
+    }
+
+    let mut artifacts = tmux_observe_paths(run_dir);
+    if let Some(session_name) = cfg.tmux_session_name.clone() {
+        artifacts.session_name = session_name;
+        artifacts.attach_command = format!("tmux attach-session -t {}", artifacts.session_name);
+    }
+
+    let Some(app_command) = cfg
+        .app_command
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(DoctorError::invalid(
+            "--observe tmux requires a non-empty --app-command",
+        ));
+    };
+    let project_dir = cfg.project_dir.display().to_string();
+    let pane_log_path = artifacts.pane_log.display().to_string();
+
+    let status = Command::new("tmux")
+        .args([
+            "new-session",
+            "-d",
+            "-s",
+            &artifacts.session_name,
+            "-c",
+            &project_dir,
+            "bash",
+            "-lc",
+            app_command,
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    if !status.success() {
+        return Err(DoctorError::exit(
+            status.code().unwrap_or(1),
+            format!(
+                "failed to start tmux observer session {}",
+                artifacts.session_name
+            ),
+        ));
+    }
+
+    let pipe_status = Command::new("tmux")
+        .args([
+            "pipe-pane",
+            "-o",
+            "-t",
+            &tmux_target(&artifacts.session_name),
+            &format!("cat >> {}", shell_single_quote(&pane_log_path)),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    if !pipe_status.success() {
+        kill_tmux_session(&artifacts.session_name);
+        return Err(DoctorError::exit(
+            pipe_status.code().unwrap_or(1),
+            format!(
+                "failed to attach tmux observer pipe-pane for {}",
+                artifacts.session_name
+            ),
+        ));
+    }
+
+    write_string(
+        &artifacts.session_file,
+        &format!(
+            "session_name={}\nattach_command={}\n",
+            artifacts.session_name, artifacts.attach_command
+        ),
+    )?;
+    ui.info(&format!(
+        "tmux replay observer active: {}",
+        artifacts.attach_command
+    ));
+
+    Ok(Some(artifacts))
+}
+
+fn finalize_tmux_observer(session: Option<&TmuxObserveArtifacts>, keep_open: bool) {
+    let Some(session) = session else {
+        return;
+    };
+
+    let output = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&session.pane_capture);
+    if let Ok(output) = output {
+        let _ = Command::new("tmux")
+            .args([
+                "capture-pane",
+                "-p",
+                "-t",
+                &tmux_target(&session.session_name),
+                "-S",
+                "-",
+            ])
+            .stdout(Stdio::from(output))
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    if !keep_open {
+        kill_tmux_session(&session.session_name);
     }
 }
 
@@ -1627,7 +1811,7 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
     write_string(&tape_path, &tape)?;
 
     let summary = format!(
-        "doctor_frankentui run\nprofile={}\nprofile_description={}\nstarted_at={}\nruntime_command={}\nproject_dir={}\nhost={}\nport={}\npath={}\nauth_bearer_set={}\nkeys={}\nseed_demo={}\nseed_required={}\nsnapshot_required={}\noutput={}\nsnapshot={}\nrun_dir={}\ntrace_id={}\nconservative_mode={}\ncapture_timeout_seconds={}\nfastapi_output_mode={}\nfastapi_agent_mode={}\nsqlmodel_output_mode={}\nsqlmodel_agent_mode={}\n",
+        "doctor_frankentui run\nprofile={}\nprofile_description={}\nstarted_at={}\nruntime_command={}\nproject_dir={}\nhost={}\nport={}\npath={}\nauth_bearer_set={}\nkeys={}\nseed_demo={}\nseed_required={}\nsnapshot_required={}\noutput={}\nsnapshot={}\nrun_dir={}\ntrace_id={}\nconservative_mode={}\ncapture_timeout_seconds={}\nobserve={}\nfastapi_output_mode={}\nfastapi_agent_mode={}\nsqlmodel_output_mode={}\nsqlmodel_agent_mode={}\n",
         cfg.profile,
         cfg.profile_description,
         start_iso,
@@ -1649,12 +1833,57 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
         trace_id,
         cfg.conservative,
         cfg.capture_timeout_seconds,
+        match cfg.observe {
+            ObserveMode::None => "none",
+            ObserveMode::Tmux => "tmux",
+        },
         integration.fastapi_mode,
         integration.fastapi_agent,
         integration.sqlmodel_mode,
         integration.sqlmodel_agent,
     );
     write_string(&summary_path, &summary)?;
+
+    if cfg.dry_run {
+        append_decision(
+            cfg.evidence_ledger,
+            &evidence_ledger_path,
+            DecisionEvent {
+                trace_id: &trace_id,
+                decision_id: "decision-0001",
+                action: "capture_config_resolved",
+                evidence_terms: vec![
+                    format!("profile={}", cfg.profile),
+                    format!("seed_demo={}", cfg.seed_demo),
+                    format!("snapshot_required={}", cfg.snapshot_required),
+                    format!("conservative={}", cfg.conservative),
+                    "dry_run=true".to_string(),
+                ],
+                fallback_active: cfg.conservative,
+                fallback_reason: cfg
+                    .conservative
+                    .then(|| "conservative mode enabled".to_string()),
+            },
+        )?;
+        ui.success("dry run complete");
+        ui.info(&format!("run_dir: {}", run_dir.display()));
+        ui.info(&format!("tape: {}", tape_path.display()));
+        if integration.should_emit_json() {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "command": "capture",
+                    "status": "dry_run_ok",
+                    "run_dir": run_dir.display().to_string(),
+                    "tape": tape_path.display().to_string(),
+                    "integration": integration,
+                })
+            );
+        }
+        return Ok(());
+    }
+
+    let tmux_observer = start_tmux_observer(&cfg, &run_dir, &ui)?;
 
     append_decision(
         cfg.evidence_ledger,
@@ -1700,6 +1929,21 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
         fallback_reason: cfg
             .conservative
             .then(|| "conservative mode enabled".to_string()),
+        tmux_session: tmux_observer
+            .as_ref()
+            .map(|observer| observer.session_name.clone()),
+        tmux_attach_command: tmux_observer
+            .as_ref()
+            .map(|observer| observer.attach_command.clone()),
+        tmux_session_file: tmux_observer
+            .as_ref()
+            .map(|observer| observer.session_file.display().to_string()),
+        tmux_pane_capture: tmux_observer
+            .as_ref()
+            .map(|observer| observer.pane_capture.display().to_string()),
+        tmux_pane_log: tmux_observer
+            .as_ref()
+            .map(|observer| observer.pane_log.display().to_string()),
         policy_id: Some(POLICY_ID.to_string()),
         evidence_ledger: cfg
             .evidence_ledger
@@ -1711,25 +1955,6 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
         ..RunMeta::default()
     };
     initial_meta.write_to_path(&meta_path)?;
-
-    if cfg.dry_run {
-        ui.success("dry run complete");
-        ui.info(&format!("run_dir: {}", run_dir.display()));
-        ui.info(&format!("tape: {}", tape_path.display()));
-        if integration.should_emit_json() {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "command": "capture",
-                    "status": "dry_run_ok",
-                    "run_dir": run_dir.display().to_string(),
-                    "tape": tape_path.display().to_string(),
-                    "integration": integration,
-                })
-            );
-        }
-        return Ok(());
-    }
 
     let mut seed_thread = None;
     if cfg.seed_demo {
@@ -1810,7 +2035,13 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
     }
 
     ui.info("running VHS capture");
-    let vhs_outcome = run_vhs_with_driver(&cfg, &run_dir, &tape_path, &vhs_log, &ui)?;
+    let vhs_outcome = match run_vhs_with_driver(&cfg, &run_dir, &tape_path, &vhs_log, &ui) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            finalize_tmux_observer(tmux_observer.as_ref(), cfg.tmux_keep_open);
+            return Err(error);
+        }
+    };
     let vhs_exit = vhs_outcome.vhs_exit;
     let host_vhs_exit = vhs_outcome.host_vhs_exit;
     let timed_out = vhs_outcome.timed_out;
@@ -1820,6 +2051,8 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
     let vhs_no_sandbox_forced = vhs_outcome.vhs_no_sandbox_forced;
     let vhs_driver_used = vhs_outcome.vhs_driver_used;
     let vhs_docker_log = vhs_outcome.vhs_docker_log;
+
+    finalize_tmux_observer(tmux_observer.as_ref(), cfg.tmux_keep_open);
 
     let seed_exit = if let Some(handle) = seed_thread {
         match handle.join() {
@@ -1943,6 +2176,16 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
     if let Some(log_path) = &ttyd_runtime_log {
         finalize_evidence_terms.push(format!("ttyd_runtime_log={}", log_path.display()));
     }
+    if let Some(observer) = &tmux_observer {
+        finalize_evidence_terms.push(format!("tmux_session={}", observer.session_name));
+        finalize_evidence_terms.push(format!("tmux_pane_log={}", observer.pane_log.display()));
+        if observer.pane_capture.exists() {
+            finalize_evidence_terms.push(format!(
+                "tmux_pane_capture={}",
+                observer.pane_capture.display()
+            ));
+        }
+    }
     if vhs_no_sandbox_forced {
         finalize_evidence_terms.push("vhs_no_sandbox_forced=1".to_string());
     }
@@ -2006,6 +2249,22 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
         ttyd_runtime_log: ttyd_runtime_log
             .as_ref()
             .map(|path| path.display().to_string()),
+        tmux_session: tmux_observer
+            .as_ref()
+            .map(|observer| observer.session_name.clone()),
+        tmux_attach_command: tmux_observer
+            .as_ref()
+            .map(|observer| observer.attach_command.clone()),
+        tmux_session_file: tmux_observer
+            .as_ref()
+            .map(|observer| observer.session_file.display().to_string()),
+        tmux_pane_capture: tmux_observer
+            .as_ref()
+            .filter(|observer| observer.pane_capture.exists())
+            .map(|observer| observer.pane_capture.display().to_string()),
+        tmux_pane_log: tmux_observer
+            .as_ref()
+            .map(|observer| observer.pane_log.display().to_string()),
         vhs_no_sandbox_forced: Some(vhs_no_sandbox_forced),
         policy_id: Some(POLICY_ID.to_string()),
         evidence_ledger: cfg
@@ -2094,7 +2353,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        CaptureArgs, FinalizationInput, ResolvedCaptureConfig, VhsDriver,
+        CaptureArgs, FinalizationInput, ObserveMode, ResolvedCaptureConfig, VhsDriver,
         resolve_finalization_result,
     };
 
@@ -2141,6 +2400,9 @@ mod tests {
             conservative: false,
             capture_timeout_seconds: None,
             vhs_driver: VhsDriver::Auto,
+            observe: ObserveMode::None,
+            tmux_session_name: None,
+            tmux_keep_open: false,
             no_evidence_ledger: false,
         }
     }
@@ -2202,6 +2464,9 @@ mod tests {
             conservative: false,
             capture_timeout_seconds: None,
             vhs_driver: VhsDriver::Auto,
+            observe: ObserveMode::None,
+            tmux_session_name: None,
+            tmux_keep_open: false,
             no_evidence_ledger: true,
         });
 
@@ -2366,10 +2631,36 @@ mod tests {
             conservative: false,
             capture_timeout_seconds: None,
             vhs_driver: VhsDriver::Auto,
+            observe: ObserveMode::None,
+            tmux_session_name: None,
+            tmux_keep_open: false,
             no_evidence_ledger: false,
         };
 
         assert!(super::run_capture(args).is_ok());
+    }
+
+    #[test]
+    fn dry_run_tmux_observe_does_not_create_tmux_artifacts() {
+        let temp = tempdir().expect("tempdir");
+        let run_root = temp.path().join("runs");
+        let run_name = "dry-run-tmux";
+
+        let mut args = minimal_args();
+        args.run_root = Some(run_root.clone());
+        args.run_name = Some(run_name.to_string());
+        args.observe = ObserveMode::Tmux;
+        args.dry_run = true;
+
+        super::run_capture(args).expect("dry-run capture should succeed");
+
+        let run_dir = run_root.join(run_name);
+        assert!(run_dir.join("capture.tape").exists());
+        assert!(run_dir.join("run_summary.txt").exists());
+        assert!(!run_dir.join("tmux_session.txt").exists());
+        assert!(!run_dir.join("tmux_pane.log").exists());
+        assert!(!run_dir.join("tmux_pane.txt").exists());
+        assert!(!run_dir.join("run_meta.json").exists());
     }
 
     #[test]
@@ -2417,6 +2708,9 @@ mod tests {
             conservative: false,
             capture_timeout_seconds: None,
             vhs_driver: VhsDriver::Auto,
+            observe: ObserveMode::None,
+            tmux_session_name: None,
+            tmux_keep_open: false,
             no_evidence_ledger: false,
         });
 
@@ -2562,6 +2856,9 @@ mod tests {
             conservative: false,
             capture_timeout_seconds: None,
             vhs_driver: VhsDriver::Auto,
+            observe: ObserveMode::None,
+            tmux_session_name: None,
+            tmux_keep_open: false,
             no_evidence_ledger: false,
         });
 
@@ -2617,6 +2914,9 @@ mod tests {
             conservative: false,
             capture_timeout_seconds: None,
             vhs_driver: VhsDriver::Auto,
+            observe: ObserveMode::None,
+            tmux_session_name: None,
+            tmux_keep_open: false,
             no_evidence_ledger: false,
         });
 

@@ -70,6 +70,10 @@ struct SuiteManifest {
     report_json: Option<String>,
     report_html: Option<String>,
     report_failed: bool,
+    trace_ids: Vec<String>,
+    fallback_profiles: Vec<String>,
+    capture_error_profiles: Vec<String>,
+    run_index: Vec<SuiteRunIndexEntry>,
     runs: Vec<RunMeta>,
 }
 
@@ -83,6 +87,29 @@ struct SuiteCounts {
     success_count: usize,
     failure_count: usize,
     report_failed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SuiteRunIndexEntry {
+    profile: String,
+    status: String,
+    run_dir: String,
+    trace_id: Option<String>,
+    fallback_reason: Option<String>,
+    capture_error_reason: Option<String>,
+    evidence_ledger: Option<String>,
+    ttyd_runtime_log: Option<String>,
+    tmux_session: Option<String>,
+    tmux_pane_capture: Option<String>,
+    tmux_pane_log: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct SuiteObservabilitySummary {
+    trace_ids: Vec<String>,
+    fallback_profiles: Vec<String>,
+    capture_error_profiles: Vec<String>,
+    run_index: Vec<SuiteRunIndexEntry>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -158,6 +185,7 @@ fn build_suite_json_summary(
     paths: &SuiteArtifactPaths<'_>,
     report_artifacts: &SuiteReportArtifacts,
     counts: SuiteCounts,
+    observability: &SuiteObservabilitySummary,
 ) -> serde_json::Value {
     serde_json::json!({
         "command": "suite",
@@ -174,8 +202,58 @@ fn build_suite_json_summary(
         "success_count": counts.success_count,
         "failure_count": counts.failure_count,
         "report_failed": counts.report_failed,
+        "trace_ids": observability.trace_ids,
+        "fallback_profiles": observability.fallback_profiles,
+        "capture_error_profiles": observability.capture_error_profiles,
         "integration": integration,
     })
+}
+
+fn build_suite_observability_summary(runs: &[RunMeta]) -> SuiteObservabilitySummary {
+    let mut trace_ids = Vec::new();
+    let mut fallback_profiles = Vec::new();
+    let mut capture_error_profiles = Vec::new();
+    let mut run_index = Vec::with_capacity(runs.len());
+
+    for run in runs {
+        if let Some(trace_id) = run.trace_id.as_ref().filter(|value| !value.is_empty()) {
+            trace_ids.push(trace_id.clone());
+        }
+        if run
+            .fallback_reason
+            .as_ref()
+            .is_some_and(|value| !value.is_empty())
+        {
+            fallback_profiles.push(run.profile.clone());
+        }
+        if run
+            .capture_error_reason
+            .as_ref()
+            .is_some_and(|value| !value.is_empty())
+        {
+            capture_error_profiles.push(run.profile.clone());
+        }
+        run_index.push(SuiteRunIndexEntry {
+            profile: run.profile.clone(),
+            status: run.status.clone(),
+            run_dir: run.run_dir.clone(),
+            trace_id: run.trace_id.clone(),
+            fallback_reason: run.fallback_reason.clone(),
+            capture_error_reason: run.capture_error_reason.clone(),
+            evidence_ledger: run.evidence_ledger.clone(),
+            ttyd_runtime_log: run.ttyd_runtime_log.clone(),
+            tmux_session: run.tmux_session.clone(),
+            tmux_pane_capture: run.tmux_pane_capture.clone(),
+            tmux_pane_log: run.tmux_pane_log.clone(),
+        });
+    }
+
+    SuiteObservabilitySummary {
+        trace_ids,
+        fallback_profiles,
+        capture_error_profiles,
+        run_index,
+    }
 }
 
 pub fn run_suite(args: SuiteArgs) -> Result<()> {
@@ -366,6 +444,7 @@ fn run_suite_with_integration(args: SuiteArgs, integration: &OutputIntegration) 
         report_html: (!args.skip_report && !report_failed && report_html_path.exists())
             .then(|| report_html_path.display().to_string()),
     };
+    let observability = build_suite_observability_summary(&runs);
 
     if !runs.is_empty() {
         let manifest = SuiteManifest {
@@ -380,6 +459,10 @@ fn run_suite_with_integration(args: SuiteArgs, integration: &OutputIntegration) 
             report_json: report_artifacts.report_json.clone(),
             report_html: report_artifacts.report_html.clone(),
             report_failed,
+            trace_ids: observability.trace_ids.clone(),
+            fallback_profiles: observability.fallback_profiles.clone(),
+            capture_error_profiles: observability.capture_error_profiles.clone(),
+            run_index: observability.run_index.clone(),
             runs,
         };
         let content = serde_json::to_string_pretty(&manifest)?;
@@ -425,6 +508,7 @@ fn run_suite_with_integration(args: SuiteArgs, integration: &OutputIntegration) 
                 failure_count,
                 report_failed,
             },
+            &observability,
         );
         println!("{stdout_summary}");
     }
@@ -758,6 +842,10 @@ mod tests {
             profile: profile.to_string(),
             output: run_dir.join("capture.mp4").display().to_string(),
             run_dir: run_dir.display().to_string(),
+            trace_id: Some("trace-manifest".to_string()),
+            fallback_reason: Some("capture degraded".to_string()),
+            capture_error_reason: Some("timeout exceeded".to_string()),
+            evidence_ledger: Some(run_dir.join("evidence_ledger.jsonl").display().to_string()),
             ..crate::runmeta::RunMeta::default()
         }
         .write_to_path(&run_dir.join("run_meta.json"))
@@ -790,6 +878,14 @@ mod tests {
             suite_dir.join("index.html").display().to_string()
         );
         assert_eq!(manifest["report_failed"], false);
+        assert_eq!(manifest["trace_ids"][0], "trace-manifest");
+        assert_eq!(manifest["fallback_profiles"][0], profile);
+        assert_eq!(manifest["capture_error_profiles"][0], profile);
+        assert_eq!(manifest["run_index"][0]["trace_id"], "trace-manifest");
+        assert_eq!(
+            manifest["run_index"][0]["fallback_reason"],
+            "capture degraded"
+        );
     }
 
     #[test]
@@ -854,6 +950,12 @@ mod tests {
                 failure_count: 1,
                 report_failed: true,
             },
+            &super::SuiteObservabilitySummary {
+                trace_ids: vec!["trace-1".to_string(), "trace-2".to_string()],
+                fallback_profiles: vec!["profile-a".to_string()],
+                capture_error_profiles: vec!["profile-b".to_string()],
+                run_index: Vec::new(),
+            },
         );
 
         assert_eq!(summary["status"], "failed");
@@ -874,6 +976,9 @@ mod tests {
         assert_eq!(summary["success_count"], 2);
         assert_eq!(summary["failure_count"], 1);
         assert_eq!(summary["report_failed"], true);
+        assert_eq!(summary["trace_ids"][0], "trace-1");
+        assert_eq!(summary["fallback_profiles"][0], "profile-a");
+        assert_eq!(summary["capture_error_profiles"][0], "profile-b");
     }
 
     #[test]
@@ -914,10 +1019,55 @@ mod tests {
                 failure_count: 0,
                 report_failed: false,
             },
+            &super::SuiteObservabilitySummary {
+                trace_ids: Vec::new(),
+                fallback_profiles: Vec::new(),
+                capture_error_profiles: Vec::new(),
+                run_index: Vec::new(),
+            },
         );
 
         assert!(summary["report_log_path"].is_null());
         assert!(summary["report_json_path"].is_null());
         assert!(summary["report_html_path"].is_null());
+    }
+
+    #[test]
+    fn build_suite_observability_summary_collects_trace_and_failure_metadata() {
+        let summary = super::build_suite_observability_summary(&[
+            crate::runmeta::RunMeta {
+                status: "degraded".to_string(),
+                profile: "profile-a".to_string(),
+                run_dir: "/tmp/run-a".to_string(),
+                trace_id: Some("trace-a".to_string()),
+                fallback_reason: Some("capture degraded".to_string()),
+                evidence_ledger: Some("/tmp/run-a/evidence_ledger.jsonl".to_string()),
+                ..crate::runmeta::RunMeta::default()
+            },
+            crate::runmeta::RunMeta {
+                status: "failed".to_string(),
+                profile: "profile-b".to_string(),
+                run_dir: "/tmp/run-b".to_string(),
+                trace_id: Some("trace-b".to_string()),
+                capture_error_reason: Some("timeout exceeded".to_string()),
+                tmux_session: Some("tmux-b".to_string()),
+                tmux_pane_log: Some("/tmp/run-b/tmux_pane.log".to_string()),
+                ..crate::runmeta::RunMeta::default()
+            },
+        ]);
+
+        assert_eq!(summary.trace_ids, vec!["trace-a", "trace-b"]);
+        assert_eq!(summary.fallback_profiles, vec!["profile-a"]);
+        assert_eq!(summary.capture_error_profiles, vec!["profile-b"]);
+        assert_eq!(summary.run_index.len(), 2);
+        assert_eq!(
+            summary.run_index[0].evidence_ledger.as_deref(),
+            Some("/tmp/run-a/evidence_ledger.jsonl")
+        );
+        assert_eq!(summary.run_index[1].tmux_session.as_deref(), Some("tmux-b"));
+        assert_eq!(
+            summary.run_index[1].tmux_pane_log.as_deref(),
+            Some("/tmp/run-b/tmux_pane.log")
+        );
     }
 }
