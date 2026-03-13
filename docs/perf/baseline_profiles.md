@@ -161,10 +161,13 @@ Use `rch` for CPU-heavy benchmark commands:
 mkdir -p target/benchmark-results
 rch exec -- cargo bench -p ftui-layout --bench layout_bench -- pane/core/ \
   | tee target/benchmark-results/layout_bench.txt
+rch exec -- cargo bench -p ftui-runtime --bench pane_terminal_bench -- pane/terminal/ \
+  | tee target/benchmark-results/pane_terminal_bench.txt
 rch exec -- cargo bench -p ftui-web --bench pane_pointer_bench -- pane/web_pointer/ \
   | tee target/benchmark-results/pane_pointer_bench.txt
 ./scripts/bench_budget.sh --check-only
 ./scripts/bench_budget.sh --json
+./scripts/pane_profile.sh --test
 ```
 
 Budget logs are emitted to:
