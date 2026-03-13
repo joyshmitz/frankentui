@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use clap::Args;
+use clap::{Args, ValueEnum};
 use serde_json::json;
 use wait_timeout::ChildExt;
 
@@ -11,8 +11,15 @@ use crate::error::{DoctorError, Result};
 use crate::profile::list_profile_names;
 use crate::util::{
     CliOutput, OutputIntegration, command_exists, ensure_dir, ensure_executable, ensure_exists,
-    output_for, shell_single_quote, write_string,
+    now_compact_timestamp, output_for, shell_single_quote, write_string,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+pub enum ObserveMode {
+    #[default]
+    None,
+    Tmux,
+}
 
 #[derive(Debug, Clone, Args)]
 pub struct DoctorArgs {
@@ -40,13 +47,27 @@ pub struct DoctorArgs {
 
     #[arg(long = "run-root", default_value = "/tmp/doctor_frankentui/doctor")]
     pub run_root: PathBuf,
+
+    #[arg(long = "observe", value_enum, default_value_t = ObserveMode::None)]
+    pub observe: ObserveMode,
+
+    #[arg(long = "tmux-session-name")]
+    pub tmux_session_name: Option<String>,
+
+    #[arg(long = "tmux-keep-open")]
+    pub tmux_keep_open: bool,
 }
 
 #[derive(Debug, Clone)]
 struct AppSmokeResult {
     summary_path: PathBuf,
-    stdout_log: PathBuf,
-    stderr_log: PathBuf,
+    stdout_log: Option<PathBuf>,
+    stderr_log: Option<PathBuf>,
+    tmux_session: Option<String>,
+    tmux_attach_command: Option<String>,
+    tmux_session_file: Option<PathBuf>,
+    tmux_pane_capture: Option<PathBuf>,
+    tmux_pane_log: Option<PathBuf>,
     timed_out: bool,
     exit_code: Option<i32>,
 }
@@ -63,6 +84,11 @@ struct DoctorSummaryInputs<'a> {
     app_smoke_summary: Option<&'a str>,
     app_smoke_stdout_log: Option<&'a str>,
     app_smoke_stderr_log: Option<&'a str>,
+    tmux_session: Option<&'a str>,
+    tmux_attach_command: Option<&'a str>,
+    tmux_session_file: Option<&'a str>,
+    tmux_pane_capture: Option<&'a str>,
+    tmux_pane_log: Option<&'a str>,
 }
 
 fn doctor_summary_path(run_root: &Path) -> PathBuf {
@@ -89,7 +115,16 @@ fn build_doctor_summary(
         "app_smoke_summary": inputs.app_smoke_summary,
         "app_smoke_stdout_log": inputs.app_smoke_stdout_log,
         "app_smoke_stderr_log": inputs.app_smoke_stderr_log,
+        "tmux_session": inputs.tmux_session,
+        "tmux_attach_command": inputs.tmux_attach_command,
+        "tmux_session_file": inputs.tmux_session_file,
+        "tmux_pane_capture": inputs.tmux_pane_capture,
+        "tmux_pane_log": inputs.tmux_pane_log,
         "allow_degraded": args.allow_degraded,
+        "observe": match args.observe {
+            ObserveMode::None => "none",
+            ObserveMode::Tmux => "tmux",
+        },
         "integration": integration,
     })
 }
@@ -343,6 +378,10 @@ fn run_app_smoke_fallback(args: &DoctorArgs, ui: &CliOutput) -> Result<AppSmokeR
 
     ui.info("running app launch smoke fallback");
 
+    if args.observe == ObserveMode::Tmux {
+        return run_tmux_app_smoke_fallback(args, &smoke_paths, ui);
+    }
+
     let mut command =
         build_app_smoke_command(args, &smoke_paths.stdout_log, &smoke_paths.stderr_log)?;
     let mut child = command.spawn()?;
@@ -393,8 +432,13 @@ fn run_app_smoke_fallback(args: &DoctorArgs, ui: &CliOutput) -> Result<AppSmokeR
 
     Ok(AppSmokeResult {
         summary_path: smoke_paths.summary_path,
-        stdout_log: smoke_paths.stdout_log,
-        stderr_log: smoke_paths.stderr_log,
+        stdout_log: Some(smoke_paths.stdout_log),
+        stderr_log: Some(smoke_paths.stderr_log),
+        tmux_session: None,
+        tmux_attach_command: None,
+        tmux_session_file: None,
+        tmux_pane_capture: None,
+        tmux_pane_log: None,
         timed_out,
         exit_code,
     })
@@ -405,6 +449,10 @@ struct AppSmokePaths {
     summary_path: PathBuf,
     stdout_log: PathBuf,
     stderr_log: PathBuf,
+    tmux_session_file: PathBuf,
+    tmux_pane_capture: PathBuf,
+    tmux_pane_log: PathBuf,
+    exit_code_path: PathBuf,
 }
 
 fn app_smoke_paths(run_root: &Path) -> AppSmokePaths {
@@ -413,8 +461,214 @@ fn app_smoke_paths(run_root: &Path) -> AppSmokePaths {
         summary_path: run_dir.join("summary.json"),
         stdout_log: run_dir.join("stdout.log"),
         stderr_log: run_dir.join("stderr.log"),
+        tmux_session_file: run_dir.join("tmux_session.txt"),
+        tmux_pane_capture: run_dir.join("tmux_pane.txt"),
+        tmux_pane_log: run_dir.join("tmux_pane.log"),
+        exit_code_path: run_dir.join("exit_code.txt"),
         run_dir,
     }
+}
+
+fn tmux_session_name(args: &DoctorArgs) -> String {
+    args.tmux_session_name
+        .clone()
+        .unwrap_or_else(|| format!("doctor-frankentui-{}", now_compact_timestamp()))
+}
+
+fn tmux_attach_command(session_name: &str) -> String {
+    format!("tmux attach-session -t {session_name}")
+}
+
+fn tmux_target(session_name: &str) -> String {
+    format!("{session_name}:0.0")
+}
+
+fn tmux_has_session(session_name: &str) -> bool {
+    Command::new("tmux")
+        .args(["has-session", "-t", session_name])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn capture_tmux_pane(session_name: &str, output_path: &Path) -> Result<()> {
+    let output = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(output_path)?;
+    let status = Command::new("tmux")
+        .args([
+            "capture-pane",
+            "-p",
+            "-t",
+            &tmux_target(session_name),
+            "-S",
+            "-",
+        ])
+        .stdout(Stdio::from(output))
+        .stderr(Stdio::null())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(DoctorError::exit(
+            status.code().unwrap_or(1),
+            format!("tmux capture-pane failed for session {session_name}"),
+        ))
+    }
+}
+
+fn kill_tmux_session(session_name: &str) {
+    let _ = Command::new("tmux")
+        .args(["kill-session", "-t", session_name])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+fn run_tmux_app_smoke_fallback(
+    args: &DoctorArgs,
+    smoke_paths: &AppSmokePaths,
+    ui: &CliOutput,
+) -> Result<AppSmokeResult> {
+    const APP_SMOKE_TIMEOUT_SECONDS: u64 = 20;
+    const APP_SMOKE_POLL_MS: u64 = 250;
+
+    let session_name = tmux_session_name(args);
+    let attach_command = tmux_attach_command(&session_name);
+    let session_target = tmux_target(&session_name);
+    let project_dir = args.project_dir.display().to_string();
+    let exit_code_path = smoke_paths.exit_code_path.display().to_string();
+    let pane_log_path = smoke_paths.tmux_pane_log.display().to_string();
+    let app_command = format!(
+        "cd {} && {} ; rc=$?; printf '%s\\n' \"$rc\" > {}",
+        shell_single_quote(&project_dir),
+        args.app_command,
+        shell_single_quote(&exit_code_path)
+    );
+
+    let new_status = Command::new("tmux")
+        .args([
+            "new-session",
+            "-d",
+            "-s",
+            &session_name,
+            "-c",
+            &project_dir,
+            "bash",
+            "-lc",
+            &app_command,
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    if !new_status.success() {
+        return Err(DoctorError::exit(
+            new_status.code().unwrap_or(1),
+            format!("failed to start tmux app smoke session {session_name}"),
+        ));
+    }
+
+    let pipe_status = Command::new("tmux")
+        .args([
+            "pipe-pane",
+            "-o",
+            "-t",
+            &session_target,
+            &format!("cat >> {}", shell_single_quote(&pane_log_path)),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    if !pipe_status.success() {
+        kill_tmux_session(&session_name);
+        return Err(DoctorError::exit(
+            pipe_status.code().unwrap_or(1),
+            format!("failed to attach tmux pipe-pane for session {session_name}"),
+        ));
+    }
+
+    write_string(
+        &smoke_paths.tmux_session_file,
+        &format!("session_name={session_name}\nattach_command={attach_command}\n"),
+    )?;
+    ui.info(&format!("tmux observe mode active: {attach_command}"));
+
+    let timeout = Duration::from_secs(APP_SMOKE_TIMEOUT_SECONDS);
+    let poll = Duration::from_millis(APP_SMOKE_POLL_MS);
+    let start = std::time::Instant::now();
+    while start.elapsed() < timeout {
+        if !tmux_has_session(&session_name) {
+            break;
+        }
+        std::thread::sleep(poll);
+    }
+
+    let timed_out = tmux_has_session(&session_name);
+    let exit_code = std::fs::read_to_string(&smoke_paths.exit_code_path)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<i32>().ok());
+
+    if timed_out || !args.tmux_keep_open {
+        let _ = capture_tmux_pane(&session_name, &smoke_paths.tmux_pane_capture);
+    }
+    if timed_out && !args.tmux_keep_open {
+        kill_tmux_session(&session_name);
+    }
+
+    let status_label = if timed_out {
+        "running_after_timeout"
+    } else if exit_code == Some(0) {
+        "exited_cleanly"
+    } else {
+        "failed"
+    };
+
+    let summary = json!({
+        "status": status_label,
+        "timed_out": timed_out,
+        "timeout_seconds": APP_SMOKE_TIMEOUT_SECONDS,
+        "exit_code": exit_code,
+        "tmux_session": session_name,
+        "tmux_attach_command": attach_command,
+        "tmux_session_file": smoke_paths.tmux_session_file.display().to_string(),
+        "tmux_pane_capture": smoke_paths.tmux_pane_capture.display().to_string(),
+        "tmux_pane_log": smoke_paths.tmux_pane_log.display().to_string(),
+        "tmux_keep_open": args.tmux_keep_open,
+    });
+    write_string(
+        &smoke_paths.summary_path,
+        &serde_json::to_string_pretty(&summary)?,
+    )?;
+
+    if !timed_out && exit_code != Some(0) {
+        return Err(DoctorError::exit(
+            exit_code.unwrap_or(1),
+            format!(
+                "tmux app launch smoke failed; see {} and {}",
+                smoke_paths.tmux_pane_capture.display(),
+                smoke_paths.tmux_pane_log.display()
+            ),
+        ));
+    }
+
+    Ok(AppSmokeResult {
+        summary_path: smoke_paths.summary_path.clone(),
+        stdout_log: None,
+        stderr_log: None,
+        tmux_session: Some(session_name),
+        tmux_attach_command: Some(attach_command),
+        tmux_session_file: Some(smoke_paths.tmux_session_file.clone()),
+        tmux_pane_capture: smoke_paths
+            .tmux_pane_capture
+            .exists()
+            .then_some(smoke_paths.tmux_pane_capture.clone()),
+        tmux_pane_log: Some(smoke_paths.tmux_pane_log.clone()),
+        timed_out,
+        exit_code,
+    })
 }
 
 pub fn run_doctor(args: DoctorArgs) -> Result<()> {
@@ -434,6 +688,13 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
         "capture_timeout_seconds={}",
         args.capture_timeout_seconds
     ));
+    ui.info(&format!(
+        "observe={}",
+        match args.observe {
+            ObserveMode::None => "none",
+            ObserveMode::Tmux => "tmux",
+        }
+    ));
 
     ui.rule(Some("environment detection"));
     ui.info(&format!(
@@ -451,6 +712,9 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
     check_command("bash", &ui)?;
     check_command("vhs", &ui)?;
     check_command("ttyd", &ui)?;
+    if args.observe == ObserveMode::Tmux {
+        check_command("tmux", &ui)?;
+    }
 
     if command_exists("ffmpeg") {
         ui.success("command available: ffmpeg");
@@ -473,6 +737,11 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
     let mut app_smoke_summary: Option<String> = None;
     let mut app_smoke_stdout_log: Option<String> = None;
     let mut app_smoke_stderr_log: Option<String> = None;
+    let mut tmux_session: Option<String> = None;
+    let mut tmux_attach_command: Option<String> = None;
+    let mut tmux_session_file: Option<String> = None;
+    let mut tmux_pane_capture: Option<String> = None;
+    let mut tmux_pane_log: Option<String> = None;
     let mut fallback_error: Option<String> = None;
     let mut terminal_error: Option<DoctorError> = None;
 
@@ -530,8 +799,28 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
             match run_app_smoke_fallback(&args, &ui) {
                 Ok(smoke) => {
                     app_smoke_summary = Some(smoke.summary_path.display().to_string());
-                    app_smoke_stdout_log = Some(smoke.stdout_log.display().to_string());
-                    app_smoke_stderr_log = Some(smoke.stderr_log.display().to_string());
+                    app_smoke_stdout_log = smoke
+                        .stdout_log
+                        .as_ref()
+                        .map(|path| path.display().to_string());
+                    app_smoke_stderr_log = smoke
+                        .stderr_log
+                        .as_ref()
+                        .map(|path| path.display().to_string());
+                    tmux_session = smoke.tmux_session;
+                    tmux_attach_command = smoke.tmux_attach_command;
+                    tmux_session_file = smoke
+                        .tmux_session_file
+                        .as_ref()
+                        .map(|path| path.display().to_string());
+                    tmux_pane_capture = smoke
+                        .tmux_pane_capture
+                        .as_ref()
+                        .map(|path| path.display().to_string());
+                    tmux_pane_log = smoke
+                        .tmux_pane_log
+                        .as_ref()
+                        .map(|path| path.display().to_string());
                     ui.success(&format!(
                         "app launch smoke fallback passed (timed_out={}, exit_code={})",
                         smoke.timed_out,
@@ -539,11 +828,16 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
                             .exit_code
                             .map_or_else(|| "none".to_string(), |value| value.to_string())
                     ));
-                    ui.info(&format!(
-                        "app smoke logs: stdout={}, stderr={}",
-                        smoke.stdout_log.display(),
-                        smoke.stderr_log.display()
-                    ));
+                    if let (Some(stdout_log), Some(stderr_log)) =
+                        (&app_smoke_stdout_log, &app_smoke_stderr_log)
+                    {
+                        ui.info(&format!(
+                            "app smoke logs: stdout={stdout_log}, stderr={stderr_log}"
+                        ));
+                    }
+                    if let Some(attach_command) = &tmux_attach_command {
+                        ui.info(&format!("attach to live app smoke: {attach_command}"));
+                    }
                 }
                 Err(error) => {
                     app_smoke_summary = smoke_paths
@@ -558,6 +852,18 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
                         .stderr_log
                         .exists()
                         .then(|| smoke_paths.stderr_log.display().to_string());
+                    tmux_session_file = smoke_paths
+                        .tmux_session_file
+                        .exists()
+                        .then(|| smoke_paths.tmux_session_file.display().to_string());
+                    tmux_pane_capture = smoke_paths
+                        .tmux_pane_capture
+                        .exists()
+                        .then(|| smoke_paths.tmux_pane_capture.display().to_string());
+                    tmux_pane_log = smoke_paths
+                        .tmux_pane_log
+                        .exists()
+                        .then(|| smoke_paths.tmux_pane_log.display().to_string());
                     fallback_error = Some(error.to_string());
                     terminal_error = Some(error);
                     ui.error("app launch smoke fallback failed");
@@ -587,6 +893,11 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
             app_smoke_summary: app_smoke_summary.as_deref(),
             app_smoke_stdout_log: app_smoke_stdout_log.as_deref(),
             app_smoke_stderr_log: app_smoke_stderr_log.as_deref(),
+            tmux_session: tmux_session.as_deref(),
+            tmux_attach_command: tmux_attach_command.as_deref(),
+            tmux_session_file: tmux_session_file.as_deref(),
+            tmux_pane_capture: tmux_pane_capture.as_deref(),
+            tmux_pane_log: tmux_pane_log.as_deref(),
         },
     );
     let doctor_summary_path = write_doctor_summary(&args.run_root, &doctor_summary)?;
@@ -656,6 +967,9 @@ mod tests {
             capture_timeout_seconds: 37,
             allow_degraded: false,
             run_root: PathBuf::from("/tmp/run-root"),
+            observe: super::ObserveMode::None,
+            tmux_session_name: None,
+            tmux_keep_open: false,
         }
     }
 
@@ -816,6 +1130,9 @@ exit 1
             capture_timeout_seconds: 20,
             allow_degraded: false,
             run_root,
+            observe: super::ObserveMode::None,
+            tmux_session_name: None,
+            tmux_keep_open: false,
         };
         let ui = CliOutput::new(false);
         let result = super::run_app_smoke_fallback(&args, &ui).expect("fallback should pass");
@@ -823,8 +1140,9 @@ exit 1
         assert_eq!(result.exit_code, Some(0));
         assert!(!result.timed_out);
         assert!(Path::new(&result.summary_path).exists());
-        assert!(Path::new(&result.stdout_log).exists());
-        assert!(Path::new(&result.stderr_log).exists());
+        assert!(Path::new(result.stdout_log.as_ref().expect("stdout log")).exists());
+        assert!(Path::new(result.stderr_log.as_ref().expect("stderr log")).exists());
+        assert!(result.tmux_session.is_none());
     }
 
     #[test]
@@ -842,6 +1160,9 @@ exit 1
             capture_timeout_seconds: 20,
             allow_degraded: false,
             run_root,
+            observe: super::ObserveMode::None,
+            tmux_session_name: None,
+            tmux_keep_open: false,
         };
         let ui = CliOutput::new(false);
         let error =
@@ -880,6 +1201,18 @@ exit 1
             paths.stderr_log,
             PathBuf::from("/tmp/doctor-run/doctor_app_smoke/stderr.log")
         );
+        assert_eq!(
+            paths.tmux_session_file,
+            PathBuf::from("/tmp/doctor-run/doctor_app_smoke/tmux_session.txt")
+        );
+        assert_eq!(
+            paths.tmux_pane_capture,
+            PathBuf::from("/tmp/doctor-run/doctor_app_smoke/tmux_pane.txt")
+        );
+        assert_eq!(
+            paths.tmux_pane_log,
+            PathBuf::from("/tmp/doctor-run/doctor_app_smoke/tmux_pane.log")
+        );
     }
 
     #[test]
@@ -907,6 +1240,11 @@ exit 1
                 app_smoke_summary: Some("/tmp/doctor-run/doctor_app_smoke/summary.json"),
                 app_smoke_stdout_log: Some("/tmp/doctor-run/doctor_app_smoke/stdout.log"),
                 app_smoke_stderr_log: Some("/tmp/doctor-run/doctor_app_smoke/stderr.log"),
+                tmux_session: Some("doctor-frankentui-demo"),
+                tmux_attach_command: Some("tmux attach-session -t doctor-frankentui-demo"),
+                tmux_session_file: Some("/tmp/doctor-run/doctor_app_smoke/tmux_session.txt"),
+                tmux_pane_capture: Some("/tmp/doctor-run/doctor_app_smoke/tmux_pane.txt"),
+                tmux_pane_log: Some("/tmp/doctor-run/doctor_app_smoke/tmux_pane.log"),
             },
         );
 
@@ -938,6 +1276,23 @@ exit 1
         assert_eq!(
             parsed["app_smoke_stderr_log"],
             "/tmp/doctor-run/doctor_app_smoke/stderr.log"
+        );
+        assert_eq!(parsed["tmux_session"], "doctor-frankentui-demo");
+        assert_eq!(
+            parsed["tmux_attach_command"],
+            "tmux attach-session -t doctor-frankentui-demo"
+        );
+        assert_eq!(
+            parsed["tmux_session_file"],
+            "/tmp/doctor-run/doctor_app_smoke/tmux_session.txt"
+        );
+        assert_eq!(
+            parsed["tmux_pane_capture"],
+            "/tmp/doctor-run/doctor_app_smoke/tmux_pane.txt"
+        );
+        assert_eq!(
+            parsed["tmux_pane_log"],
+            "/tmp/doctor-run/doctor_app_smoke/tmux_pane.log"
         );
         assert_eq!(parsed["integration"]["sqlmodel_mode"], "json");
     }
