@@ -695,6 +695,17 @@ fn resolved_binary_label(cfg: &ResolvedCaptureConfig) -> String {
     }
 }
 
+fn capture_server_command(
+    cfg: &ResolvedCaptureConfig,
+    tmux_observer: Option<&TmuxObserveArtifacts>,
+    database_url: &str,
+    storage_root: &Path,
+) -> String {
+    tmux_observer
+        .map(|observer| observer.attach_command.clone())
+        .unwrap_or_else(|| build_runtime_command(cfg, database_url, storage_root))
+}
+
 fn build_runtime_command(
     cfg: &ResolvedCaptureConfig,
     database_url: &str,
@@ -1789,7 +1800,7 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
 
     let trace_id = format!("trace-{timestamp}-{}", std::process::id());
 
-    let server_cmd = build_runtime_command(&cfg, &database_url, &storage_root);
+    let server_cmd = capture_server_command(&cfg, None, &database_url, &storage_root);
     let binary_label = resolved_binary_label(&cfg);
 
     let tape = build_capture_tape(&TapeSpec {
@@ -1884,6 +1895,26 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
     }
 
     let tmux_observer = start_tmux_observer(&cfg, &run_dir, &ui)?;
+    if tmux_observer.is_some() {
+        let observed_server_cmd =
+            capture_server_command(&cfg, tmux_observer.as_ref(), &database_url, &storage_root);
+        let tape = build_capture_tape(&TapeSpec {
+            output: &output,
+            required_binary: using_legacy_binary(&cfg).then_some(cfg.binary.as_path()),
+            project_dir: &cfg.project_dir,
+            server_command: &observed_server_cmd,
+            font_size: cfg.font_size,
+            width: cfg.width,
+            height: cfg.height,
+            framerate: cfg.framerate,
+            theme: &cfg.theme,
+            boot_sleep: &cfg.boot_sleep,
+            step_sleep: &cfg.step_sleep,
+            tail_sleep: &cfg.tail_sleep,
+            keys: &cfg.keys,
+        });
+        write_string(&tape_path, &tape)?;
+    }
 
     append_decision(
         cfg.evidence_ledger,
@@ -2748,6 +2779,26 @@ mod tests {
         let runtime =
             super::build_runtime_command(&cfg, "sqlite:///tmp/db", Path::new("/tmp/storage"));
         assert_eq!(runtime, "cargo run --bin demo");
+    }
+
+    #[test]
+    fn capture_server_command_prefers_tmux_attach_when_observing() {
+        let cfg = ResolvedCaptureConfig::defaults("analytics-empty");
+        let observer = super::TmuxObserveArtifacts {
+            session_name: "capture-123".to_string(),
+            attach_command: "tmux attach-session -t capture-123".to_string(),
+            session_file: PathBuf::from("/tmp/session.txt"),
+            pane_capture: PathBuf::from("/tmp/pane.txt"),
+            pane_log: PathBuf::from("/tmp/pane.log"),
+        };
+
+        let command = super::capture_server_command(
+            &cfg,
+            Some(&observer),
+            "sqlite:///tmp/db",
+            Path::new("/tmp/storage"),
+        );
+        assert_eq!(command, "tmux attach-session -t capture-123");
     }
 
     #[test]

@@ -70,10 +70,32 @@ pub struct ProcessSubscription<M: Send + 'static> {
     env: Vec<(String, String)>,
     timeout: Option<Duration>,
     id: SubId,
+    explicit_id: bool,
     make_msg: Box<dyn Fn(ProcessEvent) -> M + Send + Sync>,
 }
 
 impl<M: Send + 'static> ProcessSubscription<M> {
+    fn computed_id(
+        program: &str,
+        args: &[String],
+        env: &[(String, String)],
+        timeout: Option<Duration>,
+    ) -> SubId {
+        let mut h = DefaultHasher::new();
+        "ProcessSubscription".hash(&mut h);
+        program.hash(&mut h);
+        args.hash(&mut h);
+        env.hash(&mut h);
+        timeout.map(|duration| duration.as_nanos()).hash(&mut h);
+        h.finish()
+    }
+
+    fn refresh_id(&mut self) {
+        if !self.explicit_id {
+            self.id = Self::computed_id(&self.program, &self.args, &self.env, self.timeout);
+        }
+    }
+
     /// Create a new process subscription for the given program.
     ///
     /// The `make_msg` closure converts [`ProcessEvent`] into your model's
@@ -83,18 +105,14 @@ impl<M: Send + 'static> ProcessSubscription<M> {
         make_msg: impl Fn(ProcessEvent) -> M + Send + Sync + 'static,
     ) -> Self {
         let program = program.into();
-        let id = {
-            let mut h = DefaultHasher::new();
-            "ProcessSubscription".hash(&mut h);
-            program.hash(&mut h);
-            h.finish()
-        };
+        let id = Self::computed_id(&program, &[], &[], None);
         Self {
             program,
             args: Vec::new(),
             env: Vec::new(),
             timeout: None,
             id,
+            explicit_id: false,
             make_msg: Box::new(make_msg),
         }
     }
@@ -102,13 +120,8 @@ impl<M: Send + 'static> ProcessSubscription<M> {
     /// Add a command-line argument.
     #[must_use]
     pub fn arg(mut self, arg: impl Into<String>) -> Self {
-        let arg_str: String = arg.into();
-        // Update ID to include args for deduplication
-        let mut h = DefaultHasher::new();
-        self.id.hash(&mut h);
-        arg_str.hash(&mut h);
-        self.id = h.finish();
-        self.args.push(arg_str);
+        self.args.push(arg.into());
+        self.refresh_id();
         self
     }
 
@@ -125,6 +138,7 @@ impl<M: Send + 'static> ProcessSubscription<M> {
     #[must_use]
     pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.env.push((key.into(), value.into()));
+        self.refresh_id();
         self
     }
 
@@ -132,6 +146,7 @@ impl<M: Send + 'static> ProcessSubscription<M> {
     #[must_use]
     pub fn timeout(mut self, duration: Duration) -> Self {
         self.timeout = Some(duration);
+        self.refresh_id();
         self
     }
 
@@ -139,6 +154,7 @@ impl<M: Send + 'static> ProcessSubscription<M> {
     #[must_use]
     pub fn with_id(mut self, id: SubId) -> Self {
         self.id = id;
+        self.explicit_id = true;
         self
     }
 }
@@ -303,6 +319,34 @@ mod tests {
     fn custom_id_overrides_default() {
         let s: ProcessSubscription<TestMsg> =
             ProcessSubscription::new("echo", TestMsg::Proc).with_id(42);
+        assert_eq!(s.id(), 42);
+    }
+
+    #[test]
+    fn env_changes_affect_subscription_id() {
+        let s1: ProcessSubscription<TestMsg> =
+            ProcessSubscription::new("echo", TestMsg::Proc).env("FTUI_TEST_VAR", "a");
+        let s2: ProcessSubscription<TestMsg> =
+            ProcessSubscription::new("echo", TestMsg::Proc).env("FTUI_TEST_VAR", "b");
+        assert_ne!(s1.id(), s2.id());
+    }
+
+    #[test]
+    fn timeout_changes_affect_subscription_id() {
+        let s1: ProcessSubscription<TestMsg> =
+            ProcessSubscription::new("echo", TestMsg::Proc).timeout(Duration::from_millis(10));
+        let s2: ProcessSubscription<TestMsg> =
+            ProcessSubscription::new("echo", TestMsg::Proc).timeout(Duration::from_millis(20));
+        assert_ne!(s1.id(), s2.id());
+    }
+
+    #[test]
+    fn explicit_id_remains_stable_after_builder_changes() {
+        let s: ProcessSubscription<TestMsg> = ProcessSubscription::new("echo", TestMsg::Proc)
+            .with_id(42)
+            .arg("hello")
+            .env("FTUI_TEST_VAR", "value")
+            .timeout(Duration::from_millis(10));
         assert_eq!(s.id(), 42);
     }
 

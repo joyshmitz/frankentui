@@ -2481,6 +2481,7 @@ enum EffectLoopControl {
 struct EffectQueue<M: Send + 'static> {
     sender: mpsc::Sender<EffectCommand<M>>,
     handle: Option<JoinHandle<()>>,
+    closed: bool,
 }
 
 impl<M: Send + 'static> EffectQueue<M> {
@@ -2497,10 +2498,15 @@ impl<M: Send + 'static> EffectQueue<M> {
         Ok(Self {
             sender: tx,
             handle: Some(handle),
+            closed: false,
         })
     }
 
     fn enqueue(&self, spec: TaskSpec, task: Box<dyn FnOnce() -> M + Send>) {
+        if self.closed {
+            tracing::debug!("rejecting task enqueue after effect queue shutdown");
+            return;
+        }
         let _ = self.sender.send(EffectCommand::Enqueue(spec, task));
     }
 
@@ -2510,6 +2516,7 @@ impl<M: Send + 'static> EffectQueue<M> {
     const SHUTDOWN_POLL: Duration = Duration::from_millis(10);
 
     fn shutdown(&mut self) {
+        self.closed = true;
         let _ = self.sender.send(EffectCommand::Shutdown);
         if let Some(handle) = self.handle.take() {
             // Bounded wait: poll `is_finished` with a timeout so a slow task
@@ -2540,6 +2547,7 @@ struct SpawnTaskExecutor<M: Send + 'static> {
     result_sender: mpsc::Sender<M>,
     evidence_sink: Option<EvidenceSink>,
     handles: Vec<JoinHandle<()>>,
+    closed: bool,
 }
 
 impl<M: Send + 'static> SpawnTaskExecutor<M> {
@@ -2551,10 +2559,15 @@ impl<M: Send + 'static> SpawnTaskExecutor<M> {
             result_sender,
             evidence_sink,
             handles: Vec::new(),
+            closed: false,
         }
     }
 
     fn submit(&mut self, task: Box<dyn FnOnce() -> M + Send>) {
+        if self.closed {
+            tracing::debug!("rejecting spawned task submit after shutdown");
+            return;
+        }
         let sender = self.result_sender.clone();
         let evidence_sink = self.evidence_sink.clone();
         let handle = thread::spawn(move || {
@@ -2580,6 +2593,7 @@ impl<M: Send + 'static> SpawnTaskExecutor<M> {
     }
 
     fn shutdown(&mut self) {
+        self.closed = true;
         let start = Instant::now();
         while self.handles.iter().any(|handle| !handle.is_finished()) {
             if start.elapsed() >= Self::SHUTDOWN_TIMEOUT {
@@ -2607,6 +2621,7 @@ struct AsupersyncTaskExecutor<M: Send + 'static> {
     evidence_sink: Option<EvidenceSink>,
     runtime: AsupersyncRuntime,
     handles: Vec<BlockingTaskHandle>,
+    closed: bool,
 }
 
 #[cfg(feature = "asupersync-executor")]
@@ -2631,10 +2646,15 @@ impl<M: Send + 'static> AsupersyncTaskExecutor<M> {
             evidence_sink,
             runtime,
             handles: Vec::new(),
+            closed: false,
         })
     }
 
     fn submit(&mut self, task: Box<dyn FnOnce() -> M + Send>) {
+        if self.closed {
+            tracing::debug!("rejecting asupersync task submit after shutdown");
+            return;
+        }
         let sender = self.result_sender.clone();
         let evidence_sink = self.evidence_sink.clone();
         let handle = self
@@ -2651,6 +2671,7 @@ impl<M: Send + 'static> AsupersyncTaskExecutor<M> {
     }
 
     fn shutdown(&mut self) {
+        self.closed = true;
         let deadline = Instant::now() + Self::SHUTDOWN_TIMEOUT;
         for handle in &self.handles {
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -4322,6 +4343,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
         self.subscriptions.stop_all();
         self.task_executor.shutdown();
         self.reap_finished_tasks();
+        self.drain_shutdown_task_results()?;
 
         if let Some(signal) = termination_signal {
             clear_termination_signal();
@@ -4810,6 +4832,31 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
 
     fn reap_finished_tasks(&mut self) {
         self.task_executor.reap_finished();
+    }
+
+    fn drain_shutdown_task_results(&mut self) -> io::Result<()> {
+        while let Ok(msg) = self.task_receiver.try_recv() {
+            let cmd = {
+                let _span = debug_span!(
+                    "ftui.program.update",
+                    msg_type = "shutdown_task",
+                    duration_us = tracing::field::Empty,
+                    cmd_type = tracing::field::Empty
+                )
+                .entered();
+                let start = Instant::now();
+                let cmd = self.model.update(msg);
+                let elapsed_us = start.elapsed().as_micros() as u64;
+                self.last_update_us = Some(elapsed_us);
+                tracing::Span::current().record("duration_us", elapsed_us);
+                tracing::Span::current()
+                    .record("cmd_type", format!("{:?}", std::mem::discriminant(&cmd)));
+                cmd
+            };
+            self.mark_dirty();
+            self.execute_cmd(cmd)?;
+        }
+        Ok(())
     }
 
     /// Render a frame with budget tracking.
@@ -8878,6 +8925,201 @@ mod tests {
         program.run().expect("program run");
 
         assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn run_processes_shutdown_task_results_before_exit() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        struct ShutdownTaskModel {
+            shutdowns: Arc<AtomicUsize>,
+        }
+
+        #[derive(Debug, Clone, Copy)]
+        enum ShutdownTaskMsg {
+            Quit,
+            ShutdownRan,
+        }
+
+        impl From<Event> for ShutdownTaskMsg {
+            fn from(_: Event) -> Self {
+                ShutdownTaskMsg::Quit
+            }
+        }
+
+        impl Model for ShutdownTaskModel {
+            type Message = ShutdownTaskMsg;
+
+            fn init(&mut self) -> Cmd<Self::Message> {
+                Cmd::quit()
+            }
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    ShutdownTaskMsg::Quit => Cmd::quit(),
+                    ShutdownTaskMsg::ShutdownRan => {
+                        self.shutdowns.fetch_add(1, Ordering::SeqCst);
+                        Cmd::none()
+                    }
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+
+            fn on_shutdown(&mut self) -> Cmd<Self::Message> {
+                Cmd::task(|| ShutdownTaskMsg::ShutdownRan)
+            }
+        }
+
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+        let mut program = headless_program_with_config(
+            ShutdownTaskModel {
+                shutdowns: Arc::clone(&shutdowns),
+            },
+            ProgramConfig::default(),
+        );
+
+        program.run().expect("program run");
+
+        assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn run_processes_shutdown_task_results_with_effect_queue_backend() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        struct ShutdownTaskModel {
+            shutdowns: Arc<AtomicUsize>,
+        }
+
+        #[derive(Debug, Clone, Copy)]
+        enum ShutdownTaskMsg {
+            Quit,
+            ShutdownRan,
+        }
+
+        impl From<Event> for ShutdownTaskMsg {
+            fn from(_: Event) -> Self {
+                ShutdownTaskMsg::Quit
+            }
+        }
+
+        impl Model for ShutdownTaskModel {
+            type Message = ShutdownTaskMsg;
+
+            fn init(&mut self) -> Cmd<Self::Message> {
+                Cmd::quit()
+            }
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    ShutdownTaskMsg::Quit => Cmd::quit(),
+                    ShutdownTaskMsg::ShutdownRan => {
+                        self.shutdowns.fetch_add(1, Ordering::SeqCst);
+                        Cmd::none()
+                    }
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+
+            fn on_shutdown(&mut self) -> Cmd<Self::Message> {
+                Cmd::task(|| ShutdownTaskMsg::ShutdownRan)
+            }
+        }
+
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+        let mut program = headless_program_with_config(
+            ShutdownTaskModel {
+                shutdowns: Arc::clone(&shutdowns),
+            },
+            ProgramConfig::default().with_effect_queue(
+                EffectQueueConfig::default().with_backend(TaskExecutorBackend::EffectQueue),
+            ),
+        );
+
+        program.run().expect("program run");
+
+        assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn shutdown_task_results_do_not_spawn_follow_up_tasks_after_executor_shutdown() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        struct ShutdownTaskModel {
+            shutdowns: Arc<AtomicUsize>,
+            follow_up_runs: Arc<AtomicUsize>,
+        }
+
+        #[derive(Debug, Clone, Copy)]
+        enum ShutdownTaskMsg {
+            Quit,
+            ShutdownRan,
+            FollowUp,
+        }
+
+        impl From<Event> for ShutdownTaskMsg {
+            fn from(_: Event) -> Self {
+                ShutdownTaskMsg::Quit
+            }
+        }
+
+        impl Model for ShutdownTaskModel {
+            type Message = ShutdownTaskMsg;
+
+            fn init(&mut self) -> Cmd<Self::Message> {
+                Cmd::quit()
+            }
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    ShutdownTaskMsg::Quit => Cmd::quit(),
+                    ShutdownTaskMsg::ShutdownRan => {
+                        self.shutdowns.fetch_add(1, Ordering::SeqCst);
+                        let follow_up_runs = Arc::clone(&self.follow_up_runs);
+                        Cmd::task(move || {
+                            follow_up_runs.fetch_add(1, Ordering::SeqCst);
+                            ShutdownTaskMsg::FollowUp
+                        })
+                    }
+                    ShutdownTaskMsg::FollowUp => {
+                        self.follow_up_runs.fetch_add(1, Ordering::SeqCst);
+                        Cmd::none()
+                    }
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+
+            fn on_shutdown(&mut self) -> Cmd<Self::Message> {
+                Cmd::task(|| ShutdownTaskMsg::ShutdownRan)
+            }
+        }
+
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+        let follow_up_runs = Arc::new(AtomicUsize::new(0));
+        let mut program = headless_program_with_config(
+            ShutdownTaskModel {
+                shutdowns: Arc::clone(&shutdowns),
+                follow_up_runs: Arc::clone(&follow_up_runs),
+            },
+            ProgramConfig::default(),
+        );
+
+        program.run().expect("program run");
+
+        assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
+        assert_eq!(follow_up_runs.load(Ordering::SeqCst), 0);
     }
 
     #[test]
