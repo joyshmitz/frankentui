@@ -18,6 +18,7 @@ OUT_DIR="${PROJECT_ROOT}/target/pane-profiling/bd-1y0ph"
 TEST_MODE=false
 RESOURCE_STATS=false
 PERF_STAT=false
+declare -A BENCH_BINARY_PATHS=()
 
 if command -v rch >/dev/null 2>&1; then
     CARGO_RUNNER=(rch exec -- cargo)
@@ -83,11 +84,29 @@ run_bench() {
     else
         "${CARGO_RUNNER[@]}" "$@" 2>&1 | tee "$output_file"
     fi
+
+    local bench_binary
+    bench_binary="$(
+        sed -nE 's#^[[:space:]]*Running benches/[^ ]+[[:space:]]+\(([^)]+)\)$#\1#p' "$output_file" \
+            | tail -n1
+    )"
+    if [[ -n "$bench_binary" ]]; then
+        if [[ "$bench_binary" != /* ]]; then
+            bench_binary="${PROJECT_ROOT}/${bench_binary}"
+        fi
+        BENCH_BINARY_PATHS["$label"]="$bench_binary"
+    fi
 }
 
 find_bench_binary() {
     local prefix="$1"
     local binary
+
+    binary="${BENCH_BINARY_PATHS[$prefix]:-}"
+    if [[ -n "$binary" && -x "$binary" ]]; then
+        printf '%s\n' "$binary"
+        return 0
+    fi
 
     binary="$(
         find "${PROJECT_ROOT}/target/release/deps" \
@@ -149,21 +168,32 @@ record_symbol_metadata() {
     } >> "$output_file"
 
     for prefix in "${prefixes[@]}"; do
-        local binary
-        binary="$(find_bench_binary "$prefix")"
+        local binary="${BENCH_BINARY_PATHS[$prefix]:-}"
+        local source="executed"
+
+        if [[ -z "$binary" ]]; then
+            binary="$(find_bench_binary "$prefix")"
+            source="fallback-latest-local-match"
+        fi
 
         {
             echo "== ${prefix} =="
             echo "binary=${binary}"
-            file "$binary"
-            if command -v readelf >/dev/null 2>&1; then
-                if readelf -S "$binary" | grep -q '\.debug_info'; then
-                    echo "debug_info=present"
+            echo "binary_source=${source}"
+            if [[ -e "$binary" ]]; then
+                file "$binary"
+                if command -v readelf >/dev/null 2>&1; then
+                    if readelf -S "$binary" | grep -q '\.debug_info'; then
+                        echo "debug_info=present"
+                    else
+                        echo "debug_info=missing"
+                    fi
                 else
-                    echo "debug_info=missing"
+                    echo "debug_info=unknown (readelf unavailable)"
                 fi
             else
-                echo "debug_info=unknown (readelf unavailable)"
+                echo "local_binary_status=missing"
+                echo "debug_info=unknown (exact executed binary not present locally)"
             fi
             echo
         } >> "$output_file"

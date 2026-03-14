@@ -122,8 +122,20 @@ Interpretation:
 `kernel.perf_event_paranoid` to `1`, so counter-based profiling is now part of
 the repeatable capture workflow.
 
-Bench binaries are now built from a bench profile that preserves debug info, and
-the profiling runner emits `symbol_metadata.txt` so each capture bundle records
-the exact bench binary paths plus whether `.debug_info` is present. That turns
-symbol-readiness from an assumption into an auditable artifact and makes future
-`perf report` investigations easier to trust.
+The profiling runner now emits `symbol_metadata.txt`, and it records the exact
+bench binary path printed by the current run instead of guessing from whatever
+matching binary happens to exist under `target/release/deps/`.
+
+Current evidence from that artifact is mixed:
+
+- `layout_bench`: `with debug_info, not stripped`
+- `pane_terminal_bench`: exact executed binary path captured, but local binary
+  currently missing after `rch` artifact retrieval
+- `pane_pointer_bench`: exact executed binary path captured, but local binary
+  currently missing after `rch` artifact retrieval
+
+That means symbol-readiness is no longer an assumption, but it also means the
+terminal/web benches still need follow-up if we want uniformly trustworthy
+`perf report` stack attribution across all pane surfaces from the local artifact
+bundle. The immediate value of the new metadata is that it distinguishes
+"missing exact executed binary" from "found a different local binary and guessed."
