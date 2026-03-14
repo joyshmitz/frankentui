@@ -31,6 +31,9 @@ pub struct ReportSummary {
     pub total_runs: usize,
     pub ok_runs: usize,
     pub failed_runs: usize,
+    pub trace_ids: Vec<String>,
+    pub fallback_profiles: Vec<String>,
+    pub capture_error_profiles: Vec<String>,
     pub runs: Vec<RunMeta>,
 }
 
@@ -115,11 +118,14 @@ fn render_html(summary: &ReportSummary, link_base: &Path) -> String {
 
     html.push_str(&format!("<h1>{}</h1>\n", html_escape(&summary.title)));
     html.push_str(&format!(
-        "<div class=\"meta\">generated_at={} | total={} | ok={} | failed={}</div>\n",
+        "<div class=\"meta\">generated_at={} | total={} | ok={} | failed={} | traces={} | fallback_profiles={} | capture_error_profiles={}</div>\n",
         html_escape(&summary.generated_at),
         summary.total_runs,
         summary.ok_runs,
-        summary.failed_runs
+        summary.failed_runs,
+        summary.trace_ids.len(),
+        summary.fallback_profiles.len(),
+        summary.capture_error_profiles.len(),
     ));
     html.push_str("<div class=\"grid\">\n");
 
@@ -181,6 +187,16 @@ fn render_html(summary: &ReportSummary, link_base: &Path) -> String {
             html.push_str(&format!(
                 "<div class=\"row\"><span class=\"label\">fallback_reason</span>{}</div>\n",
                 html_escape(fallback_reason)
+            ));
+        }
+        if let Some(capture_error_reason) = run
+            .capture_error_reason
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            html.push_str(&format!(
+                "<div class=\"row\"><span class=\"label\">capture_error_reason</span>{}</div>\n",
+                html_escape(capture_error_reason)
             ));
         }
         if let Some(tmux_session) = run
@@ -324,6 +340,30 @@ fn run_report_with_integration(args: ReportArgs, integration: &OutputIntegration
 
     let ok_runs = runs.iter().filter(|run| run.status == "ok").count();
     let failed_runs = runs.len().saturating_sub(ok_runs);
+    let trace_ids = runs
+        .iter()
+        .filter_map(|run| run.trace_id.as_ref())
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .collect::<Vec<_>>();
+    let fallback_profiles = runs
+        .iter()
+        .filter(|run| {
+            run.fallback_reason
+                .as_ref()
+                .is_some_and(|value| !value.is_empty())
+        })
+        .map(|run| run.profile.clone())
+        .collect::<Vec<_>>();
+    let capture_error_profiles = runs
+        .iter()
+        .filter(|run| {
+            run.capture_error_reason
+                .as_ref()
+                .is_some_and(|value| !value.is_empty())
+        })
+        .map(|run| run.profile.clone())
+        .collect::<Vec<_>>();
 
     let summary = ReportSummary {
         title: args.title,
@@ -332,6 +372,9 @@ fn run_report_with_integration(args: ReportArgs, integration: &OutputIntegration
         total_runs: runs.len(),
         ok_runs,
         failed_runs,
+        trace_ids,
+        fallback_profiles,
+        capture_error_profiles,
         runs,
     };
 
@@ -663,6 +706,7 @@ mod tests {
             run_dir: run_dir.display().to_string(),
             trace_id: Some("trace-123".to_string()),
             fallback_reason: Some("capture timed out".to_string()),
+            capture_error_reason: Some("ffmpeg missing".to_string()),
             tmux_session: Some("tmux-demo".to_string()),
             tmux_attach_command: Some("tmux attach-session -t tmux-demo".to_string()),
             tmux_session_file: Some(tmux_session_file.display().to_string()),
@@ -686,6 +730,7 @@ mod tests {
         let html = fs::read_to_string(suite_dir.join("index.html")).expect("read html");
         assert!(html.contains("trace-123"));
         assert!(html.contains("capture timed out"));
+        assert!(html.contains("ffmpeg missing"));
         assert!(html.contains("tmux-demo"));
         assert!(html.contains("tmux attach-session -t tmux-demo"));
         assert!(html.contains("tmux_session_file"));
@@ -698,6 +743,14 @@ mod tests {
         assert!(html.contains("evidence_ledger.jsonl"));
         assert!(html.contains("ttyd_runtime_log"));
         assert!(html.contains("ttyd-runtime.log"));
+
+        let report_json: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(suite_dir.join("report.json")).expect("read report json"),
+        )
+        .expect("parse report json");
+        assert_eq!(report_json["trace_ids"][0], "trace-123");
+        assert_eq!(report_json["fallback_profiles"][0], "analytics-empty");
+        assert_eq!(report_json["capture_error_profiles"][0], "analytics-empty");
     }
 
     #[test]
