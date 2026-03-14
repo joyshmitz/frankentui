@@ -168,6 +168,8 @@ rch exec -- cargo bench -p ftui-web --bench pane_pointer_bench -- pane/web_point
 ./scripts/bench_budget.sh --check-only
 ./scripts/bench_budget.sh --json
 ./scripts/pane_profile.sh --test
+./scripts/pane_profile.sh --test --time
+./scripts/pane_profile.sh --test --perf-stat
 ```
 
 Budget logs are emitted to:

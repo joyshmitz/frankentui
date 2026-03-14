@@ -304,6 +304,25 @@ fn render_html(summary: &ReportSummary, link_base: &Path) -> String {
     html
 }
 
+fn build_report_machine_summary(
+    integration: &OutputIntegration,
+    summary: &ReportSummary,
+    output_json: &Path,
+    output_html: &Path,
+) -> serde_json::Value {
+    serde_json::json!({
+        "command": "report",
+        "status": "ok",
+        "report_json": output_json.display().to_string(),
+        "report_html": output_html.display().to_string(),
+        "suite_dir": summary.suite_dir,
+        "trace_ids": summary.trace_ids,
+        "fallback_profiles": summary.fallback_profiles,
+        "capture_error_profiles": summary.capture_error_profiles,
+        "integration": integration,
+    })
+}
+
 pub fn run_report(args: ReportArgs) -> Result<()> {
     let integration = OutputIntegration::detect();
     run_report_with_integration(args, &integration)
@@ -391,14 +410,7 @@ fn run_report_with_integration(args: ReportArgs, integration: &OutputIntegration
     if integration.should_emit_json() {
         println!(
             "{}",
-            serde_json::json!({
-                "command": "report",
-                "status": "ok",
-                "report_json": output_json.display().to_string(),
-                "report_html": output_html.display().to_string(),
-                "suite_dir": args.suite_dir.display().to_string(),
-                "integration": integration,
-            })
+            build_report_machine_summary(integration, &summary, &output_json, &output_html)
         );
     }
 
@@ -408,6 +420,7 @@ fn run_report_with_integration(args: ReportArgs, integration: &OutputIntegration
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path;
 
     use tempfile::tempdir;
 
@@ -415,7 +428,10 @@ mod tests {
     use crate::runmeta::RunMeta;
     use crate::util::OutputIntegration;
 
-    use super::{ReportArgs, find_run_meta_files, run_report, run_report_with_integration};
+    use super::{
+        ReportArgs, ReportSummary, build_report_machine_summary, find_run_meta_files, run_report,
+        run_report_with_integration,
+    };
 
     #[test]
     fn report_generation_writes_outputs() {
@@ -876,5 +892,42 @@ mod tests {
             &integration,
         )
         .expect("report should succeed in json mode");
+    }
+
+    #[test]
+    fn build_report_machine_summary_includes_observability_aggregates() {
+        let integration = OutputIntegration {
+            fastapi_mode: "plain".to_string(),
+            fastapi_agent: false,
+            fastapi_ci: false,
+            fastapi_tty: false,
+            sqlmodel_mode: "json".to_string(),
+            sqlmodel_agent: false,
+        };
+        let summary = ReportSummary {
+            title: "JSON Report".to_string(),
+            suite_dir: "/tmp/suite".to_string(),
+            generated_at: "2026-02-17T00:00:00Z".to_string(),
+            total_runs: 1,
+            ok_runs: 0,
+            failed_runs: 1,
+            trace_ids: vec!["trace-123".to_string()],
+            fallback_profiles: vec!["analytics-empty".to_string()],
+            capture_error_profiles: vec!["analytics-empty".to_string()],
+            runs: Vec::new(),
+        };
+
+        let payload = build_report_machine_summary(
+            &integration,
+            &summary,
+            Path::new("/tmp/suite/report.json"),
+            Path::new("/tmp/suite/index.html"),
+        );
+
+        assert_eq!(payload["trace_ids"][0], "trace-123");
+        assert_eq!(payload["fallback_profiles"][0], "analytics-empty");
+        assert_eq!(payload["capture_error_profiles"][0], "analytics-empty");
+        assert_eq!(payload["report_json"], "/tmp/suite/report.json");
+        assert_eq!(payload["report_html"], "/tmp/suite/index.html");
     }
 }

@@ -23,6 +23,9 @@ Artifacts produced by the latest run:
 - `target/pane-profiling/bd-1y0ph/layout_bench.txt`
 - `target/pane-profiling/bd-1y0ph/pane_terminal_bench.txt`
 - `target/pane-profiling/bd-1y0ph/pane_pointer_bench.txt`
+- `target/pane-profiling/bd-1y0ph/layout_bench.perfstat.txt`
+- `target/pane-profiling/bd-1y0ph/pane_terminal_bench.perfstat.txt`
+- `target/pane-profiling/bd-1y0ph/pane_pointer_bench.perfstat.txt`
 
 All targeted probes passed in the latest test-mode capture.
 
@@ -32,6 +35,8 @@ Use `rch` indirectly through the runner:
 
 ```bash
 ./scripts/pane_profile.sh --test
+./scripts/pane_profile.sh --test --time
+./scripts/pane_profile.sh --test --perf-stat
 ```
 
 For later non-test captures:
@@ -42,8 +47,8 @@ For later non-test captures:
 
 ## First-Principles Hotspot Hypotheses
 
-These are code-path hypotheses from the current implementation, not flamegraph
-proof yet.
+These are code-path hypotheses from the current implementation, now backed by
+`perf stat` counter samples for one representative benchmark per surface.
 
 ### Core pane path (`ftui-layout/src/pane.rs`)
 
@@ -54,6 +59,18 @@ proof yet.
   loops.
 - `PaneInteractionTimeline::replay()` rebuilds from baseline and reapplies all
   retained operations, so replay cost grows with timeline length.
+
+Representative `perf stat` sample (`pane/core/timeline/apply_and_replay_32_ops`):
+
+- ~408M instructions / ~157M cycles over ~44.5ms elapsed
+- 2.60 IPC, ~1.22% branch-miss rate
+- ~3.05% L1 d-cache load miss rate
+
+Interpretation:
+
+- This path is compute-dense rather than branch- or cache-pathological.
+- The first optimization wins are still algorithmic: less replay work and fewer
+  tree clones, not micro-tuning branches.
 
 ### Terminal pane path (`ftui-runtime/src/program.rs`)
 
@@ -66,6 +83,18 @@ proof yet.
   which is likely cheaper than the core structural path but still a meaningful
   per-event cost center.
 
+Representative `perf stat` sample (`pane/terminal/lifecycle/down_drag_120_up`):
+
+- ~6.7M instructions / ~7.5M cycles over ~3.59ms elapsed
+- 0.89 IPC, ~4.03% branch-miss rate
+- ~1.13% L1 d-cache load miss rate
+
+Interpretation:
+
+- This path is branchier and less pipeline-efficient than the core replay path.
+- The likely cost centers are event-state branching and handle-resolution logic,
+  not cache misses.
+
 ### Web pane path (`ftui-web/src/pane_pointer_capture.rs`)
 
 - `PanePointerCaptureAdapter::pointer_move()` maintains cumulative motion and
@@ -74,8 +103,25 @@ proof yet.
   comparison point is whether state-machine forwarding or motion bookkeeping
   dominates after capture is acquired.
 
-## Next Evidence Step
+Representative `perf stat` sample (`pane/web_pointer/lifecycle/down_ack_move_120_up`):
 
-The next `bd-1y0ph` slice should add CPU/allocation profile captures for the
-highest-frequency terminal and core paths, using the new runner artifacts as the
-stable benchmark/probe baseline.
+- ~2.7M instructions / ~4.1M cycles over ~2.33ms elapsed
+- 0.65 IPC, ~8.38% branch-miss rate
+- ~3.16% L1 d-cache load miss rate
+
+Interpretation:
+
+- This is the branchiest of the three sampled surfaces.
+- The web pointer path likely pays for high-frequency conditional state updates
+  and direction-change bookkeeping more than raw arithmetic.
+
+## Environment Notes
+
+`perf` is enabled in the current environment after lowering
+`kernel.perf_event_paranoid` to `1`, so counter-based profiling is now part of
+the repeatable capture workflow.
+
+The current bench binaries are still stripped, which means `perf report` stack
+attribution is not yet high quality even though `perf stat` counters are fully
+usable. The next `bd-1y0ph` slice should focus on getting symbol-rich bench
+artifacts locally so call-stack profiles become actionable too.
