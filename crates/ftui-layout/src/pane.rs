@@ -3887,6 +3887,10 @@ impl PaneTree {
         operation_id: u64,
         operation: PaneOperation,
     ) -> Result<PaneOperationOutcome, PaneOperationError> {
+        if let PaneOperation::SetSplitRatio { split, ratio } = operation {
+            return self.apply_set_split_ratio_atomic(operation_id, split, ratio);
+        }
+
         let kind = operation.kind();
         let before_hash = self.state_hash();
         let mut working = self.clone();
@@ -3929,6 +3933,129 @@ impl PaneTree {
         })
     }
 
+    fn apply_set_split_ratio_atomic(
+        &mut self,
+        operation_id: u64,
+        split_id: PaneId,
+        ratio: PaneSplitRatio,
+    ) -> Result<PaneOperationOutcome, PaneOperationError> {
+        let kind = PaneOperationKind::SetSplitRatio;
+        let before_hash = self.state_hash();
+        let normalized =
+            PaneSplitRatio::new(ratio.numerator(), ratio.denominator()).map_err(|_| {
+                PaneOperationError {
+                    operation_id,
+                    kind,
+                    touched_nodes: vec![split_id],
+                    before_hash,
+                    after_hash: before_hash,
+                    reason: PaneOperationFailure::InvalidRatio {
+                        node_id: split_id,
+                        numerator: ratio.numerator(),
+                        denominator: ratio.denominator(),
+                    },
+                }
+            })?;
+
+        let previous_ratio = {
+            let node = self.nodes.get_mut(&split_id).ok_or(PaneOperationError {
+                operation_id,
+                kind,
+                touched_nodes: vec![split_id],
+                before_hash,
+                after_hash: before_hash,
+                reason: PaneOperationFailure::MissingNode { node_id: split_id },
+            })?;
+            let PaneNodeKind::Split(split) = &mut node.kind else {
+                return Err(PaneOperationError {
+                    operation_id,
+                    kind,
+                    touched_nodes: vec![split_id],
+                    before_hash,
+                    after_hash: before_hash,
+                    reason: PaneOperationFailure::ParentNotSplit { node_id: split_id },
+                });
+            };
+            let previous_ratio = split.ratio;
+            split.ratio = normalized;
+            previous_ratio
+        };
+
+        if let Err(err) = self.validate() {
+            let node = self.nodes.get_mut(&split_id).ok_or(PaneOperationError {
+                operation_id,
+                kind,
+                touched_nodes: vec![split_id],
+                before_hash,
+                after_hash: before_hash,
+                reason: PaneOperationFailure::Validation(err.clone()),
+            })?;
+            let PaneNodeKind::Split(split) = &mut node.kind else {
+                return Err(PaneOperationError {
+                    operation_id,
+                    kind,
+                    touched_nodes: vec![split_id],
+                    before_hash,
+                    after_hash: before_hash,
+                    reason: PaneOperationFailure::Validation(err),
+                });
+            };
+            split.ratio = previous_ratio;
+            return Err(PaneOperationError {
+                operation_id,
+                kind,
+                touched_nodes: vec![split_id],
+                before_hash,
+                after_hash: before_hash,
+                reason: PaneOperationFailure::Validation(err),
+            });
+        }
+
+        let after_hash = self.state_hash();
+        Ok(PaneOperationOutcome {
+            operation_id,
+            kind,
+            touched_nodes: vec![split_id],
+            before_hash,
+            after_hash,
+        })
+    }
+
+    fn apply_operation_in_place_for_replay(
+        &mut self,
+        operation_id: u64,
+        operation: &PaneOperation,
+    ) -> Result<(), PaneOperationError> {
+        let kind = operation.kind();
+        let before_hash = self.state_hash();
+        let touched_nodes = operation.referenced_nodes();
+        let mut touched = touched_nodes.iter().copied().collect::<BTreeSet<_>>();
+
+        if let Err(reason) = self.apply_operation_inner_ref(operation, &mut touched) {
+            return Err(PaneOperationError {
+                operation_id,
+                kind,
+                touched_nodes,
+                before_hash,
+                after_hash: self.state_hash(),
+                reason,
+            });
+        }
+
+        if let Err(err) = self.validate() {
+            return Err(PaneOperationError {
+                operation_id,
+                kind,
+                touched_nodes,
+                before_hash,
+                after_hash: self.state_hash(),
+                reason: PaneOperationFailure::Validation(err),
+            });
+        }
+
+        Ok(())
+    }
+
     fn apply_operation_inner(
         &mut self,
         operation: PaneOperation,
@@ -3955,6 +4082,44 @@ impl PaneTree {
             }
             PaneOperation::SetSplitRatio { split, ratio } => {
                 self.apply_set_split_ratio(split, ratio, touched)
+            }
+            PaneOperation::NormalizeRatios => self.apply_normalize_ratios(touched),
+        }
+    }
+
+    fn apply_operation_inner_ref(
+        &mut self,
+        operation: &PaneOperation,
+        touched: &mut BTreeSet<PaneId>,
+    ) -> Result<(), PaneOperationFailure> {
+        match operation {
+            PaneOperation::SplitLeaf {
+                target,
+                axis,
+                ratio,
+                placement,
+                new_leaf,
+            } => self.apply_split_leaf(
+                *target,
+                *axis,
+                *ratio,
+                *placement,
+                new_leaf.clone(),
+                touched,
+            ),
+            PaneOperation::CloseNode { target } => self.apply_close_node(*target, touched),
+            PaneOperation::MoveSubtree {
+                source,
+                target,
+                axis,
+                ratio,
+                placement,
+            } => self.apply_move_subtree(*source, *target, *axis, *ratio, *placement, touched),
+            PaneOperation::SwapNodes { first, second } => {
+                self.apply_swap_nodes(*first, *second, touched)
+            }
+            PaneOperation::SetSplitRatio { split, ratio } => {
+                self.apply_set_split_ratio(*split, *ratio, touched)
             }
             PaneOperation::NormalizeRatios => self.apply_normalize_ratios(touched),
         }
@@ -5215,15 +5380,13 @@ impl PaneInteractionTimeline {
         if self.cursor < self.entries.len() {
             self.entries.truncate(self.cursor);
         }
-        let before_hash = tree.state_hash();
         let outcome = tree.apply_operation(operation_id, operation.clone())?;
-        let after_hash = tree.state_hash();
         self.entries.push(PaneInteractionTimelineEntry {
             sequence,
             operation_id,
             operation,
-            before_hash,
-            after_hash,
+            before_hash: outcome.before_hash,
+            after_hash: outcome.after_hash,
         });
         self.cursor = self.entries.len();
         Ok(outcome)
@@ -5258,7 +5421,7 @@ impl PaneInteractionTimeline {
         let mut tree = PaneTree::from_snapshot(baseline)
             .map_err(|source| PaneInteractionTimelineError::BaselineInvalid { source })?;
         for entry in self.entries.iter().take(self.cursor) {
-            tree.apply_operation(entry.operation_id, entry.operation.clone())
+            tree.apply_operation_in_place_for_replay(entry.operation_id, &entry.operation)
                 .map_err(|source| PaneInteractionTimelineError::ApplyFailed { source })?;
         }
         Ok(tree)
@@ -8644,5 +8807,43 @@ mod tests {
 
         let replayed = timeline.replay().expect("replay should succeed");
         assert_eq!(replayed.state_hash(), tree.state_hash());
+    }
+
+    #[test]
+    fn interaction_timeline_replay_matches_recorded_ratio_updates() {
+        let mut tree = PaneTree::from_snapshot(make_valid_snapshot()).expect("valid tree");
+        let mut timeline = PaneInteractionTimeline::with_baseline(&tree);
+        let split_ids: Vec<_> = tree
+            .nodes()
+            .filter_map(|node| match node.kind {
+                PaneNodeKind::Split(_) => Some(node.id),
+                PaneNodeKind::Leaf(_) => None,
+            })
+            .collect();
+        assert!(!split_ids.is_empty());
+        let ratios = [
+            PaneSplitRatio::new(3, 2).expect("valid ratio"),
+            PaneSplitRatio::new(2, 3).expect("valid ratio"),
+            PaneSplitRatio::new(5, 4).expect("valid ratio"),
+            PaneSplitRatio::new(4, 5).expect("valid ratio"),
+        ];
+
+        for idx in 0..16u64 {
+            timeline
+                .apply_and_record(
+                    &mut tree,
+                    idx,
+                    20_000 + idx,
+                    PaneOperation::SetSplitRatio {
+                        split: split_ids[idx as usize % split_ids.len()],
+                        ratio: ratios[idx as usize % ratios.len()],
+                    },
+                )
+                .expect("ratio update should apply");
+        }
+
+        let replayed = timeline.replay().expect("replay should succeed");
+        assert_eq!(replayed.state_hash(), tree.state_hash());
+        assert_eq!(replayed.to_snapshot(), tree.to_snapshot());
     }
 }

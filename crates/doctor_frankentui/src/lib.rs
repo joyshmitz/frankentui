@@ -43,6 +43,25 @@
 //! The rest of the crate is mostly pure translation/analysis logic and should
 //! remain synchronous unless a later change proves otherwise.
 //!
+//! ## Command-To-Lane Topology
+//!
+//! The command inventory is more specific than "seed/capture/doctor/suite/report
+//! exist." Each top-level CLI command already maps onto a small set of
+//! supervision lanes, cancellation points, and artifact contracts:
+//!
+//! | Command | Primary modules | Highest-value supervised concerns | Existing evidence/artifact contract |
+//! | --- | --- | --- | --- |
+//! | `seed-demo` | [`seed`], [`util`] | MCP readiness polling, bounded retries, backoff sleeps, request/response logging, JSON-RPC failure classification | optional RPC log file plus deterministic endpoint/project/agent summary payload |
+//! | `replay` / `capture` | [`capture`], [`tape`], [`runmeta`], [`trace`], [`util`] | seed-demo bootstrap, replay/VHS/tmux subprocess lifecycle, timeout enforcement, fallback classification, snapshot/media finalization, evidence-ledger writes | `run_meta.json`, `evidence_ledger.jsonl`, trace ids, output/snapshot paths, ttyd/tmux artifacts, fallback + capture-error reasons |
+//! | `certify` / `doctor` | [`doctor`], [`capture`], [`util`] | command/help probes, capture smoke subprocesses, degraded-mode classification, optional tmux fallback, bounded app-smoke wait, summary synthesis | `doctor_summary.json`, capture smoke detail, degraded/fallback reason, tmux attach/session/pane artifacts |
+//! | `migrate` / `suite` | [`suite`], [`report`], [`runmeta`] | profile fan-out, per-run CLI subprocess orchestration, fail-fast vs keep-going policy, manifest/index generation, report invocation | suite summary JSON, manifest with trace/fallback/capture-error index, report log/html/json outputs |
+//! | `report` | [`report`], [`runmeta`] | deterministic aggregation over existing runs, artifact-link resolution, fallback/capture-error surfacing | HTML + JSON report with per-run trace ids, evidence ledger links, tmux/log artifacts |
+//! | `plan` / `import` | [`import`] and translation modules | lower supervision value today; mostly deterministic analysis/snapshot materialization rather than long-running orchestration | import planning artifacts and deterministic snapshots |
+//!
+//! This mapping is the doctor-specific backbone for targeted Asupersync work:
+//! only the commands above that own retries, subprocesses, deadlines, or
+//! artifact assembly are in scope for replatforming.
+//!
 //! # Proposed Supervised Topology
 //!
 //! The migration target is a per-command supervision tree with explicit child
@@ -66,6 +85,27 @@
 //!    Used by `suite`/`report` to merge per-run outcomes into manifest, summary,
 //!    and operator-facing report artifacts.
 //!
+//! ## Boundary Inventory By Current Artifact Surface
+//!
+//! The current code already exposes the fields later migration work must keep
+//! stable. [`RunMeta`] is the key per-run contract and currently carries:
+//!
+//! - identity: `trace_id`, `policy_id`, `profile`, `run_dir`
+//! - fallback state: `fallback_active`, `fallback_reason`,
+//!   `capture_error_reason`
+//! - subprocess outcomes: `seed_exit_code`, `vhs_exit_code`,
+//!   `host_vhs_exit_code`, snapshot/video existence + duration
+//! - evidence/artifacts: `evidence_ledger`, output/snapshot paths,
+//!   ttyd runtime/shim logs
+//! - observer state: `tmux_session`, `tmux_attach_command`,
+//!   `tmux_session_file`, `tmux_pane_capture`, `tmux_pane_log`
+//!
+//! `doctor.rs` then lifts the same artifact vocabulary into
+//! `doctor_summary.json`, and `suite.rs` / `report.rs` preserve it in suite
+//! manifests and human/operator reports. Any supervised migration that cannot
+//! keep these relationships intact is changing the operator contract, not just
+//! the executor internals.
+//!
 //! # Migration Sequence
 //!
 //! The code suggests a clear order of operations:
@@ -79,6 +119,20 @@
 //!    supervised.
 //! 5. Validation expansion last, once the new orchestration boundaries are
 //!    stable enough to test deterministically.
+//!
+//! More concretely, the current repo suggests these implementation slices:
+//!
+//! 1. Convert `seed.rs` waits/retries into a supervised network/bootstrap lane
+//!    while preserving retry logging and endpoint summary semantics.
+//! 2. Replatform `capture.rs` subprocess + observer lifecycle as a supervised
+//!    subprocess lane that still writes the same `RunMeta` and
+//!    `evidence_ledger.jsonl` fields.
+//! 3. Refine `doctor.rs` so degraded-capture classification and tmux fallback
+//!    decisions become explicit child outcomes instead of ad hoc control flow.
+//! 4. Lift `suite.rs` fan-out and report invocation onto the same lane model so
+//!    suite summaries can compare per-run lane outcomes deterministically.
+//! 5. Only after the above, expand shadow-run and replay validation over the
+//!    stabilized evidence schema.
 //!
 //! # Invariants Worth Preserving
 //!

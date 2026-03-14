@@ -46,6 +46,83 @@ These are the concrete `ftui-runtime` surfaces where targeted Asupersync integra
 | Seed/demo waiting and retries | `crates/doctor_frankentui/src/seed.rs` plus seed integration tests in `TEST_MATRIX.md` | Wait/retry loops, auth forwarding, endpoint normalization, optional reservation behavior | Users need reliable setup; operators need clear retry behavior and bounded waits | Keep deterministic request sequencing and logged failure signatures |
 | Suite/report aggregation | `crates/doctor_frankentui/src/suite.rs`, `src/report.rs`, `TEST_MATRIX.md`, `VERIFICATION_REPORT.md` | Multi-run orchestration already produces suite summaries, artifact maps, and evidence bundles | Rollout confidence depends on artifact completeness and reproducibility, not just pass/fail bits | Preserve stable artifact-map keys and report contract |
 
+## doctor_frankentui Workflow Topology By Command
+
+The broad seam table above is enough to justify the migration boundary, but
+`bd-1889t` needs a more operational inventory of how each command decomposes
+today.
+
+| CLI command | Primary code path | Network/bootstrap lane | Subprocess lane | Artifact lane | Aggregation lane | Existing observable outputs |
+| --- | --- | --- | --- | --- | --- | --- |
+| `seed-demo` | `crates/doctor_frankentui/src/seed.rs` | MCP health polling, JSON-RPC retries, auth forwarding, endpoint normalization | none today | optional RPC log file, deterministic summary payload | none | seed summary JSON/human output, retry logs, server timeout failure text |
+| `replay` / `capture` | `crates/doctor_frankentui/src/capture.rs` | optional `seed-demo` bootstrap before capture | app launch, VHS invocation, ttyd interaction, tmux observer lifecycle, timeout enforcement, final exit classification | run dir creation, `run_meta.json`, `evidence_ledger.jsonl`, media/snapshot outputs, ttyd/tmux artifact files | none at command scope | `trace_id`, `fallback_reason`, `capture_error_reason`, `ttyd_*`, `tmux_*`, output/snapshot paths, policy id |
+| `certify` / `doctor` | `crates/doctor_frankentui/src/doctor.rs` | none directly beyond environment/capture stack checks | `--help` command probes, capture smoke run, optional tmux app-smoke fallback with bounded wait/kill | `doctor_summary.json`, smoke logs, tmux pane/session artifacts | single-command summary synthesis | degraded-mode classification, fallback hints, app-smoke summary, attach command, pane capture/log paths |
+| `migrate` / `suite` | `crates/doctor_frankentui/src/suite.rs` | inherited from per-run capture invocations | per-profile CLI subprocess fan-out, fail-fast / keep-going behavior, report subprocess invocation | suite dir, summary JSON, manifest, report log/json/html | merges per-run `RunMeta` into suite-wide trace/fallback/error index | manifest trace ids, fallback profiles, capture-error profiles, report outputs |
+| `report` | `crates/doctor_frankentui/src/report.rs` | none | none beyond file reads | HTML + JSON report generation over retained run artifacts | merges run metadata and artifact links into operator view | trace ids, fallback/capture-error rows, evidence-ledger links, tmux/log/media references |
+
+### Current Cancellation / Timeout Boundaries
+
+The highest-value supervision boundaries are already visible in code:
+
+- `seed.rs`
+  - server readiness loop with explicit timeout and retry backoff
+  - per-call HTTP client timeout and retriable RPC/tool error classification
+- `capture.rs`
+  - seed bootstrap optionality and required/optional failure policy
+  - child-process timeout handling via `wait_timeout`
+  - fallback activation when capture aborts early or degraded paths are forced
+  - tmux observer start/finalize lifecycle and keep-open vs cleanup policy
+- `doctor.rs`
+  - bounded smoke capture path
+  - degraded-capture vs hard-failure classification
+  - tmux fallback session creation, bounded wait, pane capture, conditional kill
+- `suite.rs`
+  - fail-fast / keep-going selection
+  - per-profile process orchestration and late report generation
+
+### Current Artifact And Correlation Contract
+
+`doctor_frankentui` already has a concrete operator contract; later Asupersync
+work must preserve it rather than "recreate observability later."
+
+- Per-run identity and evidence live primarily in `crates/doctor_frankentui/src/runmeta.rs`.
+  - `RunMeta` already carries `trace_id`, `policy_id`, `run_dir`,
+    `fallback_active`, `fallback_reason`, `capture_error_reason`,
+    `evidence_ledger`, `ttyd_*`, `tmux_*`, and media/snapshot paths.
+- `capture.rs` emits the richest raw evidence surface.
+  - `run_meta.json`
+  - `evidence_ledger.jsonl`
+  - optional ttyd shim/runtime logs
+  - optional tmux session, pane capture, and pane log artifacts
+- `doctor.rs` summarizes certification outcomes into `doctor_summary.json`.
+  - includes capture-stack health, degraded-mode reason, smoke detail,
+    fallback error, and tmux attach/session artifacts
+- `suite.rs` preserves correlation across runs.
+  - suite summary JSON and manifest expose `trace_ids`, fallback profiles,
+    capture-error profiles, and per-run artifact references
+- `report.rs` is the operator-facing read model over the same contract.
+  - HTML/JSON reports surface trace IDs, fallback reasons, capture errors,
+    evidence ledger links, and tmux/log/media artifacts
+
+### Recommended doctor_frankentui Migration Slices
+
+Given the current topology, the lowest-risk sequence is:
+
+1. `seed.rs`
+   - isolate readiness polling, retries, and request logging into the first
+     supervised network/bootstrap lane
+2. `capture.rs`
+   - migrate subprocess + observer management while holding the `RunMeta` and
+     evidence-ledger schema stable
+3. `doctor.rs`
+   - formalize degraded-mode and tmux fallback as explicit supervised outcomes
+4. `suite.rs`
+   - move fan-out/report orchestration after the lower-level lane semantics are
+     stable enough to aggregate deterministically
+5. `report.rs`
+   - keep largely synchronous unless later evidence volume makes incremental or
+     bounded aggregation necessary
+
 ## Existing Verification Surfaces To Preserve
 
 Future Asupersync-focused work should extend these commands and artifacts, not replace them.

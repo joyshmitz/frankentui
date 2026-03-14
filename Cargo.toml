@@ -38,3 +38,7 @@ strip = true
 
 [profile.release.package.ftui-extras]
 opt-level = 3
+
+[profile.bench]
+debug = true
+strip = false
