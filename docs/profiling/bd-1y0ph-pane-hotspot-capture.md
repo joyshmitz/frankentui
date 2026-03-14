@@ -128,7 +128,7 @@ matching binary happens to exist under `target/release/deps/`.
 
 Current evidence from that artifact is mixed:
 
-- `layout_bench`: `with debug_info, not stripped`
+- `layout_bench`: `binary_source=executed`, `with debug_info, not stripped`
 - `pane_terminal_bench`: exact executed binary path captured, but local binary
   currently missing after `rch` artifact retrieval
 - `pane_pointer_bench`: exact executed binary path captured, but local binary
@@ -139,3 +139,11 @@ terminal/web benches still need follow-up if we want uniformly trustworthy
 `perf report` stack attribution across all pane surfaces from the local artifact
 bundle. The immediate value of the new metadata is that it distinguishes
 "missing exact executed binary" from "found a different local binary and guessed."
+
+Latest verified `symbol_metadata.txt` state:
+
+```text
+layout_bench: binary_source=executed, debug_info=present
+pane_terminal_bench: binary_source=executed, local_binary_status=missing
+pane_pointer_bench: binary_source=executed, local_binary_status=missing
+```
