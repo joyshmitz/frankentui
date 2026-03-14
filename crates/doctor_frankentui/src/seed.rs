@@ -26,10 +26,10 @@ pub struct SeedDemoArgs {
     #[arg(long, default_value = "/tmp/tui_inspector_demo_project")]
     pub project_key: String,
 
-    #[arg(long = "agent-a", default_value = "InspectorRed")]
+    #[arg(long = "agent-a", default_value = "CrimsonHarbor")]
     pub agent_a: String,
 
-    #[arg(long = "agent-b", default_value = "InspectorBlue")]
+    #[arg(long = "agent-b", default_value = "AzureMeadow")]
     pub agent_b: String,
 
     #[arg(long = "messages", default_value_t = 6, value_parser = clap::value_parser!(u32).range(1..))]
@@ -119,6 +119,14 @@ impl RpcClient {
         }
     }
 
+    fn parsed_tool_error(parsed: &Value) -> bool {
+        parsed
+            .get("result")
+            .and_then(|result| result.get("isError"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
+
     fn call_tool_once(&mut self, method: &str, arguments: Value) -> Result<Value> {
         self.counter = self.counter.saturating_add(1);
 
@@ -162,6 +170,11 @@ impl RpcClient {
         if parsed.get("error").is_some() {
             return Err(DoctorError::invalid(format!(
                 "RPC error for {method}: {response_text}"
+            )));
+        }
+        if Self::parsed_tool_error(&parsed) {
+            return Err(DoctorError::invalid(format!(
+                "MCP tool error for {method}: {response_text}"
             )));
         }
 
@@ -355,15 +368,34 @@ mod tests {
         let empty_response = DoctorError::invalid("RPC empty response for health_check");
         let non_json = DoctorError::invalid("RPC non-JSON-RPC response for health_check: nope");
         let rpc_error = DoctorError::invalid("RPC error for send_message: {\"error\":true}");
+        let tool_error = DoctorError::invalid(
+            "MCP tool error for register_agent: {\"result\":{\"isError\":true}}",
+        );
         let other_invalid = DoctorError::invalid("some other validation error");
 
         assert!(RpcClient::should_retry(&empty_response));
         assert!(RpcClient::should_retry(&non_json));
         assert!(RpcClient::should_retry(&rpc_error));
+        assert!(!RpcClient::should_retry(&tool_error));
         assert!(!RpcClient::should_retry(&other_invalid));
         assert!(!RpcClient::should_retry(&DoctorError::MissingCommand {
             command: "vhs".to_string(),
         }));
+    }
+
+    #[test]
+    fn parsed_tool_error_detects_mcp_tool_failures() {
+        assert!(RpcClient::parsed_tool_error(&json!({
+            "result": {
+                "isError": true,
+                "content": [{"type": "text", "text": "bad"}]
+            }
+        })));
+        assert!(!RpcClient::parsed_tool_error(&json!({
+            "result": {
+                "content": [{"type": "text", "text": "ok"}]
+            }
+        })));
     }
 
     #[test]
