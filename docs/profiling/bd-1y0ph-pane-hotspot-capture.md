@@ -26,6 +26,7 @@ Artifacts produced by the latest run:
 - `target/pane-profiling/bd-1y0ph/layout_bench.perfstat.txt`
 - `target/pane-profiling/bd-1y0ph/pane_terminal_bench.perfstat.txt`
 - `target/pane-profiling/bd-1y0ph/pane_pointer_bench.perfstat.txt`
+- `target/pane-profiling/bd-1y0ph/symbol_metadata.txt`
 
 All targeted probes passed in the latest test-mode capture.
 
@@ -121,7 +122,8 @@ Interpretation:
 `kernel.perf_event_paranoid` to `1`, so counter-based profiling is now part of
 the repeatable capture workflow.
 
-The current bench binaries are still stripped, which means `perf report` stack
-attribution is not yet high quality even though `perf stat` counters are fully
-usable. The next `bd-1y0ph` slice should focus on getting symbol-rich bench
-artifacts locally so call-stack profiles become actionable too.
+Bench binaries are now built from a bench profile that preserves debug info, and
+the profiling runner emits `symbol_metadata.txt` so each capture bundle records
+the exact bench binary paths plus whether `.debug_info` is present. That turns
+symbol-readiness from an assumption into an auditable artifact and makes future
+`perf report` investigations easier to trust.
