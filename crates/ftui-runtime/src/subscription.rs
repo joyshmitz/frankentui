@@ -1051,4 +1051,316 @@ mod tests {
         let msgs = mgr.drain_messages();
         assert!(msgs.is_empty());
     }
+
+    // =========================================================================
+    // LIFECYCLE CONTRACT TESTS (bd-1dg21)
+    //
+    // These tests capture the observable behavioral contract of the subscription
+    // system that MUST be preserved during the Asupersync migration. Each test
+    // documents a specific guarantee that downstream code relies on.
+    // =========================================================================
+
+    /// CONTRACT: StopSignal::wait_timeout must handle poisoned mutex without panicking.
+    /// This ensures subscriptions can be stopped even if another thread panicked
+    /// while holding the mutex.
+    #[test]
+    fn contract_stop_signal_recovers_from_poisoned_mutex() {
+        let (signal, trigger) = StopSignal::new();
+        let signal_clone = signal.clone();
+
+        // Poison the mutex by panicking while holding the lock
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let (lock, _) = &*signal_clone.inner;
+            let _guard = lock.lock().unwrap();
+            panic!("intentional poison");
+        }));
+        assert!(result.is_err());
+
+        // Signal must still be checkable and triggerable despite poisoned mutex
+        assert!(!signal.is_stopped(), "signal should still report not-stopped");
+        trigger.stop();
+        assert!(signal.is_stopped(), "signal should report stopped after trigger");
+        assert!(
+            signal.wait_timeout(Duration::from_millis(10)),
+            "wait_timeout should return true when stopped, even with poisoned mutex"
+        );
+    }
+
+    /// CONTRACT: stop_all() must complete within a bounded time even if subscription
+    /// threads are uncooperative. The 250ms join timeout per subscription is the
+    /// upper bound.
+    #[test]
+    fn contract_stop_all_bounded_time_with_uncooperative_subscriptions() {
+        let mut mgr = SubscriptionManager::<TestMsg>::new();
+
+        // Create subscriptions that ignore the stop signal
+        struct UncooperativeSub {
+            id: SubId,
+        }
+
+        impl Subscription<TestMsg> for UncooperativeSub {
+            fn id(&self) -> SubId {
+                self.id
+            }
+
+            fn run(&self, _sender: mpsc::Sender<TestMsg>, _stop: StopSignal) {
+                // Ignore stop signal entirely, sleep for a long time
+                thread::sleep(Duration::from_secs(5));
+            }
+        }
+
+        mgr.reconcile(vec![
+            Box::new(UncooperativeSub { id: 100 }),
+            Box::new(UncooperativeSub { id: 200 }),
+        ]);
+
+        thread::sleep(Duration::from_millis(20)); // let threads start
+
+        let start = Instant::now();
+        mgr.stop_all();
+        let elapsed = start.elapsed();
+
+        // 2 subscriptions * 250ms timeout each = 500ms max, plus some margin
+        assert!(
+            elapsed < Duration::from_millis(800),
+            "stop_all took {elapsed:?}, expected < 800ms for 2 uncooperative subscriptions"
+        );
+    }
+
+    /// CONTRACT: reconcile() must not start a new subscription for an ID that is
+    /// already active, even if the subscription object is different.
+    #[test]
+    fn contract_reconcile_deduplicates_by_id_not_identity() {
+        let mut mgr = SubscriptionManager::<TestMsg>::new();
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        struct CountingSub {
+            id: SubId,
+            counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        }
+
+        impl Subscription<TestMsg> for CountingSub {
+            fn id(&self) -> SubId {
+                self.id
+            }
+
+            fn run(&self, _sender: mpsc::Sender<TestMsg>, stop: StopSignal) {
+                self.counter
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                while !stop.is_stopped() {
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
+        }
+
+        // First reconcile starts one thread
+        mgr.reconcile(vec![Box::new(CountingSub {
+            id: 42,
+            counter: counter.clone(),
+        })]);
+        thread::sleep(Duration::from_millis(20));
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "first reconcile should start exactly 1 thread"
+        );
+
+        // Second reconcile with same ID must NOT start another thread
+        mgr.reconcile(vec![Box::new(CountingSub {
+            id: 42,
+            counter: counter.clone(),
+        })]);
+        thread::sleep(Duration::from_millis(20));
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "second reconcile with same ID must not start another thread"
+        );
+
+        mgr.stop_all();
+    }
+
+    /// CONTRACT: When a subscription is removed via reconcile(), messages it sent
+    /// before being stopped may still be in the channel. drain_messages() must
+    /// return these buffered messages.
+    #[test]
+    fn contract_buffered_messages_available_after_subscription_stopped() {
+        let mut mgr = SubscriptionManager::<TestMsg>::new();
+
+        struct BurstSub;
+
+        impl Subscription<TestMsg> for BurstSub {
+            fn id(&self) -> SubId {
+                77
+            }
+
+            fn run(&self, sender: mpsc::Sender<TestMsg>, stop: StopSignal) {
+                // Send a burst of messages immediately
+                for i in 0..10 {
+                    let _ = sender.send(TestMsg::Value(i));
+                }
+                // Then wait for stop
+                while !stop.is_stopped() {
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
+        }
+
+        mgr.reconcile(vec![Box::new(BurstSub)]);
+        thread::sleep(Duration::from_millis(30));
+
+        // Remove the subscription
+        mgr.reconcile(vec![]);
+
+        // Messages sent before stop should still be drainable
+        let msgs = mgr.drain_messages();
+        let values: Vec<i32> = msgs
+            .iter()
+            .filter_map(|m| match m {
+                TestMsg::Value(v) => Some(*v),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            values.len() >= 5,
+            "Expected at least 5 buffered messages after stop, got {}",
+            values.len()
+        );
+    }
+
+    /// CONTRACT: active_count() must accurately reflect the number of running
+    /// subscriptions at all times.
+    #[test]
+    fn contract_active_count_tracks_running_subscriptions() {
+        let mut mgr = SubscriptionManager::<TestMsg>::new();
+
+        assert_eq!(mgr.active_count(), 0, "empty manager");
+
+        mgr.reconcile(vec![
+            Box::new(Every::with_id(1, Duration::from_millis(50), || {
+                TestMsg::Tick
+            })),
+            Box::new(Every::with_id(2, Duration::from_millis(50), || {
+                TestMsg::Tick
+            })),
+        ]);
+        assert_eq!(mgr.active_count(), 2, "after starting 2");
+
+        mgr.reconcile(vec![Box::new(Every::with_id(
+            1,
+            Duration::from_millis(50),
+            || TestMsg::Tick,
+        ))]);
+        assert_eq!(mgr.active_count(), 1, "after removing 1");
+
+        mgr.stop_all();
+        assert_eq!(mgr.active_count(), 0, "after stop_all");
+    }
+
+    /// CONTRACT: The Every subscription ID must be derived from interval only,
+    /// not from the message factory closure. Two Every subscriptions with the
+    /// same interval MUST have the same ID regardless of message content.
+    #[test]
+    fn contract_every_id_derived_from_interval_only() {
+        let sub_a = Every::<TestMsg>::new(Duration::from_millis(100), || TestMsg::Tick);
+        let sub_b = Every::<TestMsg>::new(Duration::from_millis(100), || TestMsg::Value(999));
+        assert_eq!(
+            sub_a.id(),
+            sub_b.id(),
+            "Every ID must depend only on interval, not message factory"
+        );
+
+        let sub_c = Every::<TestMsg>::new(Duration::from_millis(200), || TestMsg::Tick);
+        assert_ne!(
+            sub_a.id(),
+            sub_c.id(),
+            "Different intervals must produce different IDs"
+        );
+    }
+
+    /// CONTRACT: The Every subscription ID formula must remain stable across
+    /// versions. This captures the exact formula: interval_nanos XOR 0x5449_434B.
+    #[test]
+    fn contract_every_id_formula_is_stable() {
+        let interval = Duration::from_millis(100);
+        let expected_id = interval.as_nanos() as u64 ^ 0x5449_434B;
+        let sub = Every::<TestMsg>::new(interval, || TestMsg::Tick);
+        assert_eq!(
+            sub.id(),
+            expected_id,
+            "Every ID formula must be: interval.as_nanos() as u64 ^ 0x5449_434B"
+        );
+    }
+
+    /// CONTRACT: Drop on SubscriptionManager must stop all subscriptions.
+    /// This is the safety net for cleanup even if stop_all() is not called.
+    #[test]
+    fn contract_drop_triggers_stop_all() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let stop_count = std::sync::Arc::new(AtomicUsize::new(0));
+
+        struct StopCountingSub {
+            id: SubId,
+            counter: std::sync::Arc<AtomicUsize>,
+        }
+
+        impl Subscription<TestMsg> for StopCountingSub {
+            fn id(&self) -> SubId {
+                self.id
+            }
+
+            fn run(&self, _sender: mpsc::Sender<TestMsg>, stop: StopSignal) {
+                while !stop.is_stopped() {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                self.counter.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        {
+            let mut mgr = SubscriptionManager::<TestMsg>::new();
+            mgr.reconcile(vec![
+                Box::new(StopCountingSub {
+                    id: 1,
+                    counter: stop_count.clone(),
+                }),
+                Box::new(StopCountingSub {
+                    id: 2,
+                    counter: stop_count.clone(),
+                }),
+                Box::new(StopCountingSub {
+                    id: 3,
+                    counter: stop_count.clone(),
+                }),
+            ]);
+            thread::sleep(Duration::from_millis(20));
+            // mgr dropped here
+        }
+
+        // Give threads time to notice stop signal and exit
+        thread::sleep(Duration::from_millis(400));
+        assert_eq!(
+            stop_count.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "all 3 subscription threads must have observed stop signal on drop"
+        );
+    }
+
+    /// CONTRACT: SUBSCRIPTION_STOP_JOIN_TIMEOUT must be exactly 250ms.
+    /// The Asupersync migration must preserve this timeout bound.
+    #[test]
+    fn contract_stop_join_timeout_is_250ms() {
+        assert_eq!(
+            SUBSCRIPTION_STOP_JOIN_TIMEOUT,
+            Duration::from_millis(250),
+            "join timeout must be 250ms"
+        );
+        assert_eq!(
+            SUBSCRIPTION_STOP_JOIN_POLL,
+            Duration::from_millis(5),
+            "join poll interval must be 5ms"
+        );
+    }
 }

@@ -920,6 +920,27 @@ pub struct PaneInteractionTimelineCheckpoint {
     pub snapshot: PaneTreeSnapshot,
 }
 
+/// Replay diagnostics for the currently selected timeline cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneInteractionTimelineReplayDiagnostics {
+    pub entry_count: usize,
+    pub cursor: usize,
+    pub checkpoint_count: usize,
+    pub checkpoint_interval: usize,
+    pub checkpoint_hit: bool,
+    pub replay_start_idx: usize,
+    pub replay_depth: usize,
+}
+
+/// Auditable checkpoint-spacing decision derived from measured replay costs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneInteractionTimelineCheckpointDecision {
+    pub checkpoint_interval: usize,
+    pub estimated_snapshot_cost_ns: u128,
+    pub estimated_replay_step_cost_ns: u128,
+    pub estimated_replay_depth_ns: u128,
+}
+
 /// Persistent interaction timeline with undo/redo cursor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneInteractionTimeline {
@@ -936,6 +957,12 @@ pub struct PaneInteractionTimeline {
 }
 
 const DEFAULT_PANE_TIMELINE_CHECKPOINT_INTERVAL: usize = 16;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PaneValidationStrategy {
+    FullTree,
+    LocalClosure,
+}
 
 impl Default for PaneInteractionTimeline {
     fn default() -> Self {
@@ -3935,7 +3962,7 @@ impl PaneTree {
             });
         }
 
-        if let Err(err) = working.validate() {
+        if let Err(err) = working.validate_after_operation(kind, &touched) {
             return Err(PaneOperationError {
                 operation_id,
                 kind,
@@ -4006,7 +4033,7 @@ impl PaneTree {
             previous_ratio
         };
 
-        if let Err(err) = self.validate() {
+        if let Err(err) = self.validate_after_operation(kind, &BTreeSet::from([split_id])) {
             let node = self.nodes.get_mut(&split_id).ok_or(PaneOperationError {
                 operation_id,
                 kind,
@@ -4067,7 +4094,7 @@ impl PaneTree {
             });
         }
 
-        if let Err(err) = self.validate() {
+        if let Err(err) = self.validate_after_operation(kind, &touched) {
             return Err(PaneOperationError {
                 operation_id,
                 kind,
@@ -4076,6 +4103,108 @@ impl PaneTree {
                 after_hash: self.state_hash(),
                 reason: PaneOperationFailure::Validation(err),
             });
+        }
+
+        Ok(())
+    }
+
+    fn validate_after_operation(
+        &self,
+        kind: PaneOperationKind,
+        touched: &BTreeSet<PaneId>,
+    ) -> Result<(), PaneModelError> {
+        match self.validation_strategy_for_operation(kind) {
+            PaneValidationStrategy::FullTree => self.validate(),
+            PaneValidationStrategy::LocalClosure => self.validate_local_closure(touched),
+        }
+    }
+
+    const fn validation_strategy_for_operation(
+        &self,
+        kind: PaneOperationKind,
+    ) -> PaneValidationStrategy {
+        match kind {
+            PaneOperationKind::SetSplitRatio => PaneValidationStrategy::LocalClosure,
+            PaneOperationKind::SplitLeaf
+            | PaneOperationKind::CloseNode
+            | PaneOperationKind::MoveSubtree
+            | PaneOperationKind::SwapNodes
+            | PaneOperationKind::NormalizeRatios => PaneValidationStrategy::FullTree,
+        }
+    }
+
+    fn validate_local_closure(&self, touched: &BTreeSet<PaneId>) -> Result<(), PaneModelError> {
+        for node_id in touched {
+            let node = self
+                .nodes
+                .get(node_id)
+                .ok_or(PaneModelError::MissingRoot { root: *node_id })?;
+            node.constraints.validate(*node_id)?;
+
+            if *node_id == self.root {
+                if let Some(parent) = node.parent {
+                    return Err(PaneModelError::RootHasParent {
+                        root: self.root,
+                        parent,
+                    });
+                }
+            } else if let Some(parent_id) = node.parent {
+                let parent = self
+                    .nodes
+                    .get(&parent_id)
+                    .ok_or(PaneModelError::MissingParent {
+                        node_id: *node_id,
+                        parent: parent_id,
+                    })?;
+                let PaneNodeKind::Split(split) = &parent.kind else {
+                    return Err(PaneModelError::ParentMismatch {
+                        node_id: *node_id,
+                        expected: Some(parent_id),
+                        actual: node.parent,
+                    });
+                };
+                if split.first != *node_id && split.second != *node_id {
+                    return Err(PaneModelError::ParentMismatch {
+                        node_id: *node_id,
+                        expected: Some(parent_id),
+                        actual: node.parent,
+                    });
+                }
+            }
+
+            if let PaneNodeKind::Split(split) = &node.kind {
+                if split.ratio.numerator() == 0 || split.ratio.denominator() == 0 {
+                    return Err(PaneModelError::InvalidSplitRatio {
+                        numerator: split.ratio.numerator(),
+                        denominator: split.ratio.denominator(),
+                    });
+                }
+                if split.first == *node_id || split.second == *node_id {
+                    return Err(PaneModelError::SelfReferentialSplit { node_id: *node_id });
+                }
+                if split.first == split.second {
+                    return Err(PaneModelError::DuplicateSplitChildren {
+                        node_id: *node_id,
+                        child: split.first,
+                    });
+                }
+                for child_id in [split.first, split.second] {
+                    let child = self
+                        .nodes
+                        .get(&child_id)
+                        .ok_or(PaneModelError::MissingChild {
+                            parent: *node_id,
+                            child: child_id,
+                        })?;
+                    if child.parent != Some(*node_id) {
+                        return Err(PaneModelError::ParentMismatch {
+                            node_id: child_id,
+                            expected: Some(*node_id),
+                            actual: child.parent,
+                        });
+                    }
+                }
+            }
         }
 
         Ok(())
@@ -5390,6 +5519,44 @@ impl PaneInteractionTimeline {
         self.cursor
     }
 
+    /// Replay/checkpoint diagnostics for the current cursor.
+    #[must_use]
+    pub fn replay_diagnostics(&self) -> PaneInteractionTimelineReplayDiagnostics {
+        let replay_start_idx = self
+            .checkpoints
+            .iter()
+            .rev()
+            .find(|checkpoint| checkpoint.applied_len <= self.cursor)
+            .map_or(0, |checkpoint| checkpoint.applied_len);
+
+        PaneInteractionTimelineReplayDiagnostics {
+            entry_count: self.entries.len(),
+            cursor: self.cursor,
+            checkpoint_count: self.checkpoints.len(),
+            checkpoint_interval: self.checkpoint_interval,
+            checkpoint_hit: replay_start_idx != 0,
+            replay_start_idx,
+            replay_depth: self.cursor.saturating_sub(replay_start_idx),
+        }
+    }
+
+    /// Deterministic checkpoint-spacing decision from measured snapshot and replay costs.
+    #[must_use]
+    pub fn checkpoint_decision(
+        snapshot_cost_ns: u128,
+        replay_step_cost_ns: u128,
+    ) -> PaneInteractionTimelineCheckpointDecision {
+        let interval =
+            analytically_tuned_checkpoint_interval(snapshot_cost_ns, replay_step_cost_ns);
+        let replay_depth_ns = replay_step_cost_ns.saturating_mul(interval as u128) / 2;
+        PaneInteractionTimelineCheckpointDecision {
+            checkpoint_interval: interval,
+            estimated_snapshot_cost_ns: snapshot_cost_ns,
+            estimated_replay_step_cost_ns: replay_step_cost_ns,
+            estimated_replay_depth_ns: replay_depth_ns,
+        }
+    }
+
     /// Append one operation by applying it to the provided tree.
     ///
     /// If the cursor is behind the head (after undo), redo entries are dropped
@@ -5491,6 +5658,39 @@ impl PaneInteractionTimeline {
             snapshot: tree.to_snapshot(),
         });
     }
+}
+
+fn analytically_tuned_checkpoint_interval(
+    snapshot_cost_ns: u128,
+    replay_step_cost_ns: u128,
+) -> usize {
+    if snapshot_cost_ns == 0 || replay_step_cost_ns == 0 {
+        return DEFAULT_PANE_TIMELINE_CHECKPOINT_INTERVAL;
+    }
+
+    let ratio = snapshot_cost_ns.saturating_mul(2) / replay_step_cost_ns;
+    let root = integer_sqrt(ratio).max(1);
+    usize::try_from(root).unwrap_or(DEFAULT_PANE_TIMELINE_CHECKPOINT_INTERVAL)
+}
+
+fn integer_sqrt(value: u128) -> u128 {
+    if value < 2 {
+        return value;
+    }
+
+    let mut left = 1u128;
+    let mut right = value;
+    let mut answer = 1u128;
+    while left <= right {
+        let mid = left + (right - left) / 2;
+        if mid <= value / mid {
+            answer = mid;
+            left = mid + 1;
+        } else {
+            right = mid - 1;
+        }
+    }
+    answer
 }
 
 /// Deterministic allocator for pane IDs.
@@ -8998,5 +9198,87 @@ mod tests {
         assert_eq!(timeline.entries.len(), 28);
         assert_eq!(timeline.checkpoints.len(), 1);
         assert_eq!(timeline.checkpoints[0].applied_len, 16);
+    }
+
+    #[test]
+    fn interaction_timeline_replay_diagnostics_report_checkpoint_hit_and_depth() {
+        let mut tree = PaneTree::from_snapshot(make_valid_snapshot()).expect("valid tree");
+        let mut timeline = PaneInteractionTimeline::with_baseline(&tree);
+        let split_ids: Vec<_> = tree
+            .nodes()
+            .filter_map(|node| match node.kind {
+                PaneNodeKind::Split(_) => Some(node.id),
+                PaneNodeKind::Leaf(_) => None,
+            })
+            .collect();
+
+        for idx in 0..20u64 {
+            timeline
+                .apply_and_record(
+                    &mut tree,
+                    idx,
+                    50_000 + idx,
+                    PaneOperation::SetSplitRatio {
+                        split: split_ids[idx as usize % split_ids.len()],
+                        ratio: PaneSplitRatio::new(3, 2).expect("valid ratio"),
+                    },
+                )
+                .expect("ratio update should apply");
+        }
+
+        let diagnostics = timeline.replay_diagnostics();
+        assert_eq!(diagnostics.entry_count, 20);
+        assert_eq!(diagnostics.cursor, 20);
+        assert_eq!(diagnostics.checkpoint_interval, 16);
+        assert_eq!(diagnostics.checkpoint_count, 1);
+        assert!(diagnostics.checkpoint_hit);
+        assert_eq!(diagnostics.replay_start_idx, 16);
+        assert_eq!(diagnostics.replay_depth, 4);
+    }
+
+    #[test]
+    fn interaction_timeline_checkpoint_decision_prefers_shorter_interval_for_expensive_replay_steps()
+     {
+        let slow_replay =
+            PaneInteractionTimeline::checkpoint_decision(10_000, 2_500).checkpoint_interval;
+        let cheap_replay =
+            PaneInteractionTimeline::checkpoint_decision(10_000, 100).checkpoint_interval;
+
+        assert!(slow_replay < cheap_replay);
+        assert!(slow_replay >= 1);
+        assert!(cheap_replay >= 1);
+    }
+
+    #[test]
+    fn set_split_ratio_uses_local_validation_strategy() {
+        let tree = PaneTree::from_snapshot(make_valid_snapshot()).expect("valid tree");
+        assert_eq!(
+            tree.validation_strategy_for_operation(PaneOperationKind::SetSplitRatio),
+            PaneValidationStrategy::LocalClosure
+        );
+        assert_eq!(
+            tree.validation_strategy_for_operation(PaneOperationKind::NormalizeRatios),
+            PaneValidationStrategy::FullTree
+        );
+    }
+
+    #[test]
+    fn local_validation_closure_rejects_parent_mismatch_for_touched_split() {
+        let mut tree = PaneTree::from_snapshot(make_valid_snapshot()).expect("valid tree");
+        let split_id = id(1);
+        let child_id = id(2);
+        tree.nodes.get_mut(&child_id).expect("child present").parent = None;
+
+        let err = tree
+            .validate_local_closure(&BTreeSet::from([split_id]))
+            .expect_err("local closure should detect broken child parent");
+        assert!(matches!(
+            err,
+            PaneModelError::ParentMismatch {
+                node_id,
+                expected: Some(expected),
+                actual: None,
+            } if node_id == child_id && expected == split_id
+        ));
     }
 }

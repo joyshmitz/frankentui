@@ -1353,4 +1353,397 @@ mod tests {
 
         assert_eq!(sim.frame_count(), 10);
     }
+
+    // =========================================================================
+    // LIFECYCLE CONTRACT TESTS (bd-1dg21)
+    //
+    // These tests capture the observable lifecycle contract for subscriptions,
+    // commands, processes, and teardown ordering. The Asupersync migration
+    // MUST preserve all behaviors documented here.
+    // =========================================================================
+
+    /// CONTRACT: Model::init() is called exactly once, before any update() calls.
+    /// init() return value is executed as a command.
+    #[test]
+    fn contract_init_called_once_before_updates() {
+        use std::sync::atomic::{AtomicUsize, Ordering as AO};
+
+        struct InitTracker {
+            init_count: Arc<AtomicUsize>,
+            update_count: Arc<AtomicUsize>,
+            init_saw_zero_updates: bool,
+        }
+
+        #[derive(Debug)]
+        enum TrackerMsg {
+            FromInit,
+            Manual,
+        }
+
+        impl From<Event> for TrackerMsg {
+            fn from(_: Event) -> Self {
+                TrackerMsg::Manual
+            }
+        }
+
+        impl Model for InitTracker {
+            type Message = TrackerMsg;
+
+            fn init(&mut self) -> Cmd<Self::Message> {
+                self.init_count.fetch_add(1, AO::SeqCst);
+                self.init_saw_zero_updates =
+                    self.update_count.load(AO::SeqCst) == 0;
+                Cmd::msg(TrackerMsg::FromInit)
+            }
+
+            fn update(&mut self, _msg: Self::Message) -> Cmd<Self::Message> {
+                self.update_count.fetch_add(1, AO::SeqCst);
+                Cmd::none()
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let init_count = Arc::new(AtomicUsize::new(0));
+        let update_count = Arc::new(AtomicUsize::new(0));
+
+        let mut sim = ProgramSimulator::new(InitTracker {
+            init_count: init_count.clone(),
+            update_count: update_count.clone(),
+            init_saw_zero_updates: false,
+        });
+
+        sim.init();
+        assert_eq!(init_count.load(AO::SeqCst), 1, "init called exactly once");
+        assert!(
+            sim.model().init_saw_zero_updates,
+            "init must run before any update"
+        );
+        // init returned Cmd::msg(FromInit) which triggered one update
+        assert_eq!(
+            update_count.load(AO::SeqCst),
+            1,
+            "init's command should trigger update"
+        );
+    }
+
+    /// CONTRACT: on_shutdown() is called during program shutdown, providing
+    /// the model a chance to emit final commands.
+    #[test]
+    fn contract_on_shutdown_called_with_final_commands() {
+        struct ShutdownTracker {
+            shutdown_called: bool,
+            final_log: Option<String>,
+        }
+
+        #[derive(Debug)]
+        enum ShutMsg {
+            Quit,
+            LogFinal(String),
+        }
+
+        impl From<Event> for ShutMsg {
+            fn from(_: Event) -> Self {
+                ShutMsg::Quit
+            }
+        }
+
+        impl Model for ShutdownTracker {
+            type Message = ShutMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    ShutMsg::Quit => Cmd::quit(),
+                    ShutMsg::LogFinal(s) => {
+                        self.final_log = Some(s);
+                        Cmd::none()
+                    }
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+
+            fn on_shutdown(&mut self) -> Cmd<Self::Message> {
+                self.shutdown_called = true;
+                Cmd::msg(ShutMsg::LogFinal("shutdown-complete".into()))
+            }
+        }
+
+        let mut sim = ProgramSimulator::new(ShutdownTracker {
+            shutdown_called: false,
+            final_log: None,
+        });
+        sim.init();
+        sim.send(ShutMsg::Quit);
+
+        // Manually call on_shutdown to verify the contract
+        // (ProgramSimulator doesn't auto-call it; the real runtime does)
+        let shutdown_cmd = sim.model_mut().on_shutdown();
+        sim.execute_cmd(shutdown_cmd);
+
+        assert!(sim.model().shutdown_called, "on_shutdown must be called");
+        assert_eq!(
+            sim.model().final_log.as_deref(),
+            Some("shutdown-complete"),
+            "on_shutdown commands must be executed"
+        );
+    }
+
+    /// CONTRACT: Cmd::Batch stops executing remaining commands after Cmd::Quit.
+    #[test]
+    fn contract_batch_stops_on_quit() {
+        struct BatchQuitModel {
+            steps: Vec<&'static str>,
+        }
+
+        #[derive(Debug)]
+        enum BQMsg {
+            Step(&'static str),
+            TriggerBatchWithQuit,
+        }
+
+        impl From<Event> for BQMsg {
+            fn from(_: Event) -> Self {
+                BQMsg::Step("event")
+            }
+        }
+
+        impl Model for BatchQuitModel {
+            type Message = BQMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    BQMsg::Step(s) => {
+                        self.steps.push(s);
+                        Cmd::none()
+                    }
+                    BQMsg::TriggerBatchWithQuit => Cmd::batch(vec![
+                        Cmd::msg(BQMsg::Step("before-quit")),
+                        Cmd::quit(),
+                        Cmd::msg(BQMsg::Step("after-quit")),
+                    ]),
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let mut sim = ProgramSimulator::new(BatchQuitModel { steps: vec![] });
+        sim.init();
+        sim.send(BQMsg::TriggerBatchWithQuit);
+
+        assert!(!sim.is_running(), "should be stopped");
+        assert_eq!(
+            sim.model().steps,
+            vec!["before-quit"],
+            "commands after Quit in a Batch must not execute"
+        );
+    }
+
+    /// CONTRACT: Cmd::Sequence stops executing remaining commands after Cmd::Quit.
+    #[test]
+    fn contract_sequence_stops_on_quit() {
+        struct SeqQuitModel {
+            steps: Vec<&'static str>,
+        }
+
+        #[derive(Debug)]
+        enum SQMsg {
+            Step(&'static str),
+            TriggerSeqWithQuit,
+        }
+
+        impl From<Event> for SQMsg {
+            fn from(_: Event) -> Self {
+                SQMsg::Step("event")
+            }
+        }
+
+        impl Model for SeqQuitModel {
+            type Message = SQMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    SQMsg::Step(s) => {
+                        self.steps.push(s);
+                        Cmd::none()
+                    }
+                    SQMsg::TriggerSeqWithQuit => Cmd::sequence(vec![
+                        Cmd::msg(SQMsg::Step("before-quit")),
+                        Cmd::quit(),
+                        Cmd::msg(SQMsg::Step("after-quit")),
+                    ]),
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let mut sim = ProgramSimulator::new(SeqQuitModel { steps: vec![] });
+        sim.init();
+        sim.send(SQMsg::TriggerSeqWithQuit);
+
+        assert!(!sim.is_running(), "should be stopped");
+        assert_eq!(
+            sim.model().steps,
+            vec!["before-quit"],
+            "commands after Quit in a Sequence must not execute"
+        );
+    }
+
+    /// CONTRACT: Cmd::Task results are routed back through Model::update().
+    /// In simulator mode, tasks execute synchronously.
+    #[test]
+    fn contract_task_result_routes_through_update() {
+        struct TaskModel {
+            trace: Vec<String>,
+        }
+
+        #[derive(Debug)]
+        enum TMsg {
+            Spawn,
+            TaskDone(i32),
+        }
+
+        impl From<Event> for TMsg {
+            fn from(_: Event) -> Self {
+                TMsg::Spawn
+            }
+        }
+
+        impl Model for TaskModel {
+            type Message = TMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    TMsg::Spawn => {
+                        self.trace.push("spawn".into());
+                        Cmd::task(|| TMsg::TaskDone(42))
+                    }
+                    TMsg::TaskDone(v) => {
+                        self.trace.push(format!("done:{v}"));
+                        Cmd::none()
+                    }
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let mut sim = ProgramSimulator::new(TaskModel { trace: vec![] });
+        sim.init();
+        sim.send(TMsg::Spawn);
+
+        assert_eq!(
+            sim.model().trace,
+            vec!["spawn", "done:42"],
+            "task result must route through update()"
+        );
+    }
+
+    /// CONTRACT: Cmd::Msg causes recursive dispatch through update().
+    /// The message is processed immediately, not deferred.
+    #[test]
+    fn contract_cmd_msg_dispatches_recursively() {
+        struct RecursiveModel {
+            trace: Vec<i32>,
+        }
+
+        #[derive(Debug)]
+        enum RMsg {
+            Chain(i32),
+        }
+
+        impl From<Event> for RMsg {
+            fn from(_: Event) -> Self {
+                RMsg::Chain(0)
+            }
+        }
+
+        impl Model for RecursiveModel {
+            type Message = RMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    RMsg::Chain(n) => {
+                        self.trace.push(n);
+                        if n < 3 {
+                            Cmd::msg(RMsg::Chain(n + 1))
+                        } else {
+                            Cmd::none()
+                        }
+                    }
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let mut sim = ProgramSimulator::new(RecursiveModel { trace: vec![] });
+        sim.init();
+        sim.send(RMsg::Chain(0));
+
+        assert_eq!(
+            sim.model().trace,
+            vec![0, 1, 2, 3],
+            "Cmd::Msg must dispatch recursively through update()"
+        );
+    }
+
+    /// CONTRACT: Cmd::batch with empty vec produces Cmd::None.
+    /// Cmd::batch with single element unwraps to that element.
+    #[test]
+    fn contract_batch_normalization() {
+        let empty: Cmd<CounterMsg> = Cmd::batch(vec![]);
+        assert!(matches!(empty, Cmd::None), "empty batch must be Cmd::None");
+
+        let single: Cmd<CounterMsg> = Cmd::batch(vec![Cmd::quit()]);
+        assert!(
+            matches!(single, Cmd::Quit),
+            "single-element batch must unwrap"
+        );
+
+        let multi: Cmd<CounterMsg> = Cmd::batch(vec![Cmd::none(), Cmd::quit()]);
+        assert!(
+            matches!(multi, Cmd::Batch(_)),
+            "multi-element batch stays Batch"
+        );
+    }
+
+    /// CONTRACT: Cmd::sequence with empty vec produces Cmd::None.
+    #[test]
+    fn contract_sequence_normalization() {
+        let empty: Cmd<CounterMsg> = Cmd::sequence(vec![]);
+        assert!(
+            matches!(empty, Cmd::None),
+            "empty sequence must be Cmd::None"
+        );
+    }
+
+    /// CONTRACT: After Cmd::Quit, no further messages are processed.
+    /// This applies to both inject_events and send.
+    #[test]
+    fn contract_no_processing_after_quit() {
+        let mut sim = ProgramSimulator::new(Counter {
+            value: 0,
+            initialized: false,
+        });
+        sim.init();
+
+        sim.send(CounterMsg::Increment); // value = 1
+        sim.send(CounterMsg::Quit);
+        sim.send(CounterMsg::Increment); // should be ignored
+        sim.send(CounterMsg::Increment); // should be ignored
+
+        assert_eq!(sim.model().value, 1, "messages after Quit must be ignored");
+        assert!(!sim.is_running());
+
+        // Also via inject_events
+        sim.inject_events(&[key_event('+'), key_event('+')]);
+        assert_eq!(
+            sim.model().value,
+            1,
+            "events after Quit must also be ignored"
+        );
+    }
 }
