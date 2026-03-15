@@ -18,11 +18,13 @@ OUT_DIR="${PROJECT_ROOT}/target/pane-profiling/bd-1y0ph"
 TEST_MODE=false
 RESOURCE_STATS=false
 PERF_STAT=false
+STACK_REPORTS=false
 declare -A BENCH_BINARY_PATHS=()
 declare -A BENCH_EXECUTED_PATHS=()
 declare -A BENCH_WORKERS=()
 declare -A BENCH_EXACT_BINARY_ARTIFACTS=()
 declare -A BENCH_FETCH_ERRORS=()
+declare -A BENCH_BINARY_SOURCES=()
 EXACT_BINARY_DIR=""
 
 if command -v rch >/dev/null 2>&1; then
@@ -49,13 +51,19 @@ while [[ $# -gt 0 ]]; do
             PERF_STAT=true
             shift
             ;;
+        --stack-reports)
+            STACK_REPORTS=true
+            shift
+            ;;
         -h|--help)
             cat <<EOF
-Usage: $0 [--test] [--time] [--perf-stat] [--out-dir PATH]
+Usage: $0 [--test] [--time] [--perf-stat] [--stack-reports] [--out-dir PATH]
 
   --test          Run Criterion targets in fast test mode.
   --time          Capture /usr/bin/time -v resource stats per bench.
   --perf-stat     Capture perf stat counters for representative pane benches.
+  --stack-reports Capture representative perf record/report artifacts plus
+                  post-symbolized user-space stack summaries.
   --out-dir PATH  Write captured outputs under PATH.
 EOF
             exit 0
@@ -110,11 +118,24 @@ fetch_exact_bench_binary() {
         chmod u+x "$artifact_path" || true
         BENCH_EXACT_BINARY_ARTIFACTS["$label"]="$artifact_path"
         BENCH_BINARY_PATHS["$label"]="$artifact_path"
+        BENCH_BINARY_SOURCES["$label"]="executed_remote_fetched"
         return 0
     fi
 
     BENCH_FETCH_ERRORS["$label"]="scp_failed"
     return 1
+}
+
+preserve_local_bench_binary() {
+    local label="$1"
+    local bench_binary="$2"
+    local artifact_path="${EXACT_BINARY_DIR}/${label}-$(basename "$bench_binary")"
+
+    cp "$bench_binary" "$artifact_path"
+    chmod u+x "$artifact_path" || true
+    BENCH_EXACT_BINARY_ARTIFACTS["$label"]="$artifact_path"
+    BENCH_BINARY_PATHS["$label"]="$artifact_path"
+    BENCH_BINARY_SOURCES["$label"]="executed_local_preserved"
 }
 
 record_executed_binary_metadata() {
@@ -142,8 +163,7 @@ record_executed_binary_metadata() {
     BENCH_EXECUTED_PATHS["$label"]="$bench_binary"
 
     if [[ -x "$bench_binary" ]]; then
-        BENCH_BINARY_PATHS["$label"]="$bench_binary"
-        BENCH_EXACT_BINARY_ARTIFACTS["$label"]="$bench_binary"
+        preserve_local_bench_binary "$label" "$bench_binary"
         return 0
     fi
 
@@ -231,6 +251,152 @@ run_perf_stat() {
         --noplot
 }
 
+symbolize_perf_user_frames() {
+    local perf_data="$1"
+    local binary="$2"
+    local output_file="$3"
+
+    python3 - "$perf_data" "$binary" "$output_file" <<'PY'
+import collections
+import pathlib
+import re
+import subprocess
+import sys
+
+perf_data = pathlib.Path(sys.argv[1])
+binary = pathlib.Path(sys.argv[2]).resolve()
+output_file = pathlib.Path(sys.argv[3])
+
+script = subprocess.check_output(
+    ["perf", "script", "--show-mmap-events", "-i", str(perf_data)],
+    text=True,
+    errors="replace",
+)
+
+mmap_re = re.compile(
+    r"PERF_RECORD_MMAP2 .*: \[(0x[0-9a-f]+)\(0x[0-9a-f]+\) @ (0x[0-9a-f]+) <[^>]+>\]: [^ ]+ (.+)$"
+)
+symbolized_frame_re = re.compile(r"^\s*([0-9a-f]+)\s+(.+)\s+\((.+)\)$")
+
+mmaps = []
+weighted_symbols = collections.Counter()
+for line in script.splitlines():
+    match = mmap_re.search(line)
+    if not match:
+        continue
+    path = pathlib.Path(match.group(3)).resolve()
+    if path != binary:
+        continue
+    mmaps.append((int(match.group(1), 16), int(match.group(2), 16)))
+
+counter = collections.Counter()
+for line in script.splitlines():
+    symbol_match = symbolized_frame_re.match(line)
+    if not symbol_match:
+        continue
+    path = pathlib.Path(symbol_match.group(3)).resolve()
+    if path != binary:
+        continue
+    symbol = symbol_match.group(2).strip()
+    if symbol != "[unknown]":
+        weighted_symbols[symbol] += 1
+        continue
+
+    absolute = int(symbol_match.group(1), 16)
+    candidates = [(start, pgoff) for start, pgoff in mmaps if absolute >= start]
+    if not candidates:
+        continue
+    start, pgoff = max(candidates, key=lambda pair: pair[0])
+    relative = absolute - start + pgoff
+    if relative >= 0:
+        counter[relative] += 1
+
+with output_file.open("w", encoding="utf-8") as fh:
+    fh.write(f"Post-symbolized user-space frames for {binary.name}\n")
+    fh.write(f"perf_data={perf_data}\n")
+    if mmaps:
+        fh.write("mmap_ranges=\n")
+        for start, pgoff in mmaps:
+            fh.write(f"- start={hex(start)} pgoff={hex(pgoff)}\n")
+    else:
+        fh.write("mmap_ranges=missing\n")
+    user_space_weight = sum(weighted_symbols.values()) + sum(counter.values())
+    fh.write(f"user_space_frames={user_space_weight}\n\n")
+
+    if not weighted_symbols and not counter:
+        fh.write("No user-space frames from the target binary were recovered.\n")
+        sys.exit(0)
+
+    fh.write("Top frames:\n")
+    combined = collections.Counter(weighted_symbols)
+    for relative, count in counter.items():
+        symbol = subprocess.check_output(
+            ["addr2line", "-Cfipe", str(binary), hex(relative)],
+            text=True,
+            errors="replace",
+        ).strip()
+        combined[f"{symbol} @ {hex(relative)}"] += count
+
+    total = sum(combined.values())
+    for symbol, count in combined.most_common(12):
+        percent = (count / total) * 100.0 if total else 0.0
+        fh.write(f"- {percent:5.1f}% ({count} frame hits)\n")
+        for line in symbol.splitlines():
+            fh.write(f"  {line}\n")
+PY
+}
+
+run_stack_report() {
+    local stem="$1"
+    local binary_prefix="$2"
+    local benchmark_name="$3"
+    local data_file="${OUT_DIR}/${stem}.perf.data"
+    local report_file="${OUT_DIR}/${stem}.perf.txt"
+    local symbols_file="${OUT_DIR}/${stem}.symbols.txt"
+    local binary
+
+    if ! command -v perf >/dev/null 2>&1; then
+        echo "ERROR: perf is required for --stack-reports mode" >&2
+        exit 1
+    fi
+    if ! command -v addr2line >/dev/null 2>&1; then
+        echo "ERROR: addr2line is required for --stack-reports mode" >&2
+        exit 1
+    fi
+
+    binary="$(find_bench_binary "$binary_prefix")"
+    echo "==> ${stem} (perf record/report)"
+    perf record -q -F 999 -g --call-graph dwarf,16384 -o "$data_file" -- \
+        "$binary" \
+        "$benchmark_name" \
+        --exact \
+        --profile-time 2 \
+        --noplot
+    perf report --stdio -g none -i "$data_file" > "$report_file"
+    symbolize_perf_user_frames "$data_file" "$binary" "$symbols_file"
+}
+
+validate_stack_reports() {
+    local stems=(
+        pane_core_timeline_apply_and_replay_32_ops
+        pane_terminal_down_drag_120_up
+        pane_pointer_down_ack_move_120_up
+    )
+    local stem
+
+    for stem in "${stems[@]}"; do
+        local symbols_file="${OUT_DIR}/${stem}.symbols.txt"
+        if [[ ! -s "$symbols_file" ]]; then
+            echo "ERROR: missing or empty stack summary ${symbols_file}" >&2
+            exit 1
+        fi
+        if ! grep -q '^user_space_frames=' "$symbols_file"; then
+            echo "ERROR: malformed stack summary ${symbols_file}" >&2
+            exit 1
+        fi
+    done
+}
+
 record_symbol_metadata() {
     local output_file="${OUT_DIR}/symbol_metadata.txt"
     local prefixes=(
@@ -253,12 +419,10 @@ record_symbol_metadata() {
         local worker="${BENCH_WORKERS[$prefix]:-local}"
         local fetch_error="${BENCH_FETCH_ERRORS[$prefix]:-}"
         local local_candidate=""
-        local source="executed_local"
+        local source="${BENCH_BINARY_SOURCES[$prefix]:-executed_local}"
         local exact_status="available"
 
-        if [[ -n "$binary" && "$binary" != "${executed_path}" ]]; then
-            source="executed_remote_fetched"
-        elif [[ -z "$binary" ]]; then
+        if [[ -z "$binary" ]]; then
             source="executed_remote_missing"
             exact_status="missing"
             local_candidate="$(find_latest_local_bench_binary "$prefix")"
@@ -416,6 +580,25 @@ if [[ "$PERF_STAT" == "true" ]]; then
         "pane/web_pointer/lifecycle/down_ack_move_120_up"
 fi
 
+if [[ "$STACK_REPORTS" == "true" ]]; then
+    run_stack_report \
+        pane_core_timeline_apply_and_replay_32_ops \
+        layout_bench \
+        "pane/core/timeline/apply_and_replay_32_ops"
+
+    run_stack_report \
+        pane_terminal_down_drag_120_up \
+        pane_terminal_bench \
+        "pane/terminal/lifecycle/down_drag_120_up"
+
+    run_stack_report \
+        pane_pointer_down_ack_move_120_up \
+        pane_pointer_bench \
+        "pane/web_pointer/lifecycle/down_ack_move_120_up"
+
+    validate_stack_reports
+fi
+
 record_symbol_metadata
 validate_symbol_metadata
 
@@ -430,6 +613,8 @@ Files:
 - pane_pointer_bench.txt    pane/web_pointer/* Criterion output
 - *.time.txt                optional /usr/bin/time -v resource summaries
 - *.perfstat.txt            optional perf stat counter summaries
+- *.perf.data / *.perf.txt  optional perf record/report stack artifacts
+- *.symbols.txt             post-symbolized user-space top-frame summaries
 - executed-binaries/        fetched exact remote bench binaries when materialized locally
 - symbol_metadata.txt       executed-path provenance + exact-binary trust/readiness
 
@@ -440,4 +625,5 @@ Mode:
 - TEST_MODE=${TEST_MODE}
 - RESOURCE_STATS=${RESOURCE_STATS}
 - PERF_STAT=${PERF_STAT}
+- STACK_REPORTS=${STACK_REPORTS}
 EOF

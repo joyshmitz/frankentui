@@ -252,7 +252,7 @@ impl BenchmarkGate {
         self
     }
 
-    /// Load thresholds from a JSON map.
+    /// Load thresholds from a simple JSON map.
     ///
     /// Expected format:
     /// ```json
@@ -271,6 +271,49 @@ impl BenchmarkGate {
             let budget = value.get("budget")?.as_f64()?;
             let tolerance_pct = value
                 .get("tolerance_pct")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            gate.thresholds.insert(
+                metric.clone(),
+                Threshold {
+                    metric: metric.clone(),
+                    budget,
+                    tolerance_pct,
+                },
+            );
+        }
+        Some(gate)
+    }
+
+    /// Load thresholds from FrankenTUI's `tests/baseline.json` format.
+    ///
+    /// This format uses percentile budgets (`p99_ns`) and `threshold_pct`:
+    /// ```json
+    /// {
+    ///   "frame_render": {
+    ///     "p99_ns": 2000000,
+    ///     "threshold_pct": 10
+    ///   }
+    /// }
+    /// ```
+    ///
+    /// Entries whose keys start with `_` are skipped (metadata comments).
+    /// The `percentile` parameter selects which budget to use (e.g., `"p99_ns"`).
+    ///
+    /// Returns `None` if the JSON is malformed.
+    #[must_use]
+    pub fn load_baseline_json(gate_name: &str, json: &str, percentile: &str) -> Option<Self> {
+        let parsed: serde_json::Value = serde_json::from_str(json).ok()?;
+        let obj = parsed.as_object()?;
+        let mut gate = Self::new(gate_name);
+        for (metric, value) in obj {
+            // Skip metadata keys (e.g., _comment, _format)
+            if metric.starts_with('_') {
+                continue;
+            }
+            let budget = value.get(percentile).and_then(|v| v.as_f64())?;
+            let tolerance_pct = value
+                .get("threshold_pct")
                 .and_then(|v| v.as_f64())
                 .unwrap_or(0.0);
             gate.thresholds.insert(
@@ -502,6 +545,56 @@ mod tests {
     #[test]
     fn gate_load_json_invalid() {
         assert!(BenchmarkGate::load_json("bad", "not json").is_none());
+    }
+
+    #[test]
+    fn gate_load_baseline_json_format() {
+        let json = r#"{
+            "_comment": "Performance baseline",
+            "_format": "p50/p95/p99/p999 in nanoseconds",
+            "frame_render": {
+                "p50_ns": 500000,
+                "p95_ns": 1000000,
+                "p99_ns": 2000000,
+                "p999_ns": 5000000,
+                "threshold_pct": 10
+            },
+            "diff_strategy": {
+                "p50_ns": 50000,
+                "p99_ns": 200000,
+                "threshold_pct": 10
+            }
+        }"#;
+        let gate = BenchmarkGate::load_baseline_json("perf_gate", json, "p99_ns")
+            .expect("baseline JSON should parse");
+
+        // Under budget
+        let result = gate.evaluate(&[
+            Measurement::new("frame_render", 1_800_000.0).unit("ns"),
+            Measurement::new("diff_strategy", 190_000.0).unit("ns"),
+        ]);
+        assert!(result.passed(), "gate should pass: {}", result.summary());
+
+        // Over budget + tolerance
+        let result = gate.evaluate(&[
+            Measurement::new("frame_render", 2_500_000.0).unit("ns"), // >2.2M ceiling
+            Measurement::new("diff_strategy", 190_000.0).unit("ns"),
+        ]);
+        assert!(!result.passed(), "gate should fail on regression");
+    }
+
+    #[test]
+    fn gate_load_baseline_json_skips_metadata() {
+        let json = r#"{
+            "_comment": "ignored",
+            "metric_a": { "p99_ns": 100.0, "threshold_pct": 5 }
+        }"#;
+        let gate =
+            BenchmarkGate::load_baseline_json("meta_test", json, "p99_ns").expect("should parse");
+        let result = gate.evaluate(&[Measurement::new("metric_a", 95.0)]);
+        assert!(result.passed());
+        // The _comment entry should not appear as a threshold
+        assert_eq!(result.metrics.len(), 1);
     }
 
     #[test]

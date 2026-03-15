@@ -1,5 +1,6 @@
 use ftui_layout::{
-    PaneId, PaneInteractionTimeline, PaneLeaf, PaneNodeKind, PaneOperation, PanePlacement,
+    PaneId, PaneInteractionTimeline, PaneInteractionTimelineCheckpointDecision,
+    PaneInteractionTimelineReplayDiagnostics, PaneLeaf, PaneNodeKind, PaneOperation, PanePlacement,
     PaneSplitRatio, PaneTree, SplitAxis,
 };
 use serde::Serialize;
@@ -31,6 +32,14 @@ struct HarnessManifest {
     aggregate_hash: u64,
     elapsed_ns: u128,
     ns_per_iteration: u128,
+    checkpoint_interval: usize,
+    checkpoint_count: usize,
+    checkpoint_hit: bool,
+    replay_start_idx: usize,
+    replay_depth: usize,
+    estimated_snapshot_cost_ns: u128,
+    estimated_replay_step_cost_ns: u128,
+    checkpoint_decision: PaneInteractionTimelineCheckpointDecision,
     baseline_snapshot_path: String,
     final_snapshot_path: String,
     log_path: String,
@@ -40,6 +49,8 @@ struct HarnessManifest {
 struct IterationResult {
     final_hash: u64,
     applied_len: usize,
+    replay_diagnostics: PaneInteractionTimelineReplayDiagnostics,
+    replay_elapsed_ns: u128,
     snapshot: ftui_layout::PaneTreeSnapshot,
 }
 
@@ -122,6 +133,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
     log_lines.push(format!("baseline_hash={baseline_hash}"));
 
+    let (estimated_snapshot_cost_ns, estimated_replay_step_cost_ns, checkpoint_decision) =
+        measure_checkpoint_decision_inputs(
+            &baseline,
+            &split_ids,
+            &ratios,
+            spec.operations_per_iteration,
+        )?;
+    log_lines.push(format!(
+        "checkpoint_decision interval={} snapshot_cost_ns={} replay_step_cost_ns={} estimated_replay_depth_ns={}",
+        checkpoint_decision.checkpoint_interval,
+        checkpoint_decision.estimated_snapshot_cost_ns,
+        checkpoint_decision.estimated_replay_step_cost_ns,
+        checkpoint_decision.estimated_replay_depth_ns
+    ));
+
     for warmup_idx in 0..spec.warmup_iterations {
         let result = execute_iteration(
             &baseline,
@@ -141,6 +167,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut aggregate_hash = 0u64;
     let mut sample_snapshot = None;
     let mut sample_hash = 0u64;
+    let mut sample_replay_diagnostics = None;
     for iter_idx in 0..spec.iterations {
         let result = execute_iteration(
             &baseline,
@@ -157,8 +184,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 result.applied_len,
                 result.snapshot.nodes.len()
             ));
+            log_lines.push(format!(
+                "iteration={} checkpoint_interval={} checkpoint_count={} checkpoint_hit={} replay_start_idx={} replay_depth={} replay_elapsed_ns={}",
+                iter_idx,
+                result.replay_diagnostics.checkpoint_interval,
+                result.replay_diagnostics.checkpoint_count,
+                result.replay_diagnostics.checkpoint_hit,
+                result.replay_diagnostics.replay_start_idx,
+                result.replay_diagnostics.replay_depth,
+                result.replay_elapsed_ns
+            ));
         }
         sample_hash = result.final_hash;
+        sample_replay_diagnostics = Some(result.replay_diagnostics);
         sample_snapshot = Some(result.snapshot);
     }
     let elapsed = start.elapsed();
@@ -170,6 +208,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let baseline_snapshot = baseline.to_snapshot();
     let final_snapshot = sample_snapshot.ok_or("missing sample snapshot after execution")?;
+    let replay_diagnostics =
+        sample_replay_diagnostics.ok_or("missing replay diagnostics after execution")?;
 
     write_json(&baseline_snapshot_path, &baseline_snapshot)?;
     write_json(&final_snapshot_path, &final_snapshot)?;
@@ -187,6 +227,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         aggregate_hash,
         elapsed_ns: elapsed.as_nanos(),
         ns_per_iteration: elapsed.as_nanos() / u128::from(spec.iterations as u64),
+        checkpoint_interval: replay_diagnostics.checkpoint_interval,
+        checkpoint_count: replay_diagnostics.checkpoint_count,
+        checkpoint_hit: replay_diagnostics.checkpoint_hit,
+        replay_start_idx: replay_diagnostics.replay_start_idx,
+        replay_depth: replay_diagnostics.replay_depth,
+        estimated_snapshot_cost_ns,
+        estimated_replay_step_cost_ns,
+        checkpoint_decision,
         baseline_snapshot_path: baseline_snapshot_path.display().to_string(),
         final_snapshot_path: final_snapshot_path.display().to_string(),
         log_path: log_path.display().to_string(),
@@ -242,7 +290,10 @@ fn execute_iteration(
             PaneOperation::SetSplitRatio { split, ratio },
         )?;
     }
+    let replay_diagnostics = timeline.replay_diagnostics();
+    let replay_start = Instant::now();
     let replayed = timeline.replay()?;
+    let replay_elapsed_ns = replay_start.elapsed().as_nanos();
     let replay_hash = replayed.state_hash();
     if replay_hash != tree.state_hash() {
         return Err(format!(
@@ -254,8 +305,28 @@ fn execute_iteration(
     Ok(IterationResult {
         final_hash: replay_hash,
         applied_len: timeline.applied_len(),
+        replay_diagnostics,
+        replay_elapsed_ns,
         snapshot: replayed.to_snapshot(),
     })
+}
+
+fn measure_checkpoint_decision_inputs(
+    baseline: &PaneTree,
+    split_ids: &[PaneId],
+    ratios: &[PaneSplitRatio],
+    operations_per_iteration: usize,
+) -> Result<(u128, u128, PaneInteractionTimelineCheckpointDecision), Box<dyn std::error::Error>> {
+    let snapshot_start = Instant::now();
+    let _snapshot = baseline.to_snapshot();
+    let snapshot_cost_ns = snapshot_start.elapsed().as_nanos();
+
+    let result = execute_iteration(baseline, split_ids, ratios, operations_per_iteration)?;
+    let replay_steps = result.replay_diagnostics.replay_depth.max(1) as u128;
+    let replay_step_cost_ns = (result.replay_elapsed_ns / replay_steps).max(1);
+    let decision =
+        PaneInteractionTimeline::checkpoint_decision(snapshot_cost_ns, replay_step_cost_ns);
+    Ok((snapshot_cost_ns.max(1), replay_step_cost_ns, decision))
 }
 
 fn pane_split_ids(tree: &PaneTree) -> Vec<PaneId> {

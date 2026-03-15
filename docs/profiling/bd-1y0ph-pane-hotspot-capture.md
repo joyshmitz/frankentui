@@ -31,6 +31,15 @@ Artifacts produced by the latest run:
 - `target/pane-profiling/bd-1y0ph/layout_bench.perfstat.txt`
 - `target/pane-profiling/bd-1y0ph/pane_terminal_bench.perfstat.txt`
 - `target/pane-profiling/bd-1y0ph/pane_pointer_bench.perfstat.txt`
+- `target/pane-profiling/bd-1y0ph/pane_core_timeline_apply_and_replay_32_ops.perf.data`
+- `target/pane-profiling/bd-1y0ph/pane_core_timeline_apply_and_replay_32_ops.perf.txt`
+- `target/pane-profiling/bd-1y0ph/pane_core_timeline_apply_and_replay_32_ops.symbols.txt`
+- `target/pane-profiling/bd-1y0ph/pane_terminal_down_drag_120_up.perf.data`
+- `target/pane-profiling/bd-1y0ph/pane_terminal_down_drag_120_up.perf.txt`
+- `target/pane-profiling/bd-1y0ph/pane_terminal_down_drag_120_up.symbols.txt`
+- `target/pane-profiling/bd-1y0ph/pane_pointer_down_ack_move_120_up.perf.data`
+- `target/pane-profiling/bd-1y0ph/pane_pointer_down_ack_move_120_up.perf.txt`
+- `target/pane-profiling/bd-1y0ph/pane_pointer_down_ack_move_120_up.symbols.txt`
 - `target/pane-profiling/bd-1y0ph/executed-binaries/`
 - `target/pane-profiling/bd-1y0ph/symbol_metadata.txt`
 
@@ -44,6 +53,7 @@ Use `rch` indirectly through the runner:
 ./scripts/pane_profile.sh --test
 ./scripts/pane_profile.sh --test --time
 ./scripts/pane_profile.sh --test --perf-stat
+./scripts/pane_profile.sh --test --stack-reports
 ```
 
 For later non-test captures:
@@ -129,9 +139,10 @@ Interpretation:
 the repeatable capture workflow.
 
 The profiling runner now emits `symbol_metadata.txt`, records the exact bench
-binary path printed by the current run, and tries to materialize the exact
-executed remote bench binary under `executed-binaries/` when `rch` ran the
-benchmark on a worker.
+binary path printed by the current run, and preserves a copy of the exact
+executed bench binary under `executed-binaries/` for every surface. When `rch`
+ran the benchmark on a worker, the runner first uses the retrieved local binary
+when present and falls back to explicit remote fetch if needed.
 
 For the pane-core lane, the runner also invokes a long-lived deterministic
 profile harness that emits:
@@ -140,39 +151,140 @@ profile harness that emits:
 - golden `baseline_snapshot.json` and `final_snapshot.json`
 - verbose `run.log`
 
+The harness manifest and log now carry checkpoint-specific diagnostics as
+first-class evidence:
+
+- `checkpoint_interval`
+- `checkpoint_count`
+- `checkpoint_hit`
+- `replay_start_idx`
+- `replay_depth`
+- `estimated_snapshot_cost_ns`
+- `estimated_replay_step_cost_ns`
+- `checkpoint_decision`
+
 That harness exists so later checkpointing and memory work can reuse one
 replay-heavy scenario with stable hashes instead of reconstructing the same
 timeline workload from ad hoc bench flags.
+
+The general-purpose Criterion pane timeline bench in `ftui-layout/layout_bench`
+also now exposes short, medium, and long replay histories under stable names:
+
+- `pane/core/timeline/apply_and_replay_8_ops`
+- `pane/core/timeline/apply_and_replay_32_ops`
+- `pane/core/timeline/apply_and_replay_256_ops`
 
 The artifact contract is now explicit per surface:
 
 - `executed_path`: the bench binary path reported by the current run
 - `worker`: the `rch` worker used for the run, or `local`
 - `binary_source`: whether the exact binary is local, remotely fetched, or
-  still unavailable
+  preserved from the retrieved local path, or still unavailable
 - `exact_binary_status`: `available` or `missing`
 - `exact_binary_local`: local path to the exact binary artifact when present
 - `fetch_error`: machine-checkable reason when remote materialization fails
 - `local_candidate`: an informational local candidate path only; it is no
   longer treated as authoritative exact-binary evidence
 
-Current evidence from that artifact remains mixed:
+Current verified evidence is now clean across all profiled surfaces:
 
-- `layout_bench`: `binary_source=executed`, `with debug_info, not stripped`
-- `pane_terminal_bench`: exact executed binary path captured, but local binary
-  currently missing after `rch` artifact retrieval
-- `pane_pointer_bench`: exact executed binary path captured, but local binary
-  currently missing after `rch` artifact retrieval
+- `pane_profile_harness`: exact binary preserved under `executed-binaries/`
+  with debug info
+- `layout_bench`: exact binary preserved under `executed-binaries/` with
+  debug info
+- `pane_terminal_bench`: exact binary preserved under `executed-binaries/`
+  with debug info
+- `pane_pointer_bench`: exact binary preserved under `executed-binaries/`
+  with debug info
 
-That means symbol-readiness is no longer an assumption, and the remaining gap is
-also explicit: if terminal/web exact binaries are still unavailable locally
-after an `rch` run, the artifact bundle records a concrete fetch/provenance
-reason instead of silently substituting a different local binary.
+That means symbol-readiness is now explicit and durable: the artifact bundle
+contains both the provenance metadata and preserved exact binaries instead of
+silently relying on whichever file happens to still be present under
+`target/release/deps`.
 
 Latest verified `symbol_metadata.txt` state:
 
 ```text
-layout_bench: binary_source=executed_local, exact_binary_status=available
-pane_terminal_bench: binary_source=executed_remote_missing, exact_binary_status=missing
-pane_pointer_bench: binary_source=executed_remote_missing, exact_binary_status=missing
+layout_bench: binary_source=executed_remote_fetched, exact_binary_status=available
+pane_terminal_bench: binary_source=executed_remote_fetched, exact_binary_status=available
+pane_pointer_bench: binary_source=executed_remote_fetched, exact_binary_status=available
 ```
+
+## Representative Stack Evidence
+
+The runner now emits post-symbolized user-space top-frame summaries for the three
+representative profiling targets. These are not full flamegraphs, but they are
+good enough to rank optimization lanes without reconstructing symbol trust by
+hand.
+
+Representative artifacts:
+
+- `target/pane-profiling/bd-1y0ph/pane_core_timeline_apply_and_replay_32_ops.symbols.txt`
+- `target/pane-profiling/bd-1y0ph/pane_terminal_down_drag_120_up.symbols.txt`
+- `target/pane-profiling/bd-1y0ph/pane_pointer_down_ack_move_120_up.symbols.txt`
+
+Current top user-space findings:
+
+- Core replay sample is dominated by allocation-heavy hash table and layout
+  builder paths such as `hashbrown::raw::RawTable::reserve_rehash`,
+  `ftui_layout::veb_tree::VebTree::build`, and
+  `ftui_layout::veb_tree::veb_layout_order`.
+- Terminal drag sample currently collapses into pane-core validation work,
+  especially `PaneTree::validate` and BTree search in
+  `alloc::collections::btree::node::NodeRef::search_tree`.
+- Web pointer sample is concentrated in
+  `PanePointerCaptureAdapter::pointer_up`, which means the expensive part of
+  the lifecycle is not raw move arithmetic alone but the terminal state update
+  and commit path reached at gesture completion.
+
+Trust notes:
+
+- User-space symbol trust is now `high` for all three surfaces because the
+  exact executed binaries are preserved locally and the post-symbolized
+  summaries are derived from perf mmap metadata plus those preserved binaries.
+- Kernel-side frames remain partially unresolved because `kptr_restrict`
+  prevents full kernel symbol expansion in this environment. That does not
+  block the pane-specific ranking because the actionable work is in the
+  user-space frames above.
+
+Residual uncertainty:
+
+- The core stack sample comes from the `layout_bench` representative path and
+  therefore still mixes replay work with supporting data-structure costs inside
+  the same exact benchmark binary.
+- The terminal and web samples are representative lifecycle captures, so they
+  say which code paths dominate the benchmarked interaction, not necessarily
+  which individual event step is worst in isolation.
+
+## Final Opportunity Matrix
+
+Ranked for downstream optimization work using impact, confidence, effort, and
+ proof-readiness from the current artifact bundle.
+
+| Rank | Lane | Dominant evidence | Why it matters | Impact | Confidence | Effort | Proof-ready next bead(s) |
+|------|------|-------------------|----------------|--------|------------|--------|--------------------------|
+| 1 | Pane core structural validation + replay internals | `pane_core_timeline_apply_and_replay_32_ops.symbols.txt`, `pane_core_profile_harness/*`, `layout_bench.perfstat.txt` | Allocation-heavy table growth, VEB/layout-order work, and validation/search traffic dominate the replay-heavy surface and also show up under terminal drag. | High | High | Medium-High | `bd-1k7ek.2`, `bd-1k7ek.3` |
+| 2 | Web pointer commit / gesture-finalization path | `pane_pointer_down_ack_move_120_up.symbols.txt`, `pane_pointer_bench.perfstat.txt` | The representative web lifecycle is concentrated in `pointer_up`, so trimming bookkeeping and commit-path branching should improve perceived drag completion and reduce branch-heavy tail behavior. | Medium-High | Medium | Medium | `bd-1k7ek.8` |
+| 3 | Terminal drag translation and handle-routing path | `pane_terminal_down_drag_120_up.symbols.txt`, `pane_terminal_bench.perfstat.txt` | Terminal drag is still expensive, but the trustworthy stack sample says much of that cost currently lands in pane-core validation rather than adapter logic alone. Optimize adapter branching after reducing core validation churn. | Medium | Medium | Medium | `bd-1k7ek.7` |
+
+Optimization order justified by the current evidence:
+
+1. Reduce pane-core replay/validation churn first, because that is both a
+   first-order core bottleneck and a second-order contributor to terminal drag.
+2. Simplify the web pointer commit path next, because its stack sample is
+   already sharply localized and has a good chance of yielding visible wins
+   without broad architectural change.
+3. Revisit terminal adapter state-machine cleanup after the core fast paths land
+   so we do not mistake downstream validation cost for front-end routing cost.
+
+## Handoff Summary
+
+This bead now has a self-contained artifact chain:
+
+- exact executed binaries with explicit trust metadata
+- representative counter summaries per pane surface
+- representative stack reports and post-symbolized user-space summaries
+- a final opportunity matrix with residual uncertainty notes
+
+That is enough to justify the downstream optimization order without making
+future sessions reconstruct the evidence chain from raw `perf` output.

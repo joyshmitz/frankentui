@@ -443,7 +443,6 @@ impl ShadowRun {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -566,7 +565,7 @@ mod tests {
     }
 
     #[test]
-    fn assert_outputs_match_succeeds_for_identical() {
+    fn lab_assert_outputs_match_succeeds_for_identical() {
         let config = ShadowRunConfig::new("test_outputs", "outputs_test", 99);
         let result = ShadowRun::compare(
             config,
@@ -578,7 +577,7 @@ mod tests {
             },
         );
         // Both outputs came from identical runs so they should match.
-        assert_outputs_match(&result.baseline, &result.candidate);
+        crate::lab_integration::assert_outputs_match(&result.baseline, &result.candidate);
     }
 
     #[test]

@@ -689,28 +689,34 @@ fn bench_pane_core_timeline(c: &mut Criterion) {
         PaneSplitRatio::new(4, 5).expect("ratio 4:5 should be valid"),
     ];
 
-    group.bench_function("apply_and_replay_32_ops", |b| {
-        b.iter_batched(
-            || (base.clone(), PaneInteractionTimeline::with_baseline(&base)),
-            |(mut tree, mut timeline)| {
-                for idx in 0..32usize {
-                    let split = split_ids[idx % split_ids.len()];
-                    let ratio = ratios[idx % ratios.len()];
-                    timeline
-                        .apply_and_record(
-                            &mut tree,
-                            idx as u64,
-                            80_000 + idx as u64,
-                            PaneOperation::SetSplitRatio { split, ratio },
-                        )
-                        .expect("timeline set_split_ratio should succeed");
-                }
-                let replayed = timeline.replay().expect("timeline replay should succeed");
-                black_box(replayed.state_hash());
-            },
-            BatchSize::SmallInput,
-        );
-    });
+    for &(name, operation_count) in &[
+        ("apply_and_replay_8_ops", 8usize),
+        ("apply_and_replay_32_ops", 32usize),
+        ("apply_and_replay_256_ops", 256usize),
+    ] {
+        group.bench_function(name, |b| {
+            b.iter_batched(
+                || (base.clone(), PaneInteractionTimeline::with_baseline(&base)),
+                |(mut tree, mut timeline)| {
+                    for idx in 0..operation_count {
+                        let split = split_ids[idx % split_ids.len()];
+                        let ratio = ratios[idx % ratios.len()];
+                        timeline
+                            .apply_and_record(
+                                &mut tree,
+                                idx as u64,
+                                80_000 + idx as u64,
+                                PaneOperation::SetSplitRatio { split, ratio },
+                            )
+                            .expect("timeline set_split_ratio should succeed");
+                    }
+                    let replayed = timeline.replay().expect("timeline replay should succeed");
+                    black_box(replayed.state_hash());
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
 
     group.finish();
 }
