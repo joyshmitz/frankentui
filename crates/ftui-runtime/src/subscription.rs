@@ -14,6 +14,7 @@
 //! 3. New subscriptions are started, removed ones are stopped
 //! 4. Subscription messages are routed through `Model::update()`
 
+use crate::cancellation::{CancellationSource, CancellationToken};
 use std::collections::HashSet;
 use std::sync::mpsc;
 use std::thread;
@@ -48,27 +49,27 @@ pub trait Subscription<M: Send + 'static>: Send {
 ///
 /// When the runtime stops a subscription, it sets this signal. The subscription
 /// should check it periodically and exit its run loop when set.
+///
+/// Backed by [`CancellationToken`] for structured cancellation.
 #[derive(Clone)]
 pub struct StopSignal {
-    inner: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+    token: CancellationToken,
 }
 
 impl StopSignal {
     /// Create a new stop signal pair (signal, trigger).
     pub(crate) fn new() -> (Self, StopTrigger) {
-        let inner = std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let source = CancellationSource::new();
         let signal = Self {
-            inner: inner.clone(),
+            token: source.token(),
         };
-        let trigger = StopTrigger { inner };
+        let trigger = StopTrigger { source };
         (signal, trigger)
     }
 
     /// Check if the stop signal has been triggered.
     pub fn is_stopped(&self) -> bool {
-        let (lock, _) = &*self.inner;
-        // Recover from poisoned mutex - if a thread panicked, we still want to check the flag
-        *lock.lock().unwrap_or_else(|e| e.into_inner())
+        self.token.is_cancelled()
     }
 
     /// Wait for either the stop signal or a timeout.
@@ -77,51 +78,29 @@ impl StopSignal {
     /// Blocks the thread efficiently using a condition variable.
     /// Handles spurious wakeups by looping until condition met or timeout expired.
     pub fn wait_timeout(&self, duration: Duration) -> bool {
-        let (lock, cvar) = &*self.inner;
-        // Recover from poisoned mutex - if a thread panicked, we still need to check/wait
-        let mut stopped = lock.lock().unwrap_or_else(|e| e.into_inner());
-        if *stopped {
-            return true;
-        }
+        self.token.wait_timeout(duration)
+    }
 
-        let start = Instant::now();
-        let mut remaining = duration;
-
-        loop {
-            // Recover from poisoned mutex on wait_timeout as well
-            let (guard, result) = cvar
-                .wait_timeout(stopped, remaining)
-                .unwrap_or_else(|e| e.into_inner());
-            stopped = guard;
-            if *stopped {
-                return true;
-            }
-            if result.timed_out() {
-                return false;
-            }
-            // Check if we really timed out (spurious wakeup protection)
-            let elapsed = start.elapsed();
-            if elapsed >= duration {
-                return false;
-            }
-            remaining = duration - elapsed;
-        }
+    /// Access the underlying cancellation token.
+    ///
+    /// This enables integration with Asupersync-style structured cancellation
+    /// while preserving backwards compatibility with the `StopSignal` API.
+    pub fn cancellation_token(&self) -> &CancellationToken {
+        &self.token
     }
 }
 
 /// Trigger to stop a subscription from the runtime side.
+///
+/// Backed by [`CancellationSource`] for structured cancellation.
 pub(crate) struct StopTrigger {
-    inner: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+    source: CancellationSource,
 }
 
 impl StopTrigger {
     /// Signal the subscription to stop.
     pub(crate) fn stop(&self) {
-        let (lock, cvar) = &*self.inner;
-        // Recover from poisoned mutex - we must set the stop flag regardless
-        let mut stopped = lock.lock().unwrap_or_else(|e| e.into_inner());
-        *stopped = true;
-        cvar.notify_all();
+        self.source.cancel();
     }
 }
 
@@ -1060,30 +1039,40 @@ mod tests {
     // documents a specific guarantee that downstream code relies on.
     // =========================================================================
 
-    /// CONTRACT: StopSignal::wait_timeout must handle poisoned mutex without panicking.
-    /// This ensures subscriptions can be stopped even if another thread panicked
-    /// while holding the mutex.
+    /// CONTRACT: StopSignal backed by CancellationToken must remain functional
+    /// even after concurrent thread panics. The AtomicBool-based implementation
+    /// is inherently poison-resistant.
     #[test]
-    fn contract_stop_signal_recovers_from_poisoned_mutex() {
+    fn contract_stop_signal_resilient_to_thread_panics() {
         let (signal, trigger) = StopSignal::new();
         let signal_clone = signal.clone();
 
-        // Poison the mutex by panicking while holding the lock
+        // Panic in a thread that holds a clone of the signal
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let (lock, _) = &*signal_clone.inner;
-            let _guard = lock.lock().unwrap();
-            panic!("intentional poison");
+            assert!(!signal_clone.is_stopped());
+            panic!("intentional panic while holding signal clone");
         }));
         assert!(result.is_err());
 
-        // Signal must still be checkable and triggerable despite poisoned mutex
+        // Signal must still be checkable and triggerable after thread panic
         assert!(!signal.is_stopped(), "signal should still report not-stopped");
         trigger.stop();
         assert!(signal.is_stopped(), "signal should report stopped after trigger");
         assert!(
             signal.wait_timeout(Duration::from_millis(10)),
-            "wait_timeout should return true when stopped, even with poisoned mutex"
+            "wait_timeout should return true when stopped"
         );
+    }
+
+    /// CONTRACT: StopSignal exposes its underlying CancellationToken for
+    /// Asupersync integration.
+    #[test]
+    fn contract_stop_signal_exposes_cancellation_token() {
+        let (signal, trigger) = StopSignal::new();
+        let token = signal.cancellation_token();
+        assert!(!token.is_cancelled(), "token should start uncancelled");
+        trigger.stop();
+        assert!(token.is_cancelled(), "token should be cancelled after stop");
     }
 
     /// CONTRACT: stop_all() must complete within a bounded time even if subscription

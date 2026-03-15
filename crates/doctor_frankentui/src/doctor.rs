@@ -4,11 +4,13 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use clap::{Args, ValueEnum};
+use serde::Serialize;
 use serde_json::json;
 use wait_timeout::ChildExt;
 
 use crate::error::{DoctorError, Result};
 use crate::profile::list_profile_names;
+use crate::runmeta::RunMeta;
 use crate::util::{
     CliOutput, OutputIntegration, command_exists, ensure_dir, ensure_executable, ensure_exists,
     now_compact_timestamp, output_for, shell_single_quote, write_string,
@@ -81,6 +83,7 @@ struct DoctorSummaryInputs<'a> {
     degraded_reason: Option<&'a str>,
     fallback_error: Option<&'a str>,
     capture_smoke_detail: Option<&'a str>,
+    capture_smoke: Option<&'a CaptureSmokeObservability>,
     app_smoke_summary: Option<&'a str>,
     app_smoke_stdout_log: Option<&'a str>,
     app_smoke_stderr_log: Option<&'a str>,
@@ -89,6 +92,31 @@ struct DoctorSummaryInputs<'a> {
     tmux_session_file: Option<&'a str>,
     tmux_pane_capture: Option<&'a str>,
     tmux_pane_log: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct CaptureSmokeObservability {
+    run_name: String,
+    run_dir: String,
+    run_meta_path: String,
+    status: String,
+    trace_id: Option<String>,
+    fallback_active: Option<bool>,
+    fallback_reason: Option<String>,
+    capture_error_reason: Option<String>,
+    evidence_ledger: Option<String>,
+    ttyd_shim_log: Option<String>,
+    ttyd_runtime_log: Option<String>,
+    tmux_session: Option<String>,
+    tmux_attach_command: Option<String>,
+    tmux_session_file: Option<String>,
+    tmux_pane_capture: Option<String>,
+    tmux_pane_log: Option<String>,
+    vhs_exit_code: Option<i32>,
+    host_vhs_exit_code: Option<i32>,
+    vhs_driver_used: Option<String>,
+    failure_signature: Option<String>,
+    remediation_hint: Option<String>,
 }
 
 fn doctor_summary_path(run_root: &Path) -> PathBuf {
@@ -112,6 +140,7 @@ fn build_doctor_summary(
         "degraded_reason": inputs.degraded_reason,
         "fallback_error": inputs.fallback_error,
         "capture_smoke_detail": inputs.capture_smoke_detail,
+        "capture_smoke": inputs.capture_smoke,
         "app_smoke_summary": inputs.app_smoke_summary,
         "app_smoke_stdout_log": inputs.app_smoke_stdout_log,
         "app_smoke_stderr_log": inputs.app_smoke_stderr_log,
@@ -297,6 +326,48 @@ fn describe_capture_smoke_failure(run_root: &Path, run_name: &str) -> Option<Str
     } else {
         Some(format!("{} ({})", run_dir.display(), facts.join(", ")))
     }
+}
+
+fn load_capture_smoke_observability(
+    run_root: &Path,
+    run_name: &str,
+) -> Option<CaptureSmokeObservability> {
+    let run_dir = run_root.join(run_name);
+    let meta_path = run_dir.join("run_meta.json");
+    let meta = RunMeta::from_path(&meta_path).ok()?;
+    let (failure_signature, remediation_hint) = classify_capture_failure(
+        Some(&meta.status),
+        meta.vhs_exit_code.map(i64::from),
+        meta.capture_error_reason.as_deref(),
+        meta.fallback_reason.as_deref(),
+    )
+    .map_or((None, None), |(signature, hint)| {
+        (Some(signature.to_string()), Some(hint.to_string()))
+    });
+
+    Some(CaptureSmokeObservability {
+        run_name: run_name.to_string(),
+        run_dir: run_dir.display().to_string(),
+        run_meta_path: meta_path.display().to_string(),
+        status: meta.status,
+        trace_id: meta.trace_id,
+        fallback_active: meta.fallback_active,
+        fallback_reason: meta.fallback_reason,
+        capture_error_reason: meta.capture_error_reason,
+        evidence_ledger: meta.evidence_ledger,
+        ttyd_shim_log: meta.ttyd_shim_log,
+        ttyd_runtime_log: meta.ttyd_runtime_log,
+        tmux_session: meta.tmux_session,
+        tmux_attach_command: meta.tmux_attach_command,
+        tmux_session_file: meta.tmux_session_file,
+        tmux_pane_capture: meta.tmux_pane_capture,
+        tmux_pane_log: meta.tmux_pane_log,
+        vhs_exit_code: meta.vhs_exit_code,
+        host_vhs_exit_code: meta.host_vhs_exit_code,
+        vhs_driver_used: meta.vhs_driver_used,
+        failure_signature,
+        remediation_hint,
+    })
 }
 
 fn build_capture_smoke_command(
@@ -734,6 +805,7 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
     let mut degraded_capture = false;
     let mut degraded_reason: Option<String> = None;
     let mut capture_smoke_detail: Option<String> = None;
+    let mut capture_smoke: Option<CaptureSmokeObservability> = None;
     let mut app_smoke_summary: Option<String> = None;
     let mut app_smoke_stdout_log: Option<String> = None;
     let mut app_smoke_stderr_log: Option<String> = None;
@@ -780,6 +852,7 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
         ui.rule(Some("full capture smoke"));
         let mut full = build_capture_smoke_command(&current_exe, &args, "doctor_full_run", false);
         let full_status = full.status()?;
+        capture_smoke = load_capture_smoke_observability(&args.run_root, "doctor_full_run");
 
         if !full_status.success() {
             degraded_capture = true;
@@ -890,6 +963,7 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
             degraded_reason: degraded_reason.as_deref(),
             fallback_error: fallback_error.as_deref(),
             capture_smoke_detail: capture_smoke_detail.as_deref(),
+            capture_smoke: capture_smoke.as_ref(),
             app_smoke_summary: app_smoke_summary.as_deref(),
             app_smoke_stdout_log: app_smoke_stdout_log.as_deref(),
             app_smoke_stderr_log: app_smoke_stderr_log.as_deref(),
@@ -944,6 +1018,7 @@ mod tests {
     use std::path::PathBuf;
     use std::process::Command;
 
+    use crate::runmeta::RunMeta;
     use crate::util::{CliOutput, OutputIntegration};
     use tempfile::tempdir;
 
@@ -1223,6 +1298,34 @@ exit 1
             ..sample_args()
         };
         let integration = sample_integration();
+        let capture_smoke = super::CaptureSmokeObservability {
+            run_name: "doctor_full_run".to_string(),
+            run_dir: "/tmp/doctor-run/doctor_full_run".to_string(),
+            run_meta_path: "/tmp/doctor-run/doctor_full_run/run_meta.json".to_string(),
+            status: "failed".to_string(),
+            trace_id: Some("trace-123".to_string()),
+            fallback_active: Some(true),
+            fallback_reason: Some("capture timeout exceeded 30s".to_string()),
+            capture_error_reason: Some("ttyd handshake EOF".to_string()),
+            evidence_ledger: Some(
+                "/tmp/doctor-run/doctor_full_run/evidence_ledger.jsonl".to_string(),
+            ),
+            ttyd_shim_log: Some("/tmp/doctor-run/doctor_full_run/ttyd_shim.log".to_string()),
+            ttyd_runtime_log: Some("/tmp/doctor-run/doctor_full_run/ttyd_runtime.log".to_string()),
+            tmux_session: Some("doctor-frankentui-demo".to_string()),
+            tmux_attach_command: Some("tmux attach-session -t doctor-frankentui-demo".to_string()),
+            tmux_session_file: Some("/tmp/doctor-run/doctor_full_run/tmux_session.txt".to_string()),
+            tmux_pane_capture: Some("/tmp/doctor-run/doctor_full_run/tmux_pane.txt".to_string()),
+            tmux_pane_log: Some("/tmp/doctor-run/doctor_full_run/tmux_pane.log".to_string()),
+            vhs_exit_code: Some(124),
+            host_vhs_exit_code: Some(124),
+            vhs_driver_used: Some("host".to_string()),
+            failure_signature: Some("vhs_ttyd_handshake_failed".to_string()),
+            remediation_hint: Some(
+                "host has unstable VHS↔ttyd interop; pin a known-good pair or upgrade both"
+                    .to_string(),
+            ),
+        };
         let summary = super::build_doctor_summary(
             &args,
             &integration,
@@ -1237,6 +1340,7 @@ exit 1
                 capture_smoke_detail: Some(
                     "/tmp/doctor-run/doctor_full_run (status=failed, diagnosis=vhs_capture_timeout)",
                 ),
+                capture_smoke: Some(&capture_smoke),
                 app_smoke_summary: Some("/tmp/doctor-run/doctor_app_smoke/summary.json"),
                 app_smoke_stdout_log: Some("/tmp/doctor-run/doctor_app_smoke/stdout.log"),
                 app_smoke_stderr_log: Some("/tmp/doctor-run/doctor_app_smoke/stderr.log"),
@@ -1260,6 +1364,16 @@ exit 1
         assert_eq!(
             parsed["capture_smoke_detail"],
             "/tmp/doctor-run/doctor_full_run (status=failed, diagnosis=vhs_capture_timeout)"
+        );
+        assert_eq!(parsed["capture_smoke"]["run_name"], "doctor_full_run");
+        assert_eq!(parsed["capture_smoke"]["trace_id"], "trace-123");
+        assert_eq!(
+            parsed["capture_smoke"]["failure_signature"],
+            "vhs_ttyd_handshake_failed"
+        );
+        assert_eq!(
+            parsed["capture_smoke"]["evidence_ledger"],
+            "/tmp/doctor-run/doctor_full_run/evidence_ledger.jsonl"
         );
         assert_eq!(
             parsed["fallback_error"],
@@ -1295,5 +1409,46 @@ exit 1
             "/tmp/doctor-run/doctor_app_smoke/tmux_pane.log"
         );
         assert_eq!(parsed["integration"]["sqlmodel_mode"], "json");
+    }
+
+    #[test]
+    fn load_capture_smoke_observability_reads_run_meta_contract() {
+        let temp = tempdir().expect("tempdir");
+        let run_dir = temp.path().join("doctor_full_run");
+        fs::create_dir_all(&run_dir).expect("create run dir");
+        let meta_path = run_dir.join("run_meta.json");
+        let run_meta = RunMeta {
+            status: "failed".to_string(),
+            profile: "analytics-empty".to_string(),
+            run_dir: run_dir.display().to_string(),
+            trace_id: Some("trace-xyz".to_string()),
+            fallback_active: Some(true),
+            fallback_reason: Some("capture timeout exceeded 30s".to_string()),
+            capture_error_reason: Some("ttyd handshake EOF".to_string()),
+            evidence_ledger: Some(run_dir.join("evidence_ledger.jsonl").display().to_string()),
+            ttyd_runtime_log: Some(run_dir.join("ttyd_runtime.log").display().to_string()),
+            vhs_exit_code: Some(124),
+            host_vhs_exit_code: Some(124),
+            vhs_driver_used: Some("host".to_string()),
+            ..RunMeta::default()
+        };
+        run_meta.write_to_path(&meta_path).expect("write run meta");
+
+        let observability = super::load_capture_smoke_observability(temp.path(), "doctor_full_run")
+            .expect("load observability");
+
+        assert_eq!(observability.run_name, "doctor_full_run");
+        assert_eq!(observability.status, "failed");
+        assert_eq!(observability.trace_id.as_deref(), Some("trace-xyz"));
+        assert_eq!(
+            observability.failure_signature.as_deref(),
+            Some("vhs_ttyd_handshake_failed")
+        );
+        assert!(
+            observability
+                .remediation_hint
+                .as_deref()
+                .is_some_and(|value| value.contains("VHS"))
+        );
     }
 }

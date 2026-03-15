@@ -2130,6 +2130,82 @@ pub struct ImmediateDrainStats {
     pub max_zero_timeout_polls_in_burst: u64,
 }
 
+/// Runtime lane for the Asupersync migration rollout.
+///
+/// Controls which subscription/effect execution backend is active.
+/// The default is `Legacy`, preserving pre-migration behavior.
+///
+/// # Migration rollout
+///
+/// 1. `Legacy` — current thread-based subscriptions (default, safe)
+/// 2. `Structured` — CancellationToken-backed subscriptions (current state after bd-3tmu4)
+/// 3. `Asupersync` — full Asupersync-native execution (future)
+///
+/// Selection is logged at startup so operators can tell which lane is active.
+/// Fallback from `Asupersync` → `Structured` → `Legacy` is automatic on error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RuntimeLane {
+    /// Pre-migration behavior: thread-based subscriptions with manual stop coordination.
+    /// This is the safe default that preserves all existing semantics.
+    Legacy,
+    /// Structured cancellation: subscriptions use CancellationToken internally.
+    /// Externally observable behavior is identical to Legacy.
+    Structured,
+    /// Full Asupersync-native execution (reserved for future use).
+    /// Falls back to Structured if Asupersync primitives are unavailable.
+    Asupersync,
+}
+
+impl RuntimeLane {
+    /// Resolve the effective lane, applying fallback rules.
+    ///
+    /// If the requested lane is not yet implemented, falls back to the
+    /// highest available lane. Currently: Asupersync → Structured.
+    #[must_use]
+    pub fn resolve(self) -> Self {
+        match self {
+            Self::Asupersync => {
+                tracing::info!(
+                    target: "ftui.runtime",
+                    requested = "asupersync",
+                    resolved = "structured",
+                    "Asupersync lane not yet available; falling back to structured cancellation"
+                );
+                Self::Structured
+            }
+            other => other,
+        }
+    }
+
+    /// Returns a human-readable label for logging.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Legacy => "legacy",
+            Self::Structured => "structured",
+            Self::Asupersync => "asupersync",
+        }
+    }
+
+    /// Check if this lane uses structured cancellation (CancellationToken).
+    #[must_use]
+    pub fn uses_structured_cancellation(self) -> bool {
+        matches!(self, Self::Structured | Self::Asupersync)
+    }
+}
+
+impl Default for RuntimeLane {
+    fn default() -> Self {
+        Self::Structured
+    }
+}
+
+impl std::fmt::Display for RuntimeLane {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
 /// Configuration for the program runtime.
 #[derive(Debug, Clone)]
 pub struct ProgramConfig {
@@ -2191,6 +2267,12 @@ pub struct ProgramConfig {
     /// When `None` (default), all screens tick every frame (current behavior).
     /// When set, the runtime consults the strategy for each inactive screen.
     pub tick_strategy: Option<crate::tick_strategy::TickStrategyKind>,
+    /// Runtime execution lane for the Asupersync migration rollout.
+    ///
+    /// Controls which subscription/effect backend is active.
+    /// Defaults to `Structured` (CancellationToken-backed, current migration state).
+    /// Logged at startup so operators can identify the active lane.
+    pub runtime_lane: RuntimeLane,
 }
 
 impl Default for ProgramConfig {
@@ -2221,6 +2303,7 @@ impl Default for ProgramConfig {
             guardrails: GuardrailsConfig::default(),
             intercept_signals: true,
             tick_strategy: None,
+            runtime_lane: RuntimeLane::default(),
         }
     }
 }

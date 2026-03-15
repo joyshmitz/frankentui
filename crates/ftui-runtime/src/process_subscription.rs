@@ -185,6 +185,9 @@ impl<M: Send + 'static> Subscription<M> for ProcessSubscription<M> {
             }
         }
 
+        let spawn_start = web_time::Instant::now();
+        let sub_id = self.id;
+
         let mut cmd = Command::new(&self.program);
         cmd.args(&self.args)
             .stdout(Stdio::piped())
@@ -196,8 +199,25 @@ impl<M: Send + 'static> Subscription<M> for ProcessSubscription<M> {
         }
 
         let mut child = match cmd.spawn() {
-            Ok(c) => c,
+            Ok(c) => {
+                tracing::debug!(
+                    target: "ftui.process",
+                    sub_id,
+                    program = %self.program,
+                    args = ?self.args,
+                    spawn_us = spawn_start.elapsed().as_micros() as u64,
+                    "process spawned"
+                );
+                c
+            }
             Err(e) => {
+                tracing::warn!(
+                    target: "ftui.process",
+                    sub_id,
+                    program = %self.program,
+                    error = %e,
+                    "process spawn failed"
+                );
                 let _ = sender.send((self.make_msg)(ProcessEvent::Error(format!(
                     "Failed to spawn '{}': {}",
                     self.program, e
@@ -210,6 +230,8 @@ impl<M: Send + 'static> Subscription<M> for ProcessSubscription<M> {
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let make_msg_ref = &self.make_msg;
+        // Use the cancellation token for cooperative stop coordination.
+        let token = stop.cancellation_token().clone();
         let poll_interval = Duration::from_millis(50);
 
         std::thread::scope(|s| {
@@ -232,20 +254,52 @@ impl<M: Send + 'static> Subscription<M> for ProcessSubscription<M> {
 
             let final_event = loop {
                 match child.try_wait() {
-                    Ok(Some(status)) => break ProcessEvent::Exited(status.code().unwrap_or(-1)),
+                    Ok(Some(status)) => {
+                        let code = status.code().unwrap_or(-1);
+                        tracing::debug!(
+                            target: "ftui.process",
+                            sub_id,
+                            exit_code = code,
+                            elapsed_ms = spawn_start.elapsed().as_millis() as u64,
+                            "process exited"
+                        );
+                        break ProcessEvent::Exited(code);
+                    }
                     Ok(None) => {}
-                    Err(e) => break ProcessEvent::Error(format!("wait error: {e}")),
+                    Err(e) => {
+                        tracing::warn!(
+                            target: "ftui.process",
+                            sub_id,
+                            error = %e,
+                            "process wait error"
+                        );
+                        break ProcessEvent::Error(format!("wait error: {e}"));
+                    }
                 }
 
                 if let Some(dl) = deadline
                     && web_time::Instant::now() >= dl
                 {
+                    tracing::debug!(
+                        target: "ftui.process",
+                        sub_id,
+                        elapsed_ms = spawn_start.elapsed().as_millis() as u64,
+                        reason = "timeout",
+                        "killing process"
+                    );
                     let _ = child.kill();
                     let _ = child.wait();
                     break ProcessEvent::Killed;
                 }
 
-                if stop.wait_timeout(poll_interval) {
+                if token.wait_timeout(poll_interval) {
+                    tracing::debug!(
+                        target: "ftui.process",
+                        sub_id,
+                        elapsed_ms = spawn_start.elapsed().as_millis() as u64,
+                        reason = "cancellation",
+                        "killing process"
+                    );
                     let _ = child.kill();
                     let _ = child.wait();
                     break ProcessEvent::Killed;
@@ -543,5 +597,217 @@ mod tests {
             .iter()
             .any(|m| matches!(m, TestMsg::Proc(ProcessEvent::Exited(42))));
         assert!(has_exit, "Expected Exited(42), got: {msgs:?}");
+    }
+
+    // =========================================================================
+    // PROCESS LIFECYCLE CONTRACT TESTS (bd-3s3yw)
+    //
+    // These tests capture the observable process supervision contract that
+    // the Asupersync migration must preserve.
+    // =========================================================================
+
+    /// CONTRACT: Process subscription uses CancellationToken internally for
+    /// stop coordination (via StopSignal::cancellation_token()).
+    #[test]
+    fn contract_uses_cancellation_token_for_stop() {
+        let sub = ProcessSubscription::new("sleep", TestMsg::Proc).arg("60");
+        let (tx, rx) = stdmpsc::channel();
+        let (signal, trigger) = StopSignal::new();
+
+        // Verify the cancellation token is accessible
+        let token = signal.cancellation_token().clone();
+        assert!(!token.is_cancelled());
+
+        let handle = thread::spawn(move || {
+            sub.run(tx, signal);
+        });
+
+        thread::sleep(Duration::from_millis(100));
+
+        // Stopping via trigger should cancel the token
+        trigger.stop();
+        assert!(token.is_cancelled());
+
+        handle.join().unwrap();
+
+        let msgs: Vec<TestMsg> = rx.try_iter().collect();
+        assert!(
+            msgs.iter()
+                .any(|m| matches!(m, TestMsg::Proc(ProcessEvent::Killed))),
+            "process must be killed on cancellation, got: {msgs:?}"
+        );
+    }
+
+    /// CONTRACT: Final event is always sent, even on error paths.
+    /// The subscription must always emit exactly one terminal event
+    /// (Exited, Killed, or Error).
+    #[test]
+    fn contract_always_emits_terminal_event() {
+        // Happy path: process exits normally
+        {
+            let sub = ProcessSubscription::new("true", TestMsg::Proc);
+            let (tx, rx) = stdmpsc::channel();
+            let (signal, trigger) = StopSignal::new();
+
+            let handle = thread::spawn(move || {
+                sub.run(tx, signal);
+            });
+
+            thread::sleep(Duration::from_millis(500));
+            trigger.stop();
+            handle.join().unwrap();
+
+            let msgs: Vec<TestMsg> = rx.try_iter().collect();
+            let terminal_events: Vec<_> = msgs
+                .iter()
+                .filter(|m| {
+                    matches!(
+                        m,
+                        TestMsg::Proc(
+                            ProcessEvent::Exited(_)
+                                | ProcessEvent::Killed
+                                | ProcessEvent::Error(_)
+                        )
+                    )
+                })
+                .collect();
+            assert_eq!(
+                terminal_events.len(),
+                1,
+                "must emit exactly one terminal event, got: {terminal_events:?}"
+            );
+        }
+
+        // Error path: nonexistent program
+        {
+            let sub = ProcessSubscription::new(
+                "/nonexistent/program/that/should/not/exist",
+                TestMsg::Proc,
+            );
+            let (tx, rx) = stdmpsc::channel();
+            let (signal, _trigger) = StopSignal::new();
+
+            let handle = thread::spawn(move || {
+                sub.run(tx, signal);
+            });
+
+            handle.join().unwrap();
+
+            let msgs: Vec<TestMsg> = rx.try_iter().collect();
+            let terminal_events: Vec<_> = msgs
+                .iter()
+                .filter(|m| {
+                    matches!(
+                        m,
+                        TestMsg::Proc(
+                            ProcessEvent::Exited(_)
+                                | ProcessEvent::Killed
+                                | ProcessEvent::Error(_)
+                        )
+                    )
+                })
+                .collect();
+            assert_eq!(
+                terminal_events.len(),
+                1,
+                "must emit exactly one terminal event on error, got: {terminal_events:?}"
+            );
+        }
+    }
+
+    /// CONTRACT: stdout and stderr lines arrive before the terminal event.
+    /// The output forwarding threads must join before the final event is sent.
+    #[test]
+    fn contract_output_precedes_terminal_event() {
+        let sub = ProcessSubscription::new("sh", TestMsg::Proc)
+            .arg("-c")
+            .arg("echo FIRST && echo SECOND >&2 && exit 0");
+        let (tx, rx) = stdmpsc::channel();
+        let (signal, trigger) = StopSignal::new();
+
+        let handle = thread::spawn(move || {
+            sub.run(tx, signal);
+        });
+
+        thread::sleep(Duration::from_millis(500));
+        trigger.stop();
+        handle.join().unwrap();
+
+        let msgs: Vec<TestMsg> = rx.try_iter().collect();
+
+        // Find the position of the terminal event
+        let terminal_pos = msgs.iter().position(|m| {
+            matches!(
+                m,
+                TestMsg::Proc(
+                    ProcessEvent::Exited(_) | ProcessEvent::Killed | ProcessEvent::Error(_)
+                )
+            )
+        });
+
+        // Find positions of stdout/stderr events
+        let output_positions: Vec<usize> = msgs
+            .iter()
+            .enumerate()
+            .filter_map(|(i, m)| match m {
+                TestMsg::Proc(ProcessEvent::Stdout(_) | ProcessEvent::Stderr(_)) => Some(i),
+                _ => None,
+            })
+            .collect();
+
+        if let Some(term_pos) = terminal_pos {
+            for &out_pos in &output_positions {
+                assert!(
+                    out_pos < term_pos,
+                    "output event at position {out_pos} must precede terminal event at {term_pos}"
+                );
+            }
+        }
+    }
+
+    /// CONTRACT: ProcessSubscription ID includes timeout in the hash.
+    /// Changing timeout creates a different subscription identity.
+    #[test]
+    fn contract_id_includes_timeout() {
+        let s1: ProcessSubscription<TestMsg> =
+            ProcessSubscription::new("echo", TestMsg::Proc).timeout(Duration::from_secs(5));
+        let s2: ProcessSubscription<TestMsg> =
+            ProcessSubscription::new("echo", TestMsg::Proc).timeout(Duration::from_secs(10));
+        let s3: ProcessSubscription<TestMsg> = ProcessSubscription::new("echo", TestMsg::Proc);
+
+        assert_ne!(s1.id(), s2.id(), "different timeouts must produce different IDs");
+        assert_ne!(s1.id(), s3.id(), "timeout vs no-timeout must produce different IDs");
+    }
+
+    /// CONTRACT: Kill is prompt — process is killed within poll_interval (50ms)
+    /// of the stop signal, not blocked waiting for process output.
+    #[test]
+    fn contract_kill_is_prompt() {
+        let sub = ProcessSubscription::new("sleep", TestMsg::Proc).arg("60");
+        let (tx, rx) = stdmpsc::channel();
+        let (signal, trigger) = StopSignal::new();
+
+        let handle = thread::spawn(move || {
+            sub.run(tx, signal);
+        });
+
+        thread::sleep(Duration::from_millis(100));
+
+        let kill_start = web_time::Instant::now();
+        trigger.stop();
+        handle.join().unwrap();
+        let kill_elapsed = kill_start.elapsed();
+
+        assert!(
+            kill_elapsed < Duration::from_millis(500),
+            "kill must complete within 500ms of stop signal, took {kill_elapsed:?}"
+        );
+
+        let msgs: Vec<TestMsg> = rx.try_iter().collect();
+        assert!(
+            msgs.iter()
+                .any(|m| matches!(m, TestMsg::Proc(ProcessEvent::Killed))),
+            "must emit Killed event"
+        );
     }
 }

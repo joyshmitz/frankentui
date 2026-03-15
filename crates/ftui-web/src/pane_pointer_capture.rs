@@ -720,9 +720,9 @@ mod tests {
         PanePointerIgnoredReason, PanePointerLifecyclePhase, PanePointerLogOutcome,
     };
     use ftui_layout::{
-        PaneCancelReason, PaneDragResizeEffect, PaneDragResizeState, PaneId, PaneModifierSnapshot,
-        PanePointerButton, PanePointerPosition, PaneResizeTarget, PaneSemanticInputEventKind,
-        SplitAxis,
+        PaneCancelReason, PaneDragResizeEffect, PaneDragResizeState, PaneId, PaneInertialThrow,
+        PaneModifierSnapshot, PaneMotionVector, PanePointerButton, PanePointerPosition,
+        PanePressureSnapProfile, PaneResizeTarget, PaneSemanticInputEventKind, SplitAxis,
     };
 
     fn target() -> PaneResizeTarget {
@@ -843,6 +843,92 @@ mod tests {
                 .kind,
             PaneSemanticInputEventKind::PointerUp { pointer_id: 9, .. }
         ));
+    }
+
+    #[test]
+    fn pointer_move_emits_motion_and_pressure_snap_profile() {
+        let mut adapter = adapter();
+        adapter.pointer_down(
+            target(),
+            17,
+            PanePointerButton::Primary,
+            pos(4, 4),
+            PaneModifierSnapshot::default(),
+        );
+
+        let dispatch = adapter.pointer_move(17, pos(18, 8), PaneModifierSnapshot::default());
+        let expected_motion = PaneMotionVector::from_delta(14, 4, 16, 0);
+
+        assert_eq!(dispatch.motion, Some(expected_motion));
+        assert_eq!(
+            dispatch.pressure_snap_profile(),
+            Some(PanePressureSnapProfile::from_motion(expected_motion))
+        );
+    }
+
+    #[test]
+    fn pointer_move_tracks_direction_changes_in_motion_summary() {
+        let mut adapter = adapter();
+        adapter.pointer_down(
+            target(),
+            23,
+            PanePointerButton::Primary,
+            pos(10, 10),
+            PaneModifierSnapshot::default(),
+        );
+
+        let first = adapter.pointer_move(23, pos(24, 10), PaneModifierSnapshot::default());
+        let second = adapter.pointer_move(23, pos(18, 10), PaneModifierSnapshot::default());
+
+        assert_eq!(
+            first.motion,
+            Some(PaneMotionVector::from_delta(14, 0, 16, 0))
+        );
+        assert_eq!(
+            second.motion,
+            Some(PaneMotionVector::from_delta(8, 0, 32, 1))
+        );
+        assert!(
+            second
+                .pressure_snap_profile()
+                .expect("pressure profile should be derived from motion")
+                .strength_bps
+                < first
+                    .pressure_snap_profile()
+                    .expect("pressure profile should be derived from motion")
+                    .strength_bps
+        );
+    }
+
+    #[test]
+    fn pointer_up_exposes_inertial_throw_and_projected_pointer() {
+        let mut adapter = adapter();
+        adapter.pointer_down(
+            target(),
+            29,
+            PanePointerButton::Primary,
+            pos(2, 3),
+            PaneModifierSnapshot::default(),
+        );
+        let ack = adapter.capture_acquired(29);
+        assert_eq!(ack.log.outcome, PanePointerLogOutcome::CaptureStateUpdated);
+
+        let drag = adapter.pointer_move(29, pos(28, 11), PaneModifierSnapshot::default());
+        let release = adapter.pointer_up(
+            29,
+            PanePointerButton::Primary,
+            pos(31, 12),
+            PaneModifierSnapshot::default(),
+        );
+        let expected_motion = drag.motion.expect("drag motion should be recorded");
+        let expected_inertial = PaneInertialThrow::from_motion(expected_motion);
+
+        assert_eq!(release.motion, Some(expected_motion));
+        assert_eq!(release.inertial_throw, Some(expected_inertial));
+        assert_eq!(
+            release.projected_position,
+            Some(expected_inertial.projected_pointer(pos(31, 12)))
+        );
     }
 
     #[test]
