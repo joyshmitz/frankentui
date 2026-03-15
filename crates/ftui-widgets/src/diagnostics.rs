@@ -153,7 +153,7 @@ impl<E: DiagnosticRecord> DiagnosticLog<E> {
         if self.max_entries > 0 && self.entries.len().saturating_sub(self.head) > self.max_entries {
             self.head += 1;
             if self.head >= self.entries.len() / 2 {
-                self.entries.drain(0..self.head);
+                self.entries = self.entries.split_off(self.head);
                 self.head = 0;
             }
         }
