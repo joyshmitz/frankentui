@@ -20,6 +20,11 @@ The current test-mode capture covers:
 
 Artifacts produced by the latest run:
 
+- `target/pane-profiling/bd-1y0ph/pane_core_profile_harness.txt`
+- `target/pane-profiling/bd-1y0ph/pane_core_profile_harness/manifest.json`
+- `target/pane-profiling/bd-1y0ph/pane_core_profile_harness/baseline_snapshot.json`
+- `target/pane-profiling/bd-1y0ph/pane_core_profile_harness/final_snapshot.json`
+- `target/pane-profiling/bd-1y0ph/pane_core_profile_harness/run.log`
 - `target/pane-profiling/bd-1y0ph/layout_bench.txt`
 - `target/pane-profiling/bd-1y0ph/pane_terminal_bench.txt`
 - `target/pane-profiling/bd-1y0ph/pane_pointer_bench.txt`
@@ -125,6 +130,17 @@ the repeatable capture workflow.
 The profiling runner now emits `symbol_metadata.txt`, and it records the exact
 bench binary path printed by the current run instead of guessing from whatever
 matching binary happens to exist under `target/release/deps/`.
+
+For the pane-core lane, the runner also invokes a long-lived deterministic
+profile harness that emits:
+
+- a machine-readable `manifest.json`
+- golden `baseline_snapshot.json` and `final_snapshot.json`
+- verbose `run.log`
+
+That harness exists so later checkpointing and memory work can reuse one
+replay-heavy scenario with stable hashes instead of reconstructing the same
+timeline workload from ad hoc bench flags.
 
 Current evidence from that artifact is mixed:
 

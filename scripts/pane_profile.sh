@@ -155,6 +155,7 @@ run_perf_stat() {
 record_symbol_metadata() {
     local output_file="${OUT_DIR}/symbol_metadata.txt"
     local prefixes=(
+        pane_profile_harness
         layout_bench
         pane_terminal_bench
         pane_pointer_bench
@@ -200,6 +201,73 @@ record_symbol_metadata() {
     done
 }
 
+run_core_harness() {
+    local output_file="${OUT_DIR}/pane_core_profile_harness.txt"
+    local harness_dir="${OUT_DIR}/pane_core_profile_harness"
+    local harness_args=(
+        bench -p ftui-layout --bench pane_profile_harness --
+        --out-dir "${harness_dir}"
+    )
+
+    if [[ "$TEST_MODE" == "true" ]]; then
+        harness_args+=(--iterations 64 --warmup-iterations 8)
+    else
+        harness_args+=(--iterations 2000 --warmup-iterations 200)
+    fi
+
+    echo "==> pane_core_profile_harness"
+    "${CARGO_RUNNER[@]}" "${harness_args[@]}" 2>&1 | tee "$output_file"
+
+    local bench_binary
+    bench_binary="$(
+        sed -nE 's#^[[:space:]]*Running benches/[^ ]+[[:space:]]+\(([^)]+)\)$#\1#p' "$output_file" \
+            | tail -n1
+    )"
+    if [[ -n "$bench_binary" ]]; then
+        if [[ "$bench_binary" != /* ]]; then
+            bench_binary="${PROJECT_ROOT}/${bench_binary}"
+        fi
+        BENCH_BINARY_PATHS["pane_profile_harness"]="$bench_binary"
+    fi
+
+    mkdir -p "$harness_dir"
+    python3 - "$output_file" "$harness_dir" <<'PY'
+import json
+import pathlib
+import sys
+
+output_path = pathlib.Path(sys.argv[1])
+harness_dir = pathlib.Path(sys.argv[2])
+prefix_map = {
+    "HARNESS_MANIFEST_JSON=": "manifest.json",
+    "HARNESS_BASELINE_SNAPSHOT_JSON=": "baseline_snapshot.json",
+    "HARNESS_FINAL_SNAPSHOT_JSON=": "final_snapshot.json",
+    "HARNESS_RUN_LOG_JSON=": "run.log",
+}
+
+lines = output_path.read_text().splitlines()
+payloads = {}
+for line in lines:
+    for prefix, filename in prefix_map.items():
+        if line.startswith(prefix):
+            payloads[filename] = json.loads(line[len(prefix):])
+            break
+
+missing = [filename for filename in prefix_map.values() if filename not in payloads]
+if missing:
+    raise SystemExit(f"missing harness payloads: {', '.join(missing)}")
+
+for filename, payload in payloads.items():
+    path = harness_dir / filename
+    if filename == "run.log":
+        path.write_text("".join(f"{entry}\n" for entry in payload))
+    else:
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+PY
+}
+
+run_core_harness
+
 run_bench \
     layout_bench \
     bench -p ftui-layout --bench layout_bench -- pane/core/ "${bench_args[@]}"
@@ -235,6 +303,8 @@ cat > "${OUT_DIR}/README.txt" <<EOF
 Pane profiling artifacts for bd-1y0ph.
 
 Files:
+- pane_core_profile_harness.txt  long-lived pane-core harness output
+- pane_core_profile_harness/     manifest, snapshots, and verbose log
 - layout_bench.txt          pane/core/* Criterion output
 - pane_terminal_bench.txt   pane/terminal/* Criterion output
 - pane_pointer_bench.txt    pane/web_pointer/* Criterion output
