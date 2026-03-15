@@ -788,12 +788,14 @@ fn ttyd_help_text(real_ttyd: &Path) -> Option<String> {
 struct TtydFeatureSupport {
     supports_once: bool,
     supports_client_option: bool,
+    supports_debug: bool,
 }
 
 fn parse_ttyd_feature_support(help: &str) -> TtydFeatureSupport {
     TtydFeatureSupport {
         supports_once: help.contains("--once"),
         supports_client_option: help.contains("--client-option"),
+        supports_debug: help.contains("--debug"),
     }
 }
 
@@ -890,6 +892,7 @@ fn install_ttyd_compat_shim(run_dir: &Path) -> Result<Option<TtydCompatShim>> {
     let feature_support = detect_ttyd_feature_support(&real_ttyd).unwrap_or(TtydFeatureSupport {
         supports_once: false,
         supports_client_option: false,
+        supports_debug: false,
     });
 
     if !ttyd_requires_compat_shim(&real_ttyd) {
@@ -897,13 +900,49 @@ fn install_ttyd_compat_shim(run_dir: &Path) -> Result<Option<TtydCompatShim>> {
     }
     let drop_once = !feature_support.supports_once;
     let drop_client_option = !feature_support.supports_client_option;
+    let add_debug_logging = feature_support.supports_debug;
 
     let shim_dir = run_dir.join("shim_bin");
     ensure_dir(&shim_dir)?;
     let shim_path = shim_dir.join("ttyd");
     let shim_log = run_dir.join("ttyd_shim.log");
     let runtime_log = run_dir.join("ttyd_runtime.log");
-    let shim_body = format!(
+    let shim_body = build_ttyd_compat_shim_body(
+        &real_ttyd,
+        &shim_log,
+        &runtime_log,
+        drop_once,
+        drop_client_option,
+        add_debug_logging,
+    );
+    write_string(&shim_path, &shim_body)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = fs::metadata(&shim_path)?.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&shim_path, permissions)?;
+    }
+
+    Ok(Some(TtydCompatShim {
+        shim_dir,
+        shim_log,
+        runtime_log,
+        real_ttyd,
+    }))
+}
+
+fn build_ttyd_compat_shim_body(
+    real_ttyd: &Path,
+    shim_log: &Path,
+    runtime_log: &Path,
+    drop_once: bool,
+    drop_client_option: bool,
+    add_debug_logging: bool,
+) -> String {
+    format!(
         "#!/usr/bin/env bash
 set -euo pipefail
 
@@ -912,6 +951,7 @@ shim_log={}
 runtime_log={}
 drop_once={}
 drop_client_option={}
+add_debug_logging={}
 args=()
 compat_notes=()
 
@@ -1015,7 +1055,9 @@ if [[ \"${{#compat_notes[@]}}\" -gt 0 ]]; then
   }} >> \"$shim_log\"
 fi
 
-args=(\"--debug\" \"9\" \"${{args[@]}}\")
+if [[ \"$add_debug_logging\" == \"1\" ]]; then
+  args=(\"--debug\" \"9\" \"${{args[@]}}\")
+fi
 
 exec \"$real_ttyd\" \"${{args[@]}}\" >> \"$runtime_log\" 2>&1
 ",
@@ -1024,24 +1066,8 @@ exec \"$real_ttyd\" \"${{args[@]}}\" >> \"$runtime_log\" 2>&1
         shell_single_quote(&runtime_log.display().to_string()),
         bool_to_u8(drop_once),
         bool_to_u8(drop_client_option),
-    );
-    write_string(&shim_path, &shim_body)?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        let mut permissions = fs::metadata(&shim_path)?.permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&shim_path, permissions)?;
-    }
-
-    Ok(Some(TtydCompatShim {
-        shim_dir,
-        shim_log,
-        runtime_log,
-        real_ttyd,
-    }))
+        bool_to_u8(add_debug_logging),
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -3229,10 +3255,12 @@ mod tests {
 
     #[test]
     fn parse_ttyd_feature_support_detects_once_and_client_option_flags() {
-        let help = "Usage: ttyd\n  --once\n  -t, --client-option [key=value]\n";
+        let help =
+            "Usage: ttyd\n  --once\n  -t, --client-option [key=value]\n  -d, --debug [level]\n";
         let support = super::parse_ttyd_feature_support(help);
         assert!(support.supports_once);
         assert!(support.supports_client_option);
+        assert!(support.supports_debug);
     }
 
     #[test]
@@ -3241,6 +3269,32 @@ mod tests {
         let support = super::parse_ttyd_feature_support(help);
         assert!(!support.supports_once);
         assert!(!support.supports_client_option);
+        assert!(!support.supports_debug);
+    }
+
+    #[test]
+    fn ttyd_compat_shim_only_enables_debug_when_supported() {
+        let with_debug = super::build_ttyd_compat_shim_body(
+            Path::new("/usr/bin/ttyd"),
+            Path::new("/tmp/ttyd_shim.log"),
+            Path::new("/tmp/ttyd_runtime.log"),
+            false,
+            false,
+            true,
+        );
+        assert!(with_debug.contains("add_debug_logging=1"));
+        assert!(with_debug.contains("args=(\"--debug\" \"9\" \"${args[@]}\")"));
+
+        let without_debug = super::build_ttyd_compat_shim_body(
+            Path::new("/usr/bin/ttyd"),
+            Path::new("/tmp/ttyd_shim.log"),
+            Path::new("/tmp/ttyd_runtime.log"),
+            false,
+            false,
+            false,
+        );
+        assert!(without_debug.contains("add_debug_logging=0"));
+        assert!(without_debug.contains("if [[ \"$add_debug_logging\" == \"1\" ]]; then"));
     }
 
     #[test]

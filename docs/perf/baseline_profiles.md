@@ -161,6 +161,10 @@ Use `rch` for CPU-heavy benchmark commands:
 mkdir -p target/benchmark-results
 rch exec -- cargo bench -p ftui-layout --bench layout_bench -- pane/core/ \
   | tee target/benchmark-results/layout_bench.txt
+rch exec -- cargo bench -p ftui-layout --bench pane_profile_harness -- \
+  --out-dir target/pane-profiling/manual/pane_core_profile_harness \
+  --iterations 2000 --warmup-iterations 200 \
+  | tee target/benchmark-results/pane_core_profile_harness.txt
 rch exec -- cargo bench -p ftui-runtime --bench pane_terminal_bench -- pane/terminal/ \
   | tee target/benchmark-results/pane_terminal_bench.txt
 rch exec -- cargo bench -p ftui-web --bench pane_pointer_bench -- pane/web_pointer/ \
@@ -176,3 +180,10 @@ Budget logs are emitted to:
 
 - `target/benchmark-results/perf_log.jsonl`
 - `target/benchmark-results/perf_confidence.jsonl`
+
+The long-lived pane-core harness also emits:
+
+- `target/pane-profiling/.../pane_core_profile_harness/manifest.json`
+- `target/pane-profiling/.../pane_core_profile_harness/baseline_snapshot.json`
+- `target/pane-profiling/.../pane_core_profile_harness/final_snapshot.json`
+- `target/pane-profiling/.../pane_core_profile_harness/run.log`

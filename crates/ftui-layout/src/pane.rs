@@ -913,8 +913,15 @@ pub struct PaneInteractionTimelineEntry {
     pub after_hash: u64,
 }
 
+/// One replay checkpoint in the interaction timeline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneInteractionTimelineCheckpoint {
+    pub applied_len: usize,
+    pub snapshot: PaneTreeSnapshot,
+}
+
 /// Persistent interaction timeline with undo/redo cursor.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneInteractionTimeline {
     /// Baseline tree before first recorded mutation.
     pub baseline: Option<PaneTreeSnapshot>,
@@ -922,6 +929,24 @@ pub struct PaneInteractionTimeline {
     pub entries: Vec<PaneInteractionTimelineEntry>,
     /// Number of entries currently applied (<= entries.len()).
     pub cursor: usize,
+    /// Deterministic replay checkpoints keyed by applied_len.
+    pub checkpoints: Vec<PaneInteractionTimelineCheckpoint>,
+    /// Entry spacing used when materializing checkpoints.
+    pub checkpoint_interval: usize,
+}
+
+const DEFAULT_PANE_TIMELINE_CHECKPOINT_INTERVAL: usize = 16;
+
+impl Default for PaneInteractionTimeline {
+    fn default() -> Self {
+        Self {
+            baseline: None,
+            entries: Vec::new(),
+            cursor: 0,
+            checkpoints: Vec::new(),
+            checkpoint_interval: DEFAULT_PANE_TIMELINE_CHECKPOINT_INTERVAL,
+        }
+    }
 }
 
 /// Timeline replay/undo/redo failures.
@@ -5354,6 +5379,8 @@ impl PaneInteractionTimeline {
             baseline: Some(tree.to_snapshot()),
             entries: Vec::new(),
             cursor: 0,
+            checkpoints: Vec::new(),
+            checkpoint_interval: DEFAULT_PANE_TIMELINE_CHECKPOINT_INTERVAL,
         }
     }
 
@@ -5379,6 +5406,8 @@ impl PaneInteractionTimeline {
         }
         if self.cursor < self.entries.len() {
             self.entries.truncate(self.cursor);
+            self.checkpoints
+                .retain(|checkpoint| checkpoint.applied_len <= self.cursor);
         }
         let outcome = tree.apply_operation(operation_id, operation.clone())?;
         self.entries.push(PaneInteractionTimelineEntry {
@@ -5389,6 +5418,7 @@ impl PaneInteractionTimeline {
             after_hash: outcome.after_hash,
         });
         self.cursor = self.entries.len();
+        self.maybe_record_checkpoint(tree);
         Ok(outcome)
     }
 
@@ -5414,13 +5444,8 @@ impl PaneInteractionTimeline {
 
     /// Rebuild a new tree from baseline and currently-applied entries.
     pub fn replay(&self) -> Result<PaneTree, PaneInteractionTimelineError> {
-        let baseline = self
-            .baseline
-            .clone()
-            .ok_or(PaneInteractionTimelineError::MissingBaseline)?;
-        let mut tree = PaneTree::from_snapshot(baseline)
-            .map_err(|source| PaneInteractionTimelineError::BaselineInvalid { source })?;
-        for entry in self.entries.iter().take(self.cursor) {
+        let (mut tree, start_idx) = self.restore_replay_start()?;
+        for entry in self.entries.iter().take(self.cursor).skip(start_idx) {
             tree.apply_operation_in_place_for_replay(entry.operation_id, &entry.operation)
                 .map_err(|source| PaneInteractionTimelineError::ApplyFailed { source })?;
         }
@@ -5431,6 +5456,40 @@ impl PaneInteractionTimeline {
         let replayed = self.replay()?;
         *tree = replayed;
         Ok(())
+    }
+
+    fn restore_replay_start(&self) -> Result<(PaneTree, usize), PaneInteractionTimelineError> {
+        if let Some(checkpoint) = self
+            .checkpoints
+            .iter()
+            .rev()
+            .find(|checkpoint| checkpoint.applied_len <= self.cursor)
+        {
+            let tree = PaneTree::from_snapshot(checkpoint.snapshot.clone())
+                .map_err(|source| PaneInteractionTimelineError::BaselineInvalid { source })?;
+            return Ok((tree, checkpoint.applied_len));
+        }
+
+        let baseline = self
+            .baseline
+            .clone()
+            .ok_or(PaneInteractionTimelineError::MissingBaseline)?;
+        let tree = PaneTree::from_snapshot(baseline)
+            .map_err(|source| PaneInteractionTimelineError::BaselineInvalid { source })?;
+        Ok((tree, 0))
+    }
+
+    fn maybe_record_checkpoint(&mut self, tree: &PaneTree) {
+        if self.checkpoint_interval == 0 || self.cursor == 0 {
+            return;
+        }
+        if !self.cursor.is_multiple_of(self.checkpoint_interval) {
+            return;
+        }
+        self.checkpoints.push(PaneInteractionTimelineCheckpoint {
+            applied_len: self.cursor,
+            snapshot: tree.to_snapshot(),
+        });
     }
 }
 
@@ -8845,5 +8904,99 @@ mod tests {
         let replayed = timeline.replay().expect("replay should succeed");
         assert_eq!(replayed.state_hash(), tree.state_hash());
         assert_eq!(replayed.to_snapshot(), tree.to_snapshot());
+    }
+
+    #[test]
+    fn interaction_timeline_records_checkpoints_at_default_interval() {
+        let mut tree = PaneTree::from_snapshot(make_valid_snapshot()).expect("valid tree");
+        let mut timeline = PaneInteractionTimeline::with_baseline(&tree);
+        let split_ids: Vec<_> = tree
+            .nodes()
+            .filter_map(|node| match node.kind {
+                PaneNodeKind::Split(_) => Some(node.id),
+                PaneNodeKind::Leaf(_) => None,
+            })
+            .collect();
+        let ratios = [
+            PaneSplitRatio::new(3, 2).expect("valid ratio"),
+            PaneSplitRatio::new(2, 3).expect("valid ratio"),
+            PaneSplitRatio::new(5, 4).expect("valid ratio"),
+            PaneSplitRatio::new(4, 5).expect("valid ratio"),
+        ];
+
+        for idx in 0..16u64 {
+            timeline
+                .apply_and_record(
+                    &mut tree,
+                    idx,
+                    30_000 + idx,
+                    PaneOperation::SetSplitRatio {
+                        split: split_ids[idx as usize % split_ids.len()],
+                        ratio: ratios[idx as usize % ratios.len()],
+                    },
+                )
+                .expect("ratio update should apply");
+        }
+
+        assert_eq!(timeline.checkpoints.len(), 1);
+        assert_eq!(timeline.checkpoints[0].applied_len, 16);
+        assert_eq!(timeline.checkpoints[0].snapshot, tree.to_snapshot());
+    }
+
+    #[test]
+    fn interaction_timeline_discards_stale_checkpoints_after_branching() {
+        let mut tree = PaneTree::from_snapshot(make_valid_snapshot()).expect("valid tree");
+        let mut timeline = PaneInteractionTimeline::with_baseline(&tree);
+        let split_ids: Vec<_> = tree
+            .nodes()
+            .filter_map(|node| match node.kind {
+                PaneNodeKind::Split(_) => Some(node.id),
+                PaneNodeKind::Leaf(_) => None,
+            })
+            .collect();
+        let ratios = [
+            PaneSplitRatio::new(3, 2).expect("valid ratio"),
+            PaneSplitRatio::new(2, 3).expect("valid ratio"),
+            PaneSplitRatio::new(5, 4).expect("valid ratio"),
+            PaneSplitRatio::new(4, 5).expect("valid ratio"),
+        ];
+
+        for idx in 0..32u64 {
+            timeline
+                .apply_and_record(
+                    &mut tree,
+                    idx,
+                    40_000 + idx,
+                    PaneOperation::SetSplitRatio {
+                        split: split_ids[idx as usize % split_ids.len()],
+                        ratio: ratios[idx as usize % ratios.len()],
+                    },
+                )
+                .expect("ratio update should apply");
+        }
+
+        assert_eq!(timeline.checkpoints.len(), 2);
+        timeline.undo(&mut tree).expect("undo should succeed");
+        timeline.undo(&mut tree).expect("undo should succeed");
+        timeline.undo(&mut tree).expect("undo should succeed");
+        timeline.undo(&mut tree).expect("undo should succeed");
+        timeline.undo(&mut tree).expect("undo should succeed");
+
+        timeline
+            .apply_and_record(
+                &mut tree,
+                99,
+                99_999,
+                PaneOperation::SetSplitRatio {
+                    split: split_ids[0],
+                    ratio: PaneSplitRatio::new(7, 5).expect("valid ratio"),
+                },
+            )
+            .expect("branching update should apply");
+
+        assert_eq!(timeline.cursor, 28);
+        assert_eq!(timeline.entries.len(), 28);
+        assert_eq!(timeline.checkpoints.len(), 1);
+        assert_eq!(timeline.checkpoints[0].applied_len, 16);
     }
 }
