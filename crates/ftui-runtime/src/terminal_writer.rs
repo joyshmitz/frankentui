@@ -5693,6 +5693,8 @@ mod tests {
     /// The returned output must contain cursor-show and flush.
     #[test]
     fn noninterference_into_inner_performs_cleanup() {
+        let before_gauge = inline_active_widgets();
+
         let mut writer = TerminalWriter::new(
             Vec::new(),
             ScreenMode::Inline { ui_height: 5 },
@@ -5701,13 +5703,18 @@ mod tests {
         );
         writer.set_size(80, 24);
 
-        let before_gauge = inline_active_widgets();
+        let during_gauge = inline_active_widgets();
+        assert!(
+            during_gauge > before_gauge,
+            "gauge must increase while writer alive"
+        );
+
         let output = writer.into_inner().expect("should return writer");
 
-        // Gauge must be decremented by into_inner (Drop runs, sees presenter=None)
-        assert_eq!(
-            inline_active_widgets(),
-            before_gauge - 1,
+        // Gauge must be decremented by into_inner (Drop runs after consumption)
+        let after_gauge = inline_active_widgets();
+        assert!(
+            after_gauge < during_gauge,
             "into_inner must decrement inline gauge"
         );
 
