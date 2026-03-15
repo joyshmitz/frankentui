@@ -2,6 +2,90 @@
 
 > bd-2vr05.15.4.1 — Collected 2026-02-16 on Contabo VPS workers (rch fleet)
 
+## 0. Canonical Performance Program Inventory
+
+This document is also the canonical inventory for `bd-9v2se`:
+
+- what FrankenTUI already exposes as measurable performance surfaces,
+- which invariants later optimization beads must preserve,
+- and which workloads are worth optimizing instead of merely being easy to time.
+
+The intent is to keep later beads such as `bd-760ih`, `bd-p8i4s`, and `bd-vtor0`
+anchored to current code and artifact reality rather than ad hoc profiling notes.
+
+### 0.1 Observable Surfaces
+
+| Surface | Current observables | Primary code / script anchors | Artifact / output anchors | Measurement mode |
+|---------|----------------------|-------------------------------|---------------------------|------------------|
+| Render pipeline | frame latency, diff latency, presenter latency, changed cells, emitted bytes, allocation counts | `crates/ftui-demo-showcase/src/bin/profile_sweep.rs`, `crates/ftui-demo-showcase/benches/demo_pipeline_bench.rs`, `crates/ftui-render/benches/diff_bench.rs`, `crates/ftui-render/benches/presenter_bench.rs` | `profile_sweep --json`, Criterion output, flamegraph / heaptrack captures | stage-local and end-to-end |
+| Runtime orchestration | frame timing, evidence events, resize-coalescer decisions, subscription reconcile counts, fairness-guard yields, shutdown task processing | `crates/ftui-runtime/src/program.rs`, `crates/ftui-runtime/src/render_trace.rs`, `crates/ftui-runtime/src/metrics_registry.rs`, `crates/ftui-runtime/src/subscription.rs` | evidence JSONL, render trace JSONL, tracing spans, counters under `metrics_registry` | mostly end-to-end with some stage-local hooks |
+| Terminal ownership / output path | write timing, flush timing, ANSI emission bytes, screen-mode transitions, one-writer routing | `crates/ftui-runtime/src/terminal_writer.rs`, `crates/ftui-core/src/terminal_session.rs`, `docs/one-writer-rule.md`, `docs/adr/ADR-005-one-writer-rule.md` | terminal IO stats, render trace, evidence events, PTY captures | end-to-end, correctness-gated |
+| Pane performance | solver latency, structural operation latency, replay cost, terminal drag path cost, web pointer lifecycle cost, perf-stat counters | `crates/ftui-layout/benches/layout_bench.rs`, `crates/ftui-layout/benches/pane_profile_harness.rs`, `crates/ftui-runtime/benches/pane_terminal_bench.rs`, `crates/ftui-web/benches/pane_pointer_bench.rs`, `scripts/pane_profile.sh` | `target/pane-profiling/...`, `symbol_metadata.txt`, harness manifests/snapshots, `perf stat` text | stage-local plus workflow-level |
+| doctor workflows | command completion time, retry count, artifact completeness, replay readiness, determinism divergence, coverage-gate outcomes | `scripts/doctor_frankentui_happy_e2e.sh`, `scripts/doctor_frankentui_failure_e2e.sh`, `scripts/doctor_frankentui_determinism_soak.sh`, `scripts/doctor_frankentui_replay_triage.py`, `scripts/doctor_frankentui_coverage.sh` | `meta/summary.json`, `artifact_manifest.json`, `case_results.json`, `replay_triage_report.json`, `coverage_gate_report.json` | end-to-end and artifact-level |
+| Demo / PTY regression suites | suite summaries, per-case JSONL logs, trace hashes, scenario-specific summaries | `scripts/demo_showcase_e2e.sh`, `scripts/pane_e2e.sh`, `scripts/e2e_test.sh`, `docs/testing/e2e-summary-schema.md` | `summary.json`, `*.jsonl`, per-suite logs under result roots | end-to-end |
+
+### 0.2 Non-Negotiable Invariants
+
+These are the invariants that later performance work must preserve. They are not
+"nice to have" checks that can be traded away for speed.
+
+| Invariant class | What must remain true | Where it is grounded today |
+|----------------|-----------------------|----------------------------|
+| Visible output equivalence | The same deterministic inputs must yield the same buffer-visible / terminal-visible output unless a bead explicitly changes semantics. | `crates/ftui-render/tests/*`, demo snapshots, `profile_sweep` real-screen pipeline |
+| One-writer terminal safety | Performance work may not bypass `TerminalWriter`, corrupt cursor state, or weaken RAII cleanup. | `docs/one-writer-rule.md`, `docs/adr/ADR-005-one-writer-rule.md`, `crates/ftui-core/src/terminal_session.rs` |
+| Screen-mode correctness | Inline vs alt-screen behavior, cleanup ordering, and terminal restoration remain intact under profiling and optimization. | `crates/ftui-runtime/src/terminal_writer.rs`, `crates/ftui-core/src/terminal_session.rs`, PTY E2E scripts |
+| Subscription / message-order integrity | Runtime profiling must not reorder required message delivery or hide cancellation/shutdown behavior. | `crates/ftui-runtime/src/program.rs`, `crates/ftui-runtime/src/subscription.rs`, runtime tests around shutdown + reconcile |
+| Replay / artifact fidelity | doctor and E2E performance work must preserve artifact completeness and replayability, not just raw speed. | `crates/doctor_frankentui/VERIFICATION_REPORT.md`, doctor E2E scripts, determinism soak scripts |
+| Deterministic evidence linkage | Runs must remain joinable by stable identifiers and artifact paths so later comparisons are auditable. | evidence sink / render trace in `ftui-runtime`, doctor summary + manifest JSON contracts |
+
+### 0.3 Optimization-Critical Workflows
+
+These are the workload classes that later baseline and hotspot beads should
+prioritize. If a proposed optimization does not improve one of these, it starts
+with low strategic value.
+
+| Workflow | Why it matters | Primary fixture / runner | Bias to watch |
+|---------|----------------|--------------------------|---------------|
+| Real demo-screen redraw loop | Closest in-tree proxy for production UI rendering across many widget mixes. | `profile_sweep --render-mode pipeline`, `demo_pipeline_bench` | Average frame time can hide heavy-screen tails; watch p95/p99 and emitted bytes. |
+| Sparse-change render path | Determines whether dirty-region certificates and diff tuning are worth pursuing. | `ftui-render/benches/diff_bench.rs`, `profile_sweep` changed-cell counters | Mean latency can hide mode changes between sparse and bursty updates. |
+| Full-screen or heavy-change redraws | Bounds worst-case presenter + write behavior and tests style-state churn. | `presenter_bench`, `profile_sweep` max bytes / changed cells | Tail spikes matter more than averages. |
+| Pane drag / resize / replay loops | High-frequency interactive path with real branch pressure and tree churn. | `scripts/pane_profile.sh`, pane benches + perf-stat captures | Microbench speedups that do not improve replay-heavy scenarios are low EV. |
+| Runtime subscription churn + shutdown | Critical for structured concurrency changes and operator-visible responsiveness. | runtime tests / evidence hooks in `Program`, later `rch`-offloaded targeted benches | Correctness and bounded shutdown dominate raw throughput. |
+| doctor happy / failure / replay / determinism workflows | Operator-facing path where evidence quality is part of performance value. | doctor E2E scripts and verification report artifacts | Faster runs are worthless if manifests or replay bundles degrade. |
+
+### 0.4 Metric Classification Rules
+
+Later beads should classify metrics before collecting them:
+
+| Metric family | Examples | Use when | Decision bias |
+|--------------|----------|----------|---------------|
+| Stage-local latency | diff time, presenter time, terminal write time, subscription stop latency | Choosing which stage to optimize | Prefer p95/p99 over mean for contention-prone paths |
+| End-to-end latency | frame time, doctor command completion, pane gesture lifecycle time | Judging user/operator experience | Tail-sensitive |
+| Output-cost metrics | changed cells, dirty spans, emitted bytes, stdout/stderr sizes, artifact counts | Distinguishing "less work" from "same work but faster CPU" | Often explanatory, not sufficient alone |
+| Memory / allocation metrics | allocations/frame, allocated bytes/frame, replay retention size | Finding churn and retention regressions | Tail and max values matter |
+| Throughput metrics | renders/sec, scenarios/min, replay throughput | Comparing steady-state efficiency | Only meaningful with environment fingerprinting |
+| Integrity metrics | artifact completeness, replay success, divergence rate, schema validation pass/fail | Protecting diagnosability | Binary gate, not an optimization knob |
+
+### 0.5 Required Join Keys For Performance Evidence
+
+Any later baseline or hotspot artifact should be joinable across runtime, render,
+doctor, and CI layers using at least:
+
+- `bead_id` or an explicit analysis lane identifier
+- `run_id`
+- workload / fixture identifier
+- terminal or viewport geometry when relevant
+- scenario class (`render`, `runtime`, `pane`, `doctor`, `e2e`)
+- artifact path or manifest reference
+
+For existing tooling this usually means:
+
+- `profile_sweep --json` output plus command line / geometry,
+- Criterion benchmark name + input key,
+- `target/pane-profiling/.../manifest.json` and `symbol_metadata.txt`,
+- doctor `meta/summary.json` and `artifact_manifest.json`,
+- suite-level `summary.json` from E2E scripts.
+
 ## 1. Pipeline Baselines
 
 ### 1.1 Text Shaping Pipeline (ftui-text)
