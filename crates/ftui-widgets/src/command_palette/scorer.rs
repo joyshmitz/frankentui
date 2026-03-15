@@ -43,6 +43,7 @@
 //! 3. Monotonicity: longer exact prefixes score ≥ shorter
 //! 4. Transitivity: score ordering is consistent
 
+use std::cmp::Ordering;
 use std::fmt;
 
 // ---------------------------------------------------------------------------
@@ -95,6 +96,18 @@ impl MatchType {
             Self::NoMatch => "no match",
         }
     }
+}
+
+fn compare_ranked_match_results(
+    left: &(usize, MatchResult),
+    right: &(usize, MatchResult),
+) -> Ordering {
+    right
+        .1
+        .score
+        .partial_cmp(&left.1.score)
+        .unwrap_or(Ordering::Equal)
+        .then_with(|| right.1.match_type.cmp(&left.1.match_type))
 }
 
 // ---------------------------------------------------------------------------
@@ -806,18 +819,22 @@ impl BayesianScorer {
     /// Count how many matched positions are at word boundaries.
     fn count_word_boundaries(&self, positions: &[usize], title: &str) -> usize {
         let title_bytes = title.as_bytes();
-        positions
-            .iter()
-            .filter(|&&pos| {
-                pos == 0 || {
-                    let prev = title_bytes
-                        .get(pos.saturating_sub(1))
-                        .copied()
-                        .unwrap_or(b' ');
-                    prev == b' ' || prev == b'-' || prev == b'_'
-                }
-            })
-            .count()
+        let mut count = 0;
+        for &pos in positions {
+            let is_boundary = if pos == 0 {
+                true
+            } else {
+                let prev = title_bytes
+                    .get(pos.saturating_sub(1))
+                    .copied()
+                    .unwrap_or(b' ');
+                prev == b' ' || prev == b'-' || prev == b'_'
+            };
+            if is_boundary {
+                count += 1;
+            }
+        }
+        count
     }
 
     /// Calculate total gap between matched positions.
@@ -825,10 +842,11 @@ impl BayesianScorer {
         if positions.len() < 2 {
             return 0;
         }
-        positions
-            .windows(2)
-            .map(|w| w[1].saturating_sub(w[0]).saturating_sub(1))
-            .sum()
+        let mut total = 0;
+        for window in positions.windows(2) {
+            total += window[1].saturating_sub(window[0]).saturating_sub(1);
+        }
+        total
     }
 }
 
@@ -1428,12 +1446,7 @@ impl IncrementalScorer {
             }
         }
 
-        results.sort_by(|a, b| {
-            b.1.score
-                .partial_cmp(&a.1.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| b.1.match_type.cmp(&a.1.match_type))
-        });
+        results.sort_unstable_by(compare_ranked_match_results);
 
         results
     }
@@ -1459,12 +1472,7 @@ impl IncrementalScorer {
             }
         }
 
-        results.sort_by(|a, b| {
-            b.1.score
-                .partial_cmp(&a.1.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| b.1.match_type.cmp(&a.1.match_type))
-        });
+        results.sort_unstable_by(compare_ranked_match_results);
 
         results
     }
@@ -1500,12 +1508,7 @@ impl IncrementalScorer {
             }
         }
 
-        results.sort_by(|a, b| {
-            b.1.score
-                .partial_cmp(&a.1.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| b.1.match_type.cmp(&a.1.match_type))
-        });
+        results.sort_unstable_by(compare_ranked_match_results);
 
         results
     }
@@ -1538,12 +1541,7 @@ impl IncrementalScorer {
             }
         }
 
-        results.sort_by(|a, b| {
-            b.1.score
-                .partial_cmp(&a.1.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| b.1.match_type.cmp(&a.1.match_type))
-        });
+        results.sort_unstable_by(compare_ranked_match_results);
 
         results
     }
@@ -1578,12 +1576,7 @@ impl IncrementalScorer {
             }
         }
 
-        results.sort_by(|a, b| {
-            b.1.score
-                .partial_cmp(&a.1.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| b.1.match_type.cmp(&a.1.match_type))
-        });
+        results.sort_unstable_by(compare_ranked_match_results);
 
         results
     }

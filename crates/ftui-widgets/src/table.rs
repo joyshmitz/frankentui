@@ -250,9 +250,9 @@ impl<'a> Table<'a> {
                 .collect();
 
             if state.sort_ascending {
-                sort_keys.sort_by(|a, b| a.1.cmp(&b.1));
+                sort_keys.sort_unstable_by(|a, b| a.1.cmp(&b.1));
             } else {
-                sort_keys.sort_by(|a, b| b.1.cmp(&a.1));
+                sort_keys.sort_unstable_by(|a, b| b.1.cmp(&a.1));
             }
 
             indices = sort_keys.into_iter().map(|(i, _)| i).collect();
