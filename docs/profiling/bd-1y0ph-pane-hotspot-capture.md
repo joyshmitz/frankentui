@@ -31,6 +31,7 @@ Artifacts produced by the latest run:
 - `target/pane-profiling/bd-1y0ph/layout_bench.perfstat.txt`
 - `target/pane-profiling/bd-1y0ph/pane_terminal_bench.perfstat.txt`
 - `target/pane-profiling/bd-1y0ph/pane_pointer_bench.perfstat.txt`
+- `target/pane-profiling/bd-1y0ph/executed-binaries/`
 - `target/pane-profiling/bd-1y0ph/symbol_metadata.txt`
 
 All targeted probes passed in the latest test-mode capture.
@@ -127,9 +128,10 @@ Interpretation:
 `kernel.perf_event_paranoid` to `1`, so counter-based profiling is now part of
 the repeatable capture workflow.
 
-The profiling runner now emits `symbol_metadata.txt`, and it records the exact
-bench binary path printed by the current run instead of guessing from whatever
-matching binary happens to exist under `target/release/deps/`.
+The profiling runner now emits `symbol_metadata.txt`, records the exact bench
+binary path printed by the current run, and tries to materialize the exact
+executed remote bench binary under `executed-binaries/` when `rch` ran the
+benchmark on a worker.
 
 For the pane-core lane, the runner also invokes a long-lived deterministic
 profile harness that emits:
@@ -142,7 +144,19 @@ That harness exists so later checkpointing and memory work can reuse one
 replay-heavy scenario with stable hashes instead of reconstructing the same
 timeline workload from ad hoc bench flags.
 
-Current evidence from that artifact is mixed:
+The artifact contract is now explicit per surface:
+
+- `executed_path`: the bench binary path reported by the current run
+- `worker`: the `rch` worker used for the run, or `local`
+- `binary_source`: whether the exact binary is local, remotely fetched, or
+  still unavailable
+- `exact_binary_status`: `available` or `missing`
+- `exact_binary_local`: local path to the exact binary artifact when present
+- `fetch_error`: machine-checkable reason when remote materialization fails
+- `local_candidate`: an informational local candidate path only; it is no
+  longer treated as authoritative exact-binary evidence
+
+Current evidence from that artifact remains mixed:
 
 - `layout_bench`: `binary_source=executed`, `with debug_info, not stripped`
 - `pane_terminal_bench`: exact executed binary path captured, but local binary
@@ -150,16 +164,15 @@ Current evidence from that artifact is mixed:
 - `pane_pointer_bench`: exact executed binary path captured, but local binary
   currently missing after `rch` artifact retrieval
 
-That means symbol-readiness is no longer an assumption, but it also means the
-terminal/web benches still need follow-up if we want uniformly trustworthy
-`perf report` stack attribution across all pane surfaces from the local artifact
-bundle. The immediate value of the new metadata is that it distinguishes
-"missing exact executed binary" from "found a different local binary and guessed."
+That means symbol-readiness is no longer an assumption, and the remaining gap is
+also explicit: if terminal/web exact binaries are still unavailable locally
+after an `rch` run, the artifact bundle records a concrete fetch/provenance
+reason instead of silently substituting a different local binary.
 
 Latest verified `symbol_metadata.txt` state:
 
 ```text
-layout_bench: binary_source=executed, debug_info=present
-pane_terminal_bench: binary_source=executed, local_binary_status=missing
-pane_pointer_bench: binary_source=executed, local_binary_status=missing
+layout_bench: binary_source=executed_local, exact_binary_status=available
+pane_terminal_bench: binary_source=executed_remote_missing, exact_binary_status=missing
+pane_pointer_bench: binary_source=executed_remote_missing, exact_binary_status=missing
 ```

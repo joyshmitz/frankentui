@@ -43,6 +43,7 @@
 //! crate's `CARGO_MANIFEST_DIR`.
 
 pub mod asciicast;
+pub mod benchmark_gate;
 pub mod determinism;
 pub mod flicker_detection;
 pub mod frame_comparison;
@@ -52,6 +53,7 @@ pub mod input_storm;
 pub mod lab_integration;
 pub mod proptest_support;
 pub mod resize_storm;
+pub mod shadow_run;
 pub mod terminal_model;
 pub mod time_travel;
 pub mod time_travel_inspector;
@@ -81,6 +83,10 @@ pub use lab_integration::{
     lab_recordings_total, lab_replays_total,
 };
 pub use time_travel_inspector::TimeTravelInspector;
+
+// Validation infrastructure re-exports.
+pub use benchmark_gate::{BenchmarkGate, GateResult, Measurement, MetricVerdict, Threshold};
+pub use shadow_run::{ShadowRun, ShadowRunConfig, ShadowRunResult, ShadowVerdict};
 
 // ============================================================================
 // Buffer → Text Conversion
