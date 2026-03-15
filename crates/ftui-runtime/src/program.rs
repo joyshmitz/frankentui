@@ -2133,12 +2133,12 @@ pub struct ImmediateDrainStats {
 /// Runtime lane for the Asupersync migration rollout.
 ///
 /// Controls which subscription/effect execution backend is active.
-/// The default is `Legacy`, preserving pre-migration behavior.
+/// The default is `Structured`, reflecting the completed CancellationToken migration (bd-3tmu4).
 ///
 /// # Migration rollout
 ///
-/// 1. `Legacy` — current thread-based subscriptions (default, safe)
-/// 2. `Structured` — CancellationToken-backed subscriptions (current state after bd-3tmu4)
+/// 1. `Legacy` — pre-migration thread-based subscriptions with manual stop coordination
+/// 2. `Structured` — CancellationToken-backed subscriptions (current default after bd-3tmu4)
 /// 3. `Asupersync` — full Asupersync-native execution (future)
 ///
 /// Selection is logged at startup so operators can tell which lane is active.
