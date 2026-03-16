@@ -9,6 +9,12 @@ use serde_json::{Value, json};
 use crate::error::{DoctorError, Result};
 use crate::util::{OutputIntegration, append_line, normalize_http_path, now_utc_iso, output_for};
 
+const RPC_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+const RPC_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const RPC_RETRY_MAX_ATTEMPTS: u32 = 3;
+const RPC_RETRY_BASE_BACKOFF_MS: u64 = 100;
+const SERVER_READY_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
 #[derive(Debug, Clone, Args)]
 pub struct SeedDemoArgs {
     #[arg(long, default_value = "127.0.0.1")]
@@ -82,13 +88,77 @@ struct RpcClient {
     log_file: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RetryPolicy {
+    max_attempts: u32,
+    base_backoff_ms: u64,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_attempts: RPC_RETRY_MAX_ATTEMPTS,
+            base_backoff_ms: RPC_RETRY_BASE_BACKOFF_MS,
+        }
+    }
+}
+
+impl RetryPolicy {
+    fn should_retry(self, attempt: u32, error: &DoctorError) -> bool {
+        attempt < self.max_attempts && RpcClient::should_retry(error)
+    }
+
+    fn backoff_for_attempt(self, attempt: u32) -> Duration {
+        Duration::from_millis(
+            self.base_backoff_ms
+                .saturating_mul(1_u64 << attempt.saturating_sub(1)),
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Deadline {
+    started_at: Instant,
+    timeout: Duration,
+}
+
+impl Deadline {
+    fn after(timeout: Duration) -> Self {
+        Self {
+            started_at: Instant::now(),
+            timeout,
+        }
+    }
+
+    fn elapsed(self) -> Duration {
+        self.started_at.elapsed()
+    }
+
+    fn remaining(self) -> Duration {
+        self.timeout.saturating_sub(self.elapsed())
+    }
+
+    fn is_expired(self) -> bool {
+        self.elapsed() >= self.timeout
+    }
+
+    fn next_sleep(self, poll_interval: Duration) -> Option<Duration> {
+        let remaining = self.remaining();
+        if remaining.is_zero() {
+            None
+        } else {
+            Some(remaining.min(poll_interval))
+        }
+    }
+}
+
 impl RpcClient {
     fn new(config: &SeedDemoConfig) -> Result<Self> {
         let http_path = normalize_http_path(&config.http_path);
         let endpoint = format!("http://{}:{}{}", config.host, config.port, http_path);
         let client = Client::builder()
-            .connect_timeout(Duration::from_secs(2))
-            .timeout(Duration::from_secs(10))
+            .connect_timeout(RPC_CONNECT_TIMEOUT)
+            .timeout(RPC_REQUEST_TIMEOUT)
             .build()?;
 
         Ok(Self {
@@ -101,8 +171,12 @@ impl RpcClient {
     }
 
     fn log_response(&self, method: &str, payload: &str) -> Result<()> {
+        self.log_line(&format!("{method} {payload}"))
+    }
+
+    fn log_line(&self, line: &str) -> Result<()> {
         if let Some(path) = &self.log_file {
-            append_line(path, &format!("[{}] {method} {payload}", now_utc_iso()))?;
+            append_line(path, &format!("[{}] {line}", now_utc_iso()))?;
         }
         Ok(())
     }
@@ -182,31 +256,26 @@ impl RpcClient {
     }
 
     fn call_tool(&mut self, method: &str, arguments: Value) -> Result<Value> {
+        let policy = RetryPolicy::default();
         let mut attempt = 0_u32;
         loop {
             attempt = attempt.saturating_add(1);
             match self.call_tool_once(method, arguments.clone()) {
                 Ok(value) => return Ok(value),
                 Err(error) => {
-                    if attempt >= 3 || !Self::should_retry(&error) {
+                    if !policy.should_retry(attempt, &error) {
+                        let _ = self.log_line(&format!(
+                            "event=rpc_retry_exhausted method={method} attempt={attempt} reason={error}"
+                        ));
                         return Err(error);
                     }
 
-                    let backoff_ms = 100_u64.saturating_mul(1_u64 << (attempt - 1));
-                    if let Some(path) = &self.log_file {
-                        let _ = append_line(
-                            path,
-                            &format!(
-                                "[{}] retry method={} attempt={} backoff_ms={} reason={}",
-                                now_utc_iso(),
-                                method,
-                                attempt,
-                                backoff_ms,
-                                error
-                            ),
-                        );
-                    }
-                    thread::sleep(Duration::from_millis(backoff_ms));
+                    let backoff = policy.backoff_for_attempt(attempt);
+                    let _ = self.log_line(&format!(
+                        "event=rpc_retry_scheduled method={method} attempt={attempt} backoff_ms={} reason={error}",
+                        backoff.as_millis()
+                    ));
+                    thread::sleep(backoff);
                 }
             }
         }
@@ -214,23 +283,43 @@ impl RpcClient {
 }
 
 fn wait_for_server(client: &mut RpcClient, timeout_seconds: u64) -> Result<()> {
-    let start = Instant::now();
+    let deadline = Deadline::after(Duration::from_secs(timeout_seconds));
+    let mut attempt = 0_u32;
 
     loop {
-        if let Ok(response) = client.call_tool_once("health_check", json!({}))
-            && response.get("result").is_some()
-        {
-            return Ok(());
+        attempt = attempt.saturating_add(1);
+        match client.call_tool_once("health_check", json!({})) {
+            Ok(response) if response.get("result").is_some() => {
+                let _ = client.log_line(&format!(
+                    "event=server_ready attempt={attempt} elapsed_ms={}",
+                    deadline.elapsed().as_millis()
+                ));
+                return Ok(());
+            }
+            Ok(_) => {
+                let _ = client.log_line(&format!(
+                    "event=server_probe_nonresult attempt={attempt} remaining_ms={}",
+                    deadline.remaining().as_millis()
+                ));
+            }
+            Err(error) => {
+                let _ = client.log_line(&format!(
+                    "event=server_probe_retry attempt={attempt} remaining_ms={} reason={error}",
+                    deadline.remaining().as_millis()
+                ));
+            }
         }
 
-        if start.elapsed() >= Duration::from_secs(timeout_seconds) {
+        if deadline.is_expired() {
             return Err(DoctorError::invalid(format!(
                 "Timed out waiting for server at {}",
                 client.endpoint
             )));
         }
 
-        thread::sleep(Duration::from_secs(1));
+        if let Some(sleep_for) = deadline.next_sleep(SERVER_READY_POLL_INTERVAL) {
+            thread::sleep(sleep_for);
+        }
     }
 }
 
@@ -358,10 +447,14 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RpcClient, SeedDemoConfig, wait_for_server};
+    use super::{
+        Deadline, RPC_RETRY_BASE_BACKOFF_MS, RetryPolicy, RpcClient, SeedDemoConfig,
+        wait_for_server,
+    };
     use crate::error::DoctorError;
     use crate::util::OutputIntegration;
     use serde_json::json;
+    use std::time::Duration;
 
     #[test]
     fn should_retry_matches_retryable_invalid_argument_messages() {
@@ -458,6 +551,34 @@ mod tests {
         let mut client = RpcClient::new(&config).expect("rpc client");
         let error = wait_for_server(&mut client, 1).expect_err("server should time out");
         assert!(error.to_string().contains("Timed out waiting for server"));
+    }
+
+    #[test]
+    fn retry_policy_uses_deterministic_exponential_backoff() {
+        let policy = RetryPolicy::default();
+        assert_eq!(
+            policy.backoff_for_attempt(1),
+            Duration::from_millis(RPC_RETRY_BASE_BACKOFF_MS)
+        );
+        assert_eq!(
+            policy.backoff_for_attempt(2),
+            Duration::from_millis(RPC_RETRY_BASE_BACKOFF_MS * 2)
+        );
+        assert_eq!(
+            policy.backoff_for_attempt(3),
+            Duration::from_millis(RPC_RETRY_BASE_BACKOFF_MS * 4)
+        );
+    }
+
+    #[test]
+    fn deadline_sleep_is_clamped_to_remaining_budget() {
+        let deadline = Deadline::after(Duration::from_millis(5));
+        assert!(
+            deadline
+                .next_sleep(Duration::from_secs(1))
+                .expect("sleep step should exist")
+                <= Duration::from_millis(5)
+        );
     }
 
     #[test]

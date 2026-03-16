@@ -458,9 +458,10 @@ fn seed_demo_retries_transient_failures_and_preserves_auth_and_path() {
     assert_eq!(counts.get("fetch_inbox"), Some(&2));
 
     let log = std::fs::read_to_string(&log_file).expect("read seed log");
-    assert!(log.contains("retry method=ensure_project"));
-    assert!(log.contains("retry method=send_message"));
-    assert!(log.contains("retry method=fetch_inbox"));
+    assert!(log.contains("event=server_ready"));
+    assert!(log.contains("event=rpc_retry_scheduled method=ensure_project"));
+    assert!(log.contains("event=rpc_retry_scheduled method=send_message"));
+    assert!(log.contains("event=rpc_retry_scheduled method=fetch_inbox"));
 
     let transcript = std::fs::read_to_string(&transcript_path).expect("read transcript");
     assert!(transcript.contains("\"tool\":\"ensure_project\""));
@@ -536,6 +537,8 @@ fn seed_demo_plain_text_non_json_response_surfaces_parse_error() {
 
 #[test]
 fn seed_demo_wait_loop_recovers_when_health_becomes_ready() {
+    let temp = tempdir().expect("tempdir");
+    let log_file = temp.path().join("seed_wait.log");
     let server = start_scripted_server(vec![
         ScriptedResponse::json_value(
             "health_check",
@@ -554,7 +557,7 @@ fn seed_demo_wait_loop_recovers_when_health_becomes_ready() {
         ScriptedResponse::success("file_reservation_paths"),
     ]);
 
-    let config = configured_seed_run(&server.endpoint, "mcp", "", None, 3);
+    let config = configured_seed_run(&server.endpoint, "mcp", "", Some(log_file.clone()), 3);
     run_seed_with_config(config).expect("seed run should recover after delayed health success");
 
     let entries = server.transcripts.lock().expect("transcript lock").clone();
@@ -563,6 +566,10 @@ fn seed_demo_wait_loop_recovers_when_health_becomes_ready() {
         .filter(|entry| entry.tool.as_deref() == Some("health_check"))
         .count();
     assert!(health_checks >= 2);
+
+    let log = std::fs::read_to_string(&log_file).expect("read wait log");
+    assert!(log.contains("event=server_probe_nonresult attempt=1"));
+    assert!(log.contains("event=server_ready attempt=2"));
 }
 
 #[test]

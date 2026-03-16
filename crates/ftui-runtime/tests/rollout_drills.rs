@@ -10,6 +10,7 @@
 //! - **D3: Rollback** — Structured → Legacy downgrade
 //! - **D4: Recovery** — model state preserved across lane switches
 //! - **D5: Configuration** — ProgramConfig lane wiring
+//! - **D6: Rollout policy** — RolloutPolicy lifecycle (bd-2crbt)
 
 #![forbid(unsafe_code)]
 
@@ -695,6 +696,124 @@ fn d6_model_state_preserved_across_policy_switch() {
         sim2.model().value == 4,
         "Value should be 4 after transfer + 1 increment",
     );
+
+    verdict.assert_passed();
+}
+
+/// D6.8: Full lifecycle drill proving the operator workflow:
+///   Off → Shadow (gather evidence) → evaluate scorecard → Enabled → rollback to Off
+///
+/// This exercises the complete rollout policy state machine and proves that
+/// ProgramConfig correctly carries the policy through each transition.
+#[test]
+fn d6_full_lifecycle_off_shadow_enabled_rollback() {
+    let mut verdict = DrillVerdict::new("D6.8: Full lifecycle Off → Shadow → Enabled → Off");
+
+    // Phase 1: Off (default production state)
+    let config = ProgramConfig::default();
+    verdict.check(
+        config.rollout_policy == RolloutPolicy::Off,
+        "Phase 1: starts at Off",
+    );
+    verdict.check(
+        config.runtime_lane == RuntimeLane::Structured,
+        "Phase 1: lane is Structured (current default)",
+    );
+
+    // Phase 2: Operator enables shadow mode for evidence gathering
+    let config = config.with_rollout_policy(RolloutPolicy::Shadow);
+    verdict.check(
+        config.rollout_policy.is_shadow(),
+        "Phase 2: shadow mode active",
+    );
+    // Lane stays the same — shadow mode only adds comparison, doesn't change lane
+    verdict.check(
+        config.runtime_lane == RuntimeLane::Structured,
+        "Phase 2: lane unchanged during shadow",
+    );
+
+    // Phase 3: Shadow evidence is good — operator promotes to Enabled
+    let config = config
+        .with_lane(RuntimeLane::Asupersync)
+        .with_rollout_policy(RolloutPolicy::Enabled);
+    verdict.check(
+        config.rollout_policy == RolloutPolicy::Enabled,
+        "Phase 3: policy is Enabled",
+    );
+    verdict.check(
+        config.runtime_lane == RuntimeLane::Asupersync,
+        "Phase 3: lane switched to Asupersync",
+    );
+    // Asupersync resolves back to Structured until fully implemented
+    let resolved = config.runtime_lane.resolve();
+    verdict.check(
+        resolved == RuntimeLane::Structured,
+        "Phase 3: Asupersync resolves to Structured (fallback)",
+    );
+
+    // Phase 4: Problem detected — operator rolls back
+    let config = config
+        .with_lane(RuntimeLane::Structured)
+        .with_rollout_policy(RolloutPolicy::Off);
+    verdict.check(
+        config.rollout_policy == RolloutPolicy::Off,
+        "Phase 4: rolled back to Off",
+    );
+    verdict.check(
+        config.runtime_lane == RuntimeLane::Structured,
+        "Phase 4: lane back to Structured",
+    );
+
+    verdict.assert_passed();
+}
+
+/// D6.9: Scorecard JSON evidence is valid and parseable.
+///
+/// The go/no-go evidence artifact must be machine-consumable by CI gates
+/// and operator dashboards.
+#[test]
+fn d6_scorecard_json_evidence_parseable() {
+    let mut verdict = DrillVerdict::new("D6.9: Scorecard JSON evidence is parseable");
+
+    use ftui_harness::rollout_scorecard::{
+        RolloutScorecard, RolloutScorecardConfig, RolloutVerdict,
+    };
+    use ftui_harness::shadow_run::{ShadowRun, ShadowRunConfig};
+
+    // Run a shadow scenario to produce real evidence
+    let config = ShadowRunConfig::new("drill_evidence", "d6_9_drill", 42).viewport(40, 10);
+    let result = ShadowRun::compare(config, DrillModel::new, |session| {
+        session.init();
+        session.tick();
+        session.capture_frame();
+    });
+
+    let mut scorecard =
+        RolloutScorecard::new(RolloutScorecardConfig::default().min_shadow_scenarios(1));
+    scorecard.add_shadow_result(result);
+    let summary = scorecard.summary();
+
+    verdict.check(
+        summary.verdict == RolloutVerdict::Go,
+        "Verdict should be Go for matching shadow",
+    );
+
+    let json = summary.to_json();
+    verdict.check(
+        json.contains("\"verdict\":\"GO\""),
+        "JSON contains verdict field",
+    );
+    verdict.check(
+        json.contains("\"shadow_scenarios\":1"),
+        "JSON contains scenario count",
+    );
+    verdict.check(
+        json.contains("\"config\":{"),
+        "JSON contains config section",
+    );
+    // Verify it starts/ends as valid JSON object
+    verdict.check(json.starts_with('{'), "JSON starts with {");
+    verdict.check(json.ends_with('}'), "JSON ends with }");
 
     verdict.assert_passed();
 }

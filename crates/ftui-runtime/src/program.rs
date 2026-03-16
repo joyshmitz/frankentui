@@ -2675,9 +2675,9 @@ impl ProgramConfig {
 
     /// Apply environment-variable overrides for lane and rollout policy.
     ///
-    /// Reads `FTUI_RUNTIME_LANE` and `FTUI_ROLLOUT_POLICY`. Values that are
-    /// unset or unrecognized are silently ignored (the programmatic default
-    /// or prior builder value is retained).
+    /// Reads `FTUI_RUNTIME_LANE` and `FTUI_ROLLOUT_POLICY`. Unset variables
+    /// are ignored. Unrecognized values emit a `tracing::warn` and are
+    /// ignored (the programmatic default or prior builder value is retained).
     #[must_use]
     pub fn with_env_overrides(mut self) -> Self {
         if let Some(lane) = RuntimeLane::from_env() {
@@ -4068,6 +4068,18 @@ impl<M: Model> Program<M, CrosstermEventSource, Stdout> {
             evidence_sink.clone(),
         )?;
         let guardrails = FrameGuardrails::new(config.guardrails);
+
+        // Log runtime lane and rollout policy at startup (bd-2crbt)
+        let resolved_lane = config.runtime_lane.resolve();
+        tracing::info!(
+            target: "ftui.runtime",
+            requested_lane = config.runtime_lane.label(),
+            resolved_lane = resolved_lane.label(),
+            rollout_policy = config.rollout_policy.label(),
+            "runtime startup: lane={}, rollout={}",
+            resolved_lane.label(),
+            config.rollout_policy.label(),
+        );
 
         Ok(Self {
             model,

@@ -273,17 +273,57 @@ pub struct RolloutSummary {
     pub benchmark_required: bool,
 }
 
+impl RolloutSummary {
+    /// Serialize the summary to a JSON string for machine consumption.
+    ///
+    /// This produces a self-contained evidence artifact that CI, operator
+    /// dashboards, and go/no-go gates can consume without parsing human text.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        let benchmark_str = match self.benchmark_passed {
+            Some(true) => "\"pass\"",
+            Some(false) => "\"fail\"",
+            None => "null",
+        };
+        format!(
+            concat!(
+                "{{",
+                "\"verdict\":\"{verdict}\",",
+                "\"shadow_scenarios\":{scenarios},",
+                "\"shadow_matches\":{matches},",
+                "\"aggregate_match_ratio\":{ratio},",
+                "\"total_frames_compared\":{frames},",
+                "\"benchmark_passed\":{bench},",
+                "\"config\":{{",
+                "\"min_shadow_scenarios\":{min_scenarios},",
+                "\"min_match_ratio\":{min_ratio},",
+                "\"benchmark_required\":{bench_required}",
+                "}}",
+                "}}"
+            ),
+            verdict = self.verdict.label(),
+            scenarios = self.shadow_scenarios,
+            matches = self.shadow_matches,
+            ratio = self.aggregate_match_ratio,
+            frames = self.total_frames_compared,
+            bench = benchmark_str,
+            min_scenarios = self.min_shadow_scenarios_required,
+            min_ratio = self.min_match_ratio_required,
+            bench_required = self.benchmark_required,
+        )
+    }
+}
+
 impl std::fmt::Display for RolloutSummary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "=== Rollout Scorecard ===")?;
         writeln!(f, "Verdict: {}", self.verdict)?;
         writeln!(
             f,
-            "Shadow: {}/{} scenarios matched ({}/{} required)",
+            "Shadow: {}/{} scenarios matched ({} required)",
             self.shadow_matches,
             self.shadow_scenarios,
             self.min_shadow_scenarios_required,
-            self.min_shadow_scenarios_required
         )?;
         writeln!(
             f,
@@ -413,5 +453,112 @@ mod tests {
         assert_eq!(RolloutVerdict::NoGo.label(), "NO-GO");
         assert_eq!(RolloutVerdict::Inconclusive.label(), "INCONCLUSIVE");
         assert_eq!(format!("{}", RolloutVerdict::Go), "GO");
+    }
+
+    #[test]
+    fn scorecard_summary_json_go() {
+        let config = RolloutScorecardConfig::default().min_shadow_scenarios(1);
+        let mut sc = RolloutScorecard::new(config);
+        sc.add_shadow_result(make_shadow_result(ShadowVerdict::Match, 10));
+
+        let json = sc.summary().to_json();
+        assert!(json.contains("\"verdict\":\"GO\""));
+        assert!(json.contains("\"shadow_scenarios\":1"));
+        assert!(json.contains("\"shadow_matches\":1"));
+        assert!(json.contains("\"total_frames_compared\":10"));
+        assert!(json.contains("\"aggregate_match_ratio\":1"));
+        assert!(json.contains("\"benchmark_passed\":null"));
+    }
+
+    #[test]
+    fn scorecard_summary_json_nogo() {
+        let config = RolloutScorecardConfig::default();
+        let mut sc = RolloutScorecard::new(config);
+        sc.add_shadow_result(make_shadow_result(ShadowVerdict::Diverged, 5));
+
+        let json = sc.summary().to_json();
+        assert!(json.contains("\"verdict\":\"NO-GO\""));
+        assert!(json.contains("\"shadow_matches\":0"));
+    }
+
+    #[test]
+    fn scorecard_e2e_with_real_shadow_run() {
+        use crate::shadow_run::{ShadowRun, ShadowRunConfig};
+        use ftui_core::event::Event;
+        use ftui_core::geometry::Rect;
+        use ftui_render::frame::Frame;
+        use ftui_runtime::program::{Cmd, Model};
+        use ftui_widgets::Widget;
+        use ftui_widgets::paragraph::Paragraph;
+
+        struct RolloutModel {
+            ticks: u64,
+        }
+
+        #[derive(Debug, Clone)]
+        enum RolloutMsg {
+            Tick,
+            Quit,
+        }
+
+        impl From<Event> for RolloutMsg {
+            fn from(e: Event) -> Self {
+                match e {
+                    Event::Tick => RolloutMsg::Tick,
+                    _ => RolloutMsg::Quit,
+                }
+            }
+        }
+
+        impl Model for RolloutModel {
+            type Message = RolloutMsg;
+
+            fn update(&mut self, msg: RolloutMsg) -> Cmd<RolloutMsg> {
+                match msg {
+                    RolloutMsg::Tick => {
+                        self.ticks += 1;
+                        Cmd::none()
+                    }
+                    RolloutMsg::Quit => Cmd::quit(),
+                }
+            }
+
+            fn view(&self, frame: &mut Frame) {
+                let text = format!("Ticks: {}", self.ticks);
+                let area = Rect::new(0, 0, frame.width(), 1);
+                Paragraph::new(text).render(area, frame);
+            }
+        }
+
+        // Run 3 shadow scenarios with different seeds
+        let mut scorecard =
+            RolloutScorecard::new(RolloutScorecardConfig::default().min_shadow_scenarios(3));
+
+        for seed in [42, 99, 7] {
+            let config = ShadowRunConfig::new("rollout_e2e", "tick_counter", seed).viewport(40, 10);
+            let result = ShadowRun::compare(
+                config,
+                || RolloutModel { ticks: 0 },
+                |session| {
+                    session.init();
+                    for _ in 0..5 {
+                        session.tick();
+                        session.capture_frame();
+                    }
+                },
+            );
+            scorecard.add_shadow_result(result);
+        }
+
+        // All scenarios should match (same deterministic model)
+        let verdict = scorecard.evaluate();
+        assert_eq!(verdict, RolloutVerdict::Go);
+
+        let summary = scorecard.summary();
+        assert_eq!(summary.shadow_scenarios, 3);
+        assert_eq!(summary.shadow_matches, 3);
+        assert_eq!(summary.total_frames_compared, 15); // 5 frames × 3 scenarios
+        assert!((summary.aggregate_match_ratio - 1.0).abs() < f64::EPSILON);
+        assert!(summary.to_string().contains("GO"));
     }
 }
