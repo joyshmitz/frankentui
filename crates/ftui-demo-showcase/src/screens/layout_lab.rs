@@ -2860,6 +2860,212 @@ mod tests {
     }
 
     #[test]
+    fn pane_right_click_cycles_intelligence_modes() {
+        let mut lab = LayoutLab::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(140, 40, &mut pool);
+        lab.view(&mut frame, Rect::new(0, 0, 140, 40));
+
+        let pane_area = lab.pane_preview.get();
+        assert!(!pane_area.is_empty(), "pane area should be initialized");
+        let click_x = pane_area.x.saturating_add(pane_area.width / 2);
+        let click_y = pane_area.y.saturating_add(pane_area.height / 2);
+
+        assert_eq!(
+            lab.pane_intelligence_mode,
+            PaneLayoutIntelligenceMode::Focus
+        );
+
+        lab.handle_mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            click_x,
+            click_y,
+            Modifiers::NONE,
+        );
+        assert_eq!(
+            lab.pane_intelligence_mode,
+            PaneLayoutIntelligenceMode::Compare
+        );
+
+        lab.handle_mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            click_x,
+            click_y,
+            Modifiers::NONE,
+        );
+        assert_eq!(
+            lab.pane_intelligence_mode,
+            PaneLayoutIntelligenceMode::Monitor
+        );
+
+        lab.handle_mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            click_x,
+            click_y,
+            Modifiers::NONE,
+        );
+        assert_eq!(
+            lab.pane_intelligence_mode,
+            PaneLayoutIntelligenceMode::Compact
+        );
+
+        lab.handle_mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            click_x,
+            click_y,
+            Modifiers::NONE,
+        );
+        assert_eq!(
+            lab.pane_intelligence_mode,
+            PaneLayoutIntelligenceMode::Compact,
+            "focus requests are best-effort and should preserve the prior mode when no new ops apply"
+        );
+        assert!(
+            lab.pane_timeline.entries.len() >= 3,
+            "successful mode transitions should record timeline entries"
+        );
+    }
+
+    #[test]
+    fn pane_scroll_adjusts_magnetic_field_without_touching_gap() {
+        let mut lab = LayoutLab::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(140, 40, &mut pool);
+        lab.view(&mut frame, Rect::new(0, 0, 140, 40));
+
+        let pane_area = lab.pane_preview.get();
+        assert!(!pane_area.is_empty(), "pane area should be initialized");
+        let hover_x = pane_area.x.saturating_add(pane_area.width / 2);
+        let hover_y = pane_area.y.saturating_add(pane_area.height / 2);
+
+        let starting_gap = lab.gap;
+        let starting_field = lab.pane_magnetic_field_cells;
+
+        lab.handle_mouse(
+            MouseEventKind::ScrollDown,
+            hover_x,
+            hover_y,
+            Modifiers::NONE,
+        );
+        assert!(
+            (lab.pane_magnetic_field_cells - (starting_field + 0.4)).abs() < f64::EPSILON,
+            "scroll down in pane should widen the docking field"
+        );
+        assert_eq!(
+            lab.gap, starting_gap,
+            "pane scroll should not alter layout gap"
+        );
+
+        lab.handle_mouse(MouseEventKind::ScrollUp, hover_x, hover_y, Modifiers::NONE);
+        assert!(
+            (lab.pane_magnetic_field_cells - starting_field).abs() < f64::EPSILON,
+            "scroll up in pane should restore the prior docking field"
+        );
+        assert_eq!(
+            lab.gap, starting_gap,
+            "pane scroll should leave gap untouched"
+        );
+    }
+
+    #[test]
+    fn pane_keyboard_undo_redo_and_replay_restore_expected_state() {
+        let mut lab = LayoutLab::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(140, 40, &mut pool);
+        lab.view(&mut frame, Rect::new(0, 0, 140, 40));
+
+        let initial_hash = lab.pane_tree.state_hash();
+        assert_eq!(
+            lab.pane_timeline.cursor, 0,
+            "timeline should start at baseline"
+        );
+
+        lab.update(&press(KeyCode::Char('c')));
+        let compare_hash = lab.pane_tree.state_hash();
+        assert_ne!(
+            compare_hash, initial_hash,
+            "compare mode should materially change the pane workspace"
+        );
+        let entry_count = lab.pane_timeline.entries.len();
+        assert!(
+            entry_count > 0,
+            "mode application should record timeline entries"
+        );
+        assert_eq!(lab.pane_timeline.cursor, entry_count);
+
+        lab.update(&press(KeyCode::Char('u')));
+        assert_eq!(
+            lab.pane_tree.state_hash(),
+            initial_hash,
+            "undo should restore the baseline workspace state"
+        );
+        assert_eq!(
+            lab.pane_timeline.cursor, 0,
+            "undo should rewind the timeline cursor"
+        );
+
+        lab.update(&press(KeyCode::Char('y')));
+        assert_eq!(
+            lab.pane_tree.state_hash(),
+            compare_hash,
+            "redo should restore the compare-mode workspace state"
+        );
+        assert_eq!(
+            lab.pane_timeline.cursor, entry_count,
+            "redo should move the cursor back to the applied head"
+        );
+
+        lab.update(&press(KeyCode::Char('R')));
+        assert_eq!(
+            lab.pane_tree.state_hash(),
+            compare_hash,
+            "replay should deterministically rebuild the current workspace state"
+        );
+        assert_eq!(
+            lab.pane_next_operation_id,
+            (lab.pane_timeline.entries.len() as u64).saturating_add(1),
+            "replay should realign the next operation id with the journal"
+        );
+    }
+
+    #[test]
+    fn pane_keyboard_mode_shortcuts_apply_requested_mode() {
+        let mut lab = LayoutLab::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(140, 40, &mut pool);
+        lab.view(&mut frame, Rect::new(0, 0, 140, 40));
+
+        lab.update(&press(KeyCode::Char('c')));
+        assert_eq!(
+            lab.pane_intelligence_mode,
+            PaneLayoutIntelligenceMode::Compare
+        );
+
+        lab.update(&press(KeyCode::Char('n')));
+        assert_eq!(
+            lab.pane_intelligence_mode,
+            PaneLayoutIntelligenceMode::Monitor
+        );
+
+        lab.update(&press(KeyCode::Char('k')));
+        assert_eq!(
+            lab.pane_intelligence_mode,
+            PaneLayoutIntelligenceMode::Compact
+        );
+
+        lab.update(&press(KeyCode::Char('f')));
+        assert_eq!(
+            lab.pane_intelligence_mode,
+            PaneLayoutIntelligenceMode::Compact,
+            "focus is only committed when it emits new operations"
+        );
+        assert!(
+            lab.pane_workspace_generation > 0,
+            "mode shortcuts should advance workspace generation via applied operations"
+        );
+    }
+
+    #[test]
     fn pane_splitter_hover_diagnostics_track_mouse_move() {
         let mut lab = LayoutLab::new();
         let mut pool = GraphemePool::new();

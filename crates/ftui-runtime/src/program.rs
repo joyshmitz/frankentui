@@ -2143,13 +2143,14 @@ pub struct ImmediateDrainStats {
 ///
 /// Selection is logged at startup so operators can tell which lane is active.
 /// Fallback from `Asupersync` → `Structured` → `Legacy` is automatic on error.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuntimeLane {
     /// Pre-migration behavior: thread-based subscriptions with manual stop coordination.
     /// This is the safe default that preserves all existing semantics.
     Legacy,
     /// Structured cancellation: subscriptions use CancellationToken internally.
     /// Externally observable behavior is identical to Legacy.
+    #[default]
     Structured,
     /// Full Asupersync-native execution (reserved for future use).
     /// Falls back to Structured if Asupersync primitives are unavailable.
@@ -2191,12 +2192,6 @@ impl RuntimeLane {
     #[must_use]
     pub fn uses_structured_cancellation(self) -> bool {
         matches!(self, Self::Structured | Self::Asupersync)
-    }
-}
-
-impl Default for RuntimeLane {
-    fn default() -> Self {
-        Self::Structured
     }
 }
 
