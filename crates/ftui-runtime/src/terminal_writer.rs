@@ -5663,7 +5663,10 @@ mod tests {
 
         // Also verify the structural contract directly:
         assert!(
-            !matches!(ScreenMode::AltScreen, ScreenMode::Inline { .. } | ScreenMode::InlineAuto { .. }),
+            !matches!(
+                ScreenMode::AltScreen,
+                ScreenMode::Inline { .. } | ScreenMode::InlineAuto { .. }
+            ),
             "AltScreen must not match inline patterns"
         );
     }
@@ -5756,10 +5759,7 @@ mod tests {
             .filter(|w| *w == CURSOR_RESTORE)
             .count();
 
-        assert!(
-            saves > 0,
-            "present must save cursor"
-        );
+        assert!(saves > 0, "present must save cursor");
         assert!(
             restores >= saves,
             "cleanup must ensure all cursor saves are restored: {saves} saves, {restores} restores"
@@ -5814,15 +5814,9 @@ mod tests {
 
             for i in 0..10 {
                 let mut buffer = Buffer::new(40, 3);
-                buffer.set_raw(
-                    0,
-                    0,
-                    Cell::from_char(char::from(b'A' + (i % 26))),
-                );
+                buffer.set_raw(0, 0, Cell::from_char(char::from(b'A' + (i % 26))));
                 writer.present_ui(&buffer, None, true).unwrap();
-                writer
-                    .write_log(&format!("log-{i}"))
-                    .unwrap();
+                writer.write_log(&format!("log-{i}")).unwrap();
             }
         }
 
@@ -6036,10 +6030,7 @@ mod tests {
         // The output should not contain "hello" text from write_log
         // (it will contain cleanup sequences)
         let has_hello = alt_output.windows(5).any(|w| w == b"hello");
-        assert!(
-            !has_hello,
-            "AltScreen write_log must be silent (no-op)"
-        );
+        assert!(!has_hello, "AltScreen write_log must be silent (no-op)");
     }
 
     /// CONTRACT: Sync output sequences are balanced (begin/end) across
@@ -6072,10 +6063,7 @@ mod tests {
             .filter(|w| *w == SYNC_END)
             .count();
 
-        assert!(
-            begins > 0,
-            "sync-capable writer must emit SYNC_BEGIN"
-        );
+        assert!(begins > 0, "sync-capable writer must emit SYNC_BEGIN");
         assert_eq!(
             begins, ends,
             "sync blocks must be balanced: {begins} begins, {ends} ends"

@@ -1055,9 +1055,15 @@ mod tests {
         assert!(result.is_err());
 
         // Signal must still be checkable and triggerable after thread panic
-        assert!(!signal.is_stopped(), "signal should still report not-stopped");
+        assert!(
+            !signal.is_stopped(),
+            "signal should still report not-stopped"
+        );
         trigger.stop();
-        assert!(signal.is_stopped(), "signal should report stopped after trigger");
+        assert!(
+            signal.is_stopped(),
+            "signal should report stopped after trigger"
+        );
         assert!(
             signal.wait_timeout(Duration::from_millis(10)),
             "wait_timeout should return true when stopped"

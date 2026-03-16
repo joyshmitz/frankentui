@@ -1391,8 +1391,7 @@ mod tests {
 
             fn init(&mut self) -> Cmd<Self::Message> {
                 self.init_count.fetch_add(1, AO::SeqCst);
-                self.init_saw_zero_updates =
-                    self.update_count.load(AO::SeqCst) == 0;
+                self.init_saw_zero_updates = self.update_count.load(AO::SeqCst) == 0;
                 Cmd::msg(TrackerMsg::FromInit)
             }
 

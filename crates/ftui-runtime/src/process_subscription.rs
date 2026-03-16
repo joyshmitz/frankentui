@@ -664,9 +664,7 @@ mod tests {
                     matches!(
                         m,
                         TestMsg::Proc(
-                            ProcessEvent::Exited(_)
-                                | ProcessEvent::Killed
-                                | ProcessEvent::Error(_)
+                            ProcessEvent::Exited(_) | ProcessEvent::Killed | ProcessEvent::Error(_)
                         )
                     )
                 })
@@ -700,9 +698,7 @@ mod tests {
                     matches!(
                         m,
                         TestMsg::Proc(
-                            ProcessEvent::Exited(_)
-                                | ProcessEvent::Killed
-                                | ProcessEvent::Error(_)
+                            ProcessEvent::Exited(_) | ProcessEvent::Killed | ProcessEvent::Error(_)
                         )
                     )
                 })
@@ -775,8 +771,16 @@ mod tests {
             ProcessSubscription::new("echo", TestMsg::Proc).timeout(Duration::from_secs(10));
         let s3: ProcessSubscription<TestMsg> = ProcessSubscription::new("echo", TestMsg::Proc);
 
-        assert_ne!(s1.id(), s2.id(), "different timeouts must produce different IDs");
-        assert_ne!(s1.id(), s3.id(), "timeout vs no-timeout must produce different IDs");
+        assert_ne!(
+            s1.id(),
+            s2.id(),
+            "different timeouts must produce different IDs"
+        );
+        assert_ne!(
+            s1.id(),
+            s3.id(),
+            "timeout vs no-timeout must produce different IDs"
+        );
     }
 
     /// CONTRACT: Kill is prompt — process is killed within poll_interval (50ms)
