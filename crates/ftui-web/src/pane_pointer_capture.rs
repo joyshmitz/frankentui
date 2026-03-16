@@ -62,9 +62,54 @@ struct ActivePointerCapture {
     cumulative_delta_y: i32,
     direction_changes: u16,
     sample_count: u32,
-    previous_step_delta_x: i32,
-    previous_step_delta_y: i32,
+    previous_step_sign_x: i8,
+    previous_step_sign_y: i8,
     capture_state: CaptureState,
+}
+
+impl ActivePointerCapture {
+    const fn delta_sign(delta: i32) -> i8 {
+        if delta > 0 {
+            1
+        } else if delta < 0 {
+            -1
+        } else {
+            0
+        }
+    }
+
+    fn record_pointer_step(&mut self, position: PanePointerPosition) {
+        let step_delta_x = position.x.saturating_sub(self.last_position.x);
+        let step_delta_y = position.y.saturating_sub(self.last_position.y);
+        let step_sign_x = Self::delta_sign(step_delta_x);
+        let step_sign_y = Self::delta_sign(step_delta_y);
+
+        if self.sample_count > 0
+            && ((step_sign_x != 0
+                && self.previous_step_sign_x != 0
+                && step_sign_x != self.previous_step_sign_x)
+                || (step_sign_y != 0
+                    && self.previous_step_sign_y != 0
+                    && step_sign_y != self.previous_step_sign_y))
+        {
+            self.direction_changes = self.direction_changes.saturating_add(1);
+        }
+
+        self.cumulative_delta_x = self.cumulative_delta_x.saturating_add(step_delta_x);
+        self.cumulative_delta_y = self.cumulative_delta_y.saturating_add(step_delta_y);
+        self.sample_count = self.sample_count.saturating_add(1);
+        self.previous_step_sign_x = step_sign_x;
+        self.previous_step_sign_y = step_sign_y;
+    }
+
+    fn motion_summary(&self) -> PaneMotionVector {
+        PaneMotionVector::from_delta(
+            self.cumulative_delta_x,
+            self.cumulative_delta_y,
+            self.sample_count.saturating_mul(16),
+            self.direction_changes,
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -320,8 +365,8 @@ impl PanePointerCaptureAdapter {
                 cumulative_delta_y: 0,
                 direction_changes: 0,
                 sample_count: 0,
-                previous_step_delta_x: 0,
-                previous_step_delta_y: 0,
+                previous_step_sign_x: 0,
+                previous_step_sign_y: 0,
                 capture_state: CaptureState::Requested,
             });
         }
@@ -390,24 +435,7 @@ impl PanePointerCaptureAdapter {
             delta_x: position.x.saturating_sub(active.last_position.x),
             delta_y: position.y.saturating_sub(active.last_position.y),
         };
-        let step_delta_x = position.x.saturating_sub(active.last_position.x);
-        let step_delta_y = position.y.saturating_sub(active.last_position.y);
-        if active.sample_count > 0 {
-            let flipped_x = step_delta_x.signum() != 0
-                && active.previous_step_delta_x.signum() != 0
-                && step_delta_x.signum() != active.previous_step_delta_x.signum();
-            let flipped_y = step_delta_y.signum() != 0
-                && active.previous_step_delta_y.signum() != 0
-                && step_delta_y.signum() != active.previous_step_delta_y.signum();
-            if flipped_x || flipped_y {
-                active.direction_changes = active.direction_changes.saturating_add(1);
-            }
-        }
-        active.cumulative_delta_x = active.cumulative_delta_x.saturating_add(step_delta_x);
-        active.cumulative_delta_y = active.cumulative_delta_y.saturating_add(step_delta_y);
-        active.sample_count = active.sample_count.saturating_add(1);
-        active.previous_step_delta_x = step_delta_x;
-        active.previous_step_delta_y = step_delta_y;
+        active.record_pointer_step(position);
 
         let mut dispatch = self.forward_semantic(
             DispatchContext {
@@ -423,12 +451,7 @@ impl PanePointerCaptureAdapter {
         if dispatch.transition.is_some() {
             active.last_position = position;
             self.active = Some(active);
-            dispatch.motion = Some(PaneMotionVector::from_delta(
-                active.cumulative_delta_x,
-                active.cumulative_delta_y,
-                active.sample_count.saturating_mul(16),
-                active.direction_changes,
-            ));
+            dispatch.motion = Some(active.motion_summary());
         }
         dispatch
     }
@@ -490,12 +513,7 @@ impl PanePointerCaptureAdapter {
                 .then_some(PanePointerCaptureCommand::Release { pointer_id }),
         );
         if dispatch.transition.is_some() {
-            let motion = PaneMotionVector::from_delta(
-                active.cumulative_delta_x,
-                active.cumulative_delta_y,
-                active.sample_count.saturating_mul(16),
-                active.direction_changes,
-            );
+            let motion = active.motion_summary();
             let inertial = PaneInertialThrow::from_motion(motion);
             dispatch.motion = Some(motion);
             dispatch.projected_position = Some(inertial.projected_pointer(position));
@@ -896,7 +914,36 @@ mod tests {
                 < first
                     .pressure_snap_profile()
                     .expect("pressure profile should be derived from motion")
-                    .strength_bps
+                .strength_bps
+        );
+    }
+
+    #[test]
+    fn pointer_move_zero_delta_does_not_count_as_direction_change() {
+        let mut adapter = adapter();
+        adapter.pointer_down(
+            target(),
+            31,
+            PanePointerButton::Primary,
+            pos(10, 10),
+            PaneModifierSnapshot::default(),
+        );
+
+        let first = adapter.pointer_move(31, pos(24, 10), PaneModifierSnapshot::default());
+        let stationary = adapter.pointer_move(31, pos(24, 10), PaneModifierSnapshot::default());
+        let second = adapter.pointer_move(31, pos(18, 10), PaneModifierSnapshot::default());
+
+        assert_eq!(
+            first.motion,
+            Some(PaneMotionVector::from_delta(14, 0, 16, 0))
+        );
+        assert_eq!(
+            stationary.motion,
+            Some(PaneMotionVector::from_delta(14, 0, 32, 0))
+        );
+        assert_eq!(
+            second.motion,
+            Some(PaneMotionVector::from_delta(8, 0, 48, 0))
         );
     }
 

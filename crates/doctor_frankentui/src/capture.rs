@@ -1239,14 +1239,37 @@ fn run_vhs_with_docker(
     ));
 
     let mut child = docker.spawn()?;
+    let docker_spawn = std::time::Instant::now();
+    let docker_pid = child.id();
     let timeout = Duration::from_secs(cfg.capture_timeout_seconds);
+
+    eprintln!(
+        "[doctor:subprocess] docker vhs spawned pid={} timeout={}s",
+        docker_pid,
+        cfg.capture_timeout_seconds
+    );
+
     let status = child.wait_timeout(timeout)?;
 
     let mut timed_out = false;
     let exit_code = match status {
-        Some(status) => status.code().unwrap_or(1),
+        Some(status) => {
+            let code = status.code().unwrap_or(1);
+            eprintln!(
+                "[doctor:subprocess] docker vhs exited pid={} code={} elapsed={}ms",
+                docker_pid,
+                code,
+                docker_spawn.elapsed().as_millis()
+            );
+            code
+        }
         None => {
             timed_out = true;
+            eprintln!(
+                "[doctor:subprocess] docker vhs timeout pid={} elapsed={}ms",
+                docker_pid,
+                docker_spawn.elapsed().as_millis()
+            );
             let _ = child.kill();
             let _ = child.wait();
             124
@@ -1538,20 +1561,45 @@ fn run_vhs_with_driver(
     let stderr_pump = spawn_vhs_log_pump(vhs_stderr, vhs_log_err, Arc::clone(&stream_fatal_reason));
 
     let timeout = Duration::from_secs(cfg.capture_timeout_seconds);
-    let deadline = std::time::Instant::now() + timeout;
+    let spawn_instant = std::time::Instant::now();
+    let deadline = spawn_instant + timeout;
     let mut fatal_capture_reason: Option<String> = None;
     let mut timed_out = false;
     let mut defunct_ttyd_observed = false;
     let child_pid = child.id();
+    let mut poll_count: u64 = 0;
+
+    eprintln!(
+        "[doctor:subprocess] vhs spawned pid={} timeout={}s",
+        child_pid,
+        cfg.capture_timeout_seconds
+    );
+
     let mut vhs_exit = loop {
+        poll_count += 1;
+
         if let Some(status) = child.try_wait()? {
-            break status.code().unwrap_or(1);
+            let code = status.code().unwrap_or(1);
+            eprintln!(
+                "[doctor:subprocess] vhs exited pid={} code={} elapsed={}ms polls={}",
+                child_pid,
+                code,
+                spawn_instant.elapsed().as_millis(),
+                poll_count
+            );
+            break code;
         }
 
         if fatal_capture_reason.is_none()
             && let Ok(guard) = stream_fatal_reason.lock()
             && let Some(reason) = guard.clone()
         {
+            eprintln!(
+                "[doctor:subprocess] vhs stream fatal pid={} reason={} elapsed={}ms",
+                child_pid,
+                reason,
+                spawn_instant.elapsed().as_millis()
+            );
             fatal_capture_reason = Some(reason);
             terminate_process_group(child_pid);
             let _ = child.kill();
@@ -1562,6 +1610,12 @@ fn run_vhs_with_driver(
         if fatal_capture_reason.is_none()
             && let Some(reason) = detect_vhs_fatal_reason(vhs_log)
         {
+            eprintln!(
+                "[doctor:subprocess] vhs log fatal pid={} reason={} elapsed={}ms",
+                child_pid,
+                reason,
+                spawn_instant.elapsed().as_millis()
+            );
             fatal_capture_reason = Some(reason);
             terminate_process_group(child_pid);
             let _ = child.kill();
@@ -1571,6 +1625,11 @@ fn run_vhs_with_driver(
 
         if !defunct_ttyd_observed && has_defunct_ttyd_child(child_pid) {
             defunct_ttyd_observed = true;
+            eprintln!(
+                "[doctor:subprocess] defunct ttyd observed pid={} elapsed={}ms",
+                child_pid,
+                spawn_instant.elapsed().as_millis()
+            );
             ui.warning(
                 "observed defunct ttyd child while VHS still running; continuing until VHS exits or timeout",
             );
@@ -1578,6 +1637,12 @@ fn run_vhs_with_driver(
 
         if std::time::Instant::now() >= deadline {
             timed_out = true;
+            eprintln!(
+                "[doctor:subprocess] vhs timeout pid={} elapsed={}ms polls={}",
+                child_pid,
+                spawn_instant.elapsed().as_millis(),
+                poll_count
+            );
             terminate_process_group(child_pid);
             let _ = child.kill();
             let _ = child.wait();

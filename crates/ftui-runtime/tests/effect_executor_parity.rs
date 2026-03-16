@@ -18,7 +18,7 @@
 use ftui_core::event::Event;
 use ftui_render::frame::Frame;
 use ftui_runtime::program::{Cmd, Model};
-use ftui_runtime::simulator::{CmdRecord, ProgramSimulator};
+use ftui_runtime::simulator::ProgramSimulator;
 use std::time::Duration;
 
 // ============================================================================
@@ -134,7 +134,7 @@ impl Model for ParityModel {
 }
 
 /// Run a scenario and return the trace for comparison.
-fn run_scenario(msgs: Vec<PMsg>) -> (Vec<String>, Vec<CmdRecord>, Vec<String>, bool) {
+fn run_scenario(msgs: Vec<PMsg>) -> (Vec<String>, Vec<String>, bool) {
     let mut sim = ProgramSimulator::new(ParityModel::new());
     sim.init();
     for msg in msgs {
@@ -146,7 +146,6 @@ fn run_scenario(msgs: Vec<PMsg>) -> (Vec<String>, Vec<CmdRecord>, Vec<String>, b
     let _ = shutdown_cmd;
     (
         sim.model().trace.clone(),
-        sim.command_log().to_vec(),
         sim.logs().to_vec(),
         sim.is_running(),
     )
@@ -158,7 +157,7 @@ fn run_scenario(msgs: Vec<PMsg>) -> (Vec<String>, Vec<CmdRecord>, Vec<String>, b
 
 #[test]
 fn parity_happy_path_basic_steps() {
-    let (trace, _, _, running) = run_scenario(vec![
+    let (trace, _, running) = run_scenario(vec![
         PMsg::Step("a".into()),
         PMsg::Step("b".into()),
         PMsg::Step("c".into()),
@@ -180,8 +179,12 @@ fn parity_happy_path_basic_steps() {
 
 #[test]
 fn parity_batch_preserves_order() {
+<<<<<<< Updated upstream
     let (trace, _, _, _) =
         run_scenario(vec![PMsg::Batch(vec!["x".into(), "y".into(), "z".into()])]);
+=======
+    let (trace, _, _) = run_scenario(vec![PMsg::Batch(vec!["x".into(), "y".into(), "z".into()])]);
+>>>>>>> Stashed changes
 
     assert_eq!(
         trace,
@@ -199,7 +202,7 @@ fn parity_batch_preserves_order() {
 
 #[test]
 fn parity_sequence_preserves_order() {
-    let (trace, _, _, _) = run_scenario(vec![PMsg::Sequence(vec![
+    let (trace, _, _) = run_scenario(vec![PMsg::Sequence(vec![
         "p".into(),
         "q".into(),
         "r".into(),
@@ -221,7 +224,7 @@ fn parity_sequence_preserves_order() {
 
 #[test]
 fn parity_task_spawn_and_result() {
-    let (trace, _, _, _) = run_scenario(vec![
+    let (trace, _, _) = run_scenario(vec![
         PMsg::TaskSpawn("alpha".into()),
         PMsg::TaskSpawn("beta".into()),
     ]);
@@ -242,7 +245,7 @@ fn parity_task_spawn_and_result() {
 
 #[test]
 fn parity_log_emits_to_sink() {
-    let (trace, _, logs, _) = run_scenario(vec![
+    let (trace, logs, _) = run_scenario(vec![
         PMsg::LogMsg("hello".into()),
         PMsg::LogMsg("world".into()),
     ]);
@@ -266,7 +269,7 @@ fn parity_tick_sets_rate() {
 
 #[test]
 fn parity_quit_stops_processing() {
-    let (trace, _, _, running) = run_scenario(vec![
+    let (trace, _, running) = run_scenario(vec![
         PMsg::Step("before".into()),
         PMsg::Quit,
         PMsg::Step("after".into()),
@@ -284,7 +287,7 @@ fn parity_quit_stops_processing() {
 
 #[test]
 fn parity_quit_in_batch_halts_remaining() {
-    let (trace, _, _, running) = run_scenario(vec![PMsg::QuitInBatch(2)]);
+    let (trace, _, running) = run_scenario(vec![PMsg::QuitInBatch(2)]);
 
     assert!(!running);
     assert!(trace.contains(&"step:pre-quit-0".to_string()));
@@ -301,7 +304,7 @@ fn parity_quit_in_batch_halts_remaining() {
 
 #[test]
 fn parity_nested_recursion_depth_10() {
-    let (trace, _, _, _) = run_scenario(vec![PMsg::Nested(10)]);
+    let (trace, _, _) = run_scenario(vec![PMsg::Nested(10)]);
 
     // Should have nested:10, nested:9, ..., nested:0
     for i in 0..=10 {
@@ -312,7 +315,7 @@ fn parity_nested_recursion_depth_10() {
 #[test]
 fn parity_large_batch_100_items() {
     let items: Vec<String> = (0..100).map(|i| format!("item-{i}")).collect();
-    let (trace, _, _, _) = run_scenario(vec![PMsg::Batch(items)]);
+    let (trace, _, _) = run_scenario(vec![PMsg::Batch(items)]);
 
     assert!(trace.contains(&"batch:100".to_string()));
     assert!(trace.contains(&"step:item-0".to_string()));
@@ -339,7 +342,7 @@ fn parity_large_batch_100_items() {
 
 #[test]
 fn parity_interleaved_batch_and_sequence() {
-    let (trace, _, _, _) = run_scenario(vec![
+    let (trace, _, _) = run_scenario(vec![
         PMsg::Batch(vec!["b1".into(), "b2".into()]),
         PMsg::Sequence(vec!["s1".into(), "s2".into()]),
         PMsg::Step("final".into()),
@@ -368,7 +371,7 @@ fn parity_interleaved_batch_and_sequence() {
 
 #[test]
 fn parity_on_shutdown_runs_after_quit() {
-    let (trace, _, _, _) = run_scenario(vec![PMsg::Quit]);
+    let (trace, _, _) = run_scenario(vec![PMsg::Quit]);
 
     let quit_pos = trace.iter().position(|s| s == "quit").unwrap();
     let shutdown_pos = trace.iter().position(|s| s == "on_shutdown").unwrap();
@@ -408,8 +411,13 @@ fn parity_shadow_comparison_deterministic() {
     }
 
     // All runs must produce identical traces
+<<<<<<< Updated upstream
     let (ref_trace, _, ref_logs, ref_running) = &results[0];
     for (i, (trace, _, logs, running)) in results.iter().enumerate().skip(1) {
+=======
+    let (ref_trace, ref_logs, ref_running) = &results[0];
+    for (i, (trace, logs, running)) in results.iter().enumerate().skip(1) {
+>>>>>>> Stashed changes
         assert_eq!(trace, ref_trace, "run {i} trace diverged from run 0");
         assert_eq!(logs, ref_logs, "run {i} logs diverged from run 0");
         assert_eq!(
@@ -461,8 +469,13 @@ fn parity_shadow_comparison_quit_cutoff_deterministic() {
         results.push(run_scenario(msgs));
     }
 
+<<<<<<< Updated upstream
     let (ref_trace, _, _, _) = &results[0];
     for (i, (trace, _, _, _)) in results.iter().enumerate().skip(1) {
+=======
+    let (ref_trace, _, _) = &results[0];
+    for (i, (trace, _, _)) in results.iter().enumerate().skip(1) {
+>>>>>>> Stashed changes
         assert_eq!(trace, ref_trace, "quit-cutoff run {i} diverged from run 0");
     }
 

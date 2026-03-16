@@ -136,15 +136,11 @@ fn hash_buffer(buf: &ftui_render::buffer::Buffer) -> u64 {
 
 struct ShadowModel {
     trace: Vec<String>,
-    lane: RuntimeLane,
 }
 
 impl ShadowModel {
-    fn new(lane: RuntimeLane) -> Self {
-        Self {
-            trace: vec![],
-            lane,
-        }
+    fn new() -> Self {
+        Self { trace: vec![] }
     }
 }
 
@@ -173,7 +169,7 @@ impl Model for ShadowModel {
     type Message = SMsg;
 
     fn init(&mut self) -> Cmd<Self::Message> {
-        self.trace.push(format!("init[{}]", self.lane));
+        self.trace.push("init".into());
         Cmd::msg(SMsg::Init)
     }
 
@@ -249,7 +245,7 @@ impl Model for ShadowModel {
 
 /// Run a scenario through a specific lane and capture results.
 fn run_lane(lane: RuntimeLane, msgs: Vec<SMsg>, capture_frames: &[(u16, u16)]) -> LaneResult {
-    let mut sim = ProgramSimulator::new(ShadowModel::new(lane));
+    let mut sim = ProgramSimulator::new(ShadowModel::new());
     sim.init();
 
     for msg in msgs {
@@ -262,23 +258,9 @@ fn run_lane(lane: RuntimeLane, msgs: Vec<SMsg>, capture_frames: &[(u16, u16)]) -
         frame_hashes.push(hash_buffer(buf));
     }
 
-    // Normalize trace: remove lane-specific init prefix for comparison
-    let trace: Vec<String> = sim
-        .model()
-        .trace
-        .iter()
-        .map(|s| {
-            if s.starts_with("init[") {
-                "init".to_string()
-            } else {
-                s.clone()
-            }
-        })
-        .collect();
-
     LaneResult {
         lane,
-        trace,
+        trace: sim.model().trace.clone(),
         logs: sim.logs().to_vec(),
         running: sim.is_running(),
         tick_rate: sim.tick_rate(),
