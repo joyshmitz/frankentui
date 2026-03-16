@@ -125,7 +125,7 @@ pub use program::{
     PaneTerminalAdapter, PaneTerminalAdapterConfig, PaneTerminalDispatch,
     PaneTerminalIgnoredReason, PaneTerminalLifecyclePhase, PaneTerminalLogEntry,
     PaneTerminalLogOutcome, PaneTerminalSplitterHandle, PersistenceConfig, Program, ProgramConfig,
-    ResizeBehavior, RuntimeLane, TaskExecutorBackend, TaskSpec, WidgetRefreshConfig,
+    ResizeBehavior, RolloutPolicy, RuntimeLane, TaskExecutorBackend, TaskSpec, WidgetRefreshConfig,
     pane_terminal_resolve_splitter_target, pane_terminal_splitter_handles,
     pane_terminal_target_from_hit, register_pane_terminal_splitter_hits,
 };

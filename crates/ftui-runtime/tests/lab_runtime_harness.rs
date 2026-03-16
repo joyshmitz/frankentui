@@ -38,6 +38,7 @@ enum LabStep<M: std::fmt::Debug> {
 
 /// Detailed trace entry from the harness.
 #[derive(Debug, Clone)]
+#[expect(dead_code)]
 struct LabTraceEntry {
     step_index: usize,
     step_type: String,
@@ -67,6 +68,7 @@ where
     initialized: bool,
 }
 
+#[expect(dead_code)]
 impl<M: Model> LabHarness<M>
 where
     M::Message: std::fmt::Debug,

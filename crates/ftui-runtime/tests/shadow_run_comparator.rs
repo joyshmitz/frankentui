@@ -21,6 +21,7 @@ use std::time::Duration;
 /// Result of running a single scenario through a lane.
 #[derive(Debug, Clone)]
 struct LaneResult {
+    #[expect(dead_code)]
     lane: RuntimeLane,
     trace: Vec<String>,
     logs: Vec<String>,

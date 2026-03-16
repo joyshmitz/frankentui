@@ -68,6 +68,27 @@ struct ActivePointerCapture {
 }
 
 impl ActivePointerCapture {
+    fn new(
+        pointer_id: u32,
+        target: PaneResizeTarget,
+        button: PanePointerButton,
+        position: PanePointerPosition,
+    ) -> Self {
+        Self {
+            pointer_id,
+            target,
+            button,
+            last_position: position,
+            cumulative_delta_x: 0,
+            cumulative_delta_y: 0,
+            direction_changes: 0,
+            sample_count: 0,
+            previous_step_sign_x: 0,
+            previous_step_sign_y: 0,
+            capture_state: CaptureState::Requested,
+        }
+    }
+
     const fn delta_sign(delta: i32) -> i8 {
         if delta > 0 {
             1
@@ -109,6 +130,24 @@ impl ActivePointerCapture {
             self.sample_count.saturating_mul(16),
             self.direction_changes,
         )
+    }
+
+    fn release_command(self) -> Option<PanePointerCaptureCommand> {
+        self.capture_state
+            .is_acquired()
+            .then_some(PanePointerCaptureCommand::Release {
+                pointer_id: self.pointer_id,
+            })
+    }
+
+    fn finish_gesture(
+        self,
+        position: PanePointerPosition,
+    ) -> (PaneMotionVector, PaneInertialThrow, PanePointerPosition) {
+        let motion = self.motion_summary();
+        let inertial_throw = PaneInertialThrow::from_motion(motion);
+        let projected_position = inertial_throw.projected_pointer(position);
+        (motion, inertial_throw, projected_position)
     }
 }
 
@@ -301,6 +340,34 @@ impl PanePointerCaptureAdapter {
         self.machine.state()
     }
 
+    #[allow(clippy::result_large_err)]
+    fn active_for_pointer(
+        &self,
+        phase: PanePointerLifecyclePhase,
+        pointer_id: u32,
+        position: Option<PanePointerPosition>,
+    ) -> Result<ActivePointerCapture, PanePointerDispatch> {
+        let Some(active) = self.active else {
+            return Err(PanePointerDispatch::ignored(
+                phase,
+                PanePointerIgnoredReason::NoActivePointer,
+                Some(pointer_id),
+                None,
+                position,
+            ));
+        };
+        if active.pointer_id != pointer_id {
+            return Err(PanePointerDispatch::ignored(
+                phase,
+                PanePointerIgnoredReason::PointerMismatch,
+                Some(pointer_id),
+                Some(active.target),
+                position,
+            ));
+        }
+        Ok(active)
+    }
+
     /// Handle pointer-down on a pane splitter target.
     pub fn pointer_down(
         &mut self,
@@ -356,43 +423,23 @@ impl PanePointerCaptureAdapter {
             Some(PanePointerCaptureCommand::Acquire { pointer_id }),
         );
         if dispatch.transition.is_some() {
-            self.active = Some(ActivePointerCapture {
-                pointer_id,
-                target,
-                button,
-                last_position: position,
-                cumulative_delta_x: 0,
-                cumulative_delta_y: 0,
-                direction_changes: 0,
-                sample_count: 0,
-                previous_step_sign_x: 0,
-                previous_step_sign_y: 0,
-                capture_state: CaptureState::Requested,
-            });
+            self.active = Some(ActivePointerCapture::new(
+                pointer_id, target, button, position,
+            ));
         }
         dispatch
     }
 
     /// Mark browser pointer capture as successfully acquired.
     pub fn capture_acquired(&mut self, pointer_id: u32) -> PanePointerDispatch {
-        let Some(mut active) = self.active else {
-            return PanePointerDispatch::ignored(
-                PanePointerLifecyclePhase::CaptureAcquired,
-                PanePointerIgnoredReason::NoActivePointer,
-                Some(pointer_id),
-                None,
-                None,
-            );
+        let mut active = match self.active_for_pointer(
+            PanePointerLifecyclePhase::CaptureAcquired,
+            pointer_id,
+            None,
+        ) {
+            Ok(active) => active,
+            Err(dispatch) => return dispatch,
         };
-        if active.pointer_id != pointer_id {
-            return PanePointerDispatch::ignored(
-                PanePointerLifecyclePhase::CaptureAcquired,
-                PanePointerIgnoredReason::PointerMismatch,
-                Some(pointer_id),
-                Some(active.target),
-                None,
-            );
-        }
         active.capture_state = CaptureState::Acquired;
         self.active = Some(active);
         PanePointerDispatch::capture_state_updated(
@@ -409,24 +456,14 @@ impl PanePointerCaptureAdapter {
         position: PanePointerPosition,
         modifiers: PaneModifierSnapshot,
     ) -> PanePointerDispatch {
-        let Some(mut active) = self.active else {
-            return PanePointerDispatch::ignored(
-                PanePointerLifecyclePhase::PointerMove,
-                PanePointerIgnoredReason::NoActivePointer,
-                Some(pointer_id),
-                None,
-                Some(position),
-            );
+        let mut active = match self.active_for_pointer(
+            PanePointerLifecyclePhase::PointerMove,
+            pointer_id,
+            Some(position),
+        ) {
+            Ok(active) => active,
+            Err(dispatch) => return dispatch,
         };
-        if active.pointer_id != pointer_id {
-            return PanePointerDispatch::ignored(
-                PanePointerLifecyclePhase::PointerMove,
-                PanePointerIgnoredReason::PointerMismatch,
-                Some(pointer_id),
-                Some(active.target),
-                Some(position),
-            );
-        }
 
         let kind = PaneSemanticInputEventKind::PointerMove {
             target: active.target,
@@ -464,24 +501,14 @@ impl PanePointerCaptureAdapter {
         position: PanePointerPosition,
         modifiers: PaneModifierSnapshot,
     ) -> PanePointerDispatch {
-        let Some(active) = self.active else {
-            return PanePointerDispatch::ignored(
-                PanePointerLifecyclePhase::PointerUp,
-                PanePointerIgnoredReason::NoActivePointer,
-                Some(pointer_id),
-                None,
-                Some(position),
-            );
+        let active = match self.active_for_pointer(
+            PanePointerLifecyclePhase::PointerUp,
+            pointer_id,
+            Some(position),
+        ) {
+            Ok(active) => active,
+            Err(dispatch) => return dispatch,
         };
-        if active.pointer_id != pointer_id {
-            return PanePointerDispatch::ignored(
-                PanePointerLifecyclePhase::PointerUp,
-                PanePointerIgnoredReason::PointerMismatch,
-                Some(pointer_id),
-                Some(active.target),
-                Some(position),
-            );
-        }
         if active.button != button {
             return PanePointerDispatch::ignored(
                 PanePointerLifecyclePhase::PointerUp,
@@ -507,16 +534,12 @@ impl PanePointerCaptureAdapter {
             },
             kind,
             modifiers,
-            active
-                .capture_state
-                .is_acquired()
-                .then_some(PanePointerCaptureCommand::Release { pointer_id }),
+            active.release_command(),
         );
         if dispatch.transition.is_some() {
-            let motion = active.motion_summary();
-            let inertial = PaneInertialThrow::from_motion(motion);
+            let (motion, inertial, projected_position) = active.finish_gesture(position);
             dispatch.motion = Some(motion);
-            dispatch.projected_position = Some(inertial.projected_pointer(position));
+            dispatch.projected_position = Some(projected_position);
             dispatch.inertial_throw = Some(inertial);
             self.active = None;
         }
@@ -535,24 +558,14 @@ impl PanePointerCaptureAdapter {
 
     /// Handle pointer-leave lifecycle events.
     pub fn pointer_leave(&mut self, pointer_id: u32) -> PanePointerDispatch {
-        let Some(active) = self.active else {
-            return PanePointerDispatch::ignored(
-                PanePointerLifecyclePhase::PointerLeave,
-                PanePointerIgnoredReason::NoActivePointer,
-                Some(pointer_id),
-                None,
-                None,
-            );
+        let active = match self.active_for_pointer(
+            PanePointerLifecyclePhase::PointerLeave,
+            pointer_id,
+            None,
+        ) {
+            Ok(active) => active,
+            Err(dispatch) => return dispatch,
         };
-        if active.pointer_id != pointer_id {
-            return PanePointerDispatch::ignored(
-                PanePointerLifecyclePhase::PointerLeave,
-                PanePointerIgnoredReason::PointerMismatch,
-                Some(pointer_id),
-                Some(active.target),
-                None,
-            );
-        }
 
         if matches!(active.capture_state, CaptureState::Requested)
             && self.config.cancel_on_leave_without_capture
@@ -597,12 +610,7 @@ impl PanePointerCaptureAdapter {
             },
             kind,
             PaneModifierSnapshot::default(),
-            active
-                .capture_state
-                .is_acquired()
-                .then_some(PanePointerCaptureCommand::Release {
-                    pointer_id: active.pointer_id,
-                }),
+            active.release_command(),
         );
         if dispatch.transition.is_some() {
             self.active = None;
@@ -662,11 +670,11 @@ impl PanePointerCaptureAdapter {
             target: Some(active.target),
             reason,
         };
-        let command = (release_capture && active.capture_state.is_acquired()).then_some(
-            PanePointerCaptureCommand::Release {
-                pointer_id: active.pointer_id,
-            },
-        );
+        let command = if release_capture {
+            active.release_command()
+        } else {
+            None
+        };
         let dispatch = self.forward_semantic(
             DispatchContext {
                 phase,

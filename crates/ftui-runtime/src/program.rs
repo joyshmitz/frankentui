@@ -2193,6 +2193,114 @@ impl RuntimeLane {
     pub fn uses_structured_cancellation(self) -> bool {
         matches!(self, Self::Structured | Self::Asupersync)
     }
+
+    /// Read the lane from the `FTUI_RUNTIME_LANE` environment variable.
+    ///
+    /// Accepted values (case-insensitive): `legacy`, `structured`, `asupersync`.
+    /// Returns `None` if the variable is unset or contains an unrecognized value.
+    #[must_use]
+    pub fn from_env() -> Option<Self> {
+        let val = std::env::var("FTUI_RUNTIME_LANE").ok()?;
+        Self::parse(&val)
+    }
+
+    /// Parse a lane name (case-insensitive).
+    ///
+    /// Returns `None` for unrecognized values.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "legacy" => Some(Self::Legacy),
+            "structured" => Some(Self::Structured),
+            "asupersync" => Some(Self::Asupersync),
+            _ => {
+                tracing::warn!(
+                    target: "ftui.runtime",
+                    value = s,
+                    "RuntimeLane::parse: unrecognized value"
+                );
+                None
+            }
+        }
+    }
+}
+
+/// Rollout policy for the Asupersync migration (bd-2crbt).
+///
+/// Controls how the runtime lane transition is managed:
+///
+/// - `Off` — use only the configured lane, no shadow comparison.
+/// - `Shadow` — run both baseline and candidate lanes, compare outputs,
+///   but use only the baseline lane for actual rendering. Evidence is emitted
+///   to the configured JSONL sink for operator review.
+/// - `Enabled` — use the candidate lane for rendering (requires prior shadow
+///   evidence showing deterministic match).
+///
+/// The policy is logged at startup and can be overridden via the
+/// `FTUI_ROLLOUT_POLICY` environment variable (`off`, `shadow`, `enabled`).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RolloutPolicy {
+    /// No rollout activity — use the configured lane directly.
+    #[default]
+    Off,
+    /// Shadow-run comparison mode: run both lanes, emit evidence, use baseline.
+    Shadow,
+    /// Candidate lane is live — requires prior shadow evidence.
+    Enabled,
+}
+
+impl RolloutPolicy {
+    /// Read the policy from the `FTUI_ROLLOUT_POLICY` environment variable.
+    ///
+    /// Accepted values (case-insensitive): `off`, `shadow`, `enabled`.
+    /// Returns `None` if unset or unrecognized.
+    #[must_use]
+    pub fn from_env() -> Option<Self> {
+        let val = std::env::var("FTUI_ROLLOUT_POLICY").ok()?;
+        Self::parse(&val)
+    }
+
+    /// Parse a rollout policy name (case-insensitive).
+    ///
+    /// Returns `None` for unrecognized values.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "off" => Some(Self::Off),
+            "shadow" => Some(Self::Shadow),
+            "enabled" => Some(Self::Enabled),
+            _ => {
+                tracing::warn!(
+                    target: "ftui.runtime",
+                    value = s,
+                    "RolloutPolicy::parse: unrecognized value"
+                );
+                None
+            }
+        }
+    }
+
+    /// Returns a human-readable label for logging.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Shadow => "shadow",
+            Self::Enabled => "enabled",
+        }
+    }
+
+    /// Whether this policy involves shadow comparison.
+    #[must_use]
+    pub fn is_shadow(self) -> bool {
+        matches!(self, Self::Shadow)
+    }
+}
+
+impl std::fmt::Display for RolloutPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
 }
 
 impl std::fmt::Display for RuntimeLane {
@@ -2268,6 +2376,12 @@ pub struct ProgramConfig {
     /// Defaults to `Structured` (CancellationToken-backed, current migration state).
     /// Logged at startup so operators can identify the active lane.
     pub runtime_lane: RuntimeLane,
+    /// Rollout policy for the Asupersync migration (bd-2crbt).
+    ///
+    /// Controls whether shadow-run comparison is active during this session.
+    /// When `Shadow`, both the baseline and candidate lanes run in parallel
+    /// and evidence is emitted; rendering uses the baseline lane only.
+    pub rollout_policy: RolloutPolicy,
 }
 
 impl Default for ProgramConfig {
@@ -2299,6 +2413,7 @@ impl Default for ProgramConfig {
             intercept_signals: true,
             tick_strategy: None,
             runtime_lane: RuntimeLane::default(),
+            rollout_policy: RolloutPolicy::default(),
         }
     }
 }
@@ -2541,6 +2656,36 @@ impl ProgramConfig {
     #[must_use]
     pub fn with_tick_strategy(mut self, strategy: crate::tick_strategy::TickStrategyKind) -> Self {
         self.tick_strategy = Some(strategy);
+        self
+    }
+
+    /// Set the runtime execution lane.
+    #[must_use]
+    pub fn with_lane(mut self, lane: RuntimeLane) -> Self {
+        self.runtime_lane = lane;
+        self
+    }
+
+    /// Set the rollout policy for the Asupersync migration.
+    #[must_use]
+    pub fn with_rollout_policy(mut self, policy: RolloutPolicy) -> Self {
+        self.rollout_policy = policy;
+        self
+    }
+
+    /// Apply environment-variable overrides for lane and rollout policy.
+    ///
+    /// Reads `FTUI_RUNTIME_LANE` and `FTUI_ROLLOUT_POLICY`. Values that are
+    /// unset or unrecognized are silently ignored (the programmatic default
+    /// or prior builder value is retained).
+    #[must_use]
+    pub fn with_env_overrides(mut self) -> Self {
+        if let Some(lane) = RuntimeLane::from_env() {
+            self.runtime_lane = lane;
+        }
+        if let Some(policy) = RolloutPolicy::from_env() {
+            self.rollout_policy = policy;
+        }
         self
     }
 }
@@ -11580,6 +11725,91 @@ mod tests {
             .with_conformal_config(ConformalConfig::default())
             .without_conformal();
         assert!(config.conformal_config.is_none());
+    }
+
+    // =========================================================================
+    // Rollout config builder methods (bd-2crbt)
+    // =========================================================================
+
+    #[test]
+    fn program_config_with_lane() {
+        let config = ProgramConfig::default().with_lane(RuntimeLane::Asupersync);
+        assert_eq!(config.runtime_lane, RuntimeLane::Asupersync);
+    }
+
+    #[test]
+    fn program_config_with_rollout_policy() {
+        let config = ProgramConfig::default().with_rollout_policy(RolloutPolicy::Shadow);
+        assert_eq!(config.rollout_policy, RolloutPolicy::Shadow);
+    }
+
+    #[test]
+    fn rollout_policy_labels() {
+        assert_eq!(RolloutPolicy::Off.label(), "off");
+        assert_eq!(RolloutPolicy::Shadow.label(), "shadow");
+        assert_eq!(RolloutPolicy::Enabled.label(), "enabled");
+        assert_eq!(format!("{}", RolloutPolicy::Shadow), "shadow");
+    }
+
+    #[test]
+    fn rollout_policy_is_shadow() {
+        assert!(!RolloutPolicy::Off.is_shadow());
+        assert!(RolloutPolicy::Shadow.is_shadow());
+        assert!(!RolloutPolicy::Enabled.is_shadow());
+    }
+
+    #[test]
+    fn rollout_policy_default_is_off() {
+        assert_eq!(RolloutPolicy::default(), RolloutPolicy::Off);
+    }
+
+    #[test]
+    fn runtime_lane_parse_legacy() {
+        assert_eq!(RuntimeLane::parse("legacy"), Some(RuntimeLane::Legacy));
+    }
+
+    #[test]
+    fn runtime_lane_parse_structured_case_insensitive() {
+        assert_eq!(
+            RuntimeLane::parse("Structured"),
+            Some(RuntimeLane::Structured)
+        );
+    }
+
+    #[test]
+    fn runtime_lane_parse_asupersync_uppercase() {
+        assert_eq!(
+            RuntimeLane::parse("ASUPERSYNC"),
+            Some(RuntimeLane::Asupersync)
+        );
+    }
+
+    #[test]
+    fn runtime_lane_parse_unrecognized() {
+        assert_eq!(RuntimeLane::parse("bogus"), None);
+    }
+
+    #[test]
+    fn rollout_policy_parse_shadow() {
+        assert_eq!(RolloutPolicy::parse("shadow"), Some(RolloutPolicy::Shadow));
+    }
+
+    #[test]
+    fn rollout_policy_parse_enabled() {
+        assert_eq!(
+            RolloutPolicy::parse("enabled"),
+            Some(RolloutPolicy::Enabled)
+        );
+    }
+
+    #[test]
+    fn rollout_policy_parse_off() {
+        assert_eq!(RolloutPolicy::parse("off"), Some(RolloutPolicy::Off));
+    }
+
+    #[test]
+    fn rollout_policy_parse_unrecognized() {
+        assert_eq!(RolloutPolicy::parse("bogus"), None);
     }
 
     // =========================================================================

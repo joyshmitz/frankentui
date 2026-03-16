@@ -44,6 +44,7 @@ enum GMsg {
     TaskDone(String),
     Nested(u32),
     Log(String),
+    #[expect(dead_code)]
     Tick,
     Quit,
 }

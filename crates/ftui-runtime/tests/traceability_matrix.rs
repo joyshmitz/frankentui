@@ -38,7 +38,7 @@
 
 use ftui_core::event::Event;
 use ftui_render::frame::Frame;
-use ftui_runtime::program::{Cmd, Model, ProgramConfig, RuntimeLane};
+use ftui_runtime::program::{Cmd, Model, RuntimeLane};
 use ftui_runtime::simulator::ProgramSimulator;
 use std::time::Duration;
 

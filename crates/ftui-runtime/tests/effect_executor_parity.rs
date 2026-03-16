@@ -179,12 +179,7 @@ fn parity_happy_path_basic_steps() {
 
 #[test]
 fn parity_batch_preserves_order() {
-<<<<<<< Updated upstream
-    let (trace, _, _, _) =
-        run_scenario(vec![PMsg::Batch(vec!["x".into(), "y".into(), "z".into()])]);
-=======
     let (trace, _, _) = run_scenario(vec![PMsg::Batch(vec!["x".into(), "y".into(), "z".into()])]);
->>>>>>> Stashed changes
 
     assert_eq!(
         trace,
@@ -411,13 +406,8 @@ fn parity_shadow_comparison_deterministic() {
     }
 
     // All runs must produce identical traces
-<<<<<<< Updated upstream
-    let (ref_trace, _, ref_logs, ref_running) = &results[0];
-    for (i, (trace, _, logs, running)) in results.iter().enumerate().skip(1) {
-=======
     let (ref_trace, ref_logs, ref_running) = &results[0];
     for (i, (trace, logs, running)) in results.iter().enumerate().skip(1) {
->>>>>>> Stashed changes
         assert_eq!(trace, ref_trace, "run {i} trace diverged from run 0");
         assert_eq!(logs, ref_logs, "run {i} logs diverged from run 0");
         assert_eq!(
@@ -469,13 +459,8 @@ fn parity_shadow_comparison_quit_cutoff_deterministic() {
         results.push(run_scenario(msgs));
     }
 
-<<<<<<< Updated upstream
-    let (ref_trace, _, _, _) = &results[0];
-    for (i, (trace, _, _, _)) in results.iter().enumerate().skip(1) {
-=======
     let (ref_trace, _, _) = &results[0];
     for (i, (trace, _, _)) in results.iter().enumerate().skip(1) {
->>>>>>> Stashed changes
         assert_eq!(trace, ref_trace, "quit-cutoff run {i} diverged from run 0");
     }
 

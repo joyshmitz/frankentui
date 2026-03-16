@@ -53,6 +53,7 @@ pub mod input_storm;
 pub mod lab_integration;
 pub mod proptest_support;
 pub mod resize_storm;
+pub mod rollout_scorecard;
 pub mod shadow_run;
 pub mod terminal_model;
 pub mod time_travel;
@@ -86,6 +87,9 @@ pub use time_travel_inspector::TimeTravelInspector;
 
 // Validation infrastructure re-exports.
 pub use benchmark_gate::{BenchmarkGate, GateResult, Measurement, MetricVerdict, Threshold};
+pub use rollout_scorecard::{
+    RolloutScorecard, RolloutScorecardConfig, RolloutSummary, RolloutVerdict,
+};
 pub use shadow_run::{ShadowRun, ShadowRunConfig, ShadowRunResult, ShadowVerdict};
 
 // ============================================================================

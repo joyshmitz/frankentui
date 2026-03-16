@@ -20,7 +20,6 @@ use ftui_core::event::Event;
 use ftui_render::frame::Frame;
 use ftui_runtime::program::{Cmd, Model, RuntimeLane};
 use ftui_runtime::simulator::ProgramSimulator;
-use std::time::Duration;
 
 // ============================================================================
 // Artifact contract types
@@ -341,7 +340,7 @@ fn artifact_failure_path_complete() {
 fn artifact_stress_path_complete() {
     let mut bundle = ReplayBundle::new("stress_100_batch", RuntimeLane::Structured);
     let items: Vec<String> = (0..100).map(|i| format!("{i}")).collect();
-    bundle.add_input(&format!("Batch([0..99])"));
+    bundle.add_input("Batch([0..99])");
 
     let mut sim = new_sim();
     sim.send(AMsg::Batch(items));

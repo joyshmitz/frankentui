@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use ftui_layout::{
     PaneId, PaneModifierSnapshot, PanePointerButton, PanePointerPosition, PaneResizeTarget,
     SplitAxis,
@@ -80,6 +80,42 @@ fn bench_pane_pointer_lifecycle(c: &mut Criterion) {
             let up = adapter.pointer_up(23, PanePointerButton::Primary, pos(186, 8), modifiers);
             black_box(up.projected_position);
         });
+    });
+
+    group.bench_function("pointer_up_after_ack_move_120", |b| {
+        b.iter_batched(
+            || {
+                let mut adapter =
+                    PanePointerCaptureAdapter::new(PanePointerCaptureConfig::default())
+                        .expect("default adapter config should be valid");
+
+                let down = adapter.pointer_down(
+                    target(),
+                    37,
+                    PanePointerButton::Primary,
+                    pos(3, 6),
+                    modifiers,
+                );
+                black_box(down.log.sequence);
+                let ack = adapter.capture_acquired(37);
+                black_box(ack.log.phase);
+
+                for step in 0..120 {
+                    let x = 4 + ((step * 3) / 2);
+                    let y = 6 + (step % 3);
+                    let dispatch = adapter.pointer_move(37, pos(x, y), modifiers);
+                    black_box(dispatch.motion.map(|motion| motion.direction_changes));
+                }
+
+                adapter
+            },
+            |mut adapter| {
+                let up = adapter.pointer_up(37, PanePointerButton::Primary, pos(186, 8), modifiers);
+                black_box(up.projected_position);
+                black_box(up.inertial_throw);
+            },
+            BatchSize::SmallInput,
+        );
     });
 
     group.bench_function("down_ack_move_pause_reverse_120_up", |b| {

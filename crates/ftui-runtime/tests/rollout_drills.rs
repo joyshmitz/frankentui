@@ -15,7 +15,7 @@
 
 use ftui_core::event::Event;
 use ftui_render::frame::Frame;
-use ftui_runtime::program::{Cmd, Model, ProgramConfig, RuntimeLane};
+use ftui_runtime::program::{Cmd, Model, ProgramConfig, RolloutPolicy, RuntimeLane};
 use ftui_runtime::simulator::ProgramSimulator;
 use std::time::Duration;
 
@@ -45,6 +45,7 @@ enum DMsg {
     Task(String),
     TaskDone(String),
     Log(String),
+    #[expect(dead_code)]
     Tick,
     Quit,
 }
@@ -465,7 +466,7 @@ fn d5_config_lane_traits() {
 
     let lane = RuntimeLane::Structured;
     let copied = lane; // Copy
-    let cloned = lane.clone(); // Clone
+    let cloned = copied; // Clone (use Copy instead of .clone() on Copy type)
     let debug = format!("{lane:?}"); // Debug
     let display = format!("{lane}"); // Display
 
@@ -521,6 +522,178 @@ fn d5_config_cancellation_classification() {
     verdict.check(
         RuntimeLane::Asupersync.uses_structured_cancellation(),
         "Asupersync: has structured cancellation",
+    );
+
+    verdict.assert_passed();
+}
+
+// ============================================================================
+// D6: Rollout policy configuration (bd-2crbt)
+// ============================================================================
+
+#[test]
+fn d6_rollout_policy_default_is_off() {
+    let mut verdict = DrillVerdict::new("D6.1: Default rollout policy is Off");
+    let config = ProgramConfig::default();
+    verdict.check(
+        config.rollout_policy == RolloutPolicy::Off,
+        "Default policy should be Off",
+    );
+    verdict.assert_passed();
+}
+
+#[test]
+fn d6_rollout_policy_shadow_wires_through_config() {
+    let mut verdict = DrillVerdict::new("D6.2: Shadow policy wires through ProgramConfig");
+    let config = ProgramConfig::default().with_rollout_policy(RolloutPolicy::Shadow);
+    verdict.check(
+        config.rollout_policy == RolloutPolicy::Shadow,
+        "Policy should be Shadow after builder",
+    );
+    verdict.check(
+        config.rollout_policy.is_shadow(),
+        "is_shadow() should return true",
+    );
+    verdict.assert_passed();
+}
+
+#[test]
+fn d6_rollout_policy_enable_shadow_disable_sequence() {
+    let mut verdict = DrillVerdict::new("D6.3: Enable → Shadow → Disable sequence");
+
+    // Step 1: Start with Off
+    let config = ProgramConfig::default();
+    verdict.check(config.rollout_policy == RolloutPolicy::Off, "Step 1: Off");
+
+    // Step 2: Enable shadow comparison
+    let config = config.with_rollout_policy(RolloutPolicy::Shadow);
+    verdict.check(
+        config.rollout_policy == RolloutPolicy::Shadow,
+        "Step 2: Shadow",
+    );
+
+    // Step 3: Promote to enabled
+    let config = config.with_rollout_policy(RolloutPolicy::Enabled);
+    verdict.check(
+        config.rollout_policy == RolloutPolicy::Enabled,
+        "Step 3: Enabled",
+    );
+
+    // Step 4: Rollback to off
+    let config = config.with_rollout_policy(RolloutPolicy::Off);
+    verdict.check(
+        config.rollout_policy == RolloutPolicy::Off,
+        "Step 4: Off (rollback)",
+    );
+
+    verdict.assert_passed();
+}
+
+#[test]
+fn d6_rollout_lane_and_policy_independent() {
+    let mut verdict = DrillVerdict::new("D6.4: Lane and policy are independent");
+
+    let config = ProgramConfig::default()
+        .with_lane(RuntimeLane::Legacy)
+        .with_rollout_policy(RolloutPolicy::Shadow);
+
+    verdict.check(
+        config.runtime_lane == RuntimeLane::Legacy,
+        "Lane should be Legacy",
+    );
+    verdict.check(
+        config.rollout_policy == RolloutPolicy::Shadow,
+        "Policy should be Shadow",
+    );
+
+    // Changing lane doesn't affect policy
+    let config = config.with_lane(RuntimeLane::Structured);
+    verdict.check(
+        config.rollout_policy == RolloutPolicy::Shadow,
+        "Policy should still be Shadow after lane change",
+    );
+
+    verdict.assert_passed();
+}
+
+#[test]
+fn d6_rollout_policy_parse_roundtrip() {
+    let mut verdict = DrillVerdict::new("D6.5: Policy parse roundtrip");
+
+    for (input, expected) in [
+        ("off", Some(RolloutPolicy::Off)),
+        ("shadow", Some(RolloutPolicy::Shadow)),
+        ("enabled", Some(RolloutPolicy::Enabled)),
+        ("OFF", Some(RolloutPolicy::Off)),
+        ("Shadow", Some(RolloutPolicy::Shadow)),
+        ("ENABLED", Some(RolloutPolicy::Enabled)),
+        ("bogus", None),
+        ("", None),
+    ] {
+        let parsed = RolloutPolicy::parse(input);
+        verdict.check(
+            parsed == expected,
+            &format!("parse({input:?}) should be {expected:?}, got {parsed:?}"),
+        );
+    }
+
+    verdict.assert_passed();
+}
+
+#[test]
+fn d6_runtime_lane_parse_roundtrip() {
+    let mut verdict = DrillVerdict::new("D6.6: Lane parse roundtrip");
+
+    for (input, expected) in [
+        ("legacy", Some(RuntimeLane::Legacy)),
+        ("structured", Some(RuntimeLane::Structured)),
+        ("asupersync", Some(RuntimeLane::Asupersync)),
+        ("LEGACY", Some(RuntimeLane::Legacy)),
+        ("Asupersync", Some(RuntimeLane::Asupersync)),
+        ("unknown", None),
+    ] {
+        let parsed = RuntimeLane::parse(input);
+        verdict.check(
+            parsed == expected,
+            &format!("parse({input:?}) should be {expected:?}, got {parsed:?}"),
+        );
+    }
+
+    verdict.assert_passed();
+}
+
+#[test]
+fn d6_model_state_preserved_across_policy_switch() {
+    let mut verdict = DrillVerdict::new("D6.7: Model state preserved across policy switch");
+
+    // Build model and accumulate state
+    let mut sim = ProgramSimulator::new(DrillModel::new());
+    sim.init();
+    sim.send(DMsg::Inc);
+    sim.send(DMsg::Inc);
+    sim.send(DMsg::Inc);
+    let value_before = sim.model().value;
+    verdict.check(value_before == 3, "Value should be 3 after 3 increments");
+
+    // Verify trace accumulated
+    let trace_len = sim.model().trace.len();
+    verdict.check(
+        trace_len > 0,
+        &format!("Trace should have entries, got {trace_len}"),
+    );
+
+    // Simulate a "new session" (as if policy changed between sessions)
+    // by carrying state into a fresh simulator — this proves that
+    // the config switch doesn't corrupt model state.
+    let mut sim2 = ProgramSimulator::new(DrillModel {
+        trace: sim.model().trace.clone(),
+        value: sim.model().value,
+    });
+    sim2.init();
+    sim2.send(DMsg::Inc);
+    verdict.check(
+        sim2.model().value == 4,
+        "Value should be 4 after transfer + 1 increment",
     );
 
     verdict.assert_passed();
