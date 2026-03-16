@@ -185,10 +185,7 @@ fn i03_task_routes_through_update() {
 
 #[test]
 fn i04_quit_halts_batch() {
-    let mut sim = new_sim();
-    sim.send(MMsg::Step("before".into()));
-
-    // Manually construct batch with quit in middle
+    // Use a dedicated model that emits Batch with Quit in the middle.
     struct QuitBatchModel {
         trace: Vec<String>,
     }

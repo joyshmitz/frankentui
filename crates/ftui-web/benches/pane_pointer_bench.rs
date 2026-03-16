@@ -82,6 +82,42 @@ fn bench_pane_pointer_lifecycle(c: &mut Criterion) {
         });
     });
 
+    group.bench_function("down_ack_move_pause_reverse_120_up", |b| {
+        b.iter(|| {
+            let mut adapter = PanePointerCaptureAdapter::new(PanePointerCaptureConfig::default())
+                .expect("default adapter config should be valid");
+
+            let down = adapter.pointer_down(
+                target(),
+                29,
+                PanePointerButton::Primary,
+                pos(8, 8),
+                modifiers,
+            );
+            black_box(down.log.sequence);
+            let ack = adapter.capture_acquired(29);
+            black_box(ack.log.phase);
+
+            for step in 0..40 {
+                let dispatch = adapter.pointer_move(29, pos(9 + step, 8), modifiers);
+                black_box(dispatch.motion.map(|motion| motion.direction_changes));
+            }
+
+            for _ in 0..40 {
+                let dispatch = adapter.pointer_move(29, pos(48, 8), modifiers);
+                black_box(dispatch.motion.map(|motion| motion.direction_changes));
+            }
+
+            for step in 0..40 {
+                let dispatch = adapter.pointer_move(29, pos(47 - step, 8), modifiers);
+                black_box(dispatch.motion.map(|motion| motion.direction_changes));
+            }
+
+            let up = adapter.pointer_up(29, PanePointerButton::Primary, pos(8, 8), modifiers);
+            black_box(up.inertial_throw);
+        });
+    });
+
     group.bench_function("blur_after_ack", |b| {
         b.iter(|| {
             let mut adapter = PanePointerCaptureAdapter::new(PanePointerCaptureConfig::default())

@@ -92,7 +92,7 @@ impl ReplayBundle {
         }
 
         report.push_str("\n--- Replay Instructions ---\n");
-        report.push_str("1. Create model with DrillModel::new()\n");
+        report.push_str("1. Create model with ArtifactModel { trace: vec![] }\n");
         report.push_str("2. Call sim.init()\n");
         for (i, input) in self.inputs.iter().enumerate() {
             report.push_str(&format!("3.{i}. sim.send({input})\n"));
