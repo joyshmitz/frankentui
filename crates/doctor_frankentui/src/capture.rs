@@ -1245,8 +1245,7 @@ fn run_vhs_with_docker(
 
     eprintln!(
         "[doctor:subprocess] docker vhs spawned pid={} timeout={}s",
-        docker_pid,
-        cfg.capture_timeout_seconds
+        docker_pid, cfg.capture_timeout_seconds
     );
 
     let status = child.wait_timeout(timeout)?;
@@ -1571,8 +1570,7 @@ fn run_vhs_with_driver(
 
     eprintln!(
         "[doctor:subprocess] vhs spawned pid={} timeout={}s",
-        child_pid,
-        cfg.capture_timeout_seconds
+        child_pid, cfg.capture_timeout_seconds
     );
 
     let mut vhs_exit = loop {
