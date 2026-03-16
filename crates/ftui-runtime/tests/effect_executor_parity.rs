@@ -76,18 +76,12 @@ impl Model for ParityModel {
             }
             PMsg::Batch(items) => {
                 self.trace.push(format!("batch:{}", items.len()));
-                let cmds: Vec<_> = items
-                    .into_iter()
-                    .map(|s| Cmd::msg(PMsg::Step(s)))
-                    .collect();
+                let cmds: Vec<_> = items.into_iter().map(|s| Cmd::msg(PMsg::Step(s))).collect();
                 Cmd::batch(cmds)
             }
             PMsg::Sequence(items) => {
                 self.trace.push(format!("seq:{}", items.len()));
-                let cmds: Vec<_> = items
-                    .into_iter()
-                    .map(|s| Cmd::msg(PMsg::Step(s)))
-                    .collect();
+                let cmds: Vec<_> = items.into_iter().map(|s| Cmd::msg(PMsg::Step(s))).collect();
                 Cmd::sequence(cmds)
             }
             PMsg::Nested(depth) => {
@@ -186,11 +180,8 @@ fn parity_happy_path_basic_steps() {
 
 #[test]
 fn parity_batch_preserves_order() {
-    let (trace, _, _, _) = run_scenario(vec![PMsg::Batch(vec![
-        "x".into(),
-        "y".into(),
-        "z".into(),
-    ])]);
+    let (trace, _, _, _) =
+        run_scenario(vec![PMsg::Batch(vec!["x".into(), "y".into(), "z".into()])]);
 
     assert_eq!(
         trace,
@@ -314,10 +305,7 @@ fn parity_nested_recursion_depth_10() {
 
     // Should have nested:10, nested:9, ..., nested:0
     for i in 0..=10 {
-        assert!(
-            trace.contains(&format!("nested:{i}")),
-            "missing nested:{i}"
-        );
+        assert!(trace.contains(&format!("nested:{i}")), "missing nested:{i}");
     }
 }
 
@@ -334,7 +322,13 @@ fn parity_large_batch_100_items() {
     let step_positions: Vec<usize> = trace
         .iter()
         .enumerate()
-        .filter_map(|(i, s)| if s.starts_with("step:item-") { Some(i) } else { None })
+        .filter_map(|(i, s)| {
+            if s.starts_with("step:item-") {
+                Some(i)
+            } else {
+                None
+            }
+        })
         .collect();
     assert_eq!(step_positions.len(), 100);
     // Items should be in ascending order
@@ -378,10 +372,7 @@ fn parity_on_shutdown_runs_after_quit() {
 
     let quit_pos = trace.iter().position(|s| s == "quit").unwrap();
     let shutdown_pos = trace.iter().position(|s| s == "on_shutdown").unwrap();
-    assert!(
-        shutdown_pos > quit_pos,
-        "on_shutdown must run after quit"
-    );
+    assert!(shutdown_pos > quit_pos, "on_shutdown must run after quit");
 }
 
 // ============================================================================
@@ -419,14 +410,8 @@ fn parity_shadow_comparison_deterministic() {
     // All runs must produce identical traces
     let (ref_trace, _, ref_logs, ref_running) = &results[0];
     for (i, (trace, _, logs, running)) in results.iter().enumerate().skip(1) {
-        assert_eq!(
-            trace, ref_trace,
-            "run {i} trace diverged from run 0"
-        );
-        assert_eq!(
-            logs, ref_logs,
-            "run {i} logs diverged from run 0"
-        );
+        assert_eq!(trace, ref_trace, "run {i} trace diverged from run 0");
+        assert_eq!(logs, ref_logs, "run {i} logs diverged from run 0");
         assert_eq!(
             running, ref_running,
             "run {i} running state diverged from run 0"
@@ -478,10 +463,7 @@ fn parity_shadow_comparison_quit_cutoff_deterministic() {
 
     let (ref_trace, _, _, _) = &results[0];
     for (i, (trace, _, _, _)) in results.iter().enumerate().skip(1) {
-        assert_eq!(
-            trace, ref_trace,
-            "quit-cutoff run {i} diverged from run 0"
-        );
+        assert_eq!(trace, ref_trace, "quit-cutoff run {i} diverged from run 0");
     }
 
     // Verify exact cutoff
@@ -502,7 +484,11 @@ fn parity_effect_metrics_command_counter() {
     });
 
     let after = ftui_runtime::effect_system::effects_command_total();
-    assert_eq!(after, before + 1, "trace_command_effect must increment counter by 1");
+    assert_eq!(
+        after,
+        before + 1,
+        "trace_command_effect must increment counter by 1"
+    );
 }
 
 #[test]

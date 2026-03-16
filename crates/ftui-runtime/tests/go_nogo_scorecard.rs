@@ -87,7 +87,11 @@ impl Model for GateModel {
             }
             GMsg::Nested(d) => {
                 self.trace.push(format!("n:{d}"));
-                if d > 0 { Cmd::msg(GMsg::Nested(d - 1)) } else { Cmd::none() }
+                if d > 0 {
+                    Cmd::msg(GMsg::Nested(d - 1))
+                } else {
+                    Cmd::none()
+                }
             }
             GMsg::Log(t) => {
                 self.trace.push(format!("log:{t}"));
@@ -115,9 +119,15 @@ impl Model for GateModel {
 fn run(msgs: Vec<GMsg>) -> (Vec<String>, Vec<String>, bool) {
     let mut sim = ProgramSimulator::new(GateModel { trace: vec![] });
     sim.init();
-    for m in msgs { sim.send(m); }
+    for m in msgs {
+        sim.send(m);
+    }
     let _ = sim.model_mut().on_shutdown();
-    (sim.model().trace.clone(), sim.logs().to_vec(), sim.is_running())
+    (
+        sim.model().trace.clone(),
+        sim.logs().to_vec(),
+        sim.is_running(),
+    )
 }
 
 // ============================================================================
@@ -140,10 +150,7 @@ fn g1_batch_ordering_parity() {
 #[test]
 fn g1_sequence_ordering_parity() {
     let (trace, _, _) = run(vec![GMsg::Seq(vec!["x".into(), "y".into()])]);
-    assert_eq!(
-        trace,
-        vec!["init", "seq:2", "step:x", "step:y", "shutdown"]
-    );
+    assert_eq!(trace, vec!["init", "seq:2", "step:x", "step:y", "shutdown"]);
 }
 
 /// GATE G1.3: Task results route through update deterministically.
@@ -152,7 +159,9 @@ fn g1_task_routing_parity() {
     let (trace, _, _) = run(vec![GMsg::Task("t1".into()), GMsg::Task("t2".into())]);
     assert_eq!(
         trace,
-        vec!["init", "task:t1", "done:t1", "task:t2", "done:t2", "shutdown"]
+        vec![
+            "init", "task:t1", "done:t1", "task:t2", "done:t2", "shutdown"
+        ]
     );
 }
 
@@ -186,7 +195,10 @@ fn g2_no_processing_after_quit() {
         GMsg::Quit,
         GMsg::Step("after".into()),
     ]);
-    assert!(!trace.contains(&"step:after".to_string()), "G2.3: post-quit messages must be dropped");
+    assert!(
+        !trace.contains(&"step:after".to_string()),
+        "G2.3: post-quit messages must be dropped"
+    );
 }
 
 // ============================================================================
@@ -196,8 +208,10 @@ fn g2_no_processing_after_quit() {
 /// GATE G3.1: INLINE_ACTIVE_WIDGETS gauge is balanced.
 #[test]
 fn g3_inline_gauge_balanced() {
-    use ftui_runtime::terminal_writer::{ScreenMode, TerminalWriter, UiAnchor, inline_active_widgets};
     use ftui_core::terminal_capabilities::TerminalCapabilities;
+    use ftui_runtime::terminal_writer::{
+        ScreenMode, TerminalWriter, UiAnchor, inline_active_widgets,
+    };
 
     let before = inline_active_widgets();
     let output = Vec::new();
@@ -222,8 +236,8 @@ fn g3_inline_gauge_balanced() {
 #[test]
 fn g4_cancellation_stops_work() {
     use ftui_runtime::cancellation::CancellationSource;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     let source = CancellationSource::new();
     let token = source.token();
@@ -240,7 +254,10 @@ fn g4_cancellation_stops_work() {
     std::thread::sleep(Duration::from_millis(30));
     source.cancel();
     h.join().unwrap();
-    assert!(stopped.load(Ordering::SeqCst), "G4.1: cancellation must stop work");
+    assert!(
+        stopped.load(Ordering::SeqCst),
+        "G4.1: cancellation must stop work"
+    );
 }
 
 /// GATE G4.2: StopSignal exposes cancellation token.
@@ -269,11 +286,19 @@ fn g5_process_subscription_id_stable() {
         ProcessSubscription::new("echo", |e| format!("{e:?}")).arg("hello");
     let s2: ProcessSubscription<String> =
         ProcessSubscription::new("echo", |e| format!("{e:?}")).arg("hello");
-    assert_eq!(s1.id(), s2.id(), "G5.1: identical configs must produce stable ID");
+    assert_eq!(
+        s1.id(),
+        s2.id(),
+        "G5.1: identical configs must produce stable ID"
+    );
 
     let s3: ProcessSubscription<String> =
         ProcessSubscription::new("echo", |e| format!("{e:?}")).arg("world");
-    assert_ne!(s1.id(), s3.id(), "G5.1: different args must produce different ID");
+    assert_ne!(
+        s1.id(),
+        s3.id(),
+        "G5.1: different args must produce different ID"
+    );
 }
 
 // ============================================================================
@@ -341,8 +366,14 @@ fn g7_deterministic_complex_scenario() {
 #[test]
 fn g8_deep_recursion() {
     let (trace, _, _) = run(vec![GMsg::Nested(50)]);
-    assert!(trace.contains(&"n:0".to_string()), "G8.1: must reach depth 0");
-    assert!(trace.contains(&"n:50".to_string()), "G8.1: must start at depth 50");
+    assert!(
+        trace.contains(&"n:0".to_string()),
+        "G8.1: must reach depth 0"
+    );
+    assert!(
+        trace.contains(&"n:50".to_string()),
+        "G8.1: must start at depth 50"
+    );
 }
 
 /// GATE G8.2: Large batch (200 items) completes with correct ordering.

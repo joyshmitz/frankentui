@@ -12,8 +12,8 @@ use ftui_core::event::Event;
 use ftui_render::frame::Frame;
 use ftui_runtime::program::{Cmd, Model};
 use ftui_runtime::simulator::ProgramSimulator;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 // ============================================================================

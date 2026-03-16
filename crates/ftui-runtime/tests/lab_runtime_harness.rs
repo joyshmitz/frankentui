@@ -286,12 +286,7 @@ impl Model for LabModel {
             }
             LMsg::BatchPush(items) => {
                 self.values.push(format!("batch:{}", items.len()));
-                Cmd::batch(
-                    items
-                        .into_iter()
-                        .map(|s| Cmd::msg(LMsg::Push(s)))
-                        .collect(),
-                )
+                Cmd::batch(items.into_iter().map(|s| Cmd::msg(LMsg::Push(s))).collect())
             }
             LMsg::TaskPush(label) => {
                 self.values.push(format!("task-spawn:{label}"));
@@ -346,10 +341,7 @@ fn harness_basic_send_and_trace() {
     h.push_assert_running();
     h.run();
 
-    assert_eq!(
-        h.model().values,
-        vec!["init", "hello", "world"]
-    );
+    assert_eq!(h.model().values, vec!["init", "hello", "world"]);
     // Trace should have: init + 2 sends + 1 assert = 4 entries
     assert_eq!(h.trace().len(), 4);
     assert_eq!(h.trace()[0].step_type, "init");
@@ -387,10 +379,7 @@ fn harness_batch_execution() {
     h.push_assert_running();
     h.run();
 
-    assert_eq!(
-        h.model().values,
-        vec!["init", "batch:3", "x", "y", "z"]
-    );
+    assert_eq!(h.model().values, vec!["init", "batch:3", "x", "y", "z"]);
 }
 
 #[test]

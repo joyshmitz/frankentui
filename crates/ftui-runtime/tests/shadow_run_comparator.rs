@@ -189,21 +189,11 @@ impl Model for ShadowModel {
             }
             SMsg::Batch(items) => {
                 self.trace.push(format!("batch:{}", items.len()));
-                Cmd::batch(
-                    items
-                        .into_iter()
-                        .map(|s| Cmd::msg(SMsg::Step(s)))
-                        .collect(),
-                )
+                Cmd::batch(items.into_iter().map(|s| Cmd::msg(SMsg::Step(s))).collect())
             }
             SMsg::Sequence(items) => {
                 self.trace.push(format!("seq:{}", items.len()));
-                Cmd::sequence(
-                    items
-                        .into_iter()
-                        .map(|s| Cmd::msg(SMsg::Step(s)))
-                        .collect(),
-                )
+                Cmd::sequence(items.into_iter().map(|s| Cmd::msg(SMsg::Step(s))).collect())
             }
             SMsg::Nested(depth) => {
                 self.trace.push(format!("nested:{depth}"));
@@ -355,12 +345,7 @@ fn shadow_sequence_ordering() {
 fn shadow_task_execution() {
     shadow_compare(
         "task_execution",
-        || {
-            vec![
-                SMsg::Task("alpha".into()),
-                SMsg::Task("beta".into()),
-            ]
-        },
+        || vec![SMsg::Task("alpha".into()), SMsg::Task("beta".into())],
         &[(40, 10)],
     );
 }
@@ -374,12 +359,7 @@ fn shadow_nested_recursion() {
 fn shadow_log_output() {
     shadow_compare(
         "log_output",
-        || {
-            vec![
-                SMsg::Log("hello".into()),
-                SMsg::Log("world".into()),
-            ]
-        },
+        || vec![SMsg::Log("hello".into()), SMsg::Log("world".into())],
         &[],
     );
 }
@@ -406,11 +386,7 @@ fn shadow_quit_stops_processing() {
 
 #[test]
 fn shadow_quit_in_batch() {
-    shadow_compare(
-        "quit_in_batch",
-        || vec![SMsg::QuitInBatch(3)],
-        &[],
-    );
+    shadow_compare("quit_in_batch", || vec![SMsg::QuitInBatch(3)], &[]);
 }
 
 #[test]
@@ -487,10 +463,7 @@ fn shadow_deterministic_across_multiple_runs() {
     }
 
     for (i, r) in results.iter().enumerate().skip(1) {
-        assert_eq!(
-            r.trace, results[0].trace,
-            "run {i} trace diverged"
-        );
+        assert_eq!(r.trace, results[0].trace, "run {i} trace diverged");
         assert_eq!(
             r.frame_hashes, results[0].frame_hashes,
             "run {i} frame hashes diverged"
