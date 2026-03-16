@@ -922,7 +922,7 @@ mod tests {
                 < first
                     .pressure_snap_profile()
                     .expect("pressure profile should be derived from motion")
-                    .strength_bps
+                .strength_bps
         );
     }
 
