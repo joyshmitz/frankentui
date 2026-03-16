@@ -85,7 +85,10 @@ impl ReplayBundle {
         let mut report = String::new();
         report.push_str(&format!("=== Triage Report: {} ===\n", self.scenario));
         report.push_str(&format!("Lane: {}\n", self.lane));
-        report.push_str(&format!("Verdict: {}\n", if self.passed { "PASS" } else { "FAIL" }));
+        report.push_str(&format!(
+            "Verdict: {}\n",
+            if self.passed { "PASS" } else { "FAIL" }
+        ));
 
         if let Some(ref reason) = self.failure_reason {
             report.push_str(&format!("Failure: {reason}\n"));
@@ -234,7 +237,10 @@ fn artifact_replay_bundle_detects_mismatch() {
     assert!(!bundle.passed);
     assert!(bundle.failure_reason.is_some());
     let reason = bundle.failure_reason.as_ref().unwrap();
-    assert!(reason.contains("Trace mismatch"), "reason should mention mismatch");
+    assert!(
+        reason.contains("Trace mismatch"),
+        "reason should mention mismatch"
+    );
 }
 
 #[test]
@@ -298,7 +304,10 @@ fn artifact_happy_path_complete() {
 
     // Artifact completeness checks
     assert!(!bundle.inputs.is_empty(), "inputs must be recorded");
-    assert!(!bundle.expected_trace.is_empty(), "expected trace must be set");
+    assert!(
+        !bundle.expected_trace.is_empty(),
+        "expected trace must be set"
+    );
     assert!(!bundle.actual_trace.is_empty(), "actual trace must be set");
     assert_eq!(bundle.scenario, "happy_path");
     assert_eq!(bundle.lane, RuntimeLane::Structured);

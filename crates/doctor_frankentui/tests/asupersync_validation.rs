@@ -170,7 +170,10 @@ fn v2_decision_record_append_jsonl() {
     let parsed2: DecisionRecord = serde_json::from_str(lines[1]).expect("parse line 2");
     assert_eq!(parsed1.action, "spawn");
     assert_eq!(parsed2.action, "complete");
-    assert_eq!(parsed1.trace_id, parsed2.trace_id, "trace_id must be consistent");
+    assert_eq!(
+        parsed1.trace_id, parsed2.trace_id,
+        "trace_id must be consistent"
+    );
 }
 
 /// V2.3: DecisionRecord captures fallback state.
@@ -371,7 +374,10 @@ fn v5_decision_record_deterministic() {
 
     let j1 = serde_json::to_string(&make_record()).expect("s1");
     let j2 = serde_json::to_string(&make_record()).expect("s2");
-    assert_eq!(j1, j2, "decision record serialization must be deterministic");
+    assert_eq!(
+        j1, j2,
+        "decision record serialization must be deterministic"
+    );
 }
 
 /// V5.3: JSONL append order is deterministic.
