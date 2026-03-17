@@ -349,6 +349,10 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
     let ui = output_for(&integration);
     let mut client = RpcClient::new(&config)?;
 
+    let _ = client.log_line(&format!(
+        "event=seed_start endpoint={} project_key={} agent_a={} agent_b={} messages={}",
+        client.endpoint, config.project_key, config.agent_a, config.agent_b, config.messages
+    ));
     ui.info(&format!("waiting for MCP server at {}", client.endpoint));
     wait_for_server(&mut client, config.timeout_seconds)?;
     ui.info("seeding demo data");
@@ -396,6 +400,9 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
                 "body_md": format!("Seeded by doctor_frankentui run. Iteration {i}."),
             }),
         )?;
+        let _ = client.log_line(&format!(
+            "event=seed_message_sent iteration={i} from_agent={from_agent} to_agent={to_agent}"
+        ));
     }
 
     client.call_tool(
@@ -427,9 +434,17 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
             "reason": "doctor-frankentui-demo",
         }),
     ) {
+        let _ = client.log_line(&format!(
+            "event=seed_reservation_warning agent_name={} reason={error}",
+            config.agent_a
+        ));
         ui.warning(&format!("file_reservation_paths failed: {error}"));
     }
 
+    let _ = client.log_line(&format!(
+        "event=seed_complete endpoint={} project_key={} agent_a={} agent_b={} messages={}",
+        client.endpoint, config.project_key, config.agent_a, config.agent_b, config.messages
+    ));
     ui.success("seed complete");
     ui.info(&format!("project_key: {}", config.project_key));
     ui.info(&format!("agents: {}, {}", config.agent_a, config.agent_b));

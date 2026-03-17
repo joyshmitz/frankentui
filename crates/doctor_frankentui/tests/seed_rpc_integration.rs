@@ -346,7 +346,7 @@ fn seed_demo_run_seed_demo_wrapper_converts_args_and_succeeds() {
         agent_b: "SeedBeta".to_string(),
         messages: 2,
         timeout_seconds: 3,
-        log_file: Some(log_file),
+        log_file: Some(log_file.clone()),
     })
     .expect("run_seed_demo should succeed");
 
@@ -364,6 +364,16 @@ fn seed_demo_run_seed_demo_wrapper_converts_args_and_succeeds() {
         .filter(|entry| entry.tool.as_deref() == Some("send_message"))
         .collect();
     assert_eq!(send_messages.len(), 2);
+
+    let log = std::fs::read_to_string(&log_file).expect("read seed args log");
+    assert!(log.contains("event=seed_start"));
+    assert!(
+        log.contains("event=seed_message_sent iteration=1 from_agent=SeedAlpha to_agent=SeedBeta")
+    );
+    assert!(
+        log.contains("event=seed_message_sent iteration=2 from_agent=SeedBeta to_agent=SeedAlpha")
+    );
+    assert!(log.contains("event=seed_complete"));
 
     let first_send_body: Value =
         serde_json::from_str(&send_messages[0].request_body).expect("parse send_message payload");
@@ -458,10 +468,15 @@ fn seed_demo_retries_transient_failures_and_preserves_auth_and_path() {
     assert_eq!(counts.get("fetch_inbox"), Some(&2));
 
     let log = std::fs::read_to_string(&log_file).expect("read seed log");
+    assert!(log.contains("event=seed_start"));
     assert!(log.contains("event=server_ready"));
     assert!(log.contains("event=rpc_retry_scheduled method=ensure_project"));
     assert!(log.contains("event=rpc_retry_scheduled method=send_message"));
     assert!(log.contains("event=rpc_retry_scheduled method=fetch_inbox"));
+    assert!(
+        log.contains("event=seed_message_sent iteration=1 from_agent=SeedAlpha to_agent=SeedBeta")
+    );
+    assert!(log.contains("event=seed_complete"));
 
     let transcript = std::fs::read_to_string(&transcript_path).expect("read transcript");
     assert!(transcript.contains("\"tool\":\"ensure_project\""));
@@ -587,6 +602,8 @@ fn seed_demo_wait_loop_recovers_when_health_becomes_ready() {
 
 #[test]
 fn seed_demo_reservation_failure_is_warning_only_and_command_still_succeeds() {
+    let temp = tempdir().expect("tempdir");
+    let log_file = temp.path().join("seed_reservation_warning.log");
     let server = start_scripted_server(vec![
         ScriptedResponse::success("health_check"),
         ScriptedResponse::success("ensure_project"),
@@ -630,7 +647,7 @@ fn seed_demo_reservation_failure_is_warning_only_and_command_still_succeeds() {
         ),
     ]);
 
-    let config = configured_seed_run(&server.endpoint, "mcp", "", None, 3);
+    let config = configured_seed_run(&server.endpoint, "mcp", "", Some(log_file.clone()), 3);
     run_seed_with_config(config).expect("file_reservation_paths failure should be warning-only");
 
     let entries = server.transcripts.lock().expect("transcript lock").clone();
@@ -639,4 +656,8 @@ fn seed_demo_reservation_failure_is_warning_only_and_command_still_succeeds() {
         .filter(|entry| entry.tool.as_deref() == Some("file_reservation_paths"))
         .count();
     assert_eq!(reservation_attempts, 3);
+
+    let log = std::fs::read_to_string(&log_file).expect("read reservation warning log");
+    assert!(log.contains("event=seed_reservation_warning agent_name=SeedAlpha"));
+    assert!(log.contains("event=seed_complete"));
 }

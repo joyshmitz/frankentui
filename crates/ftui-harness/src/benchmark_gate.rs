@@ -624,4 +624,93 @@ mod tests {
         assert_eq!(result.pass_count, 0);
         assert_eq!(result.fail_count, 0);
     }
+
+    // =========================================================================
+    // Runtime benchmark gate tests (bd-1vb19)
+    // =========================================================================
+
+    #[test]
+    fn load_baseline_includes_runtime_benchmarks() {
+        let json = include_str!("../../../tests/baseline.json");
+        let gate = BenchmarkGate::load_baseline_json("runtime_gate", json, "p99_ns")
+            .expect("baseline.json should parse");
+
+        // Verify runtime benchmarks were loaded
+        let metrics: Vec<&str> = gate
+            .thresholds
+            .keys()
+            .filter(|k| k.starts_with("runtime_"))
+            .map(|k| k.as_str())
+            .collect();
+        assert!(
+            metrics.contains(&"runtime_shutdown_latency"),
+            "shutdown_latency baseline should be loaded"
+        );
+        assert!(
+            metrics.contains(&"runtime_first_frame"),
+            "first_frame baseline should be loaded"
+        );
+        assert!(
+            metrics.contains(&"runtime_command_roundtrip"),
+            "command_roundtrip baseline should be loaded"
+        );
+        assert!(
+            metrics.contains(&"runtime_effect_queue_drain"),
+            "effect_queue_drain baseline should be loaded"
+        );
+    }
+
+    #[test]
+    fn runtime_gate_passes_within_budget() {
+        let json = include_str!("../../../tests/baseline.json");
+        let gate = BenchmarkGate::load_baseline_json("runtime_gate", json, "p99_ns")
+            .expect("baseline.json should parse");
+
+        // Simulate measurements well within budget
+        let measurements = vec![
+            Measurement::new("runtime_shutdown_latency", 1_000_000.0).unit("ns"),
+            Measurement::new("runtime_first_frame", 5_000_000.0).unit("ns"),
+            Measurement::new("runtime_command_roundtrip", 100_000.0).unit("ns"),
+            Measurement::new("runtime_effect_queue_drain", 500_000.0).unit("ns"),
+        ];
+        let result = gate.evaluate(&measurements);
+        assert!(result.passed(), "all runtime metrics should pass: {}", result.summary());
+    }
+
+    #[test]
+    fn runtime_gate_fails_on_regression() {
+        let json = include_str!("../../../tests/baseline.json");
+        let gate = BenchmarkGate::load_baseline_json("runtime_gate", json, "p99_ns")
+            .expect("baseline.json should parse");
+
+        // Simulate a severe regression on shutdown latency
+        let measurements = vec![
+            Measurement::new("runtime_shutdown_latency", 100_000_000.0).unit("ns"), // 100ms, way over 5ms budget
+            Measurement::new("runtime_first_frame", 5_000_000.0).unit("ns"),
+        ];
+        let result = gate.evaluate(&measurements);
+        assert!(!result.passed(), "regression should fail the gate");
+        assert!(result.fail_count >= 1);
+
+        let failures = result.failures();
+        assert!(
+            failures.iter().any(|f| f.metric == "runtime_shutdown_latency"),
+            "shutdown latency should be the failing metric"
+        );
+    }
+
+    #[test]
+    fn runtime_gate_summary_readable() {
+        let json = include_str!("../../../tests/baseline.json");
+        let gate = BenchmarkGate::load_baseline_json("runtime_gate", json, "p99_ns")
+            .expect("baseline.json should parse");
+
+        let measurements = vec![
+            Measurement::new("runtime_shutdown_latency", 4_000_000.0).unit("ns"),
+        ];
+        let result = gate.evaluate(&measurements);
+        let summary = result.summary();
+        assert!(summary.contains("runtime_shutdown_latency"));
+        assert!(summary.contains("PASS") || summary.contains("ok"));
+    }
 }

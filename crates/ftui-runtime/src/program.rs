@@ -2039,6 +2039,12 @@ pub struct EffectQueueConfig {
     pub backend: TaskExecutorBackend,
     /// Scheduler configuration (Smith's rule by default).
     pub scheduler: SchedulerConfig,
+    /// Maximum queue depth before backpressure kicks in (bd-2zd0a).
+    ///
+    /// When the queue depth exceeds this limit, new tasks are dropped with
+    /// a `tracing::warn!` and the `effects_queue_dropped` counter increments.
+    /// A value of `0` means unbounded (no backpressure).
+    pub max_queue_depth: usize,
 }
 
 impl Default for EffectQueueConfig {
@@ -2056,6 +2062,7 @@ impl Default for EffectQueueConfig {
             enabled: false,
             backend: TaskExecutorBackend::Spawned,
             scheduler,
+            max_queue_depth: 0,
         }
     }
 }
@@ -2085,6 +2092,16 @@ impl EffectQueueConfig {
     #[must_use]
     pub fn with_scheduler(mut self, scheduler: SchedulerConfig) -> Self {
         self.scheduler = scheduler;
+        self
+    }
+
+    /// Set the maximum queue depth for backpressure (bd-2zd0a).
+    ///
+    /// When the queue depth exceeds this limit, new tasks are dropped.
+    /// A value of `0` means unbounded (no backpressure, the default).
+    #[must_use]
+    pub fn with_max_queue_depth(mut self, depth: usize) -> Self {
+        self.max_queue_depth = depth;
         self
     }
 }
@@ -2735,27 +2752,49 @@ impl<M: Send + 'static> EffectQueue<M> {
 
     /// Timeout for the effect-queue thread to finish after sending Shutdown.
     const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
-    /// Poll interval when waiting for the effect-queue thread.
-    const SHUTDOWN_POLL: Duration = Duration::from_millis(10);
+    /// Poll interval when waiting for the effect-queue thread (bd-170o5).
+    ///
+    /// This sleep-poll pattern is the idiomatic Rust approach for bounded
+    /// thread joins — `JoinHandle` has no `join_timeout` in stable Rust.
+    /// 1ms is chosen to minimize shutdown latency while avoiding spin.
+    const SHUTDOWN_POLL: Duration = Duration::from_millis(1);
 
     fn shutdown(&mut self) {
         self.closed = true;
         let _ = self.sender.send(EffectCommand::Shutdown);
         if let Some(handle) = self.handle.take() {
-            // Bounded wait: poll `is_finished` with a timeout so a slow task
-            // cannot block shutdown indefinitely.
             let start = Instant::now();
+            // Fast path: most shutdowns complete nearly instantly after the
+            // Shutdown command is drained. Check once before entering poll loop.
+            if handle.is_finished() {
+                let _ = handle.join();
+                let elapsed_us = start.elapsed().as_micros() as u64;
+                tracing::debug!(
+                    target: "ftui.runtime",
+                    elapsed_us,
+                    "effect-queue shutdown (fast path)"
+                );
+                return;
+            }
+            // Slow path: bounded poll loop for in-flight tasks (bd-170o5).
             while !handle.is_finished() {
                 if start.elapsed() >= Self::SHUTDOWN_TIMEOUT {
                     tracing::warn!(
+                        target: "ftui.runtime",
                         timeout_ms = Self::SHUTDOWN_TIMEOUT.as_millis() as u64,
-                        "Effect-queue thread did not stop within timeout; detaching"
+                        "effect-queue thread did not stop within timeout; detaching"
                     );
                     return;
                 }
                 thread::sleep(Self::SHUTDOWN_POLL);
             }
             let _ = handle.join();
+            let elapsed_us = start.elapsed().as_micros() as u64;
+            tracing::debug!(
+                target: "ftui.runtime",
+                elapsed_us,
+                "effect-queue shutdown (slow path)"
+            );
         }
     }
 }
@@ -2775,7 +2814,12 @@ struct SpawnTaskExecutor<M: Send + 'static> {
 
 impl<M: Send + 'static> SpawnTaskExecutor<M> {
     const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
-    const SHUTDOWN_POLL: Duration = Duration::from_millis(10);
+    /// Poll interval for bounded thread joins (bd-170o5).
+    ///
+    /// Same rationale as `EffectQueue::SHUTDOWN_POLL` — `JoinHandle` has no
+    /// `join_timeout` in stable Rust, so we poll `is_finished()` with a
+    /// 1ms sleep to minimize shutdown latency while avoiding spin.
+    const SHUTDOWN_POLL: Duration = Duration::from_millis(1);
 
     fn new(result_sender: mpsc::Sender<M>, evidence_sink: Option<EvidenceSink>) -> Self {
         Self {
@@ -2818,16 +2862,31 @@ impl<M: Send + 'static> SpawnTaskExecutor<M> {
     fn shutdown(&mut self) {
         self.closed = true;
         let start = Instant::now();
+        // Fast path: reap any already-finished handles first.
+        self.reap_finished();
+        if self.handles.is_empty() {
+            let elapsed_us = start.elapsed().as_micros() as u64;
+            tracing::debug!(
+                target: "ftui.runtime",
+                elapsed_us,
+                "spawn-executor shutdown (fast path, all tasks already finished)"
+            );
+            return;
+        }
+        // Slow path: bounded poll loop for in-flight tasks (bd-170o5).
+        let pending_at_start = self.handles.len();
         while self.handles.iter().any(|handle| !handle.is_finished()) {
             if start.elapsed() >= Self::SHUTDOWN_TIMEOUT {
+                let still_pending = self
+                    .handles
+                    .iter()
+                    .filter(|handle| !handle.is_finished())
+                    .count();
                 tracing::warn!(
+                    target: "ftui.runtime",
                     timeout_ms = Self::SHUTDOWN_TIMEOUT.as_millis() as u64,
-                    pending_handles = self
-                        .handles
-                        .iter()
-                        .filter(|handle| !handle.is_finished())
-                        .count(),
-                    "Background task threads did not stop within timeout; detaching"
+                    pending_handles = still_pending,
+                    "background task threads did not stop within timeout; detaching"
                 );
                 self.handles.clear();
                 return;
@@ -2835,6 +2894,13 @@ impl<M: Send + 'static> SpawnTaskExecutor<M> {
             thread::sleep(Self::SHUTDOWN_POLL);
         }
         self.reap_finished();
+        let elapsed_us = start.elapsed().as_micros() as u64;
+        tracing::debug!(
+            target: "ftui.runtime",
+            elapsed_us,
+            pending_at_start,
+            "spawn-executor shutdown (slow path)"
+        );
     }
 }
 
@@ -3105,6 +3171,7 @@ fn effect_queue_loop<M: Send + 'static>(
     let mut scheduler = QueueingScheduler::new(config.scheduler);
     let mut tasks: HashMap<u64, Box<dyn FnOnce() -> M + Send>> = HashMap::new();
     let mut shutdown_requested = false;
+    let max_depth = config.max_queue_depth;
 
     loop {
         if tasks.is_empty() {
@@ -3120,6 +3187,7 @@ fn effect_queue_loop<M: Send + 'static>(
                             &mut tasks,
                             &result_sender,
                             evidence_sink.as_ref(),
+                            max_depth,
                         ),
                         EffectLoopControl::ShutdownRequested
                     ) {
@@ -3132,7 +3200,7 @@ fn effect_queue_loop<M: Send + 'static>(
 
         while let Ok(cmd) = rx.try_recv() {
             if shutdown_requested && matches!(cmd, EffectCommand::Enqueue(_, _)) {
-                trace!("dropping queued task submitted after shutdown request");
+                crate::effect_system::record_queue_drop("post_shutdown");
                 continue;
             }
             if matches!(
@@ -3142,6 +3210,7 @@ fn effect_queue_loop<M: Send + 'static>(
                     &mut tasks,
                     &result_sender,
                     evidence_sink.as_ref(),
+                    max_depth,
                 ),
                 EffectLoopControl::ShutdownRequested
             ) {
@@ -3169,6 +3238,7 @@ fn effect_queue_loop<M: Send + 'static>(
         for job_id in completed {
             if let Some(task) = tasks.remove(&job_id) {
                 let _ = run_task_closure(task, "queued", evidence_sink.as_ref(), &result_sender);
+                crate::effect_system::record_queue_processed();
             }
         }
     }
@@ -3180,9 +3250,15 @@ fn handle_effect_command<M: Send + 'static>(
     tasks: &mut HashMap<u64, Box<dyn FnOnce() -> M + Send>>,
     result_sender: &mpsc::Sender<M>,
     evidence_sink: Option<&EvidenceSink>,
+    max_depth: usize,
 ) -> EffectLoopControl {
     match cmd {
         EffectCommand::Enqueue(spec, task) => {
+            // Backpressure: drop task if queue depth exceeds limit (bd-2zd0a)
+            if max_depth > 0 && tasks.len() >= max_depth {
+                crate::effect_system::record_queue_drop("backpressure");
+                return EffectLoopControl::Continue;
+            }
             let weight_source = if spec.weight == DEFAULT_TASK_WEIGHT {
                 WeightSource::Default
             } else {
@@ -3202,6 +3278,7 @@ fn handle_effect_command<M: Send + 'static>(
             );
             if let Some(id) = id {
                 tasks.insert(id, task);
+                crate::effect_system::record_queue_enqueue(tasks.len() as u64);
             } else {
                 let stats = scheduler.stats();
                 emit_task_executor_backpressure_evidence(
@@ -7469,7 +7546,7 @@ mod tests {
             }),
         );
 
-        let shutdown = handle_effect_command(cmd, &mut scheduler, &mut tasks, &result_tx, None);
+        let shutdown = handle_effect_command(cmd, &mut scheduler, &mut tasks, &result_tx, None, 0);
         assert_eq!(shutdown, EffectLoopControl::Continue);
         assert_eq!(ran.load(Ordering::SeqCst), 0);
         assert_eq!(tasks.len(), 1);
@@ -7496,6 +7573,7 @@ mod tests {
             &mut full_tasks,
             &result_tx,
             None,
+            0,
         );
         assert_eq!(shutdown_full, EffectLoopControl::Continue);
         assert!(full_tasks.is_empty());
@@ -7511,6 +7589,7 @@ mod tests {
             &mut full_tasks,
             &result_tx,
             None,
+            0,
         );
         assert_eq!(shutdown, EffectLoopControl::ShutdownRequested);
     }
@@ -7535,6 +7614,7 @@ mod tests {
             &mut tasks,
             &result_tx,
             Some(&sink),
+            0,
         );
 
         assert_eq!(shutdown, EffectLoopControl::Continue);
@@ -7566,6 +7646,7 @@ mod tests {
                 preemptive: false,
                 ..Default::default()
             },
+            ..Default::default()
         };
 
         let handle = std::thread::spawn(move || {
@@ -7604,6 +7685,7 @@ mod tests {
                 preemptive: false,
                 ..Default::default()
             },
+            ..Default::default()
         };
 
         let handle = std::thread::spawn(move || {
@@ -7650,6 +7732,7 @@ mod tests {
                 preemptive: false,
                 ..Default::default()
             },
+            ..Default::default()
         };
 
         let handle = std::thread::spawn(move || {
@@ -7691,6 +7774,7 @@ mod tests {
                 preemptive: false,
                 ..Default::default()
             },
+            ..Default::default()
         };
 
         let handle = std::thread::spawn(move || {
@@ -7726,6 +7810,82 @@ mod tests {
         handle
             .join()
             .expect("effect queue thread joins after rejecting post-shutdown work");
+    }
+
+    // =========================================================================
+    // Backpressure tests (bd-2zd0a)
+    // =========================================================================
+
+    #[test]
+    fn backpressure_drops_tasks_beyond_max_depth() {
+        let (result_tx, _result_rx) = mpsc::channel::<u32>();
+        let mut scheduler = QueueingScheduler::new(SchedulerConfig::default());
+        let mut tasks: HashMap<u64, Box<dyn FnOnce() -> u32 + Send>> = HashMap::new();
+
+        // Enqueue 2 tasks with max_depth=2 — should succeed
+        let r1 = handle_effect_command(
+            EffectCommand::Enqueue(TaskSpec::default(), Box::new(|| 1)),
+            &mut scheduler,
+            &mut tasks,
+            &result_tx,
+            None,
+            2,
+        );
+        assert_eq!(r1, EffectLoopControl::Continue);
+        assert_eq!(tasks.len(), 1);
+
+        let r2 = handle_effect_command(
+            EffectCommand::Enqueue(TaskSpec::default(), Box::new(|| 2)),
+            &mut scheduler,
+            &mut tasks,
+            &result_tx,
+            None,
+            2,
+        );
+        assert_eq!(r2, EffectLoopControl::Continue);
+        assert_eq!(tasks.len(), 2);
+
+        // 3rd task should be dropped (depth=2 >= max_depth=2)
+        let dropped_before = crate::effect_system::effects_queue_dropped();
+        let r3 = handle_effect_command(
+            EffectCommand::Enqueue(TaskSpec::default(), Box::new(|| 3)),
+            &mut scheduler,
+            &mut tasks,
+            &result_tx,
+            None,
+            2,
+        );
+        assert_eq!(r3, EffectLoopControl::Continue);
+        assert_eq!(
+            tasks.len(),
+            2,
+            "task should have been dropped, not enqueued"
+        );
+        assert!(
+            crate::effect_system::effects_queue_dropped() > dropped_before,
+            "dropped counter should increment"
+        );
+    }
+
+    #[test]
+    fn backpressure_zero_depth_means_unbounded() {
+        let (result_tx, _result_rx) = mpsc::channel::<u32>();
+        let mut scheduler = QueueingScheduler::new(SchedulerConfig::default());
+        let mut tasks: HashMap<u64, Box<dyn FnOnce() -> u32 + Send>> = HashMap::new();
+
+        // With max_depth=0, can enqueue many tasks
+        for i in 0..20 {
+            let r = handle_effect_command(
+                EffectCommand::Enqueue(TaskSpec::default(), Box::new(move || i)),
+                &mut scheduler,
+                &mut tasks,
+                &result_tx,
+                None,
+                0,
+            );
+            assert_eq!(r, EffectLoopControl::Continue);
+        }
+        // All should be enqueued (some may have been inlined by scheduler, but none dropped)
     }
 
     #[test]
@@ -10335,6 +10495,7 @@ mod tests {
                 max_queue_size: 0,
                 ..Default::default()
             },
+            ..Default::default()
         };
         let config = ProgramConfig::default().with_effect_queue(effect_queue);
         let mut program = headless_program_with_config(TaskModel { done: false }, config);

@@ -321,9 +321,7 @@ impl std::fmt::Display for RolloutSummary {
         writeln!(
             f,
             "Shadow: {}/{} scenarios matched ({} required)",
-            self.shadow_matches,
-            self.shadow_scenarios,
-            self.min_shadow_scenarios_required,
+            self.shadow_matches, self.shadow_scenarios, self.min_shadow_scenarios_required,
         )?;
         writeln!(
             f,

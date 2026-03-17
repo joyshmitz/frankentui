@@ -22,6 +22,10 @@ use web_time::Instant;
 
 static EFFECTS_COMMAND_TOTAL: AtomicU64 = AtomicU64::new(0);
 static EFFECTS_SUBSCRIPTION_TOTAL: AtomicU64 = AtomicU64::new(0);
+static EFFECTS_QUEUE_ENQUEUED: AtomicU64 = AtomicU64::new(0);
+static EFFECTS_QUEUE_PROCESSED: AtomicU64 = AtomicU64::new(0);
+static EFFECTS_QUEUE_DROPPED: AtomicU64 = AtomicU64::new(0);
+static EFFECTS_QUEUE_HIGH_WATER: AtomicU64 = AtomicU64::new(0);
 
 /// Total command effects executed (monotonic counter).
 #[must_use]
@@ -39,6 +43,99 @@ pub fn effects_subscription_total() -> u64 {
 #[must_use]
 pub fn effects_executed_total() -> u64 {
     effects_command_total() + effects_subscription_total()
+}
+
+// ---------------------------------------------------------------------------
+// Queue telemetry (bd-2zd0a)
+// ---------------------------------------------------------------------------
+
+/// Total tasks enqueued to the effect queue (monotonic counter).
+#[must_use]
+pub fn effects_queue_enqueued() -> u64 {
+    EFFECTS_QUEUE_ENQUEUED.load(Ordering::Relaxed)
+}
+
+/// Total tasks processed by the effect queue (monotonic counter).
+#[must_use]
+pub fn effects_queue_processed() -> u64 {
+    EFFECTS_QUEUE_PROCESSED.load(Ordering::Relaxed)
+}
+
+/// Total tasks dropped due to backpressure or shutdown (monotonic counter).
+#[must_use]
+pub fn effects_queue_dropped() -> u64 {
+    EFFECTS_QUEUE_DROPPED.load(Ordering::Relaxed)
+}
+
+/// High-water mark: maximum queue depth observed (ratchet — only increases).
+#[must_use]
+pub fn effects_queue_high_water() -> u64 {
+    EFFECTS_QUEUE_HIGH_WATER.load(Ordering::Relaxed)
+}
+
+/// Record a task enqueue, updating counters and high-water mark.
+pub fn record_queue_enqueue(current_depth: u64) {
+    EFFECTS_QUEUE_ENQUEUED.fetch_add(1, Ordering::Relaxed);
+    // Ratchet high-water mark upward.
+    let mut prev = EFFECTS_QUEUE_HIGH_WATER.load(Ordering::Relaxed);
+    while current_depth > prev {
+        match EFFECTS_QUEUE_HIGH_WATER.compare_exchange_weak(
+            prev,
+            current_depth,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(actual) => prev = actual,
+        }
+    }
+}
+
+/// Record a task processed by the effect queue.
+pub fn record_queue_processed() {
+    EFFECTS_QUEUE_PROCESSED.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Record a task dropped due to backpressure or shutdown.
+pub fn record_queue_drop(reason: &str) {
+    EFFECTS_QUEUE_DROPPED.fetch_add(1, Ordering::Relaxed);
+    tracing::warn!(
+        target: "ftui.effect",
+        reason = reason,
+        monotonic.counter.effects_queue_dropped_total = 1_u64,
+        "effect queue task dropped"
+    );
+}
+
+/// Snapshot of queue telemetry for operator dashboards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QueueTelemetry {
+    /// Total tasks enqueued (monotonic).
+    pub enqueued: u64,
+    /// Total tasks processed (monotonic).
+    pub processed: u64,
+    /// Total tasks dropped (monotonic).
+    pub dropped: u64,
+    /// Maximum queue depth observed.
+    pub high_water: u64,
+    /// Current in-flight: enqueued - processed - dropped.
+    pub in_flight: u64,
+}
+
+/// Snapshot the current queue telemetry counters.
+#[must_use]
+pub fn queue_telemetry() -> QueueTelemetry {
+    let enqueued = effects_queue_enqueued();
+    let processed = effects_queue_processed();
+    let dropped = effects_queue_dropped();
+    let in_flight = enqueued.saturating_sub(processed).saturating_sub(dropped);
+    QueueTelemetry {
+        enqueued,
+        processed,
+        dropped,
+        high_water: effects_queue_high_water(),
+        in_flight,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -480,6 +577,64 @@ mod tests {
         assert!(
             after > before,
             "subscription counter should increment: {before} → {after}"
+        );
+    }
+
+    // =========================================================================
+    // Queue telemetry tests (bd-2zd0a)
+    // =========================================================================
+
+    #[test]
+    fn queue_enqueue_increments_counter() {
+        let before = effects_queue_enqueued();
+        record_queue_enqueue(1);
+        let after = effects_queue_enqueued();
+        assert!(after > before, "enqueued counter should increment");
+    }
+
+    #[test]
+    fn queue_processed_increments_counter() {
+        let before = effects_queue_processed();
+        record_queue_processed();
+        let after = effects_queue_processed();
+        assert!(after > before, "processed counter should increment");
+    }
+
+    #[test]
+    fn queue_drop_increments_counter() {
+        let before = effects_queue_dropped();
+        record_queue_drop("test");
+        let after = effects_queue_dropped();
+        assert!(after > before, "dropped counter should increment");
+    }
+
+    #[test]
+    fn queue_high_water_ratchets_upward() {
+        let before = effects_queue_high_water();
+        let new_mark = before + 100;
+        record_queue_enqueue(new_mark);
+        assert!(
+            effects_queue_high_water() >= new_mark,
+            "high-water should ratchet to at least {new_mark}"
+        );
+        // Lower value should NOT reduce the high-water mark
+        record_queue_enqueue(1);
+        assert!(
+            effects_queue_high_water() >= new_mark,
+            "high-water should not decrease"
+        );
+    }
+
+    #[test]
+    fn queue_telemetry_snapshot_consistent() {
+        let snap = queue_telemetry();
+        // in_flight = enqueued - processed - dropped, all saturating
+        assert_eq!(
+            snap.in_flight,
+            snap.enqueued
+                .saturating_sub(snap.processed)
+                .saturating_sub(snap.dropped),
+            "in_flight should be enqueued - processed - dropped"
         );
     }
 }

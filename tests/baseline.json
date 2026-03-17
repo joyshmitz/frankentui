@@ -122,5 +122,51 @@
     "p99_ns":    10,
     "p999_ns":   25,
     "threshold_pct": 10
+  },
+
+  "_runtime_section": "User-visible runtime benchmarks (bd-1vb19)",
+
+  "runtime_shutdown_latency": {
+    "description": "Time from quit signal to terminal cleanup complete",
+    "category": "user-visible",
+    "crate": "ftui-runtime",
+    "p50_ns":    500000,
+    "p95_ns":   2000000,
+    "p99_ns":   5000000,
+    "p999_ns": 10000000,
+    "threshold_pct": 15
+  },
+
+  "runtime_first_frame": {
+    "description": "Time from Program::run() to first frame rendered",
+    "category": "user-visible",
+    "crate": "ftui-runtime",
+    "p50_ns":   1000000,
+    "p95_ns":   5000000,
+    "p99_ns":  10000000,
+    "p999_ns": 20000000,
+    "threshold_pct": 15
+  },
+
+  "runtime_command_roundtrip": {
+    "description": "Time from Cmd::msg() dispatch to model update completion",
+    "category": "user-visible",
+    "crate": "ftui-runtime",
+    "p50_ns":    50000,
+    "p95_ns":   200000,
+    "p99_ns":   500000,
+    "p999_ns": 1000000,
+    "threshold_pct": 10
+  },
+
+  "runtime_effect_queue_drain": {
+    "description": "Time to drain effect queue after shutdown signal",
+    "category": "user-visible",
+    "crate": "ftui-runtime",
+    "p50_ns":   100000,
+    "p95_ns":   500000,
+    "p99_ns":  2000000,
+    "p999_ns": 5000000,
+    "threshold_pct": 15
   }
 }
