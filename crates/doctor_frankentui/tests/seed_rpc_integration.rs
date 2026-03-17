@@ -381,6 +381,14 @@ fn seed_demo_run_seed_demo_wrapper_converts_args_and_succeeds() {
 
     let log = std::fs::read_to_string(&log_file).expect("read seed args log");
     assert!(log.contains("event=seed_start"));
+    assert!(log.contains("event=seed_stage_started stage=ensure_project"));
+    assert!(log.contains("event=seed_stage_completed stage=ensure_project"));
+    assert!(log.contains("event=seed_stage_started stage=send_message iteration=1 from_agent=SeedAlpha to_agent=SeedBeta"));
+    assert!(log.contains("event=seed_stage_completed stage=send_message iteration=1 from_agent=SeedAlpha to_agent=SeedBeta"));
+    assert!(log.contains("event=seed_stage_started stage=send_message iteration=2 from_agent=SeedBeta to_agent=SeedAlpha"));
+    assert!(log.contains("event=seed_stage_completed stage=send_message iteration=2 from_agent=SeedBeta to_agent=SeedAlpha"));
+    assert!(log.contains("event=seed_stage_completed stage=fetch_inbox"));
+    assert!(log.contains("event=seed_stage_completed stage=search_messages"));
     assert!(
         log.contains("event=seed_message_sent iteration=1 from_agent=SeedAlpha to_agent=SeedBeta")
     );
@@ -483,10 +491,15 @@ fn seed_demo_retries_transient_failures_and_preserves_auth_and_path() {
 
     let log = std::fs::read_to_string(&log_file).expect("read seed log");
     assert!(log.contains("event=seed_start"));
+    assert!(log.contains("event=seed_stage_started stage=ensure_project"));
     assert!(log.contains("event=server_ready"));
     assert!(log.contains("event=rpc_retry_scheduled method=ensure_project"));
     assert!(log.contains("event=rpc_retry_scheduled method=send_message"));
     assert!(log.contains("event=rpc_retry_scheduled method=fetch_inbox"));
+    assert!(log.contains("event=seed_stage_started stage=send_message iteration=1 from_agent=SeedAlpha to_agent=SeedBeta"));
+    assert!(log.contains("event=seed_stage_failed stage=send_message iteration=1 from_agent=SeedAlpha to_agent=SeedBeta"));
+    assert!(log.contains("event=seed_stage_completed stage=send_message iteration=1 from_agent=SeedAlpha to_agent=SeedBeta"));
+    assert!(log.contains("event=seed_stage_completed stage=fetch_inbox"));
     assert!(
         log.contains("event=seed_message_sent iteration=1 from_agent=SeedAlpha to_agent=SeedBeta")
     );
@@ -560,6 +573,7 @@ fn seed_demo_non_json_retries_exhaust_and_surface_clear_error() {
     assert_eq!(ensure_project_attempts, 3);
 
     let log = std::fs::read_to_string(&log_file).expect("read retry exhaust log");
+    assert!(log.contains("event=seed_stage_failed stage=ensure_project"));
     assert!(log.contains("event=rpc_retry_scheduled method=ensure_project attempt=1"));
     assert!(log.contains("event=rpc_retry_scheduled method=ensure_project attempt=2"));
     assert!(log.contains("event=rpc_retry_exhausted method=ensure_project attempt=3"));
@@ -586,6 +600,8 @@ fn seed_demo_deadline_expires_mid_run_after_readiness() {
     let log = std::fs::read_to_string(&log_file).expect("read midrun timeout log");
     assert!(log.contains("event=seed_start"));
     assert!(log.contains("event=server_ready"));
+    assert!(log.contains("event=seed_stage_started stage=ensure_project"));
+    assert!(log.contains("event=seed_stage_failed stage=ensure_project"));
     assert!(log.contains("event=seed_deadline_exceeded stage=ensure_project"));
     assert!(!log.contains("event=seed_complete"));
 }
@@ -697,6 +713,8 @@ fn seed_demo_reservation_failure_is_warning_only_and_command_still_succeeds() {
     assert_eq!(reservation_attempts, 3);
 
     let log = std::fs::read_to_string(&log_file).expect("read reservation warning log");
+    assert!(log.contains("event=seed_stage_started stage=file_reservation_paths"));
+    assert!(log.contains("event=seed_stage_failed stage=file_reservation_paths"));
     assert!(log.contains("event=seed_reservation_warning agent_name=SeedAlpha"));
     assert!(log.contains("event=seed_complete"));
 }

@@ -79,6 +79,7 @@ pub mod state_persistence;
 pub mod stdio_capture;
 pub mod string_model;
 pub mod subscription;
+pub mod telemetry_schema;
 pub mod terminal_writer;
 pub mod tick_strategy;
 pub mod transparency;

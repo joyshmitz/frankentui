@@ -156,6 +156,92 @@ fn deadline_exceeded_error(stage: &str) -> DoctorError {
     DoctorError::invalid(format!("Seed deadline exceeded during {stage}"))
 }
 
+fn log_stage_started(client: &RpcClient, stage: &str, deadline: Deadline) {
+    let _ = client.log_line(&format!(
+        "event=seed_stage_started stage={stage} elapsed_ms={} remaining_ms={}",
+        deadline.elapsed().as_millis(),
+        deadline.remaining().as_millis()
+    ));
+}
+
+fn log_stage_completed(client: &RpcClient, stage: &str, deadline: Deadline) {
+    let _ = client.log_line(&format!(
+        "event=seed_stage_completed stage={stage} elapsed_ms={} remaining_ms={}",
+        deadline.elapsed().as_millis(),
+        deadline.remaining().as_millis()
+    ));
+}
+
+fn log_stage_failed(client: &RpcClient, stage: &str, deadline: Deadline, error: &DoctorError) {
+    let _ = client.log_line(&format!(
+        "event=seed_stage_failed stage={stage} elapsed_ms={} remaining_ms={} reason={error}",
+        deadline.elapsed().as_millis(),
+        deadline.remaining().as_millis()
+    ));
+}
+
+fn log_message_stage_started(
+    client: &RpcClient,
+    deadline: Deadline,
+    iteration: u32,
+    from_agent: &str,
+    to_agent: &str,
+) {
+    let _ = client.log_line(&format!(
+        "event=seed_stage_started stage=send_message iteration={iteration} from_agent={from_agent} to_agent={to_agent} elapsed_ms={} remaining_ms={}",
+        deadline.elapsed().as_millis(),
+        deadline.remaining().as_millis()
+    ));
+}
+
+fn log_message_stage_completed(
+    client: &RpcClient,
+    deadline: Deadline,
+    iteration: u32,
+    from_agent: &str,
+    to_agent: &str,
+) {
+    let _ = client.log_line(&format!(
+        "event=seed_stage_completed stage=send_message iteration={iteration} from_agent={from_agent} to_agent={to_agent} elapsed_ms={} remaining_ms={}",
+        deadline.elapsed().as_millis(),
+        deadline.remaining().as_millis()
+    ));
+}
+
+fn log_message_stage_failed(
+    client: &RpcClient,
+    deadline: Deadline,
+    iteration: u32,
+    from_agent: &str,
+    to_agent: &str,
+    error: &DoctorError,
+) {
+    let _ = client.log_line(&format!(
+        "event=seed_stage_failed stage=send_message iteration={iteration} from_agent={from_agent} to_agent={to_agent} elapsed_ms={} remaining_ms={} reason={error}",
+        deadline.elapsed().as_millis(),
+        deadline.remaining().as_millis()
+    ));
+}
+
+fn run_seed_stage(
+    client: &mut RpcClient,
+    stage: &str,
+    arguments: Value,
+    deadline: Deadline,
+) -> Result<Value> {
+    log_stage_started(client, stage, deadline);
+    match client.call_tool(stage, arguments, deadline) {
+        Ok(value) => {
+            log_stage_completed(client, stage, deadline);
+            Ok(value)
+        }
+        Err(error) => {
+            log_stage_failed(client, stage, deadline, &error);
+            Err(error)
+        }
+    }
+}
+
 impl RpcClient {
     fn new(config: &SeedDemoConfig) -> Result<Self> {
         let http_path = normalize_http_path(&config.http_path);
@@ -401,12 +487,14 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
     let agent_a = config.agent_a.clone();
     let agent_b = config.agent_b.clone();
 
-    client.call_tool(
+    run_seed_stage(
+        &mut client,
         "ensure_project",
         json!({ "human_key": project_key }),
         deadline,
     )?;
-    client.call_tool(
+    run_seed_stage(
+        &mut client,
         "register_agent",
         json!({
             "project_key": config.project_key,
@@ -417,7 +505,8 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
         }),
         deadline,
     )?;
-    client.call_tool(
+    run_seed_stage(
+        &mut client,
         "register_agent",
         json!({
             "project_key": config.project_key,
@@ -436,6 +525,7 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
             (&config.agent_b, &config.agent_a)
         };
 
+        log_message_stage_started(&client, deadline, i, from_agent, to_agent);
         client.call_tool(
             "send_message",
             json!({
@@ -446,13 +536,16 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
                 "body_md": format!("Seeded by doctor_frankentui run. Iteration {i}."),
             }),
             deadline,
-        )?;
+        )
+        .inspect_err(|error| log_message_stage_failed(&client, deadline, i, from_agent, to_agent, error))?;
+        log_message_stage_completed(&client, deadline, i, from_agent, to_agent);
         let _ = client.log_line(&format!(
             "event=seed_message_sent iteration={i} from_agent={from_agent} to_agent={to_agent}"
         ));
     }
 
-    client.call_tool(
+    run_seed_stage(
+        &mut client,
         "fetch_inbox",
         json!({
             "project_key": config.project_key,
@@ -462,7 +555,8 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
         deadline,
     )?;
 
-    client.call_tool(
+    run_seed_stage(
+        &mut client,
         "search_messages",
         json!({
             "project_key": config.project_key,
@@ -472,6 +566,7 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
         deadline,
     )?;
 
+    log_stage_started(&client, "file_reservation_paths", deadline);
     if let Err(error) = client.call_tool(
         "file_reservation_paths",
         json!({
@@ -488,7 +583,10 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
             "event=seed_reservation_warning agent_name={} reason={error}",
             config.agent_a
         ));
+        log_stage_failed(&client, "file_reservation_paths", deadline, &error);
         ui.warning(&format!("file_reservation_paths failed: {error}"));
+    } else {
+        log_stage_completed(&client, "file_reservation_paths", deadline);
     }
 
     let _ = client.log_line(&format!(

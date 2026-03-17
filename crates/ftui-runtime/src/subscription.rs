@@ -112,7 +112,12 @@ pub(crate) struct RunningSubscription {
 }
 
 const SUBSCRIPTION_STOP_JOIN_TIMEOUT: Duration = Duration::from_millis(250);
-const SUBSCRIPTION_STOP_JOIN_POLL: Duration = Duration::from_millis(5);
+/// Poll interval for bounded subscription thread joins (bd-1f2aw).
+///
+/// Same rationale as the executor shutdown polls: `JoinHandle` has no
+/// `join_timeout` in stable Rust, so we poll `is_finished()` with a short
+/// sleep. 1ms minimizes stop latency while avoiding spin.
+const SUBSCRIPTION_STOP_JOIN_POLL: Duration = Duration::from_millis(1);
 
 impl RunningSubscription {
     /// Stop the subscription and join its thread if it exits promptly.
@@ -120,18 +125,34 @@ impl RunningSubscription {
         self.trigger.stop();
         if let Some(handle) = self.thread.take() {
             let start = Instant::now();
+            // Fast path: subscription already finished (common for short-lived subs).
+            if handle.is_finished() {
+                let _ = handle.join();
+                tracing::trace!(
+                    sub_id = self.id,
+                    elapsed_us = start.elapsed().as_micros() as u64,
+                    "subscription stop (fast path)"
+                );
+                return;
+            }
+            // Slow path: bounded poll loop (bd-1f2aw).
             while !handle.is_finished() {
                 if start.elapsed() >= SUBSCRIPTION_STOP_JOIN_TIMEOUT {
                     tracing::warn!(
                         sub_id = self.id,
                         timeout_ms = SUBSCRIPTION_STOP_JOIN_TIMEOUT.as_millis() as u64,
-                        "Subscription did not stop within timeout; detaching thread"
+                        "subscription did not stop within timeout; detaching thread"
                     );
                     return;
                 }
                 thread::sleep(SUBSCRIPTION_STOP_JOIN_POLL);
             }
             let _ = handle.join();
+            tracing::trace!(
+                sub_id = self.id,
+                elapsed_us = start.elapsed().as_micros() as u64,
+                "subscription stop (slow path)"
+            );
         }
     }
 }
@@ -249,9 +270,20 @@ impl<M: Send + 'static> SubscriptionManager<M> {
 
     /// Stop all running subscriptions.
     pub(crate) fn stop_all(&mut self) {
+        let count = self.active.len();
+        if count == 0 {
+            return;
+        }
+        let start = Instant::now();
         for running in self.active.drain(..) {
             running.stop();
         }
+        tracing::debug!(
+            target: "ftui.runtime",
+            count,
+            elapsed_us = start.elapsed().as_micros() as u64,
+            "subscription manager stop_all complete"
+        );
     }
 }
 
@@ -1354,8 +1386,8 @@ mod tests {
         );
         assert_eq!(
             SUBSCRIPTION_STOP_JOIN_POLL,
-            Duration::from_millis(5),
-            "join poll interval must be 5ms"
+            Duration::from_millis(1),
+            "join poll interval must be 1ms (bd-1f2aw)"
         );
     }
 }
