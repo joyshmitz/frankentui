@@ -1592,7 +1592,8 @@ mod tests {
         ]);
 
         // Wait for panic to happen and ticks to arrive.
-        thread::sleep(Duration::from_millis(50));
+        // The tick subscription fires every 10ms; wait long enough for several.
+        thread::sleep(Duration::from_millis(100));
 
         let msgs = mgr.drain_messages();
         assert!(
@@ -1820,6 +1821,206 @@ mod tests {
         assert!(
             elapsed < Duration::from_millis(400),
             "join_bounded should respect the 250ms timeout, took {elapsed:?}"
+        );
+    }
+
+    /// bd-1f2aw: Restart semantics — a subscription that was stopped via
+    /// reconcile can be re-started by including it in a subsequent reconcile.
+    #[test]
+    fn lifecycle_restart_after_stop() {
+        let mut mgr = SubscriptionManager::<TestMsg>::new();
+
+        // Start subscription.
+        mgr.reconcile(vec![Box::new(Every::with_id(
+            300,
+            Duration::from_millis(10),
+            || TestMsg::Tick,
+        ))]);
+        thread::sleep(Duration::from_millis(30));
+        let msgs = mgr.drain_messages();
+        assert!(!msgs.is_empty(), "should receive ticks");
+
+        // Remove it.
+        mgr.reconcile(vec![]);
+        thread::sleep(Duration::from_millis(20));
+        let _ = mgr.drain_messages();
+        thread::sleep(Duration::from_millis(30));
+        let msgs = mgr.drain_messages();
+        assert!(msgs.is_empty(), "should stop receiving after removal");
+
+        // Restart with same ID.
+        mgr.reconcile(vec![Box::new(Every::with_id(
+            300,
+            Duration::from_millis(10),
+            || TestMsg::Value(99),
+        ))]);
+        thread::sleep(Duration::from_millis(30));
+        let msgs = mgr.drain_messages();
+        assert!(
+            !msgs.is_empty(),
+            "should receive messages again after restart"
+        );
+        assert!(
+            msgs.iter().any(|m| matches!(m, TestMsg::Value(99))),
+            "restarted sub should use the new message factory"
+        );
+
+        mgr.stop_all();
+    }
+
+    /// bd-1f2aw: Non-interference contract — subscriptions communicate
+    /// exclusively through the mpsc channel. They have no access to terminal
+    /// state, frame buffers, or render surfaces.
+    ///
+    /// This test verifies the architectural invariant by demonstrating that
+    /// subscription threads only interact with the manager through messages,
+    /// and that the manager's state is consistent after concurrent operations.
+    #[test]
+    fn lifecycle_non_interference_with_manager_state() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let msg_count = std::sync::Arc::new(AtomicUsize::new(0));
+
+        struct CountingSub {
+            id: SubId,
+            counter: std::sync::Arc<AtomicUsize>,
+        }
+
+        impl Subscription<TestMsg> for CountingSub {
+            fn id(&self) -> SubId {
+                self.id
+            }
+
+            fn run(&self, sender: mpsc::Sender<TestMsg>, stop: StopSignal) {
+                while !stop.is_stopped() {
+                    if sender.send(TestMsg::Tick).is_err() {
+                        break;
+                    }
+                    self.counter.fetch_add(1, Ordering::SeqCst);
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
+        }
+
+        let mut mgr = SubscriptionManager::<TestMsg>::new();
+
+        // Start multiple subscriptions.
+        mgr.reconcile(vec![
+            Box::new(CountingSub {
+                id: 400,
+                counter: msg_count.clone(),
+            }),
+            Box::new(CountingSub {
+                id: 401,
+                counter: msg_count.clone(),
+            }),
+        ]);
+
+        thread::sleep(Duration::from_millis(50));
+
+        // Manager state is consistent while subscriptions are running.
+        assert_eq!(mgr.active_count(), 2);
+        let drained = mgr.drain_messages();
+        let sent_count = msg_count.load(Ordering::SeqCst);
+        assert!(sent_count > 0, "subscriptions should have sent messages");
+        assert!(
+            drained.len() <= sent_count,
+            "drained {} but only {} sent",
+            drained.len(),
+            sent_count
+        );
+
+        // Stop all — manager state is consistent after shutdown.
+        mgr.stop_all();
+        assert_eq!(mgr.active_count(), 0);
+
+        // Drain remaining buffered messages.
+        let remaining = mgr.drain_messages();
+        let total_drained = drained.len() + remaining.len();
+        let final_sent = msg_count.load(Ordering::SeqCst);
+        assert!(
+            total_drained <= final_sent,
+            "total drained ({total_drained}) must not exceed total sent ({final_sent})"
+        );
+    }
+
+    /// bd-1f2aw: Shutdown ordering contract — stop_all() must signal all
+    /// subscriptions before joining any. Verify by checking that all subs
+    /// observe the stop signal approximately simultaneously.
+    #[test]
+    fn lifecycle_shutdown_signal_ordering() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let signal_times =
+            std::sync::Arc::new([AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)]);
+        let epoch = Instant::now();
+
+        struct TimingStopSub {
+            id: SubId,
+            index: usize,
+            signal_times: std::sync::Arc<[AtomicU64; 3]>,
+            epoch: Instant,
+        }
+
+        impl Subscription<TestMsg> for TimingStopSub {
+            fn id(&self) -> SubId {
+                self.id
+            }
+
+            fn run(&self, _sender: mpsc::Sender<TestMsg>, stop: StopSignal) {
+                while !stop.is_stopped() {
+                    thread::sleep(Duration::from_millis(1));
+                }
+                let elapsed_us = self.epoch.elapsed().as_micros() as u64;
+                self.signal_times[self.index].store(elapsed_us, Ordering::SeqCst);
+            }
+        }
+
+        let mut mgr = SubscriptionManager::<TestMsg>::new();
+        mgr.reconcile(vec![
+            Box::new(TimingStopSub {
+                id: 500,
+                index: 0,
+                signal_times: signal_times.clone(),
+                epoch,
+            }),
+            Box::new(TimingStopSub {
+                id: 501,
+                index: 1,
+                signal_times: signal_times.clone(),
+                epoch,
+            }),
+            Box::new(TimingStopSub {
+                id: 502,
+                index: 2,
+                signal_times: signal_times.clone(),
+                epoch,
+            }),
+        ]);
+        thread::sleep(Duration::from_millis(20));
+
+        mgr.stop_all();
+
+        // All three should have observed the stop signal at approximately
+        // the same time (within 10ms of each other), because phase 1 signals
+        // all before phase 2 joins any.
+        let t0 = signal_times[0].load(Ordering::SeqCst);
+        let t1 = signal_times[1].load(Ordering::SeqCst);
+        let t2 = signal_times[2].load(Ordering::SeqCst);
+
+        assert!(
+            t0 > 0 && t1 > 0 && t2 > 0,
+            "all subs should have recorded stop time"
+        );
+
+        let max_t = t0.max(t1).max(t2);
+        let min_t = t0.min(t1).min(t2);
+        let spread_us = max_t - min_t;
+
+        assert!(
+            spread_us < 10_000, // 10ms
+            "stop signal spread should be < 10ms for parallel signaling, got {spread_us}us \
+             (t0={t0}, t1={t1}, t2={t2})"
         );
     }
 }

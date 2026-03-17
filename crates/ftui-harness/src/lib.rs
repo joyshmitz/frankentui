@@ -42,15 +42,19 @@
 //! Snapshot files are stored under `tests/snapshots/` relative to the
 //! crate's `CARGO_MANIFEST_DIR`.
 
+pub mod artifact_manifest;
 pub mod asciicast;
 pub mod benchmark_gate;
 pub mod determinism;
+pub mod doctor_topology;
+pub mod failure_signatures;
 pub mod flicker_detection;
 pub mod frame_comparison;
 pub mod golden;
 pub mod hdd;
 pub mod input_storm;
 pub mod lab_integration;
+pub mod proof_oracle;
 pub mod proptest_support;
 pub mod resize_storm;
 pub mod rollout_runbook;
