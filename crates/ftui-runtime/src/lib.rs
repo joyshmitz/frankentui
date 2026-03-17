@@ -183,9 +183,10 @@ pub use degradation_cascade::{
 };
 pub use demo::{DemoDefinition, DemoParseError, DemoStep, parse_demo_yaml, validate_demos};
 pub use effect_system::{
-    effects_command_total, effects_executed_total, effects_subscription_total,
-    record_command_effect, record_subscription_start, record_subscription_stop,
-    trace_command_effect,
+    QueueTelemetry, effects_command_total, effects_executed_total, effects_queue_dropped,
+    effects_queue_enqueued, effects_queue_high_water, effects_queue_processed,
+    effects_subscription_total, queue_telemetry, record_command_effect, record_subscription_start,
+    record_subscription_stop, trace_command_effect,
 };
 pub use eprocess_throttle::{
     EProcessThrottle, ThrottleConfig, ThrottleDecision, ThrottleLog, ThrottleStats,
