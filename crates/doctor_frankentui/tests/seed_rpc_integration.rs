@@ -470,6 +470,8 @@ fn seed_demo_retries_transient_failures_and_preserves_auth_and_path() {
 
 #[test]
 fn seed_demo_times_out_when_health_check_never_returns_result() {
+    let temp = tempdir().expect("tempdir");
+    let log_file = temp.path().join("seed_timeout.log");
     let mut responses = Vec::new();
     for _ in 0..16 {
         responses.push(ScriptedResponse::json_value(
@@ -482,7 +484,7 @@ fn seed_demo_times_out_when_health_check_never_returns_result() {
     }
 
     let server = start_scripted_server(responses);
-    let config = configured_seed_run(&server.endpoint, "/mcp/", "", None, 1);
+    let config = configured_seed_run(&server.endpoint, "/mcp/", "", Some(log_file.clone()), 1);
 
     let error =
         run_seed_with_config(config).expect_err("run should time out without health result");
@@ -495,10 +497,16 @@ fn seed_demo_times_out_when_health_check_never_returns_result() {
             .iter()
             .all(|entry| entry.tool.as_deref() == Some("health_check"))
     );
+
+    let log = std::fs::read_to_string(&log_file).expect("read timeout log");
+    assert!(log.contains("event=server_probe_nonresult"));
+    assert!(!log.contains("event=server_ready"));
 }
 
 #[test]
 fn seed_demo_non_json_retries_exhaust_and_surface_clear_error() {
+    let temp = tempdir().expect("tempdir");
+    let log_file = temp.path().join("seed_retry_exhaust.log");
     let server = start_scripted_server(vec![
         ScriptedResponse::success("health_check"),
         ScriptedResponse::json_value("ensure_project", json!({ "status": "nope-1" })),
@@ -506,7 +514,7 @@ fn seed_demo_non_json_retries_exhaust_and_surface_clear_error() {
         ScriptedResponse::json_value("ensure_project", json!({ "status": "nope-3" })),
     ]);
 
-    let config = configured_seed_run(&server.endpoint, "mcp", "", None, 2);
+    let config = configured_seed_run(&server.endpoint, "mcp", "", Some(log_file.clone()), 2);
     let error = run_seed_with_config(config).expect_err("run should fail after retry exhaustion");
 
     assert!(
@@ -521,6 +529,11 @@ fn seed_demo_non_json_retries_exhaust_and_surface_clear_error() {
         .filter(|entry| entry.tool.as_deref() == Some("ensure_project"))
         .count();
     assert_eq!(ensure_project_attempts, 3);
+
+    let log = std::fs::read_to_string(&log_file).expect("read retry exhaust log");
+    assert!(log.contains("event=rpc_retry_scheduled method=ensure_project attempt=1"));
+    assert!(log.contains("event=rpc_retry_scheduled method=ensure_project attempt=2"));
+    assert!(log.contains("event=rpc_retry_exhausted method=ensure_project attempt=3"));
 }
 
 #[test]
