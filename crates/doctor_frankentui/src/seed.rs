@@ -526,18 +526,21 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
         };
 
         log_message_stage_started(&client, deadline, i, from_agent, to_agent);
-        client.call_tool(
-            "send_message",
-            json!({
-                "project_key": config.project_key,
-                "sender_name": from_agent,
-                "to": [to_agent],
-                "subject": format!("Inspector demo message {i}"),
-                "body_md": format!("Seeded by doctor_frankentui run. Iteration {i}."),
-            }),
-            deadline,
-        )
-        .inspect_err(|error| log_message_stage_failed(&client, deadline, i, from_agent, to_agent, error))?;
+        client
+            .call_tool(
+                "send_message",
+                json!({
+                    "project_key": config.project_key,
+                    "sender_name": from_agent,
+                    "to": [to_agent],
+                    "subject": format!("Inspector demo message {i}"),
+                    "body_md": format!("Seeded by doctor_frankentui run. Iteration {i}."),
+                }),
+                deadline,
+            )
+            .inspect_err(|error| {
+                log_message_stage_failed(&client, deadline, i, from_agent, to_agent, error)
+            })?;
         log_message_stage_completed(&client, deadline, i, from_agent, to_agent);
         let _ = client.log_line(&format!(
             "event=seed_message_sent iteration={i} from_agent={from_agent} to_agent={to_agent}"

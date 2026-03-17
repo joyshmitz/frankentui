@@ -88,7 +88,7 @@ pub use time_travel_inspector::TimeTravelInspector;
 // Validation infrastructure re-exports.
 pub use benchmark_gate::{BenchmarkGate, GateResult, Measurement, MetricVerdict, Threshold};
 pub use rollout_scorecard::{
-    RolloutScorecard, RolloutScorecardConfig, RolloutSummary, RolloutVerdict,
+    RolloutEvidenceBundle, RolloutScorecard, RolloutScorecardConfig, RolloutSummary, RolloutVerdict,
 };
 pub use shadow_run::{ShadowRun, ShadowRunConfig, ShadowRunResult, ShadowVerdict};
 

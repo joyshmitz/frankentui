@@ -242,10 +242,7 @@ mod tests {
     #[test]
     fn all_events_have_dotted_names() {
         for event in ALL_EVENTS {
-            assert!(
-                event.contains('.'),
-                "event name should be dotted: {event}"
-            );
+            assert!(event.contains('.'), "event name should be dotted: {event}");
         }
     }
 

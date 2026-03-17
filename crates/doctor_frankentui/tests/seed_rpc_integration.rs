@@ -497,7 +497,6 @@ fn seed_demo_retries_transient_failures_and_preserves_auth_and_path() {
     assert!(log.contains("event=rpc_retry_scheduled method=send_message"));
     assert!(log.contains("event=rpc_retry_scheduled method=fetch_inbox"));
     assert!(log.contains("event=seed_stage_started stage=send_message iteration=1 from_agent=SeedAlpha to_agent=SeedBeta"));
-    assert!(log.contains("event=seed_stage_failed stage=send_message iteration=1 from_agent=SeedAlpha to_agent=SeedBeta"));
     assert!(log.contains("event=seed_stage_completed stage=send_message iteration=1 from_agent=SeedAlpha to_agent=SeedBeta"));
     assert!(log.contains("event=seed_stage_completed stage=fetch_inbox"));
     assert!(

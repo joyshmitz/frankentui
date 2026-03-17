@@ -37,6 +37,7 @@
 
 use crate::benchmark_gate::GateResult;
 use crate::shadow_run::{ShadowRunResult, ShadowVerdict};
+use ftui_runtime::effect_system::QueueTelemetry;
 
 // ============================================================================
 // Configuration
@@ -340,6 +341,95 @@ impl std::fmt::Display for RolloutSummary {
     }
 }
 
+// ============================================================================
+// Evidence bundle (bd-2crbt AC #2, #3)
+// ============================================================================
+
+/// Self-contained rollout evidence bundle for release decisions.
+///
+/// Combines the scorecard verdict with queue telemetry and runtime lane
+/// information so operators can make go/no-go decisions from a single
+/// artifact without correlating across multiple logs.
+#[derive(Debug, Clone)]
+pub struct RolloutEvidenceBundle {
+    /// Scorecard summary with verdict.
+    pub scorecard: RolloutSummary,
+    /// Queue telemetry snapshot at evidence-collection time.
+    pub queue_telemetry: Option<QueueTelemetry>,
+    /// Requested runtime lane.
+    pub requested_lane: String,
+    /// Resolved runtime lane (after fallback).
+    pub resolved_lane: String,
+    /// Rollout policy in effect.
+    pub rollout_policy: String,
+}
+
+impl RolloutEvidenceBundle {
+    /// Serialize the full evidence bundle to JSON.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        let qt_json = match &self.queue_telemetry {
+            Some(qt) => format!(
+                concat!(
+                    "{{",
+                    "\"enqueued\":{e},",
+                    "\"processed\":{p},",
+                    "\"dropped\":{d},",
+                    "\"high_water\":{hw},",
+                    "\"in_flight\":{inf}",
+                    "}}"
+                ),
+                e = qt.enqueued,
+                p = qt.processed,
+                d = qt.dropped,
+                hw = qt.high_water,
+                inf = qt.in_flight,
+            ),
+            None => "null".to_string(),
+        };
+        format!(
+            concat!(
+                "{{",
+                "\"schema_version\":\"1.0.0\",",
+                "\"scorecard\":{sc},",
+                "\"queue_telemetry\":{qt},",
+                "\"runtime\":{{",
+                "\"requested_lane\":\"{rl}\",",
+                "\"resolved_lane\":\"{rsl}\",",
+                "\"rollout_policy\":\"{rp}\"",
+                "}}",
+                "}}"
+            ),
+            sc = self.scorecard.to_json(),
+            qt = qt_json,
+            rl = self.requested_lane,
+            rsl = self.resolved_lane,
+            rp = self.rollout_policy,
+        )
+    }
+}
+
+impl std::fmt::Display for RolloutEvidenceBundle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "=== Rollout Evidence Bundle ===")?;
+        writeln!(
+            f,
+            "Lane: {} (resolved: {})",
+            self.requested_lane, self.resolved_lane
+        )?;
+        writeln!(f, "Policy: {}", self.rollout_policy)?;
+        write!(f, "{}", self.scorecard)?;
+        if let Some(qt) = &self.queue_telemetry {
+            writeln!(
+                f,
+                "Queue: enqueued={}, processed={}, dropped={}, high_water={}, in_flight={}",
+                qt.enqueued, qt.processed, qt.dropped, qt.high_water, qt.in_flight
+            )?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -558,5 +648,58 @@ mod tests {
         assert_eq!(summary.total_frames_compared, 15); // 5 frames × 3 scenarios
         assert!((summary.aggregate_match_ratio - 1.0).abs() < f64::EPSILON);
         assert!(summary.to_string().contains("GO"));
+    }
+
+    #[test]
+    fn evidence_bundle_json_contains_all_sections() {
+        let config = RolloutScorecardConfig::default().min_shadow_scenarios(1);
+        let mut sc = RolloutScorecard::new(config);
+        sc.add_shadow_result(make_shadow_result(ShadowVerdict::Match, 5));
+
+        let bundle = RolloutEvidenceBundle {
+            scorecard: sc.summary(),
+            queue_telemetry: Some(QueueTelemetry {
+                enqueued: 10,
+                processed: 8,
+                dropped: 1,
+                high_water: 4,
+                in_flight: 1,
+            }),
+            requested_lane: "structured".to_string(),
+            resolved_lane: "structured".to_string(),
+            rollout_policy: "shadow".to_string(),
+        };
+
+        let json = bundle.to_json();
+        assert!(json.contains("\"schema_version\":\"1.0.0\""));
+        assert!(json.contains("\"scorecard\":{"));
+        assert!(json.contains("\"verdict\":\"GO\""));
+        assert!(json.contains("\"queue_telemetry\":{"));
+        assert!(json.contains("\"enqueued\":10"));
+        assert!(json.contains("\"dropped\":1"));
+        assert!(json.contains("\"runtime\":{"));
+        assert!(json.contains("\"requested_lane\":\"structured\""));
+        assert!(json.contains("\"rollout_policy\":\"shadow\""));
+    }
+
+    #[test]
+    fn evidence_bundle_display_readable() {
+        let config = RolloutScorecardConfig::default().min_shadow_scenarios(1);
+        let mut sc = RolloutScorecard::new(config);
+        sc.add_shadow_result(make_shadow_result(ShadowVerdict::Match, 5));
+
+        let bundle = RolloutEvidenceBundle {
+            scorecard: sc.summary(),
+            queue_telemetry: None,
+            requested_lane: "asupersync".to_string(),
+            resolved_lane: "structured".to_string(),
+            rollout_policy: "off".to_string(),
+        };
+
+        let text = bundle.to_string();
+        assert!(text.contains("Rollout Evidence Bundle"));
+        assert!(text.contains("asupersync"));
+        assert!(text.contains("structured"));
+        assert!(text.contains("GO"));
     }
 }
