@@ -85,7 +85,7 @@ impl ArtifactClass {
     #[must_use]
     pub const fn max_size_bytes(&self) -> u64 {
         match self {
-            Self::RunMeta => 64 * 1024,          // 64 KB
+            Self::RunMeta => 64 * 1024,           // 64 KB
             Self::EvidenceLedger => 1024 * 1024,  // 1 MB
             Self::FrameSnapshot => 256 * 1024,    // 256 KB per frame
             Self::ShadowReport => 512 * 1024,     // 512 KB
@@ -123,12 +123,7 @@ impl ArtifactClass {
             Self::RunMeta => &["trace_id", "created_at", "status", "runtime_lane"],
             Self::EvidenceLedger => &["trace_id", "entry_count", "schema_version"],
             Self::FrameSnapshot => &["trace_id", "frame_idx", "checksum", "viewport"],
-            Self::ShadowReport => &[
-                "trace_id",
-                "verdict",
-                "frames_compared",
-                "diverged_count",
-            ],
+            Self::ShadowReport => &["trace_id", "verdict", "frames_compared", "diverged_count"],
             Self::BenchmarkGate => &["trace_id", "gate_name", "passed", "threshold"],
             Self::CaptureLog => &["trace_id", "source", "byte_count"],
             Self::ReplayScript => &["trace_id", "scenario", "seed", "viewport"],
@@ -343,9 +338,15 @@ mod tests {
 
     #[test]
     fn retention_days_ordered() {
-        assert!(RetentionClass::Ephemeral.retention_days() < RetentionClass::Session.retention_days());
-        assert!(RetentionClass::Session.retention_days() < RetentionClass::Release.retention_days());
-        assert!(RetentionClass::Release.retention_days() < RetentionClass::Permanent.retention_days());
+        assert!(
+            RetentionClass::Ephemeral.retention_days() < RetentionClass::Session.retention_days()
+        );
+        assert!(
+            RetentionClass::Session.retention_days() < RetentionClass::Release.retention_days()
+        );
+        assert!(
+            RetentionClass::Release.retention_days() < RetentionClass::Permanent.retention_days()
+        );
     }
 
     #[test]

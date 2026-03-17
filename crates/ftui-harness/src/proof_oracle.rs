@@ -215,8 +215,11 @@ pub fn validate_proof(proof: &BehaviorProof) -> ProofValidation {
     let mut missing = Vec::new();
 
     // Check all strict dimensions are covered.
-    let relaxed_dims: HashSet<EquivalenceDimension> =
-        proof.relaxed_dimensions.iter().map(|r| r.dimension).collect();
+    let relaxed_dims: HashSet<EquivalenceDimension> = proof
+        .relaxed_dimensions
+        .iter()
+        .map(|r| r.dimension)
+        .collect();
 
     for dim in EquivalenceDimension::ALL {
         if dim.is_strict()
@@ -397,7 +400,11 @@ mod tests {
         };
 
         let result = validate_proof(&proof);
-        assert!(result.valid, "complete proof should pass: {:?}", result.issues);
+        assert!(
+            result.valid,
+            "complete proof should pass: {:?}",
+            result.issues
+        );
         assert!(result.missing_dimensions.is_empty());
     }
 
@@ -476,16 +483,21 @@ mod tests {
 
         let result = validate_proof(&proof);
         assert!(!result.valid);
-        assert!(result
-            .issues
-            .iter()
-            .any(|i| i.contains("empty justification")));
+        assert!(
+            result
+                .issues
+                .iter()
+                .any(|i| i.contains("empty justification"))
+        );
     }
 
     #[test]
     fn difference_classes_are_distinct() {
         assert_ne!(DifferenceClass::Semantic, DifferenceClass::PresentationOnly);
-        assert_ne!(DifferenceClass::PresentationOnly, DifferenceClass::PerformanceOnly);
+        assert_ne!(
+            DifferenceClass::PresentationOnly,
+            DifferenceClass::PerformanceOnly
+        );
         assert_ne!(DifferenceClass::Semantic, DifferenceClass::PerformanceOnly);
     }
 

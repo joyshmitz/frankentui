@@ -106,7 +106,7 @@ impl FailureClass {
                 "pending",    // number of pending operations
             ],
             Self::QueueOverload => &[
-                "reason",     // QUEUE_OVERLOAD
+                "reason",      // QUEUE_OVERLOAD
                 "queue_depth", // current queue depth
                 "high_water",  // peak queue depth
                 "dropped",     // total dropped count
@@ -124,23 +124,23 @@ impl FailureClass {
                 "rollback_reason", // human-readable reason
             ],
             Self::ShadowDivergence => &[
-                "reason",            // SHADOW_DIVERGENCE
-                "diverged_count",    // number of diverged frames
-                "total_frames",      // total frames compared
-                "baseline_label",    // label for primary run
-                "candidate_label",   // label for shadow run
+                "reason",          // SHADOW_DIVERGENCE
+                "diverged_count",  // number of diverged frames
+                "total_frames",    // total frames compared
+                "baseline_label",  // label for primary run
+                "candidate_label", // label for shadow run
             ],
             Self::PanicCaught => &[
-                "reason",    // PANIC_CAUGHT
-                "sub_id",    // subscription or effect ID
-                "panic_msg", // panic message
+                "reason",      // PANIC_CAUGHT
+                "sub_id",      // subscription or effect ID
+                "panic_msg",   // panic message
                 "effect_type", // "subscription" or "command"
             ],
             Self::NetworkFailure => &[
-                "reason",    // NETWORK_FAILURE
-                "url",       // target URL
-                "stage",     // RPC stage name
-                "attempts",  // retry attempts made
+                "reason",     // NETWORK_FAILURE
+                "url",        // target URL
+                "stage",      // RPC stage name
+                "attempts",   // retry attempts made
                 "last_error", // final error message
             ],
         }
@@ -156,9 +156,7 @@ impl FailureClass {
                 "Frame {frame_idx} diverged: expected {expected_hash}, got {actual_hash} \
                  (scenario={scenario}, seed={seed})"
             }
-            Self::Timeout => {
-                "{operation} timed out after {elapsed_ms}ms (limit: {timeout_ms}ms)"
-            }
+            Self::Timeout => "{operation} timed out after {elapsed_ms}ms (limit: {timeout_ms}ms)",
             Self::Cancellation => {
                 "Cancelled by {trigger} after {elapsed_ms}ms ({pending} operations pending)"
             }
@@ -175,9 +173,7 @@ impl FailureClass {
                 "Shadow diverged: {diverged_count}/{total_frames} frames differ \
                  ({baseline_label} vs {candidate_label})"
             }
-            Self::PanicCaught => {
-                "Panic caught in {effect_type} (id={sub_id}): {panic_msg}"
-            }
+            Self::PanicCaught => "Panic caught in {effect_type} (id={sub_id}): {panic_msg}",
             Self::NetworkFailure => {
                 "Network failure at stage '{stage}' ({url}): {last_error} \
                  after {attempts} attempts"
@@ -313,8 +309,7 @@ mod tests {
         for class in FailureClass::ALL {
             let code = class.reason_code();
             assert!(
-                code.chars()
-                    .all(|c| c.is_ascii_uppercase() || c == '_'),
+                code.chars().all(|c| c.is_ascii_uppercase() || c == '_'),
                 "reason code '{}' must be UPPER_SNAKE_CASE",
                 code
             );
@@ -398,8 +393,14 @@ mod tests {
     #[test]
     fn mismatch_requires_replay_fields() {
         let fields = FailureClass::Mismatch.required_fields();
-        assert!(fields.contains(&"scenario"), "mismatch needs scenario for replay");
-        assert!(fields.contains(&"seed"), "mismatch needs seed for deterministic replay");
+        assert!(
+            fields.contains(&"scenario"),
+            "mismatch needs scenario for replay"
+        );
+        assert!(
+            fields.contains(&"seed"),
+            "mismatch needs seed for deterministic replay"
+        );
         assert!(
             fields.contains(&"frame_idx"),
             "mismatch needs frame_idx for pinpointing"
@@ -419,7 +420,10 @@ mod tests {
     fn network_failure_requires_retry_context() {
         let fields = FailureClass::NetworkFailure.required_fields();
         assert!(fields.contains(&"attempts"), "need retry count for triage");
-        assert!(fields.contains(&"last_error"), "need final error for diagnosis");
+        assert!(
+            fields.contains(&"last_error"),
+            "need final error for diagnosis"
+        );
         assert!(fields.contains(&"stage"), "need RPC stage for routing");
     }
 
@@ -427,7 +431,10 @@ mod tests {
     fn panic_caught_requires_effect_context() {
         let fields = FailureClass::PanicCaught.required_fields();
         assert!(fields.contains(&"panic_msg"), "need panic message");
-        assert!(fields.contains(&"effect_type"), "need to know if sub or cmd");
+        assert!(
+            fields.contains(&"effect_type"),
+            "need to know if sub or cmd"
+        );
         assert!(fields.contains(&"sub_id"), "need ID for correlation");
     }
 
@@ -455,8 +462,7 @@ mod tests {
             let required = class.required_fields();
             // At least some required fields should appear in the template
             // (the 'reason' field is implicit in the class itself).
-            let non_reason_fields: Vec<_> =
-                required.iter().filter(|f| **f != "reason").collect();
+            let non_reason_fields: Vec<_> = required.iter().filter(|f| **f != "reason").collect();
             let referenced_count = non_reason_fields
                 .iter()
                 .filter(|f| template.contains(&format!("{{{}}}", f)))
@@ -489,6 +495,9 @@ mod tests {
             .collect(),
         };
         let result = validate_log_entry(&entry);
-        assert!(result.passes, "extra fields should not cause validation failure");
+        assert!(
+            result.passes,
+            "extra fields should not cause validation failure"
+        );
     }
 }
