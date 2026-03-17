@@ -22,6 +22,7 @@ enum ResponseBody {
 struct ScriptedResponse {
     expected_tool: Option<String>,
     body: ResponseBody,
+    delay_ms: u64,
 }
 
 impl ScriptedResponse {
@@ -33,6 +34,7 @@ impl ScriptedResponse {
                 "id": 1,
                 "result": { "ok": true },
             })),
+            delay_ms: 0,
         }
     }
 
@@ -40,6 +42,7 @@ impl ScriptedResponse {
         Self {
             expected_tool: Some(expected_tool.to_string()),
             body: ResponseBody::Empty,
+            delay_ms: 0,
         }
     }
 
@@ -47,6 +50,7 @@ impl ScriptedResponse {
         Self {
             expected_tool: Some(expected_tool.to_string()),
             body: ResponseBody::Text(text.to_string()),
+            delay_ms: 0,
         }
     }
 
@@ -54,7 +58,13 @@ impl ScriptedResponse {
         Self {
             expected_tool: Some(expected_tool.to_string()),
             body: ResponseBody::Json(body),
+            delay_ms: 0,
         }
+    }
+
+    fn with_delay(mut self, delay_ms: u64) -> Self {
+        self.delay_ms = delay_ms;
+        self
     }
 }
 
@@ -200,6 +210,7 @@ fn start_scripted_server(mut responses: Vec<ScriptedResponse>) -> ServerHarness 
                 "id": 1,
                 "result": { "ok": true },
             })),
+            delay_ms: 0,
         });
     }
 
@@ -243,6 +254,9 @@ fn start_scripted_server(mut responses: Vec<ScriptedResponse>) -> ServerHarness 
 
                         let expected_tool = response.expected_tool.clone();
                         let expected_tool_matched = expected_tool.as_ref() == tool.as_ref();
+                        if response.delay_ms > 0 {
+                            thread::sleep(Duration::from_millis(response.delay_ms));
+                        }
 
                         transcripts_clone
                             .lock()
@@ -549,6 +563,31 @@ fn seed_demo_non_json_retries_exhaust_and_surface_clear_error() {
     assert!(log.contains("event=rpc_retry_scheduled method=ensure_project attempt=1"));
     assert!(log.contains("event=rpc_retry_scheduled method=ensure_project attempt=2"));
     assert!(log.contains("event=rpc_retry_exhausted method=ensure_project attempt=3"));
+}
+
+#[test]
+fn seed_demo_deadline_expires_mid_run_after_readiness() {
+    let temp = tempdir().expect("tempdir");
+    let log_file = temp.path().join("seed_midrun_timeout.log");
+    let server = start_scripted_server(vec![
+        ScriptedResponse::success("health_check"),
+        ScriptedResponse::success("ensure_project").with_delay(1200),
+    ]);
+
+    let config = configured_seed_run(&server.endpoint, "mcp", "", Some(log_file.clone()), 1);
+    let error = run_seed_with_config(config).expect_err("run should fail once seed budget expires");
+
+    assert!(
+        error
+            .to_string()
+            .contains("Seed deadline exceeded during ensure_project")
+    );
+
+    let log = std::fs::read_to_string(&log_file).expect("read midrun timeout log");
+    assert!(log.contains("event=seed_start"));
+    assert!(log.contains("event=server_ready"));
+    assert!(log.contains("event=seed_deadline_exceeded stage=ensure_project"));
+    assert!(!log.contains("event=seed_complete"));
 }
 
 #[test]

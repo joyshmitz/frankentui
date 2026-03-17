@@ -152,6 +152,10 @@ impl Deadline {
     }
 }
 
+fn deadline_exceeded_error(stage: &str) -> DoctorError {
+    DoctorError::invalid(format!("Seed deadline exceeded during {stage}"))
+}
+
 impl RpcClient {
     fn new(config: &SeedDemoConfig) -> Result<Self> {
         let http_path = normalize_http_path(&config.http_path);
@@ -201,8 +205,21 @@ impl RpcClient {
             .unwrap_or(false)
     }
 
-    fn call_tool_once(&mut self, method: &str, arguments: Value) -> Result<Value> {
+    fn call_tool_once(
+        &mut self,
+        method: &str,
+        arguments: Value,
+        deadline: Deadline,
+    ) -> Result<Value> {
         self.counter = self.counter.saturating_add(1);
+
+        if deadline.is_expired() {
+            let _ = self.log_line(&format!(
+                "event=seed_deadline_exceeded stage={method} elapsed_ms={}",
+                deadline.elapsed().as_millis()
+            ));
+            return Err(deadline_exceeded_error(method));
+        }
 
         let request_payload = json!({
             "jsonrpc": "2.0",
@@ -218,6 +235,7 @@ impl RpcClient {
             .client
             .post(&self.endpoint)
             .header("Content-Type", "application/json")
+            .timeout(deadline.remaining().min(RPC_REQUEST_TIMEOUT))
             .json(&request_payload);
 
         if !self.auth_bearer.is_empty() {
@@ -225,6 +243,13 @@ impl RpcClient {
         }
 
         let response_text = request.send()?.text()?;
+        if deadline.is_expired() {
+            let _ = self.log_line(&format!(
+                "event=seed_deadline_exceeded stage={method} elapsed_ms={}",
+                deadline.elapsed().as_millis()
+            ));
+            return Err(deadline_exceeded_error(method));
+        }
         self.log_response(method, &response_text)?;
 
         if response_text.trim().is_empty() {
@@ -255,12 +280,12 @@ impl RpcClient {
         Ok(parsed)
     }
 
-    fn call_tool(&mut self, method: &str, arguments: Value) -> Result<Value> {
+    fn call_tool(&mut self, method: &str, arguments: Value, deadline: Deadline) -> Result<Value> {
         let policy = RetryPolicy::default();
         let mut attempt = 0_u32;
         loop {
             attempt = attempt.saturating_add(1);
-            match self.call_tool_once(method, arguments.clone()) {
+            match self.call_tool_once(method, arguments.clone(), deadline) {
                 Ok(value) => return Ok(value),
                 Err(error) => {
                     if !policy.should_retry(attempt, &error) {
@@ -271,24 +296,33 @@ impl RpcClient {
                     }
 
                     let backoff = policy.backoff_for_attempt(attempt);
+                    let Some(clamped_backoff) = deadline.next_sleep(backoff) else {
+                        let _ = self.log_line(&format!(
+                            "event=seed_deadline_exceeded stage={method} elapsed_ms={}",
+                            deadline.elapsed().as_millis()
+                        ));
+                        let _ = self.log_line(&format!(
+                            "event=rpc_retry_exhausted method={method} attempt={attempt} reason={error}"
+                        ));
+                        return Err(deadline_exceeded_error(method));
+                    };
                     let _ = self.log_line(&format!(
                         "event=rpc_retry_scheduled method={method} attempt={attempt} backoff_ms={} reason={error}",
-                        backoff.as_millis()
+                        clamped_backoff.as_millis()
                     ));
-                    thread::sleep(backoff);
+                    thread::sleep(clamped_backoff);
                 }
             }
         }
     }
 }
 
-fn wait_for_server(client: &mut RpcClient, timeout_seconds: u64) -> Result<()> {
-    let deadline = Deadline::after(Duration::from_secs(timeout_seconds));
+fn wait_for_server(client: &mut RpcClient, deadline: Deadline) -> Result<()> {
     let mut attempt = 0_u32;
 
     loop {
         attempt = attempt.saturating_add(1);
-        match client.call_tool_once("health_check", json!({})) {
+        match client.call_tool_once("health_check", json!({}), deadline) {
             Ok(response) if response.get("result").is_some() => {
                 let _ = client.log_line(&format!(
                     "event=server_ready attempt={attempt} elapsed_ms={}",
@@ -348,20 +382,30 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
     let integration = OutputIntegration::detect();
     let ui = output_for(&integration);
     let mut client = RpcClient::new(&config)?;
+    let deadline = Deadline::after(Duration::from_secs(config.timeout_seconds));
 
     let _ = client.log_line(&format!(
-        "event=seed_start endpoint={} project_key={} agent_a={} agent_b={} messages={}",
-        client.endpoint, config.project_key, config.agent_a, config.agent_b, config.messages
+        "event=seed_start endpoint={} project_key={} agent_a={} agent_b={} messages={} timeout_seconds={}",
+        client.endpoint,
+        config.project_key,
+        config.agent_a,
+        config.agent_b,
+        config.messages,
+        config.timeout_seconds
     ));
     ui.info(&format!("waiting for MCP server at {}", client.endpoint));
-    wait_for_server(&mut client, config.timeout_seconds)?;
+    wait_for_server(&mut client, deadline)?;
     ui.info("seeding demo data");
 
     let project_key = config.project_key.clone();
     let agent_a = config.agent_a.clone();
     let agent_b = config.agent_b.clone();
 
-    client.call_tool("ensure_project", json!({ "human_key": project_key }))?;
+    client.call_tool(
+        "ensure_project",
+        json!({ "human_key": project_key }),
+        deadline,
+    )?;
     client.call_tool(
         "register_agent",
         json!({
@@ -371,6 +415,7 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
             "name": agent_a,
             "task_description": "demo sender",
         }),
+        deadline,
     )?;
     client.call_tool(
         "register_agent",
@@ -381,6 +426,7 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
             "name": agent_b,
             "task_description": "demo receiver",
         }),
+        deadline,
     )?;
 
     for i in 1..=config.messages {
@@ -399,6 +445,7 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
                 "subject": format!("Inspector demo message {i}"),
                 "body_md": format!("Seeded by doctor_frankentui run. Iteration {i}."),
             }),
+            deadline,
         )?;
         let _ = client.log_line(&format!(
             "event=seed_message_sent iteration={i} from_agent={from_agent} to_agent={to_agent}"
@@ -412,6 +459,7 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
             "agent_name": config.agent_b,
             "limit": 20,
         }),
+        deadline,
     )?;
 
     client.call_tool(
@@ -421,6 +469,7 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
             "query": "Inspector",
             "limit": 20,
         }),
+        deadline,
     )?;
 
     if let Err(error) = client.call_tool(
@@ -433,6 +482,7 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
             "exclusive": false,
             "reason": "doctor-frankentui-demo",
         }),
+        deadline,
     ) {
         let _ = client.log_line(&format!(
             "event=seed_reservation_warning agent_name={} reason={error}",
@@ -523,7 +573,11 @@ mod tests {
 
         let mut client = RpcClient::new(&config).expect("rpc client");
         let error = client
-            .call_tool_once("health_check", json!({}))
+            .call_tool_once(
+                "health_check",
+                json!({}),
+                Deadline::after(Duration::from_secs(1)),
+            )
             .expect_err("invalid URL should surface HTTP error");
         assert!(matches!(error, DoctorError::Http(_)));
         assert!(RpcClient::should_retry(&error));
@@ -564,7 +618,8 @@ mod tests {
         };
 
         let mut client = RpcClient::new(&config).expect("rpc client");
-        let error = wait_for_server(&mut client, 1).expect_err("server should time out");
+        let error = wait_for_server(&mut client, Deadline::after(Duration::from_secs(1)))
+            .expect_err("server should time out");
         assert!(error.to_string().contains("Timed out waiting for server"));
     }
 

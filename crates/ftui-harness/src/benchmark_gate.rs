@@ -674,7 +674,11 @@ mod tests {
             Measurement::new("runtime_effect_queue_drain", 500_000.0).unit("ns"),
         ];
         let result = gate.evaluate(&measurements);
-        assert!(result.passed(), "all runtime metrics should pass: {}", result.summary());
+        assert!(
+            result.passed(),
+            "all runtime metrics should pass: {}",
+            result.summary()
+        );
     }
 
     #[test]
@@ -694,7 +698,9 @@ mod tests {
 
         let failures = result.failures();
         assert!(
-            failures.iter().any(|f| f.metric == "runtime_shutdown_latency"),
+            failures
+                .iter()
+                .any(|f| f.metric == "runtime_shutdown_latency"),
             "shutdown latency should be the failing metric"
         );
     }
@@ -705,9 +711,8 @@ mod tests {
         let gate = BenchmarkGate::load_baseline_json("runtime_gate", json, "p99_ns")
             .expect("baseline.json should parse");
 
-        let measurements = vec![
-            Measurement::new("runtime_shutdown_latency", 4_000_000.0).unit("ns"),
-        ];
+        let measurements =
+            vec![Measurement::new("runtime_shutdown_latency", 4_000_000.0).unit("ns")];
         let result = gate.evaluate(&measurements);
         let summary = result.summary();
         assert!(summary.contains("runtime_shutdown_latency"));
