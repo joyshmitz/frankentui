@@ -105,16 +105,14 @@ mod tests {
     /// `RolloutScorecard` to get a Go/NoGo/Inconclusive verdict.
     #[test]
     fn runbook_step3_evaluate_scorecard() {
-        use crate::rollout_scorecard::{
-            RolloutScorecard, RolloutScorecardConfig, RolloutVerdict,
-        };
+        use crate::rollout_scorecard::{RolloutScorecard, RolloutScorecardConfig, RolloutVerdict};
         use crate::shadow_run::{ShadowRun, ShadowRunConfig};
 
         use ftui_core::event::Event;
         use ftui_render::frame::Frame;
         use ftui_runtime::program::{Cmd, Model};
-        use ftui_widgets::paragraph::Paragraph;
         use ftui_widgets::Widget;
+        use ftui_widgets::paragraph::Paragraph;
 
         // Minimal model for runbook demonstration
         struct RunbookModel {

@@ -124,8 +124,7 @@ const SUBSCRIPTION_STOP_JOIN_POLL: Duration = Duration::from_millis(1);
 impl RunningSubscription {
     /// Returns true if the subscription thread panicked.
     pub(crate) fn has_panicked(&self) -> bool {
-        self.panicked
-            .load(std::sync::atomic::Ordering::Acquire)
+        self.panicked.load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Signal the subscription to stop (phase 1 of two-phase shutdown).
@@ -309,10 +308,9 @@ impl<M: Send + 'static> SubscriptionManager<M> {
             let sub_id_for_thread = id;
 
             let thread = thread::spawn(move || {
-                let result =
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        sub.run(sender, signal);
-                    }));
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    sub.run(sender, signal);
+                }));
                 if let Err(payload) = result {
                     panicked_flag.store(true, std::sync::atomic::Ordering::Release);
                     let panic_msg = match payload.downcast_ref::<&str>() {
@@ -1553,7 +1551,11 @@ mod tests {
         thread::sleep(Duration::from_millis(50));
 
         // The manager should still be functional.
-        assert_eq!(mgr.active_count(), 1, "panicked sub still tracked as active");
+        assert_eq!(
+            mgr.active_count(),
+            1,
+            "panicked sub still tracked as active"
+        );
 
         // The panicked flag should be set.
         assert!(
@@ -1779,8 +1781,14 @@ mod tests {
 
         running.signal_stop();
         let leftover = running.join_bounded();
-        assert!(leftover.is_none(), "cooperative thread should join within timeout");
-        assert!(completed.load(Ordering::SeqCst), "thread should have completed");
+        assert!(
+            leftover.is_none(),
+            "cooperative thread should join within timeout"
+        );
+        assert!(
+            completed.load(Ordering::SeqCst),
+            "thread should have completed"
+        );
     }
 
     /// bd-1f2aw: join_bounded must return the handle for uncooperative threads.
