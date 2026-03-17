@@ -579,6 +579,51 @@ fn seed_demo_non_json_retries_exhaust_and_surface_clear_error() {
 }
 
 #[test]
+fn seed_demo_send_message_failure_logs_stage_failure_and_stops_run() {
+    let temp = tempdir().expect("tempdir");
+    let log_file = temp.path().join("seed_send_failure.log");
+    let server = start_scripted_server(vec![
+        ScriptedResponse::success("health_check"),
+        ScriptedResponse::success("ensure_project"),
+        ScriptedResponse::success("register_agent"),
+        ScriptedResponse::success("register_agent"),
+        ScriptedResponse::json_value("send_message", json!({ "status": "nope-1" })),
+        ScriptedResponse::json_value("send_message", json!({ "status": "nope-2" })),
+        ScriptedResponse::json_value("send_message", json!({ "status": "nope-3" })),
+    ]);
+
+    let config = configured_seed_run(&server.endpoint, "mcp", "", Some(log_file.clone()), 2);
+    let error =
+        run_seed_with_config(config).expect_err("run should fail after send_message exhaustion");
+
+    assert!(
+        error
+            .to_string()
+            .contains("RPC non-JSON-RPC response for send_message")
+    );
+
+    let entries = server.transcripts.lock().expect("transcript lock").clone();
+    let send_attempts = entries
+        .iter()
+        .filter(|entry| entry.tool.as_deref() == Some("send_message"))
+        .count();
+    assert_eq!(send_attempts, 3);
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry.tool.as_deref() == Some("fetch_inbox"))
+    );
+
+    let log = std::fs::read_to_string(&log_file).expect("read send failure log");
+    assert!(log.contains("event=seed_stage_started stage=send_message iteration=1 from_agent=SeedAlpha to_agent=SeedBeta"));
+    assert!(log.contains("event=seed_stage_failed stage=send_message iteration=1 from_agent=SeedAlpha to_agent=SeedBeta"));
+    assert!(log.contains("event=rpc_retry_scheduled method=send_message attempt=1"));
+    assert!(log.contains("event=rpc_retry_scheduled method=send_message attempt=2"));
+    assert!(log.contains("event=rpc_retry_exhausted method=send_message attempt=3"));
+    assert!(!log.contains("event=seed_complete"));
+}
+
+#[test]
 fn seed_demo_deadline_expires_mid_run_after_readiness() {
     let temp = tempdir().expect("tempdir");
     let log_file = temp.path().join("seed_midrun_timeout.log");
