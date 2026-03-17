@@ -109,6 +109,8 @@ pub(crate) struct RunningSubscription {
     pub(crate) id: SubId,
     trigger: StopTrigger,
     thread: Option<thread::JoinHandle<()>>,
+    /// Tracks whether the subscription thread panicked (set by the catch_unwind wrapper).
+    panicked: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 const SUBSCRIPTION_STOP_JOIN_TIMEOUT: Duration = Duration::from_millis(250);
@@ -120,7 +122,69 @@ const SUBSCRIPTION_STOP_JOIN_TIMEOUT: Duration = Duration::from_millis(250);
 const SUBSCRIPTION_STOP_JOIN_POLL: Duration = Duration::from_millis(1);
 
 impl RunningSubscription {
+    /// Returns true if the subscription thread panicked.
+    pub(crate) fn has_panicked(&self) -> bool {
+        self.panicked
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Signal the subscription to stop (phase 1 of two-phase shutdown).
+    ///
+    /// Does NOT join the thread — call [`join_bounded`] after signalling all
+    /// subscriptions to allow parallel wind-down (bd-1f2aw).
+    pub(crate) fn signal_stop(&self) {
+        self.trigger.stop();
+    }
+
+    /// Join the subscription thread with a bounded timeout (phase 2).
+    ///
+    /// Returns the join handle if the thread did not finish within the timeout,
+    /// allowing callers to log and move on without blocking indefinitely.
+    pub(crate) fn join_bounded(mut self) -> Option<thread::JoinHandle<()>> {
+        let handle = self.thread.take()?;
+        let start = Instant::now();
+
+        // Fast path: subscription already finished (common for short-lived subs).
+        if handle.is_finished() {
+            let _ = handle.join();
+            tracing::trace!(
+                sub_id = self.id,
+                panicked = self.has_panicked(),
+                elapsed_us = start.elapsed().as_micros() as u64,
+                "subscription join (fast path)"
+            );
+            return None;
+        }
+
+        // Slow path: bounded poll loop (bd-1f2aw).
+        while !handle.is_finished() {
+            if start.elapsed() >= SUBSCRIPTION_STOP_JOIN_TIMEOUT {
+                tracing::warn!(
+                    sub_id = self.id,
+                    panicked = self.has_panicked(),
+                    timeout_ms = SUBSCRIPTION_STOP_JOIN_TIMEOUT.as_millis() as u64,
+                    "subscription join timed out, detaching thread"
+                );
+                return Some(handle);
+            }
+            thread::sleep(SUBSCRIPTION_STOP_JOIN_POLL);
+        }
+
+        let _ = handle.join();
+        tracing::trace!(
+            sub_id = self.id,
+            panicked = self.has_panicked(),
+            elapsed_us = start.elapsed().as_micros() as u64,
+            "subscription join (slow path)"
+        );
+        None
+    }
+
     /// Stop the subscription and join its thread if it exits promptly.
+    ///
+    /// Convenience method combining signal + join for single-subscription stops.
+    /// Used by tests and external callers that stop a single subscription.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn stop(mut self) {
         self.trigger.stop();
         if let Some(handle) = self.thread.take() {
@@ -130,6 +194,7 @@ impl RunningSubscription {
                 let _ = handle.join();
                 tracing::trace!(
                     sub_id = self.id,
+                    panicked = self.has_panicked(),
                     elapsed_us = start.elapsed().as_micros() as u64,
                     "subscription stop (fast path)"
                 );
@@ -203,8 +268,9 @@ impl<M: Send + 'static> SubscriptionManager<M> {
             "subscription reconcile starting"
         );
 
-        // Stop subscriptions that are no longer active
+        // Stop subscriptions that are no longer active (two-phase: bd-1f2aw).
         let mut remaining = Vec::new();
+        let mut to_stop = Vec::new();
         for running in self.active.drain(..) {
             if new_ids.contains(&running.id) {
                 remaining.push(running);
@@ -212,8 +278,16 @@ impl<M: Send + 'static> SubscriptionManager<M> {
                 crate::debug_trace!("stopping subscription: id={}", running.id);
                 tracing::debug!(sub_id = running.id, "Stopping subscription");
                 crate::effect_system::record_subscription_stop("subscription", running.id, 0);
-                running.stop();
+                to_stop.push(running);
             }
+        }
+        // Phase 1: Signal all removals.
+        for running in &to_stop {
+            running.signal_stop();
+        }
+        // Phase 2: Join with bounded timeout.
+        for running in to_stop {
+            let _ = running.join_bounded();
         }
         self.active = remaining;
 
@@ -230,15 +304,36 @@ impl<M: Send + 'static> SubscriptionManager<M> {
             crate::effect_system::record_subscription_start("subscription", id);
             let (signal, trigger) = StopSignal::new();
             let sender = self.sender.clone();
+            let panicked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let panicked_flag = panicked.clone();
+            let sub_id_for_thread = id;
 
             let thread = thread::spawn(move || {
-                sub.run(sender, signal);
+                let result =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        sub.run(sender, signal);
+                    }));
+                if let Err(payload) = result {
+                    panicked_flag.store(true, std::sync::atomic::Ordering::Release);
+                    let panic_msg = match payload.downcast_ref::<&str>() {
+                        Some(s) => (*s).to_string(),
+                        None => match payload.downcast_ref::<String>() {
+                            Some(s) => s.clone(),
+                            None => "unknown panic payload".to_string(),
+                        },
+                    };
+                    crate::effect_system::error_effect_panic(
+                        "subscription",
+                        &format!("sub_id={sub_id_for_thread}: {panic_msg}"),
+                    );
+                }
             });
 
             self.active.push(RunningSubscription {
                 id,
                 trigger,
                 thread: Some(thread),
+                panicked,
             });
         }
 
@@ -268,21 +363,53 @@ impl<M: Send + 'static> SubscriptionManager<M> {
         self.active.len()
     }
 
-    /// Stop all running subscriptions.
+    /// Stop all running subscriptions using two-phase parallel shutdown (bd-1f2aw).
+    ///
+    /// Phase 1: Signal all subscriptions to stop (non-blocking).
+    /// Phase 2: Join all threads with bounded timeout.
+    ///
+    /// This is significantly faster than sequential stop when multiple
+    /// subscriptions are active, because all threads begin winding down
+    /// simultaneously rather than waiting for each to finish in turn.
     pub(crate) fn stop_all(&mut self) {
         let count = self.active.len();
         if count == 0 {
             return;
         }
         let start = Instant::now();
-        for running in self.active.drain(..) {
-            running.stop();
+
+        // Phase 1: Signal all subscriptions to stop (parallel).
+        for running in &self.active {
+            running.signal_stop();
         }
+
+        let signal_elapsed_us = start.elapsed().as_micros() as u64;
+        tracing::trace!(
+            target: "ftui.runtime",
+            count,
+            signal_elapsed_us,
+            "subscription stop_all phase 1 (signal) complete"
+        );
+
+        // Phase 2: Join all threads with bounded timeout.
+        let mut panicked_count = 0_usize;
+        let mut timed_out_count = 0_usize;
+        for running in self.active.drain(..) {
+            if running.has_panicked() {
+                panicked_count += 1;
+            }
+            if running.join_bounded().is_some() {
+                timed_out_count += 1;
+            }
+        }
+
         tracing::debug!(
             target: "ftui.runtime",
             count,
+            panicked_count,
+            timed_out_count,
             elapsed_us = start.elapsed().as_micros() as u64,
-            "subscription manager stop_all complete"
+            "subscription stop_all complete"
         );
     }
 }
@@ -969,6 +1096,7 @@ mod tests {
             id: 1,
             trigger,
             thread: Some(thread),
+            panicked: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
 
         running.stop();
@@ -992,6 +1120,7 @@ mod tests {
             id: 7,
             trigger,
             thread: Some(thread),
+            panicked: std::sync::Arc::new(AtomicBool::new(false)),
         };
 
         let start = Instant::now();
@@ -1388,6 +1517,301 @@ mod tests {
             SUBSCRIPTION_STOP_JOIN_POLL,
             Duration::from_millis(1),
             "join poll interval must be 1ms (bd-1f2aw)"
+        );
+    }
+
+    // =========================================================================
+    // STRUCTURED LIFECYCLE TESTS (bd-1f2aw)
+    //
+    // These tests validate the structured cancellation, panic resilience,
+    // and parallel shutdown improvements.
+    // =========================================================================
+
+    /// bd-1f2aw: A panicking subscription must not crash the runtime.
+    /// The panic is caught, the panicked flag is set, and telemetry is emitted.
+    #[test]
+    fn lifecycle_panic_in_subscription_is_caught() {
+        use std::sync::atomic::Ordering;
+
+        let mut mgr = SubscriptionManager::<TestMsg>::new();
+
+        struct PanickingSub;
+
+        impl Subscription<TestMsg> for PanickingSub {
+            fn id(&self) -> SubId {
+                0xDEAD
+            }
+
+            fn run(&self, _sender: mpsc::Sender<TestMsg>, _stop: StopSignal) {
+                panic!("intentional test panic in subscription");
+            }
+        }
+
+        mgr.reconcile(vec![Box::new(PanickingSub)]);
+
+        // Give the thread time to panic and be caught.
+        thread::sleep(Duration::from_millis(50));
+
+        // The manager should still be functional.
+        assert_eq!(mgr.active_count(), 1, "panicked sub still tracked as active");
+
+        // The panicked flag should be set.
+        assert!(
+            mgr.active[0].panicked.load(Ordering::Acquire),
+            "panicked flag should be set after subscription panic"
+        );
+
+        // stop_all should not panic even with a panicked subscription.
+        mgr.stop_all();
+        assert_eq!(mgr.active_count(), 0);
+    }
+
+    /// bd-1f2aw: A panicking subscription must not prevent other subscriptions
+    /// from continuing to deliver messages.
+    #[test]
+    fn lifecycle_panic_does_not_affect_sibling_subscriptions() {
+        let mut mgr = SubscriptionManager::<TestMsg>::new();
+
+        struct PanickingSub;
+        impl Subscription<TestMsg> for PanickingSub {
+            fn id(&self) -> SubId {
+                0xBAD
+            }
+            fn run(&self, _sender: mpsc::Sender<TestMsg>, _stop: StopSignal) {
+                panic!("boom");
+            }
+        }
+
+        mgr.reconcile(vec![
+            Box::new(PanickingSub),
+            Box::new(Every::with_id(42, Duration::from_millis(10), || {
+                TestMsg::Tick
+            })),
+        ]);
+
+        // Wait for panic to happen and ticks to arrive.
+        thread::sleep(Duration::from_millis(50));
+
+        let msgs = mgr.drain_messages();
+        assert!(
+            !msgs.is_empty(),
+            "sibling subscription should still deliver messages after a panic in another sub"
+        );
+
+        mgr.stop_all();
+    }
+
+    /// bd-1f2aw: Parallel phased shutdown (stop_all) must be faster than
+    /// sequential shutdown when multiple subscriptions need to wind down.
+    #[test]
+    fn lifecycle_stop_all_parallel_shutdown() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let stop_count = std::sync::Arc::new(AtomicUsize::new(0));
+        let sub_count = 4;
+
+        struct SlowStopSub {
+            id: SubId,
+            counter: std::sync::Arc<AtomicUsize>,
+        }
+
+        impl Subscription<TestMsg> for SlowStopSub {
+            fn id(&self) -> SubId {
+                self.id
+            }
+
+            fn run(&self, _sender: mpsc::Sender<TestMsg>, stop: StopSignal) {
+                // Wait for stop, then simulate slow cleanup (50ms).
+                while !stop.is_stopped() {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                thread::sleep(Duration::from_millis(50));
+                self.counter.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let mut mgr = SubscriptionManager::<TestMsg>::new();
+        let subs: Vec<Box<dyn Subscription<TestMsg>>> = (0..sub_count)
+            .map(|i| -> Box<dyn Subscription<TestMsg>> {
+                Box::new(SlowStopSub {
+                    id: 1000 + i,
+                    counter: stop_count.clone(),
+                })
+            })
+            .collect();
+
+        mgr.reconcile(subs);
+        thread::sleep(Duration::from_millis(20));
+
+        let start = Instant::now();
+        mgr.stop_all();
+        let elapsed = start.elapsed();
+
+        // With parallel signal, all 4 subs start their 50ms cleanup
+        // simultaneously. Sequential would take ~200ms (4 * 50ms).
+        // Parallel should complete in ~50ms + join overhead.
+        // Use 150ms as a generous bound (well under 200ms sequential).
+        assert!(
+            elapsed < Duration::from_millis(150),
+            "parallel stop_all took {elapsed:?}, expected < 150ms \
+             (sequential would be ~{expected_sequential}ms)",
+            expected_sequential = sub_count * 50
+        );
+
+        // All subscriptions should have completed cleanup.
+        thread::sleep(Duration::from_millis(20));
+        assert_eq!(
+            stop_count.load(Ordering::SeqCst),
+            sub_count as usize,
+            "all subscriptions should have completed their cleanup"
+        );
+    }
+
+    /// bd-1f2aw: Two-phase signal+join in reconcile should allow parallel
+    /// wind-down when removing multiple subscriptions at once.
+    #[test]
+    fn lifecycle_reconcile_removal_uses_parallel_stop() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let stop_count = std::sync::Arc::new(AtomicUsize::new(0));
+
+        struct SlowStopSub {
+            id: SubId,
+            counter: std::sync::Arc<AtomicUsize>,
+        }
+
+        impl Subscription<TestMsg> for SlowStopSub {
+            fn id(&self) -> SubId {
+                self.id
+            }
+
+            fn run(&self, _sender: mpsc::Sender<TestMsg>, stop: StopSignal) {
+                while !stop.is_stopped() {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                thread::sleep(Duration::from_millis(40));
+                self.counter.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let mut mgr = SubscriptionManager::<TestMsg>::new();
+        mgr.reconcile(vec![
+            Box::new(SlowStopSub {
+                id: 2000,
+                counter: stop_count.clone(),
+            }),
+            Box::new(SlowStopSub {
+                id: 2001,
+                counter: stop_count.clone(),
+            }),
+            Box::new(SlowStopSub {
+                id: 2002,
+                counter: stop_count.clone(),
+            }),
+        ]);
+        thread::sleep(Duration::from_millis(20));
+
+        // Remove all subscriptions via reconcile.
+        let start = Instant::now();
+        mgr.reconcile(vec![]);
+        let elapsed = start.elapsed();
+
+        // Parallel: ~40ms + overhead. Sequential would be ~120ms.
+        assert!(
+            elapsed < Duration::from_millis(100),
+            "reconcile removal took {elapsed:?}, expected < 100ms with parallel stop"
+        );
+
+        thread::sleep(Duration::from_millis(20));
+        assert_eq!(stop_count.load(Ordering::SeqCst), 3);
+    }
+
+    /// bd-1f2aw: has_panicked() must reflect the actual panic state of the thread.
+    #[test]
+    fn lifecycle_has_panicked_tracks_state() {
+        let panicked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let panicked_flag = panicked.clone();
+
+        let (signal, trigger) = StopSignal::new();
+        let thread = thread::spawn(move || {
+            signal.wait_timeout(Duration::from_secs(10));
+        });
+
+        let running = RunningSubscription {
+            id: 999,
+            trigger,
+            thread: Some(thread),
+            panicked,
+        };
+
+        assert!(!running.has_panicked(), "should not be panicked initially");
+
+        // Simulate a panic flag (normally set by the catch_unwind wrapper).
+        panicked_flag.store(true, std::sync::atomic::Ordering::Release);
+        assert!(running.has_panicked(), "should reflect panicked state");
+
+        running.stop();
+    }
+
+    /// bd-1f2aw: signal_stop + join_bounded should work correctly as a two-phase
+    /// shutdown for individual subscriptions.
+    #[test]
+    fn lifecycle_signal_then_join_works() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let completed = std::sync::Arc::new(AtomicBool::new(false));
+        let completed_clone = completed.clone();
+
+        let (signal, trigger) = StopSignal::new();
+        let thread = thread::spawn(move || {
+            while !signal.is_stopped() {
+                thread::sleep(Duration::from_millis(5));
+            }
+            completed_clone.store(true, Ordering::SeqCst);
+        });
+
+        let running = RunningSubscription {
+            id: 888,
+            trigger,
+            thread: Some(thread),
+            panicked: std::sync::Arc::new(AtomicBool::new(false)),
+        };
+
+        running.signal_stop();
+        let leftover = running.join_bounded();
+        assert!(leftover.is_none(), "cooperative thread should join within timeout");
+        assert!(completed.load(Ordering::SeqCst), "thread should have completed");
+    }
+
+    /// bd-1f2aw: join_bounded must return the handle for uncooperative threads.
+    #[test]
+    fn lifecycle_join_bounded_returns_handle_for_uncooperative() {
+        use std::sync::atomic::AtomicBool;
+
+        let (_signal, trigger) = StopSignal::new();
+        let thread = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(500));
+        });
+
+        let running = RunningSubscription {
+            id: 777,
+            trigger,
+            thread: Some(thread),
+            panicked: std::sync::Arc::new(AtomicBool::new(false)),
+        };
+
+        running.signal_stop();
+        let start = Instant::now();
+        let leftover = running.join_bounded();
+        let elapsed = start.elapsed();
+
+        assert!(
+            leftover.is_some(),
+            "uncooperative thread should not join within timeout"
+        );
+        assert!(
+            elapsed < Duration::from_millis(400),
+            "join_bounded should respect the 250ms timeout, took {elapsed:?}"
         );
     }
 }

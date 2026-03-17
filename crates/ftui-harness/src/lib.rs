@@ -53,6 +53,7 @@ pub mod input_storm;
 pub mod lab_integration;
 pub mod proptest_support;
 pub mod resize_storm;
+pub mod rollout_runbook;
 pub mod rollout_scorecard;
 pub mod shadow_run;
 pub mod terminal_model;

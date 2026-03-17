@@ -814,6 +814,33 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if MODE == "send_message_non_json":
+            if method_name in {"ensure_project", "register_agent"}:
+                body = json.dumps({"jsonrpc": "2.0", "id": request_id, "result": {"ok": True, "method": method_name}}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            if method_name == "send_message":
+                body = json.dumps({"id": request_id, "result": {"mode": "non_jsonrpc_send_message"}}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            body = json.dumps({"jsonrpc": "2.0", "id": request_id, "result": {"ok": True, "method": method_name}}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         body = json.dumps({"id": request_id, "result": {"mode": "non_jsonrpc"}}).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -980,7 +1007,7 @@ mkdir -p "${case_root}/logs"
 run_case \
   "${case_id}" \
   1 \
-  "Timed out waiting for server" \
+  "event=server_probe_retry" \
   0 \
   "${case_root}/logs/seed_timeout.log" \
   "${BIN_PATH}" seed-demo \
@@ -999,7 +1026,20 @@ extra_files="$(prepare_seed_retry_wrapper "${case_root}" "always_non_json")"
 run_case \
   "${case_id}" \
   1 \
-  "RPC non-JSON-RPC response for ensure_project|retry method=ensure_project attempt=2" \
+  "event=rpc_retry_exhausted method=ensure_project attempt=3|event=seed_stage_failed stage=ensure_project" \
+  0 \
+  "${extra_files}" \
+  "${case_root}/run_case.sh"
+
+# Case 7: seed send_message failure boundary (non-JSON response at send_message stage).
+case_id="seed_send_message_non_json"
+case_root="${CASES_DIR}/${case_id}"
+mkdir -p "${case_root}/logs"
+extra_files="$(prepare_seed_retry_wrapper "${case_root}" "send_message_non_json")"
+run_case \
+  "${case_id}" \
+  1 \
+  "event=rpc_retry_exhausted method=send_message attempt=3|event=seed_stage_failed stage=send_message" \
   0 \
   "${extra_files}" \
   "${case_root}/run_case.sh"
