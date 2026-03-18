@@ -78,12 +78,8 @@ impl ProfilingMode {
     }
 
     /// All profiling modes.
-    pub const ALL: &'static [ProfilingMode] = &[
-        Self::Cpu,
-        Self::Allocation,
-        Self::Syscall,
-        Self::Workflow,
-    ];
+    pub const ALL: &'static [ProfilingMode] =
+        &[Self::Cpu, Self::Allocation, Self::Syscall, Self::Workflow];
 }
 
 /// Confidence level for a hotspot finding.

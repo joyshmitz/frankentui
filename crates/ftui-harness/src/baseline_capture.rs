@@ -551,7 +551,11 @@ mod tests {
         let p = compute_percentiles(&values);
         assert_eq!(p.min, 1.0);
         assert_eq!(p.max, 100.0);
-        assert!((p.p50 - 50.0).abs() < 1.0, "p50 should be ~50, got {}", p.p50);
+        assert!(
+            (p.p50 - 50.0).abs() < 1.0,
+            "p50 should be ~50, got {}",
+            p.p50
+        );
         assert!(p.p95 > 90.0, "p95 should be > 90, got {}", p.p95);
         assert!(p.p99 > 95.0, "p99 should be > 95, got {}", p.p99);
     }
@@ -573,7 +577,11 @@ mod tests {
         let m = &baseline.metrics[0];
         assert_eq!(m.metric, "diff");
         assert_eq!(m.sample_count, 10);
-        assert!(m.cv < 0.05, "cv should be < 5% for stable data, got {}", m.cv);
+        assert!(
+            m.cv < 0.05,
+            "cv should be < 5% for stable data, got {}",
+            m.cv
+        );
         assert_eq!(m.stability, StabilityClass::Stable);
         assert!(baseline.is_stable());
     }
@@ -716,7 +724,11 @@ mod tests {
         let m = &b.metrics[0];
 
         // Mean of [10,20,30,40,50] = 30
-        assert!((m.mean - 30.0).abs() < 0.01, "mean should be 30, got {}", m.mean);
+        assert!(
+            (m.mean - 30.0).abs() < 0.01,
+            "mean should be 30, got {}",
+            m.mean
+        );
 
         // Sample stddev of [10,20,30,40,50] = sqrt(250) ≈ 15.81
         assert!(
