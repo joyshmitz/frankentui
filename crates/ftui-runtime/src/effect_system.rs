@@ -139,6 +139,134 @@ pub fn queue_telemetry() -> QueueTelemetry {
 }
 
 // ---------------------------------------------------------------------------
+// Runtime dynamics instrumentation (bd-4flji)
+//
+// These metrics track the leading indicators of user-visible pain:
+// subscription churn, shutdown latency, and reconcile frequency.
+// ---------------------------------------------------------------------------
+
+static SUBSCRIPTION_STARTS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIPTION_STOPS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static SUBSCRIPTION_PANICS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static RECONCILE_COUNT: AtomicU64 = AtomicU64::new(0);
+static RECONCILE_DURATION_US_TOTAL: AtomicU64 = AtomicU64::new(0);
+static SHUTDOWN_DURATION_US_LAST: AtomicU64 = AtomicU64::new(0);
+static SHUTDOWN_TIMED_OUT_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+/// Total subscription starts (monotonic counter).
+#[must_use]
+pub fn subscription_starts_total() -> u64 {
+    SUBSCRIPTION_STARTS_TOTAL.load(Ordering::Relaxed)
+}
+
+/// Total subscription stops (monotonic counter).
+#[must_use]
+pub fn subscription_stops_total() -> u64 {
+    SUBSCRIPTION_STOPS_TOTAL.load(Ordering::Relaxed)
+}
+
+/// Total subscription panics caught (monotonic counter).
+#[must_use]
+pub fn subscription_panics_total() -> u64 {
+    SUBSCRIPTION_PANICS_TOTAL.load(Ordering::Relaxed)
+}
+
+/// Total reconcile operations (monotonic counter).
+#[must_use]
+pub fn reconcile_count() -> u64 {
+    RECONCILE_COUNT.load(Ordering::Relaxed)
+}
+
+/// Cumulative reconcile duration in microseconds.
+#[must_use]
+pub fn reconcile_duration_us_total() -> u64 {
+    RECONCILE_DURATION_US_TOTAL.load(Ordering::Relaxed)
+}
+
+/// Most recent shutdown duration in microseconds (0 = no shutdown yet).
+#[must_use]
+pub fn shutdown_duration_us_last() -> u64 {
+    SHUTDOWN_DURATION_US_LAST.load(Ordering::Relaxed)
+}
+
+/// Total subscription join timeouts during shutdown (monotonic counter).
+#[must_use]
+pub fn shutdown_timed_out_total() -> u64 {
+    SHUTDOWN_TIMED_OUT_TOTAL.load(Ordering::Relaxed)
+}
+
+/// Record a subscription start event.
+pub fn record_dynamics_sub_start() {
+    SUBSCRIPTION_STARTS_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Record a subscription stop event.
+pub fn record_dynamics_sub_stop() {
+    SUBSCRIPTION_STOPS_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Record a subscription panic event.
+pub fn record_dynamics_sub_panic() {
+    SUBSCRIPTION_PANICS_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Record a reconcile operation with its duration.
+pub fn record_dynamics_reconcile(duration_us: u64) {
+    RECONCILE_COUNT.fetch_add(1, Ordering::Relaxed);
+    RECONCILE_DURATION_US_TOTAL.fetch_add(duration_us, Ordering::Relaxed);
+}
+
+/// Record a shutdown completion with its duration and timeout count.
+pub fn record_dynamics_shutdown(duration_us: u64, timed_out: u64) {
+    SHUTDOWN_DURATION_US_LAST.store(duration_us, Ordering::Relaxed);
+    SHUTDOWN_TIMED_OUT_TOTAL.fetch_add(timed_out, Ordering::Relaxed);
+}
+
+/// Snapshot of runtime dynamics for operator dashboards and performance analysis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeDynamics {
+    /// Total subscription starts.
+    pub sub_starts: u64,
+    /// Total subscription stops.
+    pub sub_stops: u64,
+    /// Total subscription panics caught.
+    pub sub_panics: u64,
+    /// Current subscription churn: starts - stops.
+    pub sub_active_estimate: u64,
+    /// Total reconcile operations.
+    pub reconciles: u64,
+    /// Average reconcile duration in microseconds (0 if no reconciles yet).
+    pub reconcile_avg_us: u64,
+    /// Most recent shutdown duration in microseconds.
+    pub shutdown_last_us: u64,
+    /// Total join timeouts during shutdowns.
+    pub shutdown_timeouts: u64,
+}
+
+/// Snapshot the current runtime dynamics counters.
+#[must_use]
+pub fn runtime_dynamics() -> RuntimeDynamics {
+    let sub_starts = subscription_starts_total();
+    let sub_stops = subscription_stops_total();
+    let reconciles = reconcile_count();
+    let reconcile_total_us = reconcile_duration_us_total();
+    RuntimeDynamics {
+        sub_starts,
+        sub_stops,
+        sub_panics: subscription_panics_total(),
+        sub_active_estimate: sub_starts.saturating_sub(sub_stops),
+        reconciles,
+        reconcile_avg_us: if reconciles > 0 {
+            reconcile_total_us / reconciles
+        } else {
+            0
+        },
+        shutdown_last_us: shutdown_duration_us_last(),
+        shutdown_timeouts: shutdown_timed_out_total(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Command effect instrumentation
 // ---------------------------------------------------------------------------
 
@@ -636,5 +764,66 @@ mod tests {
                 .saturating_sub(snap.dropped),
             "in_flight should be enqueued - processed - dropped"
         );
+    }
+
+    // =========================================================================
+    // Runtime dynamics tests (bd-4flji)
+    // =========================================================================
+
+    #[test]
+    fn dynamics_sub_start_increments() {
+        let before = subscription_starts_total();
+        record_dynamics_sub_start();
+        let after = subscription_starts_total();
+        assert!(after > before);
+    }
+
+    #[test]
+    fn dynamics_sub_stop_increments() {
+        let before = subscription_stops_total();
+        record_dynamics_sub_stop();
+        let after = subscription_stops_total();
+        assert!(after > before);
+    }
+
+    #[test]
+    fn dynamics_sub_panic_increments() {
+        let before = subscription_panics_total();
+        record_dynamics_sub_panic();
+        let after = subscription_panics_total();
+        assert!(after > before);
+    }
+
+    #[test]
+    fn dynamics_reconcile_records_count_and_duration() {
+        let before_count = reconcile_count();
+        let before_dur = reconcile_duration_us_total();
+        record_dynamics_reconcile(500);
+        assert!(reconcile_count() > before_count);
+        assert!(reconcile_duration_us_total() >= before_dur + 500);
+    }
+
+    #[test]
+    fn dynamics_shutdown_records_duration() {
+        record_dynamics_shutdown(1234, 2);
+        assert_eq!(shutdown_duration_us_last(), 1234);
+        let timeouts = shutdown_timed_out_total();
+        assert!(timeouts >= 2);
+    }
+
+    #[test]
+    fn dynamics_snapshot_consistent() {
+        let snap = runtime_dynamics();
+        assert_eq!(
+            snap.sub_active_estimate,
+            snap.sub_starts.saturating_sub(snap.sub_stops),
+            "active estimate = starts - stops"
+        );
+        if snap.reconciles > 0 {
+            assert!(
+                snap.reconcile_avg_us > 0 || reconcile_duration_us_total() == 0,
+                "avg should be > 0 when reconciles happened with non-zero duration"
+            );
+        }
     }
 }

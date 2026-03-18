@@ -44,6 +44,7 @@
 
 pub mod artifact_manifest;
 pub mod asciicast;
+pub mod baseline_capture;
 pub mod benchmark_gate;
 pub mod determinism;
 pub mod doctor_topology;
@@ -52,6 +53,7 @@ pub mod flicker_detection;
 pub mod frame_comparison;
 pub mod golden;
 pub mod hdd;
+pub mod hotspot_extraction;
 pub mod input_storm;
 pub mod lab_integration;
 pub mod proof_oracle;

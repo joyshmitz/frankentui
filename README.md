@@ -99,6 +99,28 @@ FTUI_HARNESS_VIEW=visual_effects cargo run -p ftui-demo-showcase
 
 ---
 
+## Demo Showcase Gallery (46 Screens)
+
+The demo showcase (`cargo run -p ftui-demo-showcase`) ships 46 interactive screens, each demonstrating a different subsystem:
+
+| Category | Screens | What They Show |
+|----------|---------|----------------|
+| **Overview** | `dashboard`, `widget_gallery`, `advanced_features` | Full-system demos with animated panels, sparklines, markdown streaming |
+| **Layout** | `layout_lab`, `layout_inspector`, `intrinsic_sizing`, `responsive_demo` | Flex/Grid solvers, pane workspaces, constraint visualization |
+| **Text** | `shakespeare`, `markdown_rich_text`, `markdown_live_editor`, `advanced_text_editor` | Rope editor, syntax highlighting, streaming markdown |
+| **Data** | `table_theme_gallery`, `data_viz`, `virtualized_search`, `log_search` | Themed tables, charts, Fenwick-backed virtualization |
+| **Input** | `forms_input`, `form_validation`, `command_palette_lab`, `mouse_playground` | Bayesian fuzzy search, gesture recognition, focus management |
+| **Visual FX** | `visual_effects`, `theme_studio`, `mermaid_showcase`, `mermaid_mega_showcase` | Gray-Scott reaction-diffusion, metaballs, Clifford attractors, fractal zooms |
+| **System** | `terminal_capabilities`, `performance`, `performance_hud`, `determinism_lab` | Capability probing, frame budgets, conformal risk gating |
+| **Diagnostics** | `explainability_cockpit`, `voi_overlay`, `snapshot_player`, `accessibility_panel` | Evidence ledgers, VOI sampling visualization, a11y tree |
+| **Workflow** | `file_browser`, `kanban_board`, `async_tasks`, `notifications`, `drag_drop` | File picker, task boards, notification toasts, drag handles |
+| **Advanced** | `inline_mode_story`, `hyperlink_playground`, `i18n_demo`, `macro_recorder`, `quake` | Inline scrollback, OSC 8 links, locale switching, event recording |
+| **3D / Code** | `3d_data`, `code_explorer`, `widget_builder`, `action_timeline` | 3D data views, AST browsing, widget composition, timeline aggregation |
+
+Each screen is also a snapshot test target. `BLESS=1 cargo test -p ftui-demo-showcase` updates baselines.
+
+---
+
 ## Use Cases
 
 - Inline UI for CLI tools where logs must keep scrolling.
@@ -171,11 +193,11 @@ fn main() -> std::io::Result<()> {
 
 ## Design Philosophy
 
-1. **Correctness over cleverness** — predictable terminal state is non‑negotiable.
-2. **Deterministic output** — buffer diffs and explicit presentation over ad‑hoc writes.
-3. **Inline first** — preserve scrollback while keeping chrome stable.
-4. **Layered architecture** — core → render → runtime → widgets, no cyclic dependencies.
-5. **Zero‑surprise teardown** — RAII cleanup, even when apps crash.
+1. **Correctness over cleverness.** Predictable terminal state is non-negotiable.
+2. **Deterministic output.** Buffer diffs and explicit presentation over ad-hoc writes.
+3. **Inline first.** Preserve scrollback while keeping chrome stable.
+4. **Layered architecture.** Core, render, runtime, widgets; no cyclic dependencies.
+5. **Zero-surprise teardown.** RAII cleanup, even when apps crash.
 
 ---
 
@@ -536,14 +558,14 @@ FrankenTUI includes a full pane workspace system (9,000+ lines in `ftui-layout/s
 
 - **Drag‑to‑resize** via splitter handles with cell‑level hit‑testing
 - **Drag‑to‑move** with magnetic docking fields and live ghost preview targets
-- **Inertial throw** — release mid‑drag and panes coast with momentum via `PaneInertialThrow`
-- **Pressure‑sensitive snap** — snap strength derived from drag speed and direction changes via `PanePressureSnapProfile`
+- **Inertial throw**: release mid-drag and panes coast with momentum via `PaneInertialThrow`
+- **Pressure-sensitive snap**: snap strength derived from drag speed and direction changes via `PanePressureSnapProfile`
 - **Multi‑pane selection** via Shift+Click with `PaneSelectionState`
-- **Intelligence modes** — Focus, Compare, Monitor, Compact layout presets via `PaneLayoutIntelligenceMode`
+- **Intelligence modes**: Focus, Compare, Monitor, Compact layout presets via `PaneLayoutIntelligenceMode`
 - **Persistent interaction timeline** with full undo/redo/replay via `PaneInteractionTimeline`
 - **Right‑click mode cycling** through all four intelligence modes
-- **Scroll‑wheel magnetic field tuning** — adjust snap strength without leaving the pane
-- **Terminal + Web parity** — same pane interactions work in both backends via `PaneTerminalAdapter` and `PanePointerCaptureAdapter`
+- **Scroll-wheel magnetic field tuning**: adjust snap strength without leaving the pane
+- **Terminal + Web parity**: same pane interactions work in both backends via `PaneTerminalAdapter` and `PanePointerCaptureAdapter`
 
 The pane system is integrated into three of the 46 demo screens (Dashboard, Widget Gallery, Layout Lab) and has dedicated E2E tests (`scripts/pane_e2e.sh`).
 
@@ -675,9 +697,29 @@ The web adapter translates browser pointer events into the same `PaneSemanticInp
 
 ---
 
+## Terminal Emulator (FrankenTerm)
+
+FrankenTUI includes a **terminal emulator** built on the same rendering kernel:
+
+| Crate | Purpose |
+|-------|---------|
+| `frankenterm-core` | VT100/VT220/xterm parser, screen buffer, escape sequence handling |
+| `frankenterm-web` | Browser frontend; renders via `ftui-web`, no xterm.js dependency |
+
+**Design goal:** replace xterm.js with a Rust-native terminal emulator that shares FrankenTUI's deterministic rendering guarantees, enabling terminal-in-browser without a JavaScript terminal library.
+
+The emulator handles:
+- **CSI/OSC/DCS sequences** for cursor control, colors, and window operations
+- **Alternate screen** buffer switching (like vim/less)
+- **Mouse reporting** protocols (X10, SGR, URXVT)
+- **Scrollback** with configurable history depth
+- **Selection/copy** with Unicode-aware grapheme boundaries
+
+---
+
 ## "Alien Artifact" Quality Algorithms
 
-FrankenTUI employs mathematically rigorous algorithms that go far beyond typical TUI implementations—what we call "alien artifact" quality engineering.
+FrankenTUI employs mathematically rigorous algorithms that go far beyond typical TUI implementations. We call this "alien artifact" quality engineering.
 
 ### Bayesian Fuzzy Scoring (Command Palette)
 
@@ -758,7 +800,7 @@ Full Redraw:   Cost = c_emit × N
 Decision: argmin { E[Cost_full], E[Cost_dirty], E[Cost_redraw] }
 ```
 
-**Conservative mode:** Uses 95th percentile of p (not mean) when posterior variance is high—the system knows when it's uncertain.
+**Conservative mode:** Uses 95th percentile of p (not mean) when posterior variance is high, because the system knows when it's uncertain.
 
 ### Bayesian Capability Detection (Terminal Caps Probe)
 
@@ -907,7 +949,7 @@ where λ_t is the betting fraction from GRAPA (General Random Adaptive Proportio
 Key guarantee:
     P(∃t: W_t ≥ 1/α) ≤ α   under null hypothesis
 
-This holds at ANY stopping time—no peeking penalty!
+This holds at ANY stopping time, with no peeking penalty.
 ```
 
 **Applications in FrankenTUI:**
@@ -934,7 +976,7 @@ E-process layer (anytime-valid):
     e_t = exp(λ × (z_t - μ₀) - λ²σ²/2)
 ```
 
-**Why conformal?** No distributional assumptions required—works for any data pattern.
+**Why conformal?** No distributional assumptions required. Works for any data pattern.
 
 ### Mondrian Conformal Frame-Time Risk Gating
 
@@ -984,6 +1026,51 @@ switch if S_t > h
 where `d_t` is signed distance to the current target boundary, `k` is drift allowance, and `h` is the switch threshold.
 
 **Result:** single‑cell jitter doesn’t cause hover flicker, but intentional crossings still switch within a couple frames.
+
+### Gesture Recognition State Machine
+
+The `GestureRecognizer` in `ftui-core` (2,100+ lines) transforms raw terminal events into semantic events via a multi-phase state machine:
+
+```
+Raw Events                    Semantic Events
+─────────                    ───────────────
+MouseDown(x,y)  ─┬─ idle ──→ Click
+MouseDown(x,y)   │          DoubleClick
+MouseDown(x,y)  ─┤          TripleClick (select word / line)
+MouseMove(x,y)  ─┤─ armed ─→ DragStart
+MouseMove(x,y)  ─┤          DragMove
+MouseUp(x,y)    ─┤─ drag ──→ DragEnd
+                  │
+Key(a)          ─┤          KeyChord (multi-key sequences)
+Key(Ctrl+x)     ─┘          ModifiedKey
+```
+
+**Dead zone:** drag is only recognized after the pointer moves beyond a configurable threshold (default: 2 cells), preventing accidental drags from jittery mice.
+
+**Multi-click timing:** double/triple clicks use a configurable interval window (default: 500ms) with a `click_count` counter that resets on timeout or position change.
+
+**Chord recognition:** multi-key sequences like `g g` (vim-style) use a `KeySequence` buffer with configurable timeout, enabling complex keybinding schemes without blocking single-key shortcuts.
+
+### Input Parser (3,200+ Lines)
+
+The `InputParser` in `ftui-core` handles the full complexity of terminal input encoding:
+
+- **ANSI escape sequences**: CSI, SS3, DCS, OSC, APC parsing with timeout-based disambiguation
+- **Kitty keyboard protocol**: repeat/release events, modifier encoding, functional key disambiguation
+- **Bracketed paste**: captures pasted text as a single `Paste` event, preventing paste injection attacks
+- **Mouse protocols**: X10, SGR, URXVT, SGR-Pixels with automatic protocol detection
+- **UTF-8 streaming**: multi-byte character assembly across partial reads
+- **Ambiguous prefix handling**: `ESC` alone vs `ESC [` (Alt+key vs CSI) resolved by timing
+
+### Keybinding System (1,900+ Lines)
+
+The `Keybinding` module supports:
+
+- **Declarative binding maps** with priority levels (global, mode, widget)
+- **Chord sequences** (`g g`, `Ctrl+x Ctrl+s`) with configurable timeout
+- **Context-sensitive activation**: bindings active only in specific modes/focus states
+- **Conflict detection**: warns when bindings shadow each other
+- **Serialization**: load/save binding maps for user customization
 
 ### Damped Spring Dynamics (Animation System)
 
@@ -1127,7 +1214,7 @@ Inline mode uses synchronized output where supported. If you’re in a very old 
 
 ### Why “FrankenTUI”?
 
-It’s a modular kernel assembled from focused, composable parts — a deliberate, engineered “monster.”
+A modular kernel assembled from focused, composable parts. A deliberate, engineered “monster.”
 
 ### Is this a full framework?
 
@@ -1187,9 +1274,230 @@ The runtime supports three execution lanes (Legacy, Structured, Asupersync) with
 
 ---
 
+## E-Graph Layout Optimizer
+
+The layout engine includes an **equality saturation** optimizer (1,700+ lines in `ftui-layout/src/egraph.rs`) that finds optimal constraint solutions through algebraic rewriting:
+
+```
+Expression Language:
+  Expr ::= Num(u16)           -- concrete pixel value
+         | Var(NodeId)         -- widget reference
+         | Add(Expr, Expr)     -- constraint arithmetic
+         | Sub(Expr, Expr)
+         | Max(Expr, Expr)     -- competing constraints
+         | Min(Expr, Expr)     -- bounded constraints
+
+Rewrite Rules (equality saturation):
+  Add(a, Num(0)) → a                    -- identity
+  Add(Num(x), Num(y)) → Num(x + y)     -- constant folding
+  Max(a, a) → a                          -- idempotence
+  Add(a, b) = Add(b, a)                  -- commutativity
+  ...plus ~20 more domain-specific rules
+```
+
+**How it works:** rather than applying rewrites greedily (which can miss global optima), the e-graph compactly represents *all* equivalent forms simultaneously. After saturation, the cheapest expression is extracted using a cost model that penalizes deep nesting and prefers constant propagation.
+
+**Result:** complex constraint layouts (nested flex + grid + min/max) are optimized to simpler equivalent forms before the solver runs, reducing both computation and allocation.
+
+---
+
+## Text Engine
+
+The `ftui-text` crate provides a full text processing stack:
+
+### Rope-Backed Storage
+
+Large text buffers (e.g., the advanced text editor demo) use a **rope** data structure for efficient editing:
+
+```
+Rope (balanced tree of chunks):
+  ┌──────┐
+  │ Node │  ← weight = total chars in left subtree
+  ├──┬───┤
+  │  │   │
+ ┌┴┐ ┌┴┐
+ │A│ │B│   ← leaf chunks (typically 512–2048 chars)
+ └─┘ └─┘
+
+Insert at position i:  O(log n) — split + rebalance
+Delete range [i,j):    O(log n) — split + drop + rebalance
+Index by position:     O(log n) — walk tree using weights
+```
+
+**Why rope?** For a 100K-line log viewer, inserting at the cursor is O(log n) vs O(n) for a flat `String`. The rope also enables efficient line-index lookups and range extraction.
+
+### Text Editor Core
+
+The `Editor` module (1,800+ lines) provides:
+
+- **Cursor model** with visual position (column) vs byte offset tracking
+- **Selection** with anchor/head semantics (Shift+Arrow, Shift+Click)
+- **Word/line/paragraph movement** with Unicode word-boundary detection
+- **Undo/redo** with operation coalescing (typing "hello" = one undo step, not five)
+- **Clipboard integration** via `Cmd::SetClipboard` / `Cmd::GetClipboard`
+
+### BiDi & Shaping
+
+- **BiDi** (`bidi.rs`, 1,100+ lines): Unicode Bidirectional Algorithm for mixed LTR/RTL text
+- **Shaping** (`shaping.rs`, 1,500+ lines): script/run segmentation for cluster-aware rendering
+- **Normalization** (`normalization.rs`): NFC/NFD Unicode normalization for consistent comparison
+
+### Width Calculation
+
+Grapheme width calculation uses a **W-TinyLFU admission cache** for expensive `unicode-width` lookups:
+
+```
+Cache Architecture:
+  Doorkeeper (Bloom filter) → Count-Min Sketch → LRU cache
+
+Admission:
+  New item admitted only if CMS frequency ≥ eviction candidate frequency
+  → High hit-rate even under adversarial access patterns
+
+Width Embedding:
+  GraphemeId packs display width into bits [31:25], avoiding pool lookup for width queries
+```
+
+---
+
+## Degradation Cascade
+
+When frame rendering exceeds its time budget, FrankenTUI executes a **principled degradation cascade** that preserves correctness while shedding visual fidelity:
+
+```
+Conformal Frame Guard
+  │ "frame will likely exceed budget"
+  ▼
+Budget Controller (PID)
+  │ computes control signal from frame-time error
+  ▼
+Degradation Level Selection
+  │ Full → SimpleBorders → NoColors → TextOnly
+  ▼
+Widget Priority Filtering
+  │ high-priority widgets rendered first
+  ▼
+Evidence Emission
+    structured JSONL documenting every decision
+```
+
+**Key properties:**
+- **Recoverable**: when load drops, the cascade automatically restores visual fidelity
+- **Observable**: every degradation event is logged with conformal prediction context
+- **Widget-aware**: critical widgets (input fields, status bars) degrade last
+- **Deterministic**: same input sequence always produces the same degradation path
+
+---
+
+## Formal Cost Models
+
+The `cost_model` module (1,800 lines) provides closed-form cost models for three subsystems:
+
+### Cache Cost Model
+
+```
+Loss function:
+  L(h, m) = c_miss × (1 - h) + c_memory × m
+
+Optimal cache size (LRU under Zipf workload):
+  m* = argmin_m { c_miss × (1 - h(m)) + c_memory × m }
+
+where h(m) is the hit-rate function derived from the characteristic time approximation.
+```
+
+### Pipeline Scheduling Model
+
+```
+M/G/1 queue model:
+  ρ = λ × E[S]                           -- utilization
+  W = (λ × E[S²]) / (2 × (1 - ρ))      -- Pollaczek-Khinchine waiting time
+  T = W + E[S]                            -- mean response time
+
+Applies to: effect queue, render pipeline, subscription dispatch
+```
+
+### Batching Cost Model
+
+```
+Batch-and-process cost:
+  C(b) = c_setup / b + c_per_item × b    -- amortized setup vs holding cost
+
+Optimal batch size:
+  b* = √(c_setup / c_per_item)           -- square root law
+
+Applies to: ANSI emission, change run coalescing, event drain bursts
+```
+
+---
+
+## Flake Detection & Sequential FDR Control
+
+### Anytime-Valid Flake Detector
+
+E2E timing tests use an **e-process** to detect flaky regressions without inflating false positives across the hundreds of frames tested:
+
+```
+Sub-Gaussian e-value:
+  e_t = exp(λ × r_t − λ²σ²/2)
+
+Cumulative evidence:
+  E_t = ∏ᵢ eᵢ
+
+Reject H₀ when E_t ≥ 1/α, valid at ANY stopping time.
+```
+
+**Why this matters:** traditional significance tests become unreliable when you check p-values after every frame (the "peeking problem"). E-processes eliminate this entirely.
+
+### Alpha-Investing (Sequential FDR Control)
+
+When many monitors fire simultaneously (budget alerts, degradation triggers, capability decisions), testing each at a fixed alpha inflates false discoveries. Alpha-Investing treats significance as a **spendable resource**:
+
+```
+Wealth process:
+  W₀ = initial_wealth          (e.g. 0.5)
+
+Per-test:
+  αᵢ = min(W, α_max)           -- spend from wealth
+  W ← W - αᵢ                    -- deduct cost
+  if test i rejects:
+    W ← W + reward              -- earn back on discovery
+
+FDR guarantee:
+  E[FDP] ≤ initial_wealth / (initial_wealth + reward_total)
+```
+
+**Result:** FrankenTUI can safely run dozens of simultaneous statistical monitors (BOCPD, CUSUM, conformal, e-process) without false-alarm inflation.
+
+---
+
+## Rough-Path Signatures
+
+The `rough_path` module implements **rough-path signatures** for sequential trace feature extraction, a technique from stochastic analysis:
+
+```
+Given a d-dimensional path X: [0,T] → ℝᵈ, the signature is:
+
+S(X)^{i₁,...,iₖ} = ∫₀<t₁<...<tₖ<T dX^{i₁}_{t₁} ⊗ ... ⊗ dX^{iₖ}_{tₖ}
+
+Truncated at depth K:
+  S_K(X) = (1, S¹(X), S²(X), ..., Sᴷ(X))
+```
+
+**Properties:**
+- **Parameterization invariance**: `S(X)` is the same regardless of time warping
+- **Universality**: signatures separate paths; different paths always have different signatures
+- **Efficient computation**: Chen's identity enables O(nK²d²) incremental updates
+
+**Applications in FrankenTUI:**
+- **Workload characterization**: frame time series → signature → anomaly detection
+- **Trace comparison**: compare two execution traces without aligning timestamps
+- **Regression detection**: signature distance between baseline and candidate runs
+
+---
+
 ## Core Algorithms & Data Structures
 
-FrankenTUI isn't just another widget library—it's built on carefully chosen algorithms and data structures optimized for terminal rendering constraints.
+FrankenTUI is built on carefully chosen algorithms and data structures optimized for terminal rendering constraints.
 
 ## Math-Driven Performance
 
@@ -1255,7 +1563,7 @@ Intuition: no brittle thresholds; the model smoothly adapts to drag vs pause beh
 
 ### Run‑Length Posterior + Hazard Function (BOCPD Core)
 
-BOCPD’s main state is the **run‑length posterior**—how long the current regime has lasted.
+BOCPD’s main state is the **run‑length posterior**, which tracks how long the current regime has lasted.
 
 $$
 P(r_t=r\mid x_{1:t}) \propto P(r_{t-1}=r-1)\,(1-H(r-1))\,P(x_t\mid r)
@@ -1374,7 +1682,7 @@ $$
 
 Intuition: short, important jobs finish quickly, but long‑waiting jobs still rise.
 
-These aren’t academic decorations—they’re directly tied to throughput, latency, and determinism under real terminal workloads.
+Every one of these is directly tied to throughput, latency, and determinism under real terminal workloads.
 
 ### Visual FX Math At a Glance
 
@@ -1436,13 +1744,15 @@ The visual effects screen is deterministic math, not “random shader noise.” 
 Every terminal cell is exactly **16 bytes**, fitting 4 cells per 64-byte cache line:
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Cell (16 bytes)                          │
-├─────────────┬─────────────┬─────────────┬─────────────┬────────┤
-│ CellContent │     fg      │     bg      │   attrs     │ link_id│
-│  (4 bytes)  │ PackedRgba  │ PackedRgba  │  CellAttrs  │  (2B)  │
-│  char/gid   │  (4 bytes)  │  (4 bytes)  │  (2 bytes)  │        │
-└─────────────┴─────────────┴─────────────┴─────────────┴────────┘
+┌──────────────┬──────────────┬──────────────┬──────────────┬─────────┐
+│              │              │              │              │         │
+│  CellContent │      fg      │      bg      │    attrs     │ link_id │
+│   (4 bytes)  │  PackedRgba  │  PackedRgba  │  CellAttrs   │  (2B)   │
+│   char/gid   │   (4 bytes)  │   (4 bytes)  │  (2 bytes)   │         │
+│              │              │              │              │         │
+└──────────────┴──────────────┴──────────────┴──────────────┴─────────┘
+                              Cell (16 bytes)
+4 cells per 64-byte cache line. SIMD-friendly 128-bit equality via bits_eq().
 ```
 
 **Why 16 bytes?**
@@ -1491,7 +1801,7 @@ This ensures expensive operations (like full diff computation) only run when the
 
 ## Bayesian Intelligence Layer
 
-FrankenTUI uses principled statistical methods—not ad-hoc heuristics—for runtime decisions.
+FrankenTUI uses principled statistical methods for runtime decisions, replacing ad-hoc heuristics with Bayesian inference.
 
 ### BOCPD: Bayesian Online Change-Point Detection
 
@@ -1834,6 +2144,45 @@ FrankenTUI ships 106 `Widget` and `StatefulWidget` implementations across 50 sou
 
 Plus: `Align`, `Badge`, `Cached`, `Columns`, `ConstraintOverlay`, `DebugOverlay`, `DecisionCard`, `DragHandle`, `Emoji`, `ErrorBoundary`, `Group`, `Help`, `HistoryPanel`, `Inspector`, `LogViewer`, `NotificationQueue`, `Padding`, `Paginator`, `Panel`, `Pretty`, `Rule`, `StatusLine`, `Stopwatch`, `Timer`, `ValidationError`, `VoiDebugOverlay`, `DriftVisualization`, and more.
 
+### Table Theming System
+
+The table widget has a dedicated theme engine (3,500+ lines in `ftui-style/src/table_theme.rs`) that goes far beyond simple row striping:
+
+| Theme Feature | What It Controls |
+|---------------|-----------------|
+| **Row striping** | Alternating background colors with configurable period |
+| **Column emphasis** | Per-column foreground/background overrides |
+| **Header styling** | Separate style for header row with bottom border |
+| **Selection highlight** | Active row/cell highlight with blend modes |
+| **Hover state** | Mouse-over styling with CUSUM-stabilized transitions |
+| **Border variants** | 9 built-in border styles per table edge |
+| **Cell padding** | Per-cell horizontal/vertical padding |
+| **Truncation** | Ellipsis, clip, or wrap per column |
+| **Alignment** | Left/center/right per column with Unicode-aware width |
+
+Themes are composable; a base theme can be overlaid with per-instance overrides:
+
+```rust
+let theme = TableTheme::modern()
+    .with_stripe_period(2)
+    .with_header_style(Style::new().bold().fg(Color::Cyan))
+    .with_selection_style(Style::new().bg(Color::DarkGray));
+```
+
+### Stylesheet System
+
+Named styles are registered in a `Stylesheet` for consistent theming across widgets:
+
+```rust
+let mut sheet = Stylesheet::new();
+sheet.register("heading", Style::new().bold().fg(Color::Blue));
+sheet.register("error", Style::new().fg(Color::Red).bold());
+sheet.register("muted", Style::new().fg(Color::DarkGray));
+
+// Apply by name anywhere in the widget tree
+let style = sheet.get("heading").unwrap_or_default();
+```
+
 ### Widget Composition
 
 ```rust
@@ -1910,6 +2259,459 @@ recorder.record(frame.clone());
 recorder.seek(frame_index);
 let historical_frame = recorder.current();
 ```
+
+---
+
+## Accessibility
+
+The `ftui-a11y` crate provides an accessibility tree that mirrors the widget render tree:
+
+- **Semantic nodes** for every interactive widget (button, input, list item)
+- **Role/state/label** properties following WAI-ARIA semantics
+- **Focus graph** with keyboard navigation order (Tab/Shift+Tab)
+- **Live regions** for announcing dynamic content changes to screen readers
+- **Contrast checking** using WCAG 2.1 luminance ratios (`ftui-style/src/color.rs`)
+
+The `accessibility_panel` demo screen visualizes the a11y tree in real time as you navigate the UI.
+
+---
+
+## Internationalization
+
+The `ftui-i18n` crate provides locale-aware rendering:
+
+- **Locale context** propagated through the runtime (`ProgramConfig::with_locale("fr")`)
+- **Number/date formatting** respecting locale conventions
+- **Text direction** (LTR/RTL) integrated with the BiDi module in `ftui-text`
+- **String table** support for message translation
+
+The `i18n_demo` screen demonstrates live locale switching between English, French, German, Japanese, and Arabic.
+
+---
+
+## Queueing-Theoretic Scheduler (Deep Dive)
+
+The effect queue scheduler (1,900+ lines) implements multiple scheduling disciplines from queueing theory:
+
+### SRPT (Shortest Remaining Processing Time)
+
+```
+Optimal for minimizing mean response time in M/G/1 queues:
+  E[T_SRPT] ≤ E[T_FCFS]  for any service-time distribution
+
+Selection rule:
+  next_job = argmin { remaining_time(j) : j ∈ ready_queue }
+```
+
+Problem: can starve long jobs indefinitely.
+
+### Smith's Rule (Weighted SRPT)
+
+```
+Maximizes weighted throughput:
+  priority(j) = weight(j) / remaining_time(j)
+
+next_job = argmax { priority(j) : j ∈ ready_queue }
+```
+
+### Aging for Starvation Prevention
+
+```
+Effective priority:
+  priority_eff(j) = weight(j) / remaining_time(j) + aging_factor × wait_time(j)
+
+Wait time grows linearly, so even low-priority jobs eventually rise above high-priority ones.
+Guaranteed service: every job completes within O(N × max_weight / aging_factor) time.
+```
+
+### Queue Telemetry
+
+```rust
+let snap = ftui_runtime::effect_system::queue_telemetry();
+// QueueTelemetry {
+//   enqueued: 1042,          -- total tasks submitted
+//   processed: 1038,         -- total tasks completed
+//   dropped: 2,              -- tasks dropped (backpressure/shutdown)
+//   high_water: 12,          -- peak queue depth observed
+//   in_flight: 2,            -- currently executing
+// }
+```
+
+Backpressure kicks in when `in_flight ≥ max_queue_depth`, preventing unbounded memory growth under burst load.
+
+---
+
+## Inline Mode: How Scrollback Preservation Works
+
+Most TUI frameworks take over the alternate screen, destroying the user's scrollback history. FrankenTUI's inline mode keeps the UI stable while letting log output scroll naturally above it. Three strategies are implemented and selected automatically based on terminal capabilities:
+
+### Strategy A: Scroll Region (DECSTBM)
+
+```
+Terminal viewport (24 rows):
+  ┌──────────────────────────┐
+  │ log line 47              │ ← scrollable region (rows 1-20)
+  │ log line 48              │    DECSTBM constrains scrolling here
+  │ log line 49              │
+  │ ...                      │
+  │ log line 66              │
+  ├──────────────────────────┤
+  │ ▌Status: 3 tasks  FPS:60│ ← fixed UI region (rows 21-24)
+  │ ▌[Tab] switch  [q] quit │    cursor never enters this region
+  └──────────────────────────┘
+
+CSI sequence: ESC [ top ; bottom r   (set scrolling region)
+```
+
+When new log output arrives, the terminal scrolls only within the designated region. The UI rows below are untouched.
+
+### Strategy B: Overlay Redraw
+
+For terminals that don't support scroll regions reliably (some multiplexers, older emulators), FrankenTUI saves the cursor, clears the UI area, writes new log lines, redraws the UI, and restores the cursor. Wrapped in DEC 2026 sync brackets, this appears atomic to the user.
+
+### Strategy C: Hybrid
+
+Uses scroll-region for the fast path but falls back to overlay-redraw when capability probing detects an unreliable DECSTBM implementation. This is the default.
+
+### Key Invariants
+
+- Scrollback history is never destroyed
+- UI region never flickers (sync brackets guarantee atomicity)
+- Cursor position is restored exactly after each render cycle
+- Log output above the UI region is genuine terminal scrollback (you can scroll up to see it)
+
+---
+
+## Incremental View Maintenance (IVM)
+
+Rather than recomputing layouts, styled text, and visibility flags from scratch every frame, FrankenTUI can propagate *deltas* through a DAG of view operators:
+
+```
+Observable<Theme>   Observable<Content>   Observable<Constraint>
+       │                    │                      │
+       ▼                    ▼                      ▼
+   ┌────────┐         ┌─────────┐           ┌───────────┐
+   │StyleMap │         │ TextWrap │           │ FlexSolve │
+   └────┬───┘         └────┬────┘           └─────┬─────┘
+        │                  │                       │
+        └──────────┬───────┘───────────────────────┘
+                   ▼
+            ┌────────────┐
+            │ RenderPlan │  ← only dirty nodes recomputed
+            └────────────┘
+```
+
+When only the theme changes, the style map operator emits deltas that flow to `RenderPlan` without re-running text wrapping or constraint solving. When only a single text cell changes, only that cell's wrapping is recomputed.
+
+This is the same technique used by materialized-view databases (e.g., Materialize, Noria), adapted for frame-rate rendering.
+
+---
+
+## SOS Barrier Certificates
+
+Frame-budget admissibility is checked using a **sum-of-squares (SOS) polynomial barrier certificate**, precomputed offline via semidefinite programming:
+
+```
+State space:
+  x₁ = budget_remaining ∈ [0, 1]    (fraction of frame budget left)
+  x₂ = workload_estimate ∈ [0, 1]   (estimated render cost)
+
+Barrier certificate B(x₁, x₂):
+  B(x₁, x₂) = Σ cᵢⱼ x₁ⁱ x₂ʲ     (polynomial, degree ≤ 6)
+
+Safety:
+  B(x) ≤ 0  ⟹  state is admissible (safe to render at full fidelity)
+  B(x) > 0  ⟹  state is in degradation region (shed visual fidelity)
+
+Guarantee:
+  B is a valid barrier certificate iff B(x) ≥ 0 on the unsafe set
+  AND dB/dt ≤ 0 on the boundary (Lyapunov-like decrease condition)
+```
+
+The polynomial coefficients are solved by `scripts/solve_sos_barrier.py` using SOS/SDP relaxation. The Rust evaluator (`sos_barrier.rs`) is 257 lines and runs in constant time per frame with no allocations.
+
+Why SOS instead of a simple threshold? A polynomial barrier can encode nonlinear safe/unsafe boundaries that accurately reflect the interaction between budget remaining and workload estimate. A flat threshold either triggers too early (wasting visual quality) or too late (missing the deadline).
+
+---
+
+## S3-FIFO Cache
+
+Terminal capability detection and grapheme width lookups use an **S3-FIFO** eviction policy, which was shown to match or outperform W-TinyLFU and ARC on most workloads while being simpler to implement:
+
+```
+Three queues:
+  Small  (10% capacity) ← new entries land here
+  Main   (90% capacity) ← promoted entries (accessed ≥ 1 time in Small)
+  Ghost  (keys only)    ← recently evicted keys for frequency tracking
+
+Eviction from Small:
+  if accessed ≥ 1 time → promote to Main
+  else → evict (key goes to Ghost)
+
+Eviction from Main (FIFO + frequency):
+  if freq > 0 → decrement freq, re-insert at tail
+  else → evict permanently
+```
+
+The key insight: S3-FIFO is scan-resistant without the overhead of an LRU doubly-linked list. Sequential access patterns (like scanning a large buffer) don't flush the cache.
+
+---
+
+## Flat Combining
+
+When multiple event sources (timers, background tasks, input) post operations concurrently, **flat combining** batches them into a single pass. One thread becomes the "combiner" and executes ALL pending operations while holding the state lock:
+
+```
+Thread 1: post(op_a) → wait
+Thread 2: post(op_b) → wait           combiner (Thread 3):
+Thread 3: post(op_c) → becomes          lock state
+           combiner                      execute op_a
+                                         execute op_b
+                                         execute op_c
+                                         unlock state
+                                         wake threads 1, 2
+```
+
+Benefits over a bare `Mutex`:
+- Data stays hot in L1 cache (one thread touches everything)
+- Lock acquisition happens once per batch, not once per operation
+- Natural coalescing: redundant operations (multiple redraws) collapse
+
+---
+
+## Bidirectional Lenses
+
+The `lens` module provides algebraic lenses for binding widgets to model subfields:
+
+```rust
+use ftui_runtime::lens::{Lens, field_lens, compose};
+
+struct Config { volume: u8, brightness: u8 }
+
+// A lens focuses on a part of a larger structure
+let volume_lens = field_lens!(Config, volume);
+
+// Algebraic guarantees:
+//   GetPut: setting the value you just read is a no-op
+//   PutGet: reading after a set returns the value you set
+
+let config = Config { volume: 75, brightness: 50 };
+assert_eq!(volume_lens.view(&config), 75);
+
+let updated = volume_lens.set(&config, 100);
+assert_eq!(updated.volume, 100);
+assert_eq!(updated.brightness, 50);  // other fields untouched
+```
+
+Lenses compose, so `compose(config_lens, volume_lens)` creates a lens from `AppState` directly to `volume` through an intermediate `Config` struct.
+
+---
+
+## Input Macro Recording & Playback
+
+The `InputMacro` system records terminal events with timing for deterministic replay:
+
+```rust
+// Record
+let mut recorder = MacroRecorder::new("login_flow");
+recorder.record_event(key_event_username);
+// ... 200ms passes ...
+recorder.record_event(key_event_tab);
+recorder.record_event(key_event_password);
+recorder.record_event(key_event_enter);
+let macro_data = recorder.finish();
+
+// Replay through ProgramSimulator
+let mut player = MacroPlayer::new(macro_data);
+while let Some((event, delay)) = player.next() {
+    std::thread::sleep(delay);
+    simulator.send_event(event);
+}
+```
+
+Uses: regression testing, demo recording, user workflow capture. The `macro_recorder` demo screen shows this in action.
+
+---
+
+## State Persistence
+
+Widget state survives across sessions via the `StateRegistry`:
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│                       StateRegistry                           │
+│   In-memory cache of widget states (HashMap<WidgetId, State>) │
+│   Delegates to StorageBackend for persistence                 │
+└───────────────────────────────┬───────────────────────────────┘
+                                │
+                ┌───────────────┼───────────────┐
+                ▼               ▼               ▼
+          FileBackend     MemoryBackend   CustomBackend
+          (JSON on disk)  (tests only)   (user-provided)
+```
+
+Configuration:
+
+```rust
+let config = ProgramConfig::default().with_persistence(
+    PersistenceConfig::new()
+        .with_auto_save(true)
+        .with_auto_load(true)
+        .with_backend(FileBackend::new("~/.config/myapp/state.json"))
+);
+```
+
+Widgets opt in by implementing the `Stateful` trait. On program start, the registry loads saved state; on exit (or periodic checkpoints), it flushes back to the backend.
+
+---
+
+## SLO Schema & Breach Detection
+
+FrankenTUI supports machine-readable **Service Level Objectives** for runtime behavior:
+
+```yaml
+# slo.yaml
+objectives:
+  - name: frame_render_p99
+    metric: frame_render_us
+    budget_us: 16000          # 16ms = 60fps
+    window_seconds: 60
+    error_budget_pct: 1.0     # allow 1% of frames to exceed
+
+  - name: shutdown_latency
+    metric: shutdown_us
+    budget_us: 5000           # 5ms shutdown target
+    window_seconds: 300
+    error_budget_pct: 0.1
+```
+
+The SLO engine checks observations against budgets and tracks error-budget consumption:
+
+```
+slo.yaml  ──parse──▶  SloSchema
+                         │
+        observations ──▶ check_breach() ──▶ BreachResult
+                                              │
+                                   ┌──────────┴──────────┐
+                                   ▼                     ▼
+                              No breach             Breach detected
+                              (continue)            (enter safe mode)
+```
+
+When an SLO is breached, the runtime can enter safe mode (reduced rendering, aggressive coalescing) until the error budget recovers.
+
+---
+
+## Multi-Stage Conformal Monitoring
+
+Individual render pipeline stages have independent conformal monitors:
+
+```
+view() → [Layout] → Buffer → [Diff] → Changes → [Present] → ANSI
+           ↑               ↑                ↑
+      stage monitor   stage monitor   stage monitor
+      (calibration)   (calibration)   (calibration)
+```
+
+Each stage maintains its own Mondrian-bucketed residual set, so a regression in layout computation is detected independently from diff or presenter regressions. Buckets are keyed by (screen mode, diff strategy, terminal size) and fall back to coarser groupings when data is sparse.
+
+This granularity means the runtime can identify *which* pipeline stage is responsible for a slowdown, rather than just flagging "frame was slow."
+
+---
+
+## Headless Simulator
+
+The `ProgramSimulator` (1,700+ lines) runs a `Model` without a real terminal, enabling deterministic testing:
+
+```rust
+let mut sim = ProgramSimulator::new(MyModel::new());
+sim.init();
+sim.send(Msg::LoadData);
+sim.tick();
+
+// Capture rendered output without a terminal
+let frame = sim.capture_frame(80, 24);
+assert_eq!(sim.model().items.len(), 42);
+assert!(sim.is_running());
+
+// Frame hashes for regression detection
+let hash = frame.checksum();
+```
+
+The simulator is the backbone of the shadow-run comparison system and the rollout scorecard. It powers every harness test without needing a PTY or terminal emulator.
+
+---
+
+## Frame Arena Allocator
+
+The render hot path uses a **bump allocator** reset at frame boundaries, eliminating per-frame allocator churn:
+
+```rust
+let mut arena = FrameArena::new(256 * 1024); // 256 KB initial
+
+// During frame rendering:
+let styled_spans = arena.alloc_slice(&computed_spans);
+let layout_rects = arena.alloc_slice(&solved_rects);
+
+// At frame boundary:
+arena.reset();  // O(1), no individual deallocations
+```
+
+Why bump allocation? The render path produces many small, short-lived allocations (styled text spans, layout rectangles, change runs). A bump allocator satisfies these in O(1) with zero fragmentation, and `reset()` reclaims everything in a single pointer write.
+
+---
+
+## Color System
+
+The `ftui-style` color module supports multiple color profiles with automatic downgrade:
+
+| Profile | Colors | When Used |
+|---------|--------|-----------|
+| `TrueColor` | 16M (24-bit RGB) | Modern terminals with `COLORTERM=truecolor` |
+| `Ansi256` | 256 | Terminals with 256-color support |
+| `Ansi16` | 16 | Basic terminals |
+| `Mono` | 2 | `NO_COLOR` set, or dumb terminals |
+
+Color downgrade is automatic based on terminal capability detection:
+
+```
+TrueColor RGB(128, 0, 255)
+  → Ansi256: find nearest palette entry (Euclidean distance in RGB space)
+  → Ansi16: map to closest basic color
+  → Mono: drop color entirely, keep bold/underline for emphasis
+```
+
+The module includes **WCAG 2.1 contrast ratio** utilities for accessibility checking:
+
+```rust
+let ratio = contrast_ratio(foreground_rgb, background_rgb);
+// WCAG AA: ratio ≥ 4.5 for normal text, ≥ 3.0 for large text
+// WCAG AAA: ratio ≥ 7.0 for normal text, ≥ 4.5 for large text
+```
+
+Perceived luminance uses the standard formula: `Y = 0.2126R + 0.7152G + 0.0722B` (linearized sRGB).
+
+---
+
+## Evidence Sink Architecture
+
+Every probabilistic decision in FrankenTUI is logged to a **shared evidence sink**, a structured JSONL stream that captures the reasoning behind runtime behavior:
+
+```rust
+let config = ProgramConfig::default().with_evidence_sink(
+    EvidenceSinkConfig::enabled_file("evidence.jsonl")
+);
+```
+
+Evidence categories:
+- `diff_decision`: which diff strategy was chosen and why (Beta posterior, cost estimates)
+- `resize_decision`: coalesce vs apply, with Bayes factor ledger
+- `conformal_gate`: frame-time risk gating with bucket, upper bound, budget
+- `degradation_event`: which visual tier was selected and why
+- `queue_select`: scheduler job selection with priority breakdown
+- `voi_sample`: VOI computation and sampling decision
+
+**Why evidence?** When a frame is slow, operators can `grep` the JSONL for that frame index and see exactly which decisions were made and what statistical state drove them. No black boxes.
 
 ---
 

@@ -254,6 +254,7 @@ impl<M: Send + 'static> SubscriptionManager<M> {
     /// - Stops subscriptions that are no longer declared (ID not in new set)
     /// - Leaves unchanged subscriptions running
     pub(crate) fn reconcile(&mut self, subscriptions: Vec<Box<dyn Subscription<M>>>) {
+        let reconcile_start = Instant::now();
         let new_ids: HashSet<SubId> = subscriptions.iter().map(|s| s.id()).collect();
         let active_count_before = self.active.len();
 
@@ -279,6 +280,7 @@ impl<M: Send + 'static> SubscriptionManager<M> {
                 crate::debug_trace!("stopping subscription: id={}", running.id);
                 tracing::debug!(sub_id = running.id, "Stopping subscription");
                 crate::effect_system::record_subscription_stop("subscription", running.id, 0);
+                crate::effect_system::record_dynamics_sub_stop();
                 to_stop.push(running);
             }
         }
@@ -303,6 +305,7 @@ impl<M: Send + 'static> SubscriptionManager<M> {
             crate::debug_trace!("starting subscription: id={}", id);
             tracing::debug!(sub_id = id, "Starting subscription");
             crate::effect_system::record_subscription_start("subscription", id);
+            crate::effect_system::record_dynamics_sub_start();
             let (signal, trigger) = StopSignal::new();
             let sender = self.sender.clone();
             let panicked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -315,6 +318,7 @@ impl<M: Send + 'static> SubscriptionManager<M> {
                 }));
                 if let Err(payload) = result {
                     panicked_flag.store(true, std::sync::atomic::Ordering::Release);
+                    crate::effect_system::record_dynamics_sub_panic();
                     let panic_msg = match payload.downcast_ref::<&str>() {
                         Some(s) => (*s).to_string(),
                         None => match payload.downcast_ref::<String>() {
@@ -338,12 +342,15 @@ impl<M: Send + 'static> SubscriptionManager<M> {
         }
 
         let active_count_after = self.active.len();
+        let reconcile_elapsed_us = reconcile_start.elapsed().as_micros() as u64;
+        crate::effect_system::record_dynamics_reconcile(reconcile_elapsed_us);
         crate::debug_trace!("reconcile complete: active_after={}", active_count_after);
         tracing::trace!(
             active_before = active_count_before,
             active_after = active_count_after,
             started = active_count_after.saturating_sub(active_count_before),
             stopped = active_count_before.saturating_sub(active_count_after),
+            reconcile_us = reconcile_elapsed_us,
             "subscription reconcile complete"
         );
     }
@@ -403,12 +410,17 @@ impl<M: Send + 'static> SubscriptionManager<M> {
             }
         }
 
+        let shutdown_elapsed_us = start.elapsed().as_micros() as u64;
+        crate::effect_system::record_dynamics_shutdown(
+            shutdown_elapsed_us,
+            timed_out_count as u64,
+        );
         tracing::debug!(
             target: "ftui.runtime",
             count,
             panicked_count,
             timed_out_count,
-            elapsed_us = start.elapsed().as_micros() as u64,
+            elapsed_us = shutdown_elapsed_us,
             "subscription stop_all complete"
         );
     }
