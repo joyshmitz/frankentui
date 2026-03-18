@@ -1413,12 +1413,7 @@ impl BufferDiff {
     ///
     /// Emits a tracing event when a skip or narrow is applied, including
     /// the hint type and resulting change count for evidence logging.
-    pub fn compute_certified_into(
-        &mut self,
-        old: &Buffer,
-        new: &Buffer,
-        hint: DiffSkipHint,
-    ) {
+    pub fn compute_certified_into(&mut self, old: &Buffer, new: &Buffer, hint: DiffSkipHint) {
         match hint {
             DiffSkipHint::FullDiff => {
                 // Standard path — no certificate benefit
@@ -5054,11 +5049,7 @@ mod span_edge_cases {
         new.set(7, 4, Cell::from_char('C'));
 
         let mut diff = BufferDiff::new();
-        diff.compute_certified_into(
-            &old,
-            &new,
-            DiffSkipHint::NarrowToRows(vec![1, 3]),
-        );
+        diff.compute_certified_into(&old, &new, DiffSkipHint::NarrowToRows(vec![1, 3]));
 
         // Should find changes in rows 1 and 3, but NOT row 4
         let changes = diff.changes();
@@ -5082,11 +5073,7 @@ mod span_edge_cases {
         let new = Buffer::new(10, 5);
 
         let mut diff = BufferDiff::new();
-        diff.compute_certified_into(
-            &old,
-            &new,
-            DiffSkipHint::NarrowToRows(vec![0, 2, 4]),
-        );
+        diff.compute_certified_into(&old, &new, DiffSkipHint::NarrowToRows(vec![0, 2, 4]));
 
         assert!(
             diff.is_empty(),
