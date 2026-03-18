@@ -42,6 +42,50 @@ use crate::buffer::{Buffer, DirtySpan};
 use crate::cell::Cell;
 
 // =============================================================================
+// Certificate-Based Skip Hints
+// =============================================================================
+
+/// Hint from a render certificate evaluator about what diff work can be skipped.
+///
+/// The runtime evaluates a certificate (e.g., from `render_certificate::CertificateEvaluator`)
+/// and translates the result into a `DiffSkipHint` that `BufferDiff::compute_certified_into`
+/// can act on.
+///
+/// # Safety contract
+///
+/// The hint must be correct: `SkipDiff` must only be issued when the caller
+/// can guarantee that old and new buffers are byte-identical. `NarrowToRows`
+/// must include all rows that actually changed. Incorrect hints produce stale
+/// frames — the diff engine trusts the hint without verification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiffSkipHint {
+    /// No skip — perform standard dirty-diff computation.
+    FullDiff,
+    /// Skip diff entirely — buffers are guaranteed identical.
+    SkipDiff,
+    /// Only diff the specified rows — all other rows are guaranteed clean.
+    NarrowToRows(Vec<u16>),
+}
+
+impl DiffSkipHint {
+    /// Whether this hint skips any work.
+    #[must_use]
+    pub fn skips_work(&self) -> bool {
+        !matches!(self, Self::FullDiff)
+    }
+
+    /// Human-readable label for evidence logging.
+    #[must_use]
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::FullDiff => "full-diff",
+            Self::SkipDiff => "skip-diff",
+            Self::NarrowToRows(_) => "narrow-to-rows",
+        }
+    }
+}
+
+// =============================================================================
 // Block-based Row Scanning (autovec-friendly)
 // =============================================================================
 
@@ -4964,5 +5008,120 @@ mod span_edge_cases {
                 super::span_diagnostics(&new)
             );
         }
+    }
+
+    // =========================================================================
+    // Certificate-based skip hint tests (bd-i71od)
+    // =========================================================================
+
+    #[test]
+    fn certified_skip_produces_empty_diff() {
+        let old = Buffer::new(10, 5);
+        let new = Buffer::new(10, 5);
+        let mut diff = BufferDiff::new();
+
+        diff.compute_certified_into(&old, &new, DiffSkipHint::SkipDiff);
+        assert!(diff.is_empty(), "SkipDiff should produce zero changes");
+    }
+
+    #[test]
+    fn certified_full_diff_matches_standard() {
+        let old = Buffer::new(10, 5);
+        let mut new = Buffer::new(10, 5);
+        new.set(3, 2, Cell::from_char('X'));
+
+        let mut standard = BufferDiff::new();
+        standard.compute_dirty_into(&old, &new);
+
+        let mut certified = BufferDiff::new();
+        certified.compute_certified_into(&old, &new, DiffSkipHint::FullDiff);
+
+        assert_eq!(
+            standard.changes(),
+            certified.changes(),
+            "FullDiff hint should produce identical results to standard dirty diff"
+        );
+    }
+
+    #[test]
+    fn certified_narrow_to_rows_only_diffs_specified_rows() {
+        let old = Buffer::new(10, 5);
+        let mut new = Buffer::new(10, 5);
+        // Change cells in rows 1 and 3
+        new.set(2, 1, Cell::from_char('A'));
+        new.set(5, 3, Cell::from_char('B'));
+        // Also change row 4 (but we won't include it in the hint)
+        new.set(7, 4, Cell::from_char('C'));
+
+        let mut diff = BufferDiff::new();
+        diff.compute_certified_into(
+            &old,
+            &new,
+            DiffSkipHint::NarrowToRows(vec![1, 3]),
+        );
+
+        // Should find changes in rows 1 and 3, but NOT row 4
+        let changes = diff.changes();
+        assert!(
+            changes.iter().any(|&(x, y)| x == 2 && y == 1),
+            "should find change at (2, 1)"
+        );
+        assert!(
+            changes.iter().any(|&(x, y)| x == 5 && y == 3),
+            "should find change at (5, 3)"
+        );
+        assert!(
+            !changes.iter().any(|&(_, y)| y == 4),
+            "should NOT find changes in row 4 (not in hint)"
+        );
+    }
+
+    #[test]
+    fn certified_narrow_skips_clean_rows() {
+        let old = Buffer::new(10, 5);
+        let new = Buffer::new(10, 5);
+
+        let mut diff = BufferDiff::new();
+        diff.compute_certified_into(
+            &old,
+            &new,
+            DiffSkipHint::NarrowToRows(vec![0, 2, 4]),
+        );
+
+        assert!(
+            diff.is_empty(),
+            "narrowing to clean rows should produce zero changes"
+        );
+    }
+
+    #[test]
+    fn certified_narrow_out_of_bounds_rows_ignored() {
+        let old = Buffer::new(10, 5);
+        let mut new = Buffer::new(10, 5);
+        new.set(0, 0, Cell::from_char('X'));
+
+        let mut diff = BufferDiff::new();
+        diff.compute_certified_into(
+            &old,
+            &new,
+            DiffSkipHint::NarrowToRows(vec![0, 100, 200]), // 100, 200 are out of bounds
+        );
+
+        assert_eq!(diff.len(), 1, "should find the one change in row 0");
+        assert_eq!(diff.changes()[0], (0, 0));
+    }
+
+    #[test]
+    fn diff_skip_hint_labels() {
+        assert_eq!(DiffSkipHint::FullDiff.label(), "full-diff");
+        assert_eq!(DiffSkipHint::SkipDiff.label(), "skip-diff");
+        assert_eq!(DiffSkipHint::NarrowToRows(vec![]).label(), "narrow-to-rows");
+    }
+
+    #[test]
+    fn diff_skip_hint_skips_work() {
+        assert!(!DiffSkipHint::FullDiff.skips_work());
+        assert!(DiffSkipHint::SkipDiff.skips_work());
+        assert!(DiffSkipHint::NarrowToRows(vec![1]).skips_work());
     }
 }
