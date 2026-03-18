@@ -71,10 +71,7 @@ impl EquivalenceDimension {
     /// may differ if the difference is documented and justified.
     #[must_use]
     pub const fn is_strict(&self) -> bool {
-        match self {
-            Self::TimingBounds => false,
-            _ => true,
-        }
+        !matches!(self, Self::TimingBounds)
     }
 
     /// Human-readable description of what this dimension checks.

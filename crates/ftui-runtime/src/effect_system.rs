@@ -256,11 +256,7 @@ pub fn runtime_dynamics() -> RuntimeDynamics {
         sub_panics: subscription_panics_total(),
         sub_active_estimate: sub_starts.saturating_sub(sub_stops),
         reconciles,
-        reconcile_avg_us: if reconciles > 0 {
-            reconcile_total_us / reconciles
-        } else {
-            0
-        },
+        reconcile_avg_us: reconcile_total_us.checked_div(reconciles).unwrap_or(0),
         shutdown_last_us: shutdown_duration_us_last(),
         shutdown_timeouts: shutdown_timed_out_total(),
     }

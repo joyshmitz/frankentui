@@ -1346,6 +1346,97 @@ impl BufferDiff {
         );
     }
 
+    /// Compute the diff with a certificate-based skip hint.
+    ///
+    /// The caller (typically the runtime loop) evaluates a render certificate
+    /// and passes the result as a `DiffSkipHint`. This method shortcuts the
+    /// diff computation when the certificate allows it:
+    ///
+    /// - `FullDiff`: performs the standard dirty-diff computation.
+    /// - `SkipDiff`: clears changes (no work to present). The caller must
+    ///   ensure that old and new buffers are identical when issuing this hint.
+    /// - `NarrowToRows(rows)`: only diffs the specified rows, skipping all
+    ///   others even if marked dirty. Useful when the certificate identifies
+    ///   exactly which rows changed.
+    ///
+    /// # Safety invariant
+    ///
+    /// Issuing `SkipDiff` when buffers differ produces stale frames.
+    /// The certificate evaluator must guarantee correctness — this method
+    /// trusts the hint without verification.
+    ///
+    /// # Tracing
+    ///
+    /// Emits a tracing event when a skip or narrow is applied, including
+    /// the hint type and resulting change count for evidence logging.
+    pub fn compute_certified_into(
+        &mut self,
+        old: &Buffer,
+        new: &Buffer,
+        hint: DiffSkipHint,
+    ) {
+        match hint {
+            DiffSkipHint::FullDiff => {
+                // Standard path — no certificate benefit
+                self.compute_dirty_into(old, new);
+            }
+            DiffSkipHint::SkipDiff => {
+                // Certificate guarantees buffers are identical — skip all work
+                self.changes.clear();
+                self.last_tile_stats = None;
+                #[cfg(feature = "tracing")]
+                tracing::debug!(
+                    event = "diff_skip_certified",
+                    hint = "skip_diff",
+                    changes = 0,
+                );
+            }
+            DiffSkipHint::NarrowToRows(ref rows) => {
+                // Only diff the specified rows
+                self.changes.clear();
+                self.last_tile_stats = None;
+
+                let w = old.width();
+                let h = old.height();
+                debug_assert_eq!(w, new.width());
+                debug_assert_eq!(h, new.height());
+
+                let old_cells = old.cells();
+                let new_cells = new.cells();
+                let stride = w as usize;
+
+                for &row in rows {
+                    if row >= h {
+                        continue;
+                    }
+                    let start = row as usize * stride;
+                    let end = start + stride;
+                    if end > old_cells.len() || end > new_cells.len() {
+                        continue;
+                    }
+                    let old_row = &old_cells[start..end];
+                    let new_row = &new_cells[start..end];
+                    if old_row == new_row {
+                        continue;
+                    }
+                    for (x, (o, n)) in old_row.iter().zip(new_row.iter()).enumerate() {
+                        if !o.bits_eq(n) {
+                            self.changes.push((x as u16, row));
+                        }
+                    }
+                }
+
+                #[cfg(feature = "tracing")]
+                tracing::debug!(
+                    event = "diff_narrow_certified",
+                    hint = "narrow_to_rows",
+                    rows_checked = rows.len(),
+                    changes = self.changes.len(),
+                );
+            }
+        }
+    }
+
     /// Populate the diff with all cells (full redraw) reusing existing capacity.
     pub fn fill_full(&mut self, width: u16, height: u16) {
         self.changes.clear();
