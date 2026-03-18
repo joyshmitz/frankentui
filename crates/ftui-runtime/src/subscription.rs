@@ -204,6 +204,7 @@ impl RunningSubscription {
                 if start.elapsed() >= SUBSCRIPTION_STOP_JOIN_TIMEOUT {
                     tracing::warn!(
                         sub_id = self.id,
+                        panicked = self.has_panicked(),
                         timeout_ms = SUBSCRIPTION_STOP_JOIN_TIMEOUT.as_millis() as u64,
                         "subscription did not stop within timeout; detaching thread"
                     );
@@ -214,6 +215,7 @@ impl RunningSubscription {
             let _ = handle.join();
             tracing::trace!(
                 sub_id = self.id,
+                panicked = self.has_panicked(),
                 elapsed_us = start.elapsed().as_micros() as u64,
                 "subscription stop (slow path)"
             );

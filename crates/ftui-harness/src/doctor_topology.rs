@@ -108,7 +108,7 @@ pub struct RetrySpec {
 }
 
 /// Subprocess management specification.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct SubprocessSpec {
     /// Process name or command.
     pub command: &'static str,

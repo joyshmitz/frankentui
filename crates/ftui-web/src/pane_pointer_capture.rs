@@ -922,7 +922,36 @@ mod tests {
                 < first
                     .pressure_snap_profile()
                     .expect("pressure profile should be derived from motion")
-                    .strength_bps
+                .strength_bps
+        );
+    }
+
+    #[test]
+    fn pointer_move_zero_delta_does_not_count_as_direction_change() {
+        let mut adapter = adapter();
+        adapter.pointer_down(
+            target(),
+            31,
+            PanePointerButton::Primary,
+            pos(10, 10),
+            PaneModifierSnapshot::default(),
+        );
+
+        let first = adapter.pointer_move(31, pos(24, 10), PaneModifierSnapshot::default());
+        let stationary = adapter.pointer_move(31, pos(24, 10), PaneModifierSnapshot::default());
+        let second = adapter.pointer_move(31, pos(18, 10), PaneModifierSnapshot::default());
+
+        assert_eq!(
+            first.motion,
+            Some(PaneMotionVector::from_delta(14, 0, 16, 0))
+        );
+        assert_eq!(
+            stationary.motion,
+            Some(PaneMotionVector::from_delta(14, 0, 32, 0))
+        );
+        assert_eq!(
+            second.motion,
+            Some(PaneMotionVector::from_delta(8, 0, 48, 0))
         );
     }
 

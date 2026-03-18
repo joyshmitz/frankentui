@@ -13,11 +13,14 @@
   <img src="frankentui_illustration.webp" alt="FrankenTUI - Minimal, high-performance terminal UI kernel">
 </div>
 
-Minimal, high‑performance terminal UI kernel focused on correctness, determinism, and clean architecture.
+High‑performance terminal UI kernel -- 850K+ lines of Rust across 20 crates, 106 widget implementations, 46 interactive demo screens, a Bayesian intelligence layer, resizable pane workspaces, and a web/WASM backend -- focused on correctness, determinism, and clean architecture.
 
 ![status](https://img.shields.io/badge/status-WIP-yellow)
 ![rust](https://img.shields.io/badge/rust-nightly-blue)
 ![license](https://img.shields.io/badge/license-MIT%2BOpenAI%2FAnthropic%20Rider-green)
+![crates](https://img.shields.io/badge/crates-20-blue)
+![widgets](https://img.shields.io/badge/widgets-106-blue)
+![screens](https://img.shields.io/badge/demo_screens-46-blue)
 
 ## Quick Run (from source)
 
@@ -58,6 +61,12 @@ cargo run -p ftui-demo-showcase
 | **One‑writer rule** | Serializes output for correctness | `TerminalWriter` owns all stdout writes |
 | **RAII cleanup** | Terminal state restored even on panic | `TerminalSession` in `ftui-core` |
 | **Composable crates** | Layout, text, style, runtime, widgets | Add only what you need |
+| **106 widgets** | Block, Paragraph, Table, Input, Tree, Modal, Command Palette, etc. | 50 widget source files across `ftui-widgets` |
+| **Pane workspaces** | Drag‑to‑resize, docking, magnetic snap, inertial throw, undo/redo | `PaneTree` + `PaneDragResizeMachine` in `ftui-layout` |
+| **Web/WASM backend** | Same Rust core renders to browser canvas | `ftui-web` + `frankenterm-web` crates |
+| **Bayesian intelligence** | Statistical diff strategy, resize coalescing, capability detection | BOCPD, VOI, conformal prediction, e‑processes |
+| **Shadow‑run validation** | Prove rendering determinism across runtime migrations | `ShadowRun::compare()` in `ftui-harness` |
+| **46 demo screens** | Dashboard, visual effects, widget gallery, layout lab, and more | `cargo run -p ftui-demo-showcase` |
 
 ---
 
@@ -170,22 +179,47 @@ fn main() -> std::io::Result<()> {
 
 ---
 
-## Workspace Overview
+## Workspace Overview (20 Crates)
+
+### Core Architecture
 
 | Crate | Purpose | Status |
 |------|---------|--------|
 | `ftui` | Public facade + prelude | Implemented |
-| `ftui-core` | Terminal lifecycle, events, capabilities | Implemented |
-| `ftui-render` | Buffer, diff, ANSI presenter | Implemented |
-| `ftui-style` | Style + theme system | Implemented |
-| `ftui-text` | Spans, segments, rope editor | Implemented |
-| `ftui-layout` | Flex + Grid solvers | Implemented |
-| `ftui-runtime` | Elm/Bubbletea runtime | Implemented |
-| `ftui-widgets` | Core widget library | Implemented |
-| `ftui-extras` | Feature‑gated add‑ons | Implemented |
-| `ftui-harness` | Reference app + snapshots | Implemented |
-| `ftui-pty` | PTY test utilities | Implemented |
-| `ftui-simd` | Optional safe optimizations | Reserved |
+| `ftui-core` | Terminal lifecycle, events, capabilities, animation, input parsing, gestures | Implemented |
+| `ftui-render` | Buffer, diff, ANSI presenter, frame, grapheme pool, budget system | Implemented |
+| `ftui-style` | Style + theme system with CSS‑like cascading | Implemented |
+| `ftui-text` | Spans, segments, rope editor, cursor, BiDi, shaping, normalization | Implemented |
+| `ftui-layout` | Flex + Grid solvers, **pane workspace system** (9K+ lines), e‑graph optimizer | Implemented |
+| `ftui-runtime` | Elm/Bubbletea runtime, effect system, subscriptions, rollout policy, telemetry schema (13K+ line program.rs) | Implemented |
+| `ftui-widgets` | 106 widget implementations across 50 source files | Implemented |
+| `ftui-extras` | Feature‑gated add‑ons, VFX rasterizer (opt‑level=3) | Implemented |
+
+### Backend & Platform
+
+| Crate | Purpose | Status |
+|------|---------|--------|
+| `ftui-backend` | Backend abstraction layer | Implemented |
+| `ftui-tty` | TTY terminal backend | Implemented |
+| `ftui-web` | Web/WASM adapter with pointer/touch parity | Implemented |
+| `ftui-showcase-wasm` | WASM build of the demo showcase | Implemented |
+
+### Testing & Verification
+
+| Crate | Purpose | Status |
+|------|---------|--------|
+| `ftui-harness` | Test harness, shadow‑run comparison, benchmark gate, rollout scorecard, determinism fixtures | Implemented |
+| `ftui-pty` | PTY‑based test utilities | Implemented |
+| `ftui-demo-showcase` | 46 interactive demo screens + snapshot tests | Implemented |
+| `doctor_frankentui` | Integrated TUI capture, seeding, suite reporting, diagnostics, and coverage gating | Implemented |
+
+### Supporting
+
+| Crate | Purpose | Status |
+|------|---------|--------|
+| `ftui-a11y` | Accessibility tree and node structures | Implemented |
+| `ftui-i18n` | Internationalization support | Implemented |
+| `ftui-simd` | SIMD acceleration | Reserved |
 
 ---
 
@@ -197,15 +231,23 @@ fn main() -> std::io::Result<()> {
 | Deterministic buffer diff | ✅ Kernel‑level | ✅ | ✅ | ❌ |
 | One‑writer rule | ✅ Enforced | ⚠️ App‑specific | ⚠️ App‑specific | ❌ |
 | RAII teardown | ✅ TerminalSession | ⚠️ App‑specific | ⚠️ App‑specific | ❌ |
+| Pane workspaces (drag/resize/dock) | ✅ Built‑in | ❌ | ❌ | ❌ |
+| Web/WASM backend | ✅ Shared Rust core | ❌ | ❌ | ❌ |
+| Bayesian diff strategy | ✅ Adaptive | ❌ Fixed | ❌ Fixed | ❌ N/A |
+| Shadow‑run validation harness | ✅ Built‑in | ❌ | ❌ | ❌ |
 | Snapshot/time‑travel harness | ✅ Built‑in | ❌ | ❌ | ❌ |
+| Widget count | 106 | ~20 | ~12 | 0 |
+| Demo screens | 46 | ~5 | ~5 | 0 |
 
 **When to use FrankenTUI:**
 - You want inline + scrollback without flicker.
 - You care about deterministic rendering and teardown guarantees.
+- You need resizable pane workspaces with drag, dock, and undo.
+- You want a single Rust codebase targeting both terminal and web.
 - You prefer a kernel you can build your own UI framework on top of.
 
 **When FrankenTUI might not be ideal:**
-- You need a huge widget ecosystem today (FrankenTUI is still early stage).
+- You need a stable public API today (FrankenTUI is evolving fast).
 - You want a fully opinionated application framework rather than a kernel.
 
 ---
@@ -485,6 +527,151 @@ Terminal capability detection uses standard environment variables (`TERM`, `COLO
 7. **Writer** → enforces one‑writer rule, flushes output.
 
 This is the core loop that ensures determinism and flicker‑free output.
+
+---
+
+## Pane Workspace System
+
+FrankenTUI includes a full pane workspace system (9,000+ lines in `ftui-layout/src/pane.rs`) that goes far beyond simple split layouts:
+
+- **Drag‑to‑resize** via splitter handles with cell‑level hit‑testing
+- **Drag‑to‑move** with magnetic docking fields and live ghost preview targets
+- **Inertial throw** — release mid‑drag and panes coast with momentum via `PaneInertialThrow`
+- **Pressure‑sensitive snap** — snap strength derived from drag speed and direction changes via `PanePressureSnapProfile`
+- **Multi‑pane selection** via Shift+Click with `PaneSelectionState`
+- **Intelligence modes** — Focus, Compare, Monitor, Compact layout presets via `PaneLayoutIntelligenceMode`
+- **Persistent interaction timeline** with full undo/redo/replay via `PaneInteractionTimeline`
+- **Right‑click mode cycling** through all four intelligence modes
+- **Scroll‑wheel magnetic field tuning** — adjust snap strength without leaving the pane
+- **Terminal + Web parity** — same pane interactions work in both backends via `PaneTerminalAdapter` and `PanePointerCaptureAdapter`
+
+The pane system is integrated into three of the 46 demo screens (Dashboard, Widget Gallery, Layout Lab) and has dedicated E2E tests (`scripts/pane_e2e.sh`).
+
+### Pane Architecture
+
+```
+PaneTree                         ← Spatial layout tree (HSplit / VSplit / Leaf)
+  └── PaneOperation              ← Atomic layout mutation (resize, swap, split, close)
+       └── PaneInteractionTimeline  ← Undo/redo/replay history of operations
+            └── PaneDragResizeMachine   ← State machine for pointer gesture lifecycle
+                 └── PaneSemanticInputEvent  ← High‑level input abstraction
+```
+
+---
+
+## Runtime Migration & Rollout Infrastructure
+
+FrankenTUI is migrating its execution substrate through three lanes:
+
+| Lane | Description | Status |
+|------|-------------|--------|
+| `Legacy` | Thread‑based subscriptions with manual stop coordination | Available |
+| `Structured` | CancellationToken‑backed subscriptions (current default) | **Active** |
+| `Asupersync` | Full Asupersync‑native execution | Future |
+
+### Rollout Policy
+
+Runtime lane transitions are managed through a shadow‑run comparison system to prevent regressions:
+
+```rust
+// Operator workflow: Off → Shadow → Evaluate → Enable → Monitor → Rollback
+let config = ProgramConfig::default()
+    .with_lane(RuntimeLane::Structured)         // Current execution backend
+    .with_rollout_policy(RolloutPolicy::Shadow)  // Shadow‑compare before enabling
+    .with_env_overrides();                       // FTUI_RUNTIME_LANE, FTUI_ROLLOUT_POLICY
+```
+
+| Environment Variable | Values | Default | Purpose |
+|---------------------|--------|---------|---------|
+| `FTUI_RUNTIME_LANE` | `legacy`, `structured`, `asupersync` | `structured` | Select execution backend |
+| `FTUI_ROLLOUT_POLICY` | `off`, `shadow`, `enabled` | `off` | Control rollout behavior |
+
+### Shadow‑Run Validation
+
+Prove rendering determinism across runtime migrations by running the same model through two independent execution paths and comparing frame checksums:
+
+```rust
+use ftui_harness::{ShadowRun, ShadowRunConfig, ShadowVerdict};
+
+let config = ShadowRunConfig::new("migration_test", "tick_counter", 42).viewport(80, 24);
+let result = ShadowRun::compare(config, || MyModel::new(), |session| {
+    session.init();
+    session.tick();
+    session.capture_frame();
+});
+assert_eq!(result.verdict, ShadowVerdict::Match);
+```
+
+### Rollout Scorecard & Evidence Bundle
+
+Combine shadow evidence + benchmark results into a single go/no‑go release decision:
+
+```rust
+use ftui_harness::{RolloutScorecard, RolloutScorecardConfig, RolloutVerdict, RolloutEvidenceBundle};
+
+let mut scorecard = RolloutScorecard::new(
+    RolloutScorecardConfig::default().min_shadow_scenarios(3)
+);
+scorecard.add_shadow_result(shadow_result);
+assert_eq!(scorecard.evaluate(), RolloutVerdict::Go);
+
+// Machine‑readable JSON evidence for CI gates
+let bundle = RolloutEvidenceBundle {
+    scorecard: scorecard.summary(),
+    queue_telemetry: Some(ftui_runtime::effect_system::queue_telemetry()),
+    requested_lane: "structured".to_string(),
+    resolved_lane: "structured".to_string(),
+    rollout_policy: "shadow".to_string(),
+};
+println!("{}", bundle.to_json());  // Self‑contained release decision artifact
+```
+
+### Effect Queue Telemetry & Backpressure
+
+The effect executor tracks queue health with monotonic counters and enforces backpressure:
+
+```rust
+// Configure backpressure bounds
+let config = ProgramConfig::default()
+    .with_effect_queue(
+        EffectQueueConfig::default()
+            .with_enabled(true)
+            .with_max_queue_depth(64)  // Drop tasks beyond this depth
+    );
+
+// Monitor queue health at runtime
+let snap = ftui_runtime::effect_system::queue_telemetry();
+// snap.enqueued, snap.processed, snap.dropped, snap.high_water, snap.in_flight
+```
+
+### Unified Telemetry Schema
+
+All runtime telemetry uses canonical targets and event names defined in `ftui_runtime::telemetry_schema`:
+
+| Target | Purpose |
+|--------|---------|
+| `ftui.runtime` | Startup, shutdown, lane resolution |
+| `ftui.effect` | Command/subscription execution, queue drops |
+| `ftui.process` | Process subscription lifecycle |
+| `ftui.decision.resize` | Resize coalescer decisions |
+| `ftui.voi` | Value‑of‑information sampling |
+| `ftui.bocpd` | Change‑point detection |
+| `ftui.eprocess` | E‑process throttle decisions |
+
+---
+
+## Web/WASM Backend
+
+FrankenTUI targets both native terminals and web browsers from a single Rust codebase:
+
+| Crate | Purpose |
+|-------|---------|
+| `ftui-web` | Web adapter with pointer/touch parity, DPR/zoom handling |
+| `ftui-showcase-wasm` | WASM build target for the demo showcase |
+| `frankenterm-core` | Terminal emulator core (shared between backends) |
+| `frankenterm-web` | Browser frontend for the terminal emulator |
+
+The web adapter translates browser pointer events into the same `PaneSemanticInputEvent` stream used by the terminal backend, ensuring interaction parity across platforms.
 
 ---
 
@@ -929,8 +1116,10 @@ Inline mode uses synchronized output where supported. If you’re in a very old 
 | Capability | Current State | Planned |
 |------------|---------------|---------|
 | Stable API | ❌ Not yet | Yes (post‑v1) |
-| Full widget ecosystem | ⚠️ Partial | Expanding |
+| Widget ecosystem | ✅ 106 implementations | Expanding |
 | Formal compatibility matrix | ⚠️ In progress | Yes |
+| Asupersync execution lane | ⚠️ Falls back to Structured | Migration infrastructure complete, executor pending |
+| crates.io publishing | ⚠️ 3 of 20 crates | Remaining in publish queue |
 
 ---
 
@@ -942,7 +1131,7 @@ It’s a modular kernel assembled from focused, composable parts — a deliberat
 
 ### Is this a full framework?
 
-Not yet. It’s a kernel plus core widgets. You can build a framework on top, but expect APIs to evolve.
+It’s a kernel plus 106 widgets plus a demo showcase with 46 screens plus a full pane workspace system. You can build a framework on top, but expect APIs to evolve.
 
 ### Does it work on Windows?
 
@@ -953,11 +1142,27 @@ strategy is documented in `docs/spec/frankenterm-architecture.md` (Section 13.5)
 
 Yes. Inline mode is designed for CLI + UI coexistence.
 
+### Can it run in a browser?
+
+Yes. `ftui-web` provides a WASM adapter that renders through the same Rust core. `ftui-showcase-wasm` is the WASM build target for the demo showcase.
+
 ### How do I update snapshot tests?
 
 ```bash
-BLESS=1 cargo test -p ftui-harness
+BLESS=1 cargo test -p ftui-demo-showcase
 ```
+
+### How many lines of code is it?
+
+850,000+ lines of Rust across 20 crates, with 106 widget implementations, 46 demo screens, and 69 E2E scripts.
+
+### What's the performance like?
+
+The 16‑byte cell design puts 4 cells per cache line. Bayesian diff strategy selection avoids scanning unchanged regions. The presenter uses cost‑optimal cursor positioning. Frame‑time budgets are enforced via conformal prediction with automatic degradation (Full → SimpleBorders → NoColors → TextOnly).
+
+### How does the rollout system work?
+
+The runtime supports three execution lanes (Legacy, Structured, Asupersync) with a shadow‑run comparison system that proves determinism before enabling a new lane. The `RolloutScorecard` combines shadow evidence with benchmark results into a machine‑readable go/no‑go verdict. See the "Runtime Migration & Rollout Infrastructure" section above.
 
 ---
 
@@ -1600,7 +1805,9 @@ Intervention: if input_latency > threshold OR F < 0.8:
 
 ---
 
-## Widget System
+## Widget System (106 Implementations)
+
+FrankenTUI ships 106 `Widget` and `StatefulWidget` implementations across 50 source files in `ftui-widgets`.
 
 ### Core Widgets
 
@@ -1609,13 +1816,23 @@ Intervention: if input_latency > threshold OR F < 0.8:
 | `Block` | Container with borders/title | 9 border styles, title alignment |
 | `Paragraph` | Text with wrapping | Word/char wrap, scroll |
 | `List` | Selectable items | Virtualized, custom highlight |
-| `Table` | Columnar data | Column constraints, row selection |
+| `Table` | Columnar data | Column constraints, row selection, themed |
 | `Input` | Text input | Cursor, selection, history |
 | `Textarea` | Multi-line input | Line numbers, syntax hooks |
 | `Tabs` | Tab bar | Closeable, reorderable |
 | `Progress` | Progress bars | Determinate/indeterminate |
 | `Sparkline` | Inline charts | Min/max markers |
 | `Tree` | Hierarchical data | Expand/collapse, lazy loading |
+| `CommandPalette` | Fuzzy search | Bayesian scoring with evidence ledger |
+| `Modal` | Dialog/overlay system | Stack‑based, focus capture |
+| `JsonView` | JSON tree viewer | Collapse/expand nodes |
+| `FilePicker` | File browser | Directory navigation |
+| `VirtualizedList` | Large lists | Fenwick tree scroll, Bayesian height prediction |
+| `Toast` | Notifications | Timed, dismissable |
+| `Spinner` | Activity indicator | Multiple styles |
+| `Scrollbar` | Scroll position | Proportional thumb |
+
+Plus: `Align`, `Badge`, `Cached`, `Columns`, `ConstraintOverlay`, `DebugOverlay`, `DecisionCard`, `DragHandle`, `Emoji`, `ErrorBoundary`, `Group`, `Help`, `HistoryPanel`, `Inspector`, `LogViewer`, `NotificationQueue`, `Padding`, `Paginator`, `Panel`, `Pretty`, `Rule`, `StatusLine`, `Stopwatch`, `Timer`, `ValidationError`, `VoiDebugOverlay`, `DriftVisualization`, and more.
 
 ### Widget Composition
 
