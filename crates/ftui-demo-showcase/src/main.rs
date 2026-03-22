@@ -193,17 +193,17 @@ where
 
     // Crossterm-compat fallback: used on non-Unix (Windows) always, or on
     // Unix when native-backend is not enabled.
-    #[cfg(all(not(all(unix, feature = "native-backend")), feature = "crossterm-compat"))]
+    #[cfg(all(
+        not(all(unix, feature = "native-backend")),
+        feature = "crossterm-compat"
+    ))]
     {
         let mut program = Program::with_config(model, config)?;
         program.run()
     }
 
     // Neither backend is usable — provide a helpful error.
-    #[cfg(not(any(
-        all(unix, feature = "native-backend"),
-        feature = "crossterm-compat"
-    )))]
+    #[cfg(not(any(all(unix, feature = "native-backend"), feature = "crossterm-compat")))]
     {
         let _ = (model, config);
         Err(std::io::Error::new(
