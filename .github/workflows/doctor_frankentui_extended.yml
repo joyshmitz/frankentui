@@ -1,4 +1,4 @@
-# doctor_franktentui Extended Verification (nightly lane)
+# doctor_frankentui Extended Verification (nightly lane)
 # bd-36je8.4.4: nightly extended doctor verification lane
 #
 # Goals:
@@ -6,7 +6,7 @@
 # - Run deeper soak + variant coverage on a schedule / main pushes.
 # - Retain richer artifacts longer for intermittent failure triage.
 
-name: doctor_franktentui Extended Verification
+name: doctor_frankentui Extended Verification
 
 on:
   schedule:
@@ -16,23 +16,23 @@ on:
   push:
     branches: [main]
     paths:
-      - 'crates/doctor_franktentui/**'
-      - 'scripts/doctor_franktentui_*'
-      - '.github/workflows/doctor_franktentui_extended.yml'
+      - 'crates/doctor_frankentui/**'
+      - 'scripts/doctor_frankentui_*'
+      - '.github/workflows/doctor_frankentui_extended.yml'
 
 concurrency:
-  group: doctor-franktentui-extended
+  group: doctor-frankentui-extended
   cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  DOCTOR_FTUI_ARTIFACT_ROOT: /tmp/doctor_franktentui_ci_extended
-  DOCTOR_FRANKTENTUI_VHS_SMOKE_TIMEOUT_S: 30
+  DOCTOR_FTUI_ARTIFACT_ROOT: /tmp/doctor_frankentui_ci_extended
+  DOCTOR_FRANKENTUI_VHS_SMOKE_TIMEOUT_S: 30
 
 jobs:
-  doctor-franktentui-extended:
-    name: doctor_franktentui Extended Verification
+  doctor-frankentui-extended:
+    name: doctor_frankentui Extended Verification
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -95,64 +95,64 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-doctor-franktentui-extended-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-doctor-frankentui-extended-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Run doctor_franktentui no-fake realism gate
+      - name: Run doctor_frankentui no-fake realism gate
         run: |
           set -euo pipefail
           mkdir -p "${DOCTOR_FTUI_ARTIFACT_ROOT}/logs"
-          python3 ./scripts/doctor_franktentui_no_fake_gate.py \
+          python3 ./scripts/doctor_frankentui_no_fake_gate.py \
             2>&1 | tee "${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/no_fake_gate.log"
 
-      - name: Run doctor_franktentui unit + integration tests
+      - name: Run doctor_frankentui unit + integration tests
         run: |
           set -euo pipefail
           mkdir -p "${DOCTOR_FTUI_ARTIFACT_ROOT}/logs"
-          cargo test -p doctor_franktentui --all-targets -- --nocapture \
+          cargo test -p doctor_frankentui --all-targets -- --nocapture \
             2>&1 | tee "${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/unit_integration.log"
 
-      - name: Run doctor_franktentui happy-path E2E
+      - name: Run doctor_frankentui happy-path E2E
         run: |
           set -euo pipefail
-          ./scripts/doctor_franktentui_happy_e2e.sh "${DOCTOR_FTUI_ARTIFACT_ROOT}/happy" \
+          ./scripts/doctor_frankentui_happy_e2e.sh "${DOCTOR_FTUI_ARTIFACT_ROOT}/happy" \
             2>&1 | tee "${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/happy_e2e.log"
 
-      - name: Run doctor_franktentui failure-path E2E
+      - name: Run doctor_frankentui failure-path E2E
         run: |
           set -euo pipefail
-          ./scripts/doctor_franktentui_failure_e2e.sh "${DOCTOR_FTUI_ARTIFACT_ROOT}/failure" \
+          ./scripts/doctor_frankentui_failure_e2e.sh "${DOCTOR_FTUI_ARTIFACT_ROOT}/failure" \
             2>&1 | tee "${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/failure_e2e.log"
 
-      - name: Build doctor_franktentui replay/triage summary
+      - name: Build doctor_frankentui replay/triage summary
         if: always()
         run: |
           set -euo pipefail
-          ./scripts/doctor_franktentui_replay_triage.py \
+          ./scripts/doctor_frankentui_replay_triage.py \
             --run-root "${DOCTOR_FTUI_ARTIFACT_ROOT}/failure" \
             --output-json "${DOCTOR_FTUI_ARTIFACT_ROOT}/failure/meta/replay_triage_report.json" \
             --max-signals 8 \
             --max-timeline 120 \
             2>&1 | tee "${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/replay_triage.log"
 
-      - name: Run doctor_franktentui determinism soak (extended)
+      - name: Run doctor_frankentui determinism soak (extended)
         run: |
           set -euo pipefail
-          ./scripts/doctor_franktentui_determinism_soak.sh "${DOCTOR_FTUI_ARTIFACT_ROOT}/determinism" 5 \
+          ./scripts/doctor_frankentui_determinism_soak.sh "${DOCTOR_FTUI_ARTIFACT_ROOT}/determinism" 5 \
             2>&1 | tee "${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/determinism_soak.log"
 
-      - name: Run doctor_franktentui coverage gate
+      - name: Run doctor_frankentui coverage gate
         run: |
           set -euo pipefail
-          ./scripts/doctor_franktentui_coverage.sh "${DOCTOR_FTUI_ARTIFACT_ROOT}/coverage" \
+          ./scripts/doctor_frankentui_coverage.sh "${DOCTOR_FTUI_ARTIFACT_ROOT}/coverage" \
             2>&1 | tee "${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/coverage_gate.log"
-          cp crates/doctor_franktentui/coverage/thresholds.toml "${DOCTOR_FTUI_ARTIFACT_ROOT}/coverage/thresholds.toml"
-          cp crates/doctor_franktentui/coverage/e2e_jsonl_schema.json "${DOCTOR_FTUI_ARTIFACT_ROOT}/coverage/e2e_jsonl_schema.json"
+          cp crates/doctor_frankentui/coverage/thresholds.toml "${DOCTOR_FTUI_ARTIFACT_ROOT}/coverage/thresholds.toml"
+          cp crates/doctor_frankentui/coverage/e2e_jsonl_schema.json "${DOCTOR_FTUI_ARTIFACT_ROOT}/coverage/e2e_jsonl_schema.json"
 
-      - name: Run doctor_franktentui happy-path E2E (conservative mode)
+      - name: Run doctor_frankentui happy-path E2E (conservative mode)
         run: |
           set -euo pipefail
-          DOCTOR_FRANKTENTUI_CONSERVATIVE=1 \
-            ./scripts/doctor_franktentui_happy_e2e.sh "${DOCTOR_FTUI_ARTIFACT_ROOT}/happy_conservative" \
+          DOCTOR_FRANKENTUI_CONSERVATIVE=1 \
+            ./scripts/doctor_frankentui_happy_e2e.sh "${DOCTOR_FTUI_ARTIFACT_ROOT}/happy_conservative" \
               2>&1 | tee "${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/happy_conservative_e2e.log"
 
       - name: Write artifact map
@@ -163,7 +163,7 @@ jobs:
           artifact_map_txt="${DOCTOR_FTUI_ARTIFACT_ROOT}/artifact_map.txt"
           artifact_map_json="${DOCTOR_FTUI_ARTIFACT_ROOT}/artifact_map.json"
           {
-            echo "doctor_franktentui extended artifact map"
+            echo "doctor_frankentui extended artifact map"
             echo "generated_at_utc=$(date -u +%Y%m%dT%H%M%SZ)"
             echo "git_rev=$(git rev-parse HEAD 2>/dev/null || echo unknown)"
             echo "artifact_root=${DOCTOR_FTUI_ARTIFACT_ROOT}"
@@ -252,7 +252,7 @@ json_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 PY
 
           {
-            echo "## doctor_franktentui extended artifact map"
+            echo "## doctor_frankentui extended artifact map"
             echo ""
             echo '```'
             cat "${artifact_map_txt}"
@@ -261,11 +261,11 @@ PY
             echo "artifact_map_json=${artifact_map_json}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Upload doctor_franktentui extended verification artifacts
+      - name: Upload doctor_frankentui extended verification artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: doctor-franktentui-extended-verification
-          path: /tmp/doctor_franktentui_ci_extended/
+          name: doctor-frankentui-extended-verification
+          path: /tmp/doctor_frankentui_ci_extended/
           retention-days: 30
           if-no-files-found: error
