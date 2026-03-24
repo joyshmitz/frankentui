@@ -631,7 +631,7 @@ impl Flex {
             return rects;
         }
 
-        let total_items_size: u16 = sizes.iter().sum();
+        let total_items_size: u16 = sizes.iter().fold(0u16, |acc, &s| acc.saturating_add(s));
         let total_available = match self.direction {
             Direction::Horizontal => area.width,
             Direction::Vertical => area.height,

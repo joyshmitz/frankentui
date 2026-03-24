@@ -87,7 +87,7 @@ impl LayoutRecord {
 
     /// Check if the total computed size exceeds available space (overflow).
     pub fn has_overflow(&self) -> bool {
-        let total_computed: u16 = self.computed_sizes.iter().sum();
+        let total_computed: u16 = self.computed_sizes.iter().fold(0u16, |acc, &s| acc.saturating_add(s));
         let total_gaps = if self.computed_sizes.len() > 1 {
             self.gap
                 .saturating_mul((self.computed_sizes.len() - 1) as u16)
@@ -101,7 +101,7 @@ impl LayoutRecord {
     ///
     /// Returns true if more than 20% of available space is unused.
     pub fn has_underflow(&self) -> bool {
-        let total_computed: u16 = self.computed_sizes.iter().sum();
+        let total_computed: u16 = self.computed_sizes.iter().fold(0u16, |acc, &s| acc.saturating_add(s));
         let total_gaps = if self.computed_sizes.len() > 1 {
             self.gap
                 .saturating_mul((self.computed_sizes.len() - 1) as u16)
@@ -119,7 +119,7 @@ impl LayoutRecord {
         if self.available_size == 0 {
             return 0.0;
         }
-        let total_computed: u16 = self.computed_sizes.iter().sum();
+        let total_computed: u16 = self.computed_sizes.iter().fold(0u16, |acc, &s| acc.saturating_add(s));
         let total_gaps = if self.computed_sizes.len() > 1 {
             self.gap
                 .saturating_mul((self.computed_sizes.len() - 1) as u16)
