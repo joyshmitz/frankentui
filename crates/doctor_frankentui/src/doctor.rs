@@ -99,6 +99,7 @@ struct CaptureSmokeObservability {
     run_name: String,
     run_dir: String,
     run_meta_path: String,
+    artifact_manifest: Option<String>,
     status: String,
     trace_id: Option<String>,
     fallback_active: Option<bool>,
@@ -349,6 +350,7 @@ fn load_capture_smoke_observability(
         run_name: run_name.to_string(),
         run_dir: run_dir.display().to_string(),
         run_meta_path: meta_path.display().to_string(),
+        artifact_manifest: meta.artifact_manifest,
         status: meta.status,
         trace_id: meta.trace_id,
         fallback_active: meta.fallback_active,
@@ -1302,6 +1304,9 @@ exit 1
             run_name: "doctor_full_run".to_string(),
             run_dir: "/tmp/doctor-run/doctor_full_run".to_string(),
             run_meta_path: "/tmp/doctor-run/doctor_full_run/run_meta.json".to_string(),
+            artifact_manifest: Some(
+                "/tmp/doctor-run/doctor_full_run/run_artifact_manifest.json".to_string(),
+            ),
             status: "failed".to_string(),
             trace_id: Some("trace-123".to_string()),
             fallback_active: Some(true),
@@ -1368,6 +1373,10 @@ exit 1
         assert_eq!(parsed["capture_smoke"]["run_name"], "doctor_full_run");
         assert_eq!(parsed["capture_smoke"]["trace_id"], "trace-123");
         assert_eq!(
+            parsed["capture_smoke"]["artifact_manifest"],
+            "/tmp/doctor-run/doctor_full_run/run_artifact_manifest.json"
+        );
+        assert_eq!(
             parsed["capture_smoke"]["failure_signature"],
             "vhs_ttyd_handshake_failed"
         );
@@ -1426,6 +1435,12 @@ exit 1
             fallback_reason: Some("capture timeout exceeded 30s".to_string()),
             capture_error_reason: Some("ttyd handshake EOF".to_string()),
             evidence_ledger: Some(run_dir.join("evidence_ledger.jsonl").display().to_string()),
+            artifact_manifest: Some(
+                run_dir
+                    .join("run_artifact_manifest.json")
+                    .display()
+                    .to_string(),
+            ),
             ttyd_runtime_log: Some(run_dir.join("ttyd_runtime.log").display().to_string()),
             vhs_exit_code: Some(124),
             host_vhs_exit_code: Some(124),
@@ -1436,10 +1451,18 @@ exit 1
 
         let observability = super::load_capture_smoke_observability(temp.path(), "doctor_full_run")
             .expect("load observability");
+        let expected_artifact_manifest = run_dir
+            .join("run_artifact_manifest.json")
+            .display()
+            .to_string();
 
         assert_eq!(observability.run_name, "doctor_full_run");
         assert_eq!(observability.status, "failed");
         assert_eq!(observability.trace_id.as_deref(), Some("trace-xyz"));
+        assert_eq!(
+            observability.artifact_manifest.as_deref(),
+            Some(expected_artifact_manifest.as_str())
+        );
         assert_eq!(
             observability.failure_signature.as_deref(),
             Some("vhs_ttyd_handshake_failed")

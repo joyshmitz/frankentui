@@ -98,6 +98,7 @@ struct SuiteRunIndexEntry {
     fallback_reason: Option<String>,
     capture_error_reason: Option<String>,
     evidence_ledger: Option<String>,
+    artifact_manifest: Option<String>,
     ttyd_runtime_log: Option<String>,
     tmux_session: Option<String>,
     tmux_pane_capture: Option<String>,
@@ -241,6 +242,7 @@ fn build_suite_observability_summary(runs: &[RunMeta]) -> SuiteObservabilitySumm
             fallback_reason: run.fallback_reason.clone(),
             capture_error_reason: run.capture_error_reason.clone(),
             evidence_ledger: run.evidence_ledger.clone(),
+            artifact_manifest: run.artifact_manifest.clone(),
             ttyd_runtime_log: run.ttyd_runtime_log.clone(),
             tmux_session: run.tmux_session.clone(),
             tmux_pane_capture: run.tmux_pane_capture.clone(),
@@ -1075,6 +1077,7 @@ mod tests {
                 trace_id: Some("trace-a".to_string()),
                 fallback_reason: Some("capture degraded".to_string()),
                 evidence_ledger: Some("/tmp/run-a/evidence_ledger.jsonl".to_string()),
+                artifact_manifest: Some("/tmp/run-a/run_artifact_manifest.json".to_string()),
                 ..crate::runmeta::RunMeta::default()
             },
             crate::runmeta::RunMeta {
@@ -1096,6 +1099,10 @@ mod tests {
         assert_eq!(
             summary.run_index[0].evidence_ledger.as_deref(),
             Some("/tmp/run-a/evidence_ledger.jsonl")
+        );
+        assert_eq!(
+            summary.run_index[0].artifact_manifest.as_deref(),
+            Some("/tmp/run-a/run_artifact_manifest.json")
         );
         assert_eq!(summary.run_index[1].tmux_session.as_deref(), Some("tmux-b"));
         assert_eq!(

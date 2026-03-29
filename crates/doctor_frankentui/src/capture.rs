@@ -1886,6 +1886,7 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
     let summary_path = run_dir.join("run_summary.txt");
     let meta_path = run_dir.join("run_meta.json");
     let evidence_ledger_path = run_dir.join("evidence_ledger.jsonl");
+    let artifact_manifest_path = run_dir.join("run_artifact_manifest.json");
 
     let trace_id = format!("trace-{timestamp}-{}", std::process::id());
 
@@ -1911,7 +1912,7 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
     write_string(&tape_path, &tape)?;
 
     let summary = format!(
-        "doctor_frankentui run\nprofile={}\nprofile_description={}\nstarted_at={}\nruntime_command={}\nproject_dir={}\nhost={}\nport={}\npath={}\nauth_bearer_set={}\nkeys={}\nseed_demo={}\nseed_required={}\nsnapshot_required={}\noutput={}\nsnapshot={}\nrun_dir={}\ntrace_id={}\nconservative_mode={}\ncapture_timeout_seconds={}\nobserve={}\nfastapi_output_mode={}\nfastapi_agent_mode={}\nsqlmodel_output_mode={}\nsqlmodel_agent_mode={}\n",
+        "doctor_frankentui run\nprofile={}\nprofile_description={}\nstarted_at={}\nruntime_command={}\nproject_dir={}\nhost={}\nport={}\npath={}\nauth_bearer_set={}\nkeys={}\nseed_demo={}\nseed_required={}\nsnapshot_required={}\noutput={}\nsnapshot={}\nrun_dir={}\nmeta={}\nartifact_manifest={}\ntrace_id={}\nconservative_mode={}\ncapture_timeout_seconds={}\nobserve={}\nfastapi_output_mode={}\nfastapi_agent_mode={}\nsqlmodel_output_mode={}\nsqlmodel_agent_mode={}\n",
         cfg.profile,
         cfg.profile_description,
         start_iso,
@@ -1930,6 +1931,8 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
             .as_ref()
             .map_or_else(|| "disabled".to_string(), |path| path.display().to_string()),
         run_dir.display(),
+        meta_path.display(),
+        artifact_manifest_path.display(),
         trace_id,
         cfg.conservative,
         cfg.capture_timeout_seconds,
@@ -1945,6 +1948,43 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
     write_string(&summary_path, &summary)?;
 
     if cfg.dry_run {
+        let dry_run_meta = RunMeta {
+            status: "running".to_string(),
+            started_at: start_iso.clone(),
+            profile: cfg.profile.clone(),
+            profile_description: cfg.profile_description.clone(),
+            binary: binary_label.clone(),
+            project_dir: cfg.project_dir.display().to_string(),
+            host: cfg.host.clone(),
+            port: cfg.port.clone(),
+            path: cfg.http_path.clone(),
+            keys: cfg.keys.clone(),
+            seed_demo: 0,
+            seed_required: 0,
+            snapshot_required: 0,
+            output: output.display().to_string(),
+            snapshot: snapshot
+                .as_ref()
+                .map_or_else(String::new, |path| path.display().to_string()),
+            run_dir: run_dir.display().to_string(),
+            trace_id: Some(trace_id.clone()),
+            fallback_active: Some(cfg.conservative),
+            fallback_reason: cfg
+                .conservative
+                .then(|| "conservative mode enabled".to_string()),
+            policy_id: Some(POLICY_ID.to_string()),
+            evidence_ledger: cfg
+                .evidence_ledger
+                .then(|| evidence_ledger_path.display().to_string()),
+            artifact_manifest: Some(artifact_manifest_path.display().to_string()),
+            fastapi_output_mode: Some(integration.fastapi_mode.clone()),
+            fastapi_agent_mode: Some(integration.fastapi_agent),
+            sqlmodel_output_mode: Some(integration.sqlmodel_mode.clone()),
+            sqlmodel_agent_mode: Some(integration.sqlmodel_agent),
+            ..RunMeta::default()
+        };
+        dry_run_meta.write_to_path(&meta_path)?;
+        let dry_run_artifact_manifest = dry_run_meta.write_artifact_manifest()?;
         append_decision(
             cfg.evidence_ledger,
             &evidence_ledger_path,
@@ -1968,6 +2008,10 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
         ui.success("dry run complete");
         ui.info(&format!("run_dir: {}", run_dir.display()));
         ui.info(&format!("tape: {}", tape_path.display()));
+        ui.info(&format!("meta: {}", meta_path.display()));
+        if let Some(path) = dry_run_artifact_manifest.as_ref() {
+            ui.info(&format!("artifact manifest: {}", path.display()));
+        }
         if integration.should_emit_json() {
             println!(
                 "{}",
@@ -1976,6 +2020,10 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
                     "status": "dry_run_ok",
                     "run_dir": run_dir.display().to_string(),
                     "tape": tape_path.display().to_string(),
+                    "meta": meta_path.display().to_string(),
+                    "artifact_manifest": dry_run_artifact_manifest
+                        .as_ref()
+                        .map(|path| path.display().to_string()),
                     "integration": integration,
                 })
             );
@@ -2068,6 +2116,7 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
         evidence_ledger: cfg
             .evidence_ledger
             .then(|| evidence_ledger_path.display().to_string()),
+        artifact_manifest: Some(artifact_manifest_path.display().to_string()),
         fastapi_output_mode: Some(integration.fastapi_mode.clone()),
         fastapi_agent_mode: Some(integration.fastapi_agent),
         sqlmodel_output_mode: Some(integration.sqlmodel_mode.clone()),
@@ -2075,6 +2124,7 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
         ..RunMeta::default()
     };
     initial_meta.write_to_path(&meta_path)?;
+    let _ = initial_meta.write_artifact_manifest()?;
 
     let mut seed_thread = None;
     if cfg.seed_demo {
@@ -2390,12 +2440,14 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
         evidence_ledger: cfg
             .evidence_ledger
             .then(|| evidence_ledger_path.display().to_string()),
+        artifact_manifest: Some(artifact_manifest_path.display().to_string()),
         fastapi_output_mode: Some(integration.fastapi_mode.clone()),
         fastapi_agent_mode: Some(integration.fastapi_agent),
         sqlmodel_output_mode: Some(integration.sqlmodel_mode.clone()),
         sqlmodel_agent_mode: Some(integration.sqlmodel_agent),
     };
     final_meta.write_to_path(&meta_path)?;
+    let artifact_manifest = final_meta.write_artifact_manifest()?;
 
     let final_summary = format!(
         "finished_at={}\nduration_seconds={}\nfinal_status={}\nfinal_exit={}\nvhs_exit={}\nhost_vhs_exit={}\nvhs_driver_used={}\nvhs_docker_log={}\nseed_exit={}\nsnapshot_status={}\nsnapshot_exit={}\nvideo_exists={}\nsnapshot_exists={}\nvideo_duration_seconds={}\ncapture_error_reason={}\nttyd_shim_log={}\nttyd_runtime_log={}\nvhs_no_sandbox_forced={}\n",
@@ -2433,6 +2485,10 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
 
     ui.info(&format!("video: {}", output.display()));
     ui.info(&format!("run directory: {}", run_dir.display()));
+    ui.info(&format!("meta: {}", meta_path.display()));
+    if let Some(path) = artifact_manifest.as_ref() {
+        ui.info(&format!("artifact manifest: {}", path.display()));
+    }
 
     if integration.should_emit_json() {
         println!(
@@ -2444,6 +2500,9 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
                 "run_dir": run_dir.display().to_string(),
                 "video": output.display().to_string(),
                 "meta": meta_path.display().to_string(),
+                "artifact_manifest": artifact_manifest
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
                 "vhs_driver_used": vhs_driver_used,
                 "host_vhs_exit_code": host_vhs_exit,
                 "vhs_docker_log": vhs_docker_log
@@ -2780,7 +2839,8 @@ mod tests {
         assert!(!run_dir.join("tmux_session.txt").exists());
         assert!(!run_dir.join("tmux_pane.log").exists());
         assert!(!run_dir.join("tmux_pane.txt").exists());
-        assert!(!run_dir.join("run_meta.json").exists());
+        assert!(run_dir.join("run_meta.json").exists());
+        assert!(run_dir.join("run_artifact_manifest.json").exists());
     }
 
     #[test]

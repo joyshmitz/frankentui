@@ -113,7 +113,7 @@ fn render_html(summary: &ReportSummary, link_base: &Path) -> String {
         html_escape(&summary.title)
     ));
     html.push_str(
-        "  <style>\n    body { font-family: ui-sans-serif, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; background: #0f1115; color: #e7ebf3; }\n    h1, h2 { margin: 0 0 12px; }\n    .meta { margin-bottom: 20px; color: #a8b0c5; }\n    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; }\n    .card { border: 1px solid #2a3142; border-radius: 10px; padding: 14px; background: #171b24; }\n    .ok { border-left: 5px solid #2cb67d; }\n    .fail { border-left: 5px solid #ef4565; }\n    .row { margin: 4px 0; font-size: 13px; color: #c8d0e3; }\n    .label { color: #8a95b5; display: inline-block; min-width: 130px; }\n    .snapshot { width: 100%; border-radius: 8px; border: 1px solid #2a3142; margin-top: 8px; }\n    video { width: 100%; margin-top: 8px; border-radius: 8px; border: 1px solid #2a3142; background: #090b10; }\n    a { color: #7da6ff; text-decoration: none; }\n    a:hover { text-decoration: underline; }\n    .pill { font-size: 11px; border: 1px solid #3a4460; border-radius: 999px; padding: 2px 8px; margin-left: 8px; color: #b9c6ee; }\n  </style>\n</head>\n<body>\n",
+        "  <style>\n    body { font-family: ui-sans-serif, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; background: #0f1115; color: #e7ebf3; }\n    h1, h2 { margin: 0 0 12px; }\n    h3 { margin: 14px 0 8px; font-size: 14px; color: #d9e2ff; }\n    .meta { margin-bottom: 20px; color: #a8b0c5; }\n    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; }\n    .card { border: 1px solid #2a3142; border-radius: 10px; padding: 14px; background: #171b24; }\n    .ok { border-left: 5px solid #2cb67d; }\n    .fail { border-left: 5px solid #ef4565; }\n    .row { margin: 4px 0; font-size: 13px; color: #c8d0e3; }\n    .label { color: #8a95b5; display: inline-block; min-width: 130px; }\n    .snapshot { width: 100%; border-radius: 8px; border: 1px solid #2a3142; margin-top: 8px; }\n    video { width: 100%; margin-top: 8px; border-radius: 8px; border: 1px solid #2a3142; background: #090b10; }\n    a { color: #7da6ff; text-decoration: none; }\n    a:hover { text-decoration: underline; }\n    .pill { font-size: 11px; border: 1px solid #3a4460; border-radius: 999px; padding: 2px 8px; margin-left: 8px; color: #b9c6ee; }\n    .command { margin: 6px 0 0; padding: 8px 10px; background: #0d1118; border: 1px solid #2a3142; border-radius: 8px; overflow-x: auto; color: #d9e2ff; font-size: 12px; }\n  </style>\n</head>\n<body>\n",
     );
 
     html.push_str(&format!("<h1>{}</h1>\n", html_escape(&summary.title)));
@@ -230,6 +230,13 @@ fn render_html(summary: &ReportSummary, link_base: &Path) -> String {
             &mut html,
             link_base,
             &run_path,
+            "artifact_manifest",
+            run.artifact_manifest.as_deref(),
+        );
+        push_optional_artifact_link(
+            &mut html,
+            link_base,
+            &run_path,
             "ttyd_shim_log",
             run.ttyd_shim_log.as_deref(),
         );
@@ -268,6 +275,22 @@ fn render_html(summary: &ReportSummary, link_base: &Path) -> String {
             "vhs_docker_log",
             run.vhs_docker_log.as_deref(),
         );
+
+        let replay_commands = run.replay_commands();
+        if !replay_commands.is_empty() {
+            html.push_str("<h3>Replay Commands</h3>\n");
+            for replay in replay_commands {
+                html.push_str(&format!(
+                    "<div class=\"row\"><span class=\"label\">{}</span>{}</div>\n",
+                    html_escape(&replay.key),
+                    html_escape(&replay.purpose)
+                ));
+                html.push_str(&format!(
+                    "<pre class=\"command\">{}</pre>\n",
+                    html_escape(&replay.command)
+                ));
+            }
+        }
 
         if let Some(output_path) = output_path {
             let output_rel = relative_to(link_base, &output_path).unwrap_or(output_path.clone());
@@ -773,11 +796,15 @@ mod tests {
         fs::create_dir_all(&run_dir).expect("mkdir");
 
         let evidence_ledger = run_dir.join("evidence_ledger.jsonl");
+        let artifact_manifest = run_dir.join("run_artifact_manifest.json");
+        let capture_tape = run_dir.join("capture.tape");
         let ttyd_runtime_log = run_dir.join("ttyd-runtime.log");
         let tmux_session_file = run_dir.join("tmux_session.txt");
         let tmux_pane_capture = run_dir.join("tmux_pane.txt");
         let tmux_pane_log = run_dir.join("tmux_pane.log");
         fs::write(&evidence_ledger, b"{}\n").expect("write ledger");
+        fs::write(&artifact_manifest, b"{}\n").expect("write artifact manifest");
+        fs::write(&capture_tape, b"set FontSize 14\n").expect("write capture tape");
         fs::write(&ttyd_runtime_log, b"log").expect("write runtime log");
         fs::write(&tmux_session_file, b"session_name=tmux-demo\n").expect("write tmux session");
         fs::write(&tmux_pane_capture, b"pane snapshot").expect("write tmux pane capture");
@@ -797,6 +824,7 @@ mod tests {
             tmux_pane_capture: Some(tmux_pane_capture.display().to_string()),
             tmux_pane_log: Some(tmux_pane_log.display().to_string()),
             evidence_ledger: Some(evidence_ledger.display().to_string()),
+            artifact_manifest: Some(artifact_manifest.display().to_string()),
             ttyd_runtime_log: Some(ttyd_runtime_log.display().to_string()),
             ..RunMeta::default()
         }
@@ -825,8 +853,15 @@ mod tests {
         assert!(html.contains("tmux_pane.log"));
         assert!(html.contains("evidence_ledger"));
         assert!(html.contains("evidence_ledger.jsonl"));
+        assert!(html.contains("artifact_manifest"));
+        assert!(html.contains("run_artifact_manifest.json"));
         assert!(html.contains("ttyd_runtime_log"));
         assert!(html.contains("ttyd-runtime.log"));
+        assert!(html.contains("Replay Commands"));
+        assert!(html.contains("inspect_run_meta"));
+        assert!(html.contains("tail -n 80"));
+        assert!(html.contains("replay_capture_tape"));
+        assert!(html.contains("capture.tape"));
 
         let report_json: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(suite_dir.join("report.json")).expect("read report json"),
