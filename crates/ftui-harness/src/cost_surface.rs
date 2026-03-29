@@ -632,7 +632,7 @@ mod tests {
             &[15, 15, 15, 15, 15],
         );
         let analyzer = CostSurfaceAnalyzer::from_baseline(&baseline);
-        let report = analyzer.report();
+        let _report = analyzer.report();
 
         // At least the diff stage should show tail issues
         let diff_profile = analyzer.stage_profile(RenderStage::BufferDiff);

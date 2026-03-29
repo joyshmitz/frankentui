@@ -368,7 +368,7 @@ fn invariant_cursor_always_valid() {
     }
     let cursor = editor.cursor();
     let text = editor.text();
-    assert!(cursor.line as usize <= text.lines().count());
+    assert!(cursor.line <= text.lines().count());
 }
 
 /// Test that undo fully reverses operations.
@@ -569,7 +569,7 @@ fn property_cursor_reachable() {
 
     // Should be able to get text at cursor line
     if cursor.line > 0 || cursor.grapheme > 0 {
-        let line_text = editor.line_text(cursor.line as usize);
+        let line_text = editor.line_text(cursor.line);
         assert!(
             line_text.is_some(),
             "cursor line {} not accessible",

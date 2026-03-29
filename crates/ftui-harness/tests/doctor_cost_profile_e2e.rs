@@ -6,7 +6,7 @@
 #![forbid(unsafe_code)]
 
 use ftui_harness::doctor_cost_profile::{
-    CostEntry, CostLane, CostReport, DoctorCostProfile, OptimizationImpact, WorkflowStage,
+    CostEntry, CostLane, DoctorCostProfile, OptimizationImpact, WorkflowStage,
 };
 
 // ============================================================================
