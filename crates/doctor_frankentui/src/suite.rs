@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::error::{DoctorError, Result};
 use crate::profile::list_profile_names;
-use crate::report::{ReportArgs, run_report};
+use crate::report::{ReportArgs, run_report_with_runs};
 use crate::runmeta::RunMeta;
 use crate::util::{
     OutputIntegration, ensure_dir, ensure_exists, now_compact_timestamp, now_utc_iso, output_for,
@@ -418,27 +418,47 @@ fn run_suite_with_integration(args: SuiteArgs, integration: &OutputIntegration) 
     }
 
     let mut report_failed = false;
-    if !args.skip_report {
-        let report_result = run_report(ReportArgs {
-            suite_dir: suite_dir.clone(),
-            output_html: None,
-            output_json: None,
-            title: "TUI Inspector Report".to_string(),
-        });
-
-        if let Err(error) = report_result {
-            report_failed = true;
-            let message = format!("report generation failed: {error}");
-            write_string(&report_log, &message)?;
-            ui.error(&message);
-        }
-    }
-
     let report_json_path = suite_dir.join("report.json");
     let report_html_path = suite_dir.join("index.html");
     let report_log_path = suite_dir.join("suite_report.log");
+    if !args.skip_report {
+        let report_mode = format!(
+            "report_input=preloaded_runmeta dedupe_applied=true run_count={}\n",
+            runs.len()
+        );
+        let report_result = run_report_with_runs(
+            ReportArgs {
+                suite_dir: suite_dir.clone(),
+                output_html: None,
+                output_json: None,
+                title: "TUI Inspector Report".to_string(),
+            },
+            runs.clone(),
+            integration,
+        );
+
+        match report_result {
+            Ok(()) => {
+                let message = format!(
+                    "{}report generation succeeded: report_json_exists={} report_html_exists={}",
+                    report_mode,
+                    report_json_path.exists(),
+                    report_html_path.exists()
+                );
+                write_string(&report_log, &message)?;
+            }
+            Err(error) => {
+                report_failed = true;
+                let message = format!("{report_mode}report generation failed: {error}");
+                write_string(&report_log, &message)?;
+                ui.error(&message);
+            }
+        }
+    }
+
     let report_artifacts = SuiteReportArtifacts {
-        report_log: report_failed.then(|| report_log_path.display().to_string()),
+        report_log: (!args.skip_report && report_log_path.exists())
+            .then(|| report_log_path.display().to_string()),
         report_json: (!args.skip_report && !report_failed && report_json_path.exists())
             .then(|| report_json_path.display().to_string()),
         report_html: (!args.skip_report && !report_failed && report_html_path.exists())
@@ -815,6 +835,9 @@ mod tests {
         let suite_dir = run_root.join(suite_name);
         let report_log = fs::read_to_string(suite_dir.join("suite_report.log"))
             .expect("suite_report.log should exist");
+        assert!(report_log.contains("report_input=preloaded_runmeta"));
+        assert!(report_log.contains("dedupe_applied=true"));
+        assert!(report_log.contains("run_count=0"));
         assert!(report_log.contains("report generation failed"));
         assert!(
             report_log.contains("No run_meta.json files found under"),
@@ -860,6 +883,12 @@ mod tests {
         assert!(suite_dir.join("suite_manifest.json").exists());
         assert!(suite_dir.join("report.json").exists());
         assert!(suite_dir.join("index.html").exists());
+        let report_log =
+            fs::read_to_string(suite_dir.join("suite_report.log")).expect("read suite report log");
+        assert!(report_log.contains("report_input=preloaded_runmeta"));
+        assert!(report_log.contains("dedupe_applied=true"));
+        assert!(report_log.contains("run_count=1"));
+        assert!(report_log.contains("report generation succeeded"));
 
         let manifest: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(suite_dir.join("suite_manifest.json")).expect("read manifest"),
@@ -876,6 +905,10 @@ mod tests {
         assert_eq!(
             manifest["report_html"],
             suite_dir.join("index.html").display().to_string()
+        );
+        assert_eq!(
+            manifest["report_log"],
+            suite_dir.join("suite_report.log").display().to_string()
         );
         assert_eq!(manifest["report_failed"], false);
         assert_eq!(manifest["trace_ids"][0], "trace-manifest");

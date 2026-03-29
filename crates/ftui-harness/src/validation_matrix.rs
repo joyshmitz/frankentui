@@ -713,6 +713,46 @@ impl ValidationMatrix {
 
         matrix.add_obligation(
             ValidationObligation::new(
+                "runtime.e2e.mode-contract",
+                PerfLane::Runtime,
+                ValidationLevel::EndToEnd,
+            )
+            .assertion(AssertionCategory::BoundedDegradation)
+            .description(
+                "Healthy, stressed, degraded, and recovered modes must preserve strict behaviors while emitting explicit mode and recovery signals",
+            )
+            .artifacts(vec![
+                "runtime_mode_trace.jsonl",
+                "degradation_contract_report.json",
+                "recovery_summary.json",
+            ])
+            .diagnostics(vec![
+                "mode_transition_diff",
+                "strict_guarantee_violation_report",
+                "signal_gap_report",
+            ])
+            .fixtures(vec!["challenge_input_flood", "challenge_mixed_workload"])
+            .tags(vec!["runtime-mode", "degradation", "recovery", "ux-contract"]),
+        );
+
+        matrix.add_obligation(
+            ValidationObligation::new(
+                "runtime.replay.mode-transition-determinism",
+                PerfLane::Runtime,
+                ValidationLevel::Replay,
+            )
+            .assertion(AssertionCategory::NoChange)
+            .description(
+                "Fixed pressure schedules must reproduce the same mode transitions, fallback reasons, and recovery completion markers",
+            )
+            .artifacts(vec!["runtime_mode_trace.jsonl", "mode_transition_checksum.json"])
+            .diagnostics(vec!["mode_transition_diff", "recovery_reason_drift"])
+            .fixtures(vec!["challenge_input_flood"])
+            .tags(vec!["runtime-mode", "replay", "determinism", "recovery"]),
+        );
+
+        matrix.add_obligation(
+            ValidationObligation::new(
                 "runtime.negative.idle-overhead",
                 PerfLane::Runtime,
                 ValidationLevel::Unit,
@@ -747,6 +787,33 @@ impl ValidationMatrix {
                 .diagnostics(vec!["retry_exhaustion_report", "deadline_violation_log"])
                 .fixtures(vec!["doctor_seed_orchestration"])
                 .tags(vec!["doctor", "seed", "lifecycle"]),
+        );
+
+        matrix.add_obligation(
+            ValidationObligation::new(
+                "doctor.integration.runtime-mode-reporting",
+                PerfLane::Doctor,
+                ValidationLevel::Integration,
+            )
+            .assertion(AssertionCategory::GracefulFallback)
+            .description(
+                "Doctor summaries and manifests must surface runtime degraded/fallback intervals so operators can classify runs without raw log inspection",
+            )
+            .artifacts(vec![
+                "summary.json",
+                "artifact_manifest.json",
+                "runtime_mode_report.json",
+            ])
+            .diagnostics(vec![
+                "runtime_mode_signal_gap",
+                "summary_signal_diff",
+                "artifact_linkage_report",
+            ])
+            .fixtures(vec![
+                "doctor_capture_workflow",
+                "challenge_doctor_degraded_network",
+            ])
+            .tags(vec!["doctor", "runtime-mode", "artifacts", "graceful-fallback"]),
         );
 
         matrix.add_obligation(
@@ -904,27 +971,90 @@ impl ValidationMatrix {
             }
             PerfLane::Runtime => {
                 contract = contract
+                    .field(LogField::new(
+                        "runtime_mode",
+                        "string",
+                        false,
+                        "Current user-visible runtime mode (healthy, stressed, degraded, recovered)",
+                    ))
+                    .field(LogField::new(
+                        "mode_before",
+                        "string",
+                        false,
+                        "Previous runtime mode when recording a transition",
+                    ))
+                    .field(LogField::new(
+                        "mode_after",
+                        "string",
+                        false,
+                        "Next runtime mode when recording a transition",
+                    ))
+                    .field(LogField::new(
+                        "pressure_class",
+                        "string",
+                        false,
+                        "Pressure class driving the transition or fallback decision",
+                    ))
+                    .field(LogField::new(
+                        "recovery_latency_us",
+                        "u64",
+                        false,
+                        "Time spent recovering from degraded mode before healthy service resumed",
+                    ))
+                    .field(LogField::new(
+                        "strict_guarantees",
+                        "string",
+                        false,
+                        "Machine-readable list of guarantees preserved while degraded",
+                    ))
+                    .field(LogField::new(
+                        "work_disposition",
+                        "string",
+                        false,
+                        "How pending work was preserved, deferred, coalesced, or dropped",
+                    ))
                     .event("cycle_start")
                     .event("cycle_complete")
                     .event("subscription_lifecycle")
                     .event("effect_dispatch")
+                    .event("mode_transition")
+                    .event("fallback_activation")
+                    .event("recovery_complete")
                     .event("shutdown_sequence")
                     .reason_code("cancellation_requested")
                     .reason_code("timeout_exceeded")
-                    .reason_code("subscription_panic");
+                    .reason_code("subscription_panic")
+                    .reason_code("input_backpressure")
+                    .reason_code("mixed_workload_pressure")
+                    .reason_code("recovery_hysteresis")
+                    .reason_code("strict_guarantee_violation");
             }
             PerfLane::Doctor => {
                 contract = contract
+                    .field(LogField::new(
+                        "runtime_mode",
+                        "string",
+                        false,
+                        "Most severe runtime mode observed during the recorded workflow",
+                    ))
+                    .field(LogField::new(
+                        "recovery_outcome",
+                        "string",
+                        false,
+                        "How the runtime returned to healthy service, or why it did not",
+                    ))
                     .event("stage_started")
                     .event("stage_completed")
                     .event("stage_failed")
                     .event("rpc_retry_scheduled")
                     .event("rpc_retry_exhausted")
+                    .event("runtime_mode_summary")
                     .event("seed_complete")
                     .reason_code("handshake_failure")
                     .reason_code("retry_exhausted")
                     .reason_code("deadline_exceeded")
-                    .reason_code("artifact_missing");
+                    .reason_code("artifact_missing")
+                    .reason_code("runtime_mode_signal_missing");
             }
             PerfLane::CrossLane => {
                 contract = contract

@@ -328,7 +328,11 @@ pub fn run_report(args: ReportArgs) -> Result<()> {
     run_report_with_integration(args, &integration)
 }
 
-fn run_report_with_integration(args: ReportArgs, integration: &OutputIntegration) -> Result<()> {
+pub(crate) fn run_report_with_runs(
+    args: ReportArgs,
+    runs: Vec<RunMeta>,
+    integration: &OutputIntegration,
+) -> Result<()> {
     let ui = output_for(integration);
 
     if !args.suite_dir.exists() {
@@ -337,25 +341,19 @@ fn run_report_with_integration(args: ReportArgs, integration: &OutputIntegration
         });
     }
 
-    let output_html = args
-        .output_html
-        .unwrap_or_else(|| args.suite_dir.join("index.html"));
-    let output_json = args
-        .output_json
-        .unwrap_or_else(|| args.suite_dir.join("report.json"));
-
-    let meta_files = find_run_meta_files(&args.suite_dir)?;
-    if meta_files.is_empty() {
+    if runs.is_empty() {
         return Err(DoctorError::invalid(format!(
             "No run_meta.json files found under {}",
             args.suite_dir.display()
         )));
     }
 
-    let runs = meta_files
-        .iter()
-        .map(|path| RunMeta::from_path(path))
-        .collect::<Result<Vec<_>>>()?;
+    let output_html = args
+        .output_html
+        .unwrap_or_else(|| args.suite_dir.join("index.html"));
+    let output_json = args
+        .output_json
+        .unwrap_or_else(|| args.suite_dir.join("report.json"));
 
     let ok_runs = runs.iter().filter(|run| run.status == "ok").count();
     let failed_runs = runs.len().saturating_sub(ok_runs);
@@ -417,6 +415,29 @@ fn run_report_with_integration(args: ReportArgs, integration: &OutputIntegration
     Ok(())
 }
 
+fn run_report_with_integration(args: ReportArgs, integration: &OutputIntegration) -> Result<()> {
+    if !args.suite_dir.exists() {
+        return Err(DoctorError::MissingPath {
+            path: args.suite_dir,
+        });
+    }
+
+    let meta_files = find_run_meta_files(&args.suite_dir)?;
+    if meta_files.is_empty() {
+        return Err(DoctorError::invalid(format!(
+            "No run_meta.json files found under {}",
+            args.suite_dir.display()
+        )));
+    }
+
+    let runs = meta_files
+        .iter()
+        .map(|path| RunMeta::from_path(path))
+        .collect::<Result<Vec<_>>>()?;
+
+    run_report_with_runs(args, runs, integration)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -430,7 +451,7 @@ mod tests {
 
     use super::{
         ReportArgs, ReportSummary, build_report_machine_summary, find_run_meta_files, run_report,
-        run_report_with_integration,
+        run_report_with_integration, run_report_with_runs,
     };
 
     #[test]
@@ -557,6 +578,53 @@ mod tests {
                 .contains("No run_meta.json files found under"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn run_report_with_runs_uses_preloaded_runmeta_without_scanning_suite_dir() {
+        let temp = tempdir().expect("tempdir");
+        let suite_dir = temp.path().join("suite");
+        let run_dir = suite_dir.join("run_01");
+        fs::create_dir_all(&run_dir).expect("mkdir");
+
+        let output_path = run_dir.join("capture.mp4");
+        let snapshot_path = run_dir.join("snapshot.png");
+        fs::write(&output_path, b"dummy").expect("write dummy video");
+        fs::write(&snapshot_path, b"dummy").expect("write dummy snapshot");
+
+        let run_meta = RunMeta {
+            status: "ok".to_string(),
+            started_at: "2026-02-17T00:00:00Z".to_string(),
+            profile: "analytics-empty".to_string(),
+            output: output_path.display().to_string(),
+            snapshot: snapshot_path.display().to_string(),
+            run_dir: run_dir.display().to_string(),
+            ..RunMeta::default()
+        };
+
+        let integration = OutputIntegration {
+            fastapi_mode: "plain".to_string(),
+            fastapi_agent: true,
+            fastapi_ci: false,
+            fastapi_tty: false,
+            sqlmodel_mode: "plain".to_string(),
+            sqlmodel_agent: false,
+        };
+
+        run_report_with_runs(
+            ReportArgs {
+                suite_dir: suite_dir.clone(),
+                output_html: None,
+                output_json: None,
+                title: "Preloaded Report".to_string(),
+            },
+            vec![run_meta],
+            &integration,
+        )
+        .expect("run report with preloaded runs");
+
+        assert!(suite_dir.join("index.html").exists());
+        assert!(suite_dir.join("report.json").exists());
     }
 
     #[test]
