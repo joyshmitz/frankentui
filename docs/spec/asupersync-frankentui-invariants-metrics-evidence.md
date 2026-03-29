@@ -57,6 +57,9 @@ support one of the metrics below.
 | `MET-RT-SHUTDOWN-LATENCY-P50/P95/P99` | Time from shutdown initiation to terminal restoration + runtime exit | milliseconds | `ftui-runtime` | Direct user-facing exit quality metric. |
 | `MET-RT-DEADLINE-BREACH-RATE` | Share/count of operations breaching configured deadlines | count, ratio | `ftui-runtime` | Indicates whether the new lane actually improves bounded execution. |
 | `MET-RT-EVIDENCE-DROP-RATE` | Missing/failed evidence events relative to required events | count, ratio | runtime + validation | Protects diagnosability and replayability. |
+| `MET-RT-DEGRADED-DUTY-CYCLE` | Share of runtime spent in `stressed` or `degraded` mode | ratio | runtime + validation | Distinguishes brief pressure from chronic service degradation. |
+| `MET-RT-RECOVERY-LATENCY-P50/P95/P99` | Time from pressure relief to healthy-mode restoration | milliseconds | runtime + validation | Measures whether the system actually returns to normal instead of remaining sticky. |
+| `MET-RT-STRICT-BEHAVIOR-VIOLATION-RATE` | Violations of guarantees that must remain strict under load | count, ratio | runtime + validation | Separates acceptable fidelity loss from contract-breaking behavior drift. |
 
 ### doctor_frankentui Metrics
 
@@ -75,6 +78,60 @@ support one of the metrics below.
 | `MET-RO-SHADOW-DIVERGENCE-RATE` | Shadow comparisons that differ on invariant-bearing outputs | ratio | rollout/validation | Primary migration readiness metric. |
 | `MET-RO-FALLBACK-ACTIVATION-RATE` | Runs that activate fallback or rollback | ratio | rollout/runtime/doctor | Indicates stability and rollout risk. |
 | `MET-RO-DIAGNOSABLE-FAILURE-RATE` | Failed runs with complete structured evidence bundle | ratio | validation/rollout | Failure without evidence is operationally equivalent to a flaky system. |
+
+## Runtime Mode, Responsiveness, and Recovery Contract
+
+This section is the canonical `bd-8vstx` contract. Later queue/admission, governor,
+comparator, non-interference, and rollout beads must satisfy it even if the internal
+control policy changes.
+
+### Runtime Modes
+
+| Mode | Entry condition | User-visible semantics | Operator-visible evidence | Exit rule |
+| --- | --- | --- | --- | --- |
+| `healthy` | No sustained pressure and no active fallback | Interactive work, rendering, and shutdown behave within the steady-state envelope; no explicit loss of fidelity is active. | Evidence shows `runtime_mode=healthy` and no active degradation or fallback interval. | Leave only when pressure exceeds the steady-state envelope or a safety invariant is threatened. |
+| `stressed` | Pressure is elevated but strict guarantees are still being met without explicit shedding | Short-term batching/coalescing is allowed, but the UI must still feel responsive and no user-visible ambiguity is allowed. | Emit an early warning transition with pressure class, reason code, and the strict guarantees being preserved. | Return to `healthy` if pressure subsides before shedding begins, or advance to `degraded` if bounded fallback is required. |
+| `degraded` | Explicit shedding/fallback is active to protect responsiveness or safety | Visual fidelity, batching policy, and non-critical work may degrade only according to declared policy; the runtime must remain understandable rather than merely "still running." | Emit a mode transition, active degradation level, work disposition, and recovery target through logs/evidence and any operator summary surfaces. | Leave only through an explicit `recovered` transition or fail-fast if strict guarantees can no longer be preserved. |
+| `recovered` | Pressure has subsided after a stressed/degraded interval | Fidelity may be restored stepwise, but the return to normal must be explicit and non-flapping; no silent snap-back is allowed. | Emit the closing transition for the degraded interval, including recovery latency and what happened to deferred/coalesced work. | Return to `healthy` only after the configured hysteresis window and backlog drain complete. |
+
+### Strict Behaviors That Must Hold In Every Mode
+
+- Terminal safety, screen-mode correctness, and RAII cleanup remain strict.
+- Accepted input must preserve ordering, explicit cancellation, and comprehensible outcomes even when coalescing is active.
+- Shutdown, cancellation, and detach paths remain bounded and visible.
+- Evidence continuity remains strict: if work is dropped, deferred, or coalesced, the operator can tell which happened and why.
+- If any strict guarantee cannot be preserved, the correct action is fail-fast, not optimistic degradation.
+
+### Behaviors That May Degrade Only With Explicit Policy
+
+- Visual fidelity tiers, animation cadence, and expensive embellishments.
+- Batching/coalescing frequency for non-critical updates.
+- Throughput of background or non-interactive work.
+- Detail level of diagnostics exposed to the user, provided operator-grade evidence remains intact.
+
+### Observable Signals
+
+| Surface | Minimum required signal | What it must answer |
+| --- | --- | --- |
+| Runtime evidence / telemetry | Mode transitions, degradation level, pressure class, reason code, strict guarantees preserved, work disposition | "What mode was the runtime in, why did it change, and what was allowed to degrade?" |
+| `doctor_frankentui` summaries and manifests | Active degraded/fallback interval, dominant reason code, recovery outcome, artifact links | "Did this run degrade, and can I diagnose it without raw log spelunking?" |
+| UI-facing hooks (HUD/status line) when available | Current mode, visible degradation tier, whether input/render updates are being coalesced | "What should the user expect right now?" |
+| Validation artifacts | Mode timeline, transition checksum, strict-guarantee report | "Did this run obey the contract, and is it reproducible?" |
+
+### Scenario Classes
+
+| Scenario class | Purpose | Contract expectation | Canonical fixtures |
+| --- | --- | --- | --- |
+| Normal-path | Prove the runtime stays in `healthy` mode during ordinary work | No sustained degraded interval; brief `stressed` transitions are allowed only if they self-clear without user-visible ambiguity. | `control_idle_runtime`, `runtime_shutdown_determinism` |
+| Challenge-path | Prove the runtime degrades intentionally and recovers cleanly under real pressure | `stressed` and `degraded` are allowed, but strict guarantees remain intact and recovery is explicit. | `challenge_input_flood`, `challenge_mixed_workload` |
+| Negative-control | Prove the runtime does not invent degradation without pressure | No fallback, no recovery churn, and no contract signals that suggest phantom pressure. | `control_idle_runtime` |
+
+### Recovery Expectations
+
+1. Entering `degraded` mode must emit the reason code, active degradation level, preserved guarantees, and recovery target no later than the first degraded interval.
+2. Recovery must be hysteretic and explicit; oscillating `healthy`/`degraded` state on single-sample noise is a contract violation.
+3. Deferred, coalesced, or dropped work must be counted and reason-coded so operators can distinguish preserved throughput from silent loss.
+4. A run is not fully recovered until the runtime returns to `healthy`, backlog drains within policy, and the closing evidence identifies the degraded interval's duration.
 
 ## Mapping To Existing Runtime Metrics And Schema Facilities
 
@@ -143,6 +200,28 @@ Any shadow or fallback record must include:
 - `fallback_trigger`
 - `fallback_decision`
 - `rollback_required`
+
+### Required Runtime-Mode Fields
+
+Any record that enters, exits, or reports `stressed`, `degraded`, or `recovered`
+behavior must include:
+
+- `runtime_mode`
+- `mode_before`
+- `mode_after`
+- `pressure_class`
+- `degradation_level`
+- `strict_guarantees`
+  - machine-readable list of guarantees still being held strict
+- `degraded_behaviors`
+  - machine-readable list of behaviors currently allowed to degrade
+- `recovery_target`
+- `recovery_completed`
+- `recovery_latency_ms`
+- `signal_surface`
+  - e.g. `otel`, `evidence_jsonl`, `doctor_summary`, `hud`
+- `work_disposition`
+  - `preserved`, `deferred`, `coalesced`, `dropped_with_reason`, or `failed_fast`
 
 ### Required Integrity Fields
 
@@ -225,6 +304,12 @@ If any part of this bundle is missing, the run is not considered fully diagnosab
   - map feature flags, shadow mode, and fallback topology onto the `lane`, `fallback_*`, and comparison fields above
 - `bd-zkalo` / `bd-2vb3o` / `bd-392ka`
   - emit runtime executor evidence and timing data against the runtime invariants and metrics above
+- `bd-8vstx`
+  - use the runtime-mode contract above as the user/operator definition of degraded service and recovery
+- `bd-td5el` / `bd-eh85k`
+  - implement load-governor and runtime scheduling changes so they produce the mode, signal, and recovery evidence above
+- `bd-lu69j` / `bd-cn7eq`
+  - treat missing mode/recovery evidence or strict-behavior violations as rollout blockers rather than "nice to have" telemetry
 - `bd-1dccp`
   - align doctor orchestration records and manifests with the same `run_id` / `correlation_id` / artifact contract
 - validation and rollout beads

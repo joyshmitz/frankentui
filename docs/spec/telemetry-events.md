@@ -57,6 +57,23 @@ Point-in-time events for auditable decisions.
 | `ftui.decision.resize` | Resize handling decision | `strategy`, `debounce_active`, `coalesced`, `same_size`, `width`, `height`, `rate_hz` |
 | `ftui.decision.screen_mode` | Screen mode selection | `mode`, `ui_height`, `anchor` |
 
+#### 3.3.1 Runtime Mode Contract Extensions
+
+For the runtime-performance lane, degradation and fallback events are not complete
+unless they also explain the user-visible service mode:
+
+- `ftui.decision.degradation`
+  - must carry `runtime_mode_before`, `runtime_mode_after`, `pressure_class`,
+    `degradation_level`, `strict_guarantees`, `degraded_behaviors`, and
+    `recovery_target`
+- `ftui.decision.fallback`
+  - must carry `runtime_mode`, `rollback_required`, `operator_action`, and the
+    fallback reason in machine-readable form
+
+Recovery does not need a separate OTEL event name if it is represented as a
+`ftui.decision.degradation` transition back toward `healthy`, but the closing
+transition must still report recovery latency and degraded-interval duration.
+
 ### 3.4 Input Events
 
 Spans for input processing (redacted by default).
@@ -361,6 +378,44 @@ Required fields:
 - `cusum_plus`, `cusum_minus`, `e_value`
 - `alert` (bool)
 
+### 9.3 Runtime Mode Contract Additions
+
+The current evidence sink already captures low-level decisions. For `bd-8vstx`
+and downstream runtime-performance work, the following additions are mandatory
+for any scenario that enters `stressed`, `degraded`, or `recovered` mode.
+
+#### Event: `mode_transition`
+
+Required fields:
+- `run_id`
+- `event_idx`
+- `runtime_mode_before` / `runtime_mode_after`
+  - `healthy`, `stressed`, `degraded`, `recovered`
+- `pressure_class`
+  - `steady_state`, `input_backpressure`, `mixed_workload`, `shutdown_pressure`, `capability_fallback`
+- `degradation_level`
+- `reason`
+- `strict_guarantees`
+- `degraded_behaviors`
+- `recovery_target`
+- `work_disposition`
+
+#### Event: `recovery_complete`
+
+Required fields:
+- `run_id`
+- `event_idx`
+- `runtime_mode_before`
+- `runtime_mode_after`
+- `recovery_latency_ms`
+- `degraded_interval_ms`
+- `pending_work_drained`
+- `reason`
+
+These additions may be emitted via OTEL events, the local evidence sink, or both.
+Once the runtime-performance lane adopts them, missing mode/recovery evidence is
+a contract failure rather than optional telemetry.
+
 ---
 
 ## 10) Implementation Notes
@@ -428,3 +483,4 @@ fn is_verbose() -> bool {
 - Capture OTEL export and verify schema compliance
 - Verify redaction in verbose and non-verbose modes
 - Check schema version in exported spans
+- Drive input-flood and mixed-workload scenarios and verify `mode_transition` / recovery evidence contains strict-guarantee and work-disposition fields
