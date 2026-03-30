@@ -50,6 +50,7 @@ fn test_config() -> LoweringConfig {
 fn make_project(files: Vec<(&str, FileParse)>) -> ProjectParse {
     ProjectParse {
         files: files.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+        file_contents: BTreeMap::new(),
         symbol_table: BTreeMap::new(),
         component_count: 0,
         hook_usage_count: 0,

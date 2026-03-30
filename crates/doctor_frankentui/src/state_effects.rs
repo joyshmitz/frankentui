@@ -13,7 +13,7 @@ use regex_lite::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::migration_ir::{Capability, PlatformAssumption};
-use crate::tsx_parser::{ComponentDecl, FileParse, HookCall};
+use crate::tsx_parser::{ComponentDecl, FileParse, HookCall, JsxElement};
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -225,8 +225,10 @@ pub struct StateEffectsStats {
 pub fn extract_state_effects(file_parse: &FileParse) -> Vec<ComponentStateModel> {
     let mut models = Vec::new();
 
-    for component in &file_parse.components {
-        let model = extract_component_state(component, &file_parse.file);
+    for (index, component) in file_parse.components.iter().enumerate() {
+        let component_jsx =
+            jsx_elements_for_component(&file_parse.jsx_elements, &file_parse.components, index);
+        let model = extract_component_state(component, &file_parse.file, &component_jsx);
         models.push(model);
     }
 
@@ -234,13 +236,17 @@ pub fn extract_state_effects(file_parse: &FileParse) -> Vec<ComponentStateModel>
 }
 
 /// Extract state-effects model from a single component.
-fn extract_component_state(component: &ComponentDecl, file: &str) -> ComponentStateModel {
+fn extract_component_state(
+    component: &ComponentDecl,
+    file: &str,
+    jsx_elements: &[&JsxElement],
+) -> ComponentStateModel {
     let mut state_vars = Vec::new();
     let mut reducers = Vec::new();
     let mut derived = Vec::new();
     let mut effects = Vec::new();
     let mut context_consumers = Vec::new();
-    let context_providers = Vec::new();
+    let context_providers = extract_context_providers(jsx_elements);
 
     for hook in &component.hooks {
         match hook.name.as_str() {
@@ -292,6 +298,47 @@ fn extract_component_state(component: &ComponentDecl, file: &str) -> ComponentSt
         context_consumers,
         context_providers,
     }
+}
+
+fn jsx_elements_for_component<'a>(
+    jsx_elements: &'a [JsxElement],
+    components: &[ComponentDecl],
+    component_index: usize,
+) -> Vec<&'a JsxElement> {
+    let component = &components[component_index];
+    let component_end = components
+        .iter()
+        .skip(component_index + 1)
+        .map(|next| next.line)
+        .min()
+        .unwrap_or(usize::MAX);
+
+    jsx_elements
+        .iter()
+        .filter(|element| element.line >= component.line && element.line < component_end)
+        .collect()
+}
+
+fn extract_context_providers(jsx_elements: &[&JsxElement]) -> Vec<ContextProvider> {
+    jsx_elements
+        .iter()
+        .filter_map(|element| {
+            let context_name = element.tag.strip_suffix(".Provider")?;
+            if context_name.is_empty() {
+                return None;
+            }
+            let value_expression = element
+                .props
+                .iter()
+                .find(|prop| !prop.is_spread && prop.name == "value")
+                .and_then(|prop| prop.value_snippet.clone());
+            Some(ContextProvider {
+                context_name: context_name.to_string(),
+                value_expression,
+                line: element.line,
+            })
+        })
+        .collect()
 }
 
 fn extract_use_state(hook: &HookCall) -> StateVar {
@@ -915,16 +962,32 @@ pub fn detect_global_stores(content: &str, file: &str) -> Vec<GlobalStoreInfo> {
 
     for (pattern, kind) in patterns {
         if content.contains(pattern) {
+            let assignment_pattern = match (kind, *pattern) {
+                (GlobalStoreKind::Jotai, "atom(") => r"atom\(\s*[^\s\{]".to_string(),
+                (GlobalStoreKind::Recoil, "atom({") => r"atom\(\s*\{".to_string(),
+                (GlobalStoreKind::Recoil, "selector({") => r"selector\(\s*\{".to_string(),
+                _ => regex_lite::escape(pattern),
+            };
             // Try to extract the store name.
             let re_name = Regex::new(&format!(
-                r"(?:const|let|export\s+const)\s+(\w+)\s*=\s*.*{pattern}"
+                r"(?:const|let|export\s+const)\s+(\w+)\s*=\s*(?s:.*?){assignment_pattern}"
             ))
             .ok();
-
-            let name = re_name
+            let matched_name = re_name
+                .as_ref()
                 .and_then(|re| re.captures(content))
-                .map(|c| c[1].to_string())
-                .unwrap_or_else(|| format!("{kind:?}Store"));
+                .map(|captures| captures[1].to_string());
+            let requires_structural_match = matches!(
+                (kind, *pattern),
+                (GlobalStoreKind::Jotai, "atom(")
+                    | (GlobalStoreKind::Recoil, "atom({")
+                    | (GlobalStoreKind::Recoil, "selector({")
+            );
+            if requires_structural_match && matched_name.is_none() {
+                continue;
+            }
+
+            let name = matched_name.unwrap_or_else(|| format!("{kind:?}Store"));
 
             stores.push(GlobalStoreInfo {
                 kind: kind.clone(),
@@ -950,6 +1013,8 @@ pub fn build_project_state_model(
     let mut platform_assumptions = Vec::new();
     let mut platform_assumption_dedup = BTreeSet::new();
     let mut risk_flags = Vec::new();
+    let mut context_providers_by_name: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut unresolved_context_consumers = Vec::new();
 
     let mut total_state_vars = 0usize;
     let mut total_reducers = 0usize;
@@ -964,6 +1029,7 @@ pub fn build_project_state_model(
         let models = extract_state_effects(parse);
 
         for model in models {
+            let component_key = format!("{}::{}", file, model.component_name);
             total_state_vars += model.state_vars.len();
             total_reducers += model.reducers.len();
             total_effects += model.effects.len();
@@ -998,17 +1064,18 @@ pub fn build_project_state_model(
                 risk_flags.extend(build_effect_risk_flags(file, &model.component_name, effect));
             }
 
-            // Build context graph edges.
+            for provider in &model.context_providers {
+                context_providers_by_name
+                    .entry(provider.context_name.clone())
+                    .or_default()
+                    .insert(component_key.clone());
+            }
             for consumer in &model.context_consumers {
-                context_graph.push(ContextEdge {
-                    provider_component: String::new(), // resolved below
-                    consumer_component: model.component_name.clone(),
-                    context_name: consumer.context_name.clone(),
-                });
+                unresolved_context_consumers
+                    .push((component_key.clone(), consumer.context_name.clone()));
             }
 
-            let key = format!("{}::{}", file, model.component_name);
-            components.insert(key, model);
+            components.insert(component_key, model);
         }
 
         // Detect global stores.
@@ -1016,6 +1083,39 @@ pub fn build_project_state_model(
             global_stores.extend(detect_global_stores(content, file));
         }
     }
+
+    for (consumer_component, context_name) in unresolved_context_consumers {
+        let Some(provider_components) = context_providers_by_name.get(&context_name) else {
+            continue;
+        };
+        // React resolves useContext() against an ancestor provider, not a provider
+        // rendered later by the same component. Without ancestry information we
+        // also refuse ambiguous multi-provider fanout instead of asserting false
+        // data-flow edges.
+        let candidate_providers = provider_components
+            .iter()
+            .filter(|provider_component| *provider_component != &consumer_component)
+            .cloned()
+            .collect::<Vec<_>>();
+        if let [provider_component] = candidate_providers.as_slice() {
+            context_graph.push(ContextEdge {
+                provider_component: provider_component.clone(),
+                consumer_component: consumer_component.clone(),
+                context_name: context_name.clone(),
+            });
+        }
+    }
+    context_graph.sort_by(|left, right| {
+        left.context_name
+            .cmp(&right.context_name)
+            .then_with(|| left.provider_component.cmp(&right.provider_component))
+            .then_with(|| left.consumer_component.cmp(&right.consumer_component))
+    });
+    context_graph.dedup_by(|left, right| {
+        left.context_name == right.context_name
+            && left.provider_component == right.provider_component
+            && left.consumer_component == right.consumer_component
+    });
 
     ProjectStateModel {
         components,
@@ -1155,6 +1255,23 @@ function ThemeButton() {
     }
 
     #[test]
+    fn extract_context_provider_from_jsx() {
+        let src = r#"
+function ThemeProvider() {
+    return <ThemeContext.Provider value={theme}><button /></ThemeContext.Provider>;
+}
+"#;
+        let parse = parse_file(src, "ThemeProvider.tsx");
+        let models = extract_state_effects(&parse);
+        assert_eq!(models[0].context_providers.len(), 1);
+        assert_eq!(models[0].context_providers[0].context_name, "ThemeContext");
+        assert_eq!(
+            models[0].context_providers[0].value_expression.as_deref(),
+            Some("theme")
+        );
+    }
+
+    #[test]
     fn classify_effect_timer() {
         assert_eq!(
             classify_effect("() => { const id = setInterval(() => tick(), 1000); }"),
@@ -1265,6 +1382,56 @@ function ThemeButton() {
         let content = "export const useStore = create((set) => ({ count: 0 }));";
         let stores = detect_global_stores(content, "store.ts");
         assert!(stores.iter().any(|s| s.kind == GlobalStoreKind::Zustand));
+        assert!(
+            stores
+                .iter()
+                .any(|s| s.kind == GlobalStoreKind::Zustand && s.name == "useStore")
+        );
+    }
+
+    #[test]
+    fn detect_global_stores_jotai_atom() {
+        let content = "export const countAtom = atom(0);";
+        let stores = detect_global_stores(content, "state.ts");
+        assert_eq!(stores.len(), 1);
+        assert_eq!(stores[0].kind, GlobalStoreKind::Jotai);
+        assert_eq!(stores[0].name, "countAtom");
+    }
+
+    #[test]
+    fn detect_global_stores_multiline_jotai_atom() {
+        let content = r#"
+export const countAtom = atom(
+    0
+);
+"#;
+        let stores = detect_global_stores(content, "state.ts");
+        assert_eq!(stores.len(), 1);
+        assert_eq!(stores[0].kind, GlobalStoreKind::Jotai);
+        assert_eq!(stores[0].name, "countAtom");
+    }
+
+    #[test]
+    fn detect_global_stores_recoil_atom_is_not_misclassified_as_jotai() {
+        let content = "export const themeAtom = atom({ key: 'theme', default: 'light' });";
+        let stores = detect_global_stores(content, "state.ts");
+        assert_eq!(stores.len(), 1);
+        assert_eq!(stores[0].kind, GlobalStoreKind::Recoil);
+        assert_eq!(stores[0].name, "themeAtom");
+    }
+
+    #[test]
+    fn detect_global_stores_multiline_recoil_atom() {
+        let content = r#"
+export const themeAtom = atom({
+    key: 'theme',
+    default: 'light',
+});
+"#;
+        let stores = detect_global_stores(content, "state.ts");
+        assert_eq!(stores.len(), 1);
+        assert_eq!(stores[0].kind, GlobalStoreKind::Recoil);
+        assert_eq!(stores[0].name, "themeAtom");
     }
 
     #[test]
@@ -1321,6 +1488,155 @@ function App() {
 
         let model = build_project_state_model(&file_parses, &BTreeMap::new());
         assert_eq!(model.stats.total_state_vars, 1);
+    }
+
+    #[test]
+    fn project_state_model_detects_global_stores_when_contents_are_available() {
+        let src = r#"
+export const appStore = createStore({ reducer });
+function App() {
+    return <div />;
+}
+"#;
+        let parse = parse_file(src, "App.tsx");
+        let mut file_parses = BTreeMap::new();
+        file_parses.insert("App.tsx".to_string(), parse);
+        let mut file_contents = BTreeMap::new();
+        file_contents.insert("App.tsx".to_string(), src.to_string());
+
+        let model = build_project_state_model(&file_parses, &file_contents);
+        assert_eq!(model.global_state_stores.len(), 1);
+        assert_eq!(model.global_state_stores[0].name, "appStore");
+        assert_eq!(model.global_state_stores[0].kind, GlobalStoreKind::Redux);
+    }
+
+    #[test]
+    fn project_state_model_resolves_context_provider_edges() {
+        let provider_src = r#"
+function App() {
+    return <ThemeContext.Provider value={theme}><ThemeButton /></ThemeContext.Provider>;
+}
+"#;
+        let consumer_src = r#"
+function ThemeButton() {
+    const theme = useContext(ThemeContext);
+    return <button />;
+}
+"#;
+        let mut file_parses = BTreeMap::new();
+        file_parses.insert(
+            "src/App.tsx".to_string(),
+            parse_file(provider_src, "src/App.tsx"),
+        );
+        file_parses.insert(
+            "src/ThemeButton.tsx".to_string(),
+            parse_file(consumer_src, "src/ThemeButton.tsx"),
+        );
+
+        let model = build_project_state_model(&file_parses, &BTreeMap::new());
+        assert_eq!(model.context_graph.len(), 1);
+        assert_eq!(
+            model.context_graph[0].provider_component,
+            "src/App.tsx::App"
+        );
+        assert_eq!(
+            model.context_graph[0].consumer_component,
+            "src/ThemeButton.tsx::ThemeButton"
+        );
+        assert_eq!(model.context_graph[0].context_name, "ThemeContext");
+    }
+
+    #[test]
+    fn project_state_model_deduplicates_repeated_context_reads_in_one_component() {
+        let provider_src = r#"
+function App() {
+    return <ThemeContext.Provider value={theme}><ThemeButton /></ThemeContext.Provider>;
+}
+"#;
+        let consumer_src = r#"
+function ThemeButton() {
+    const theme = useContext(ThemeContext);
+    const inheritedTheme = useContext(ThemeContext);
+    return <button data-theme={theme} data-alt-theme={inheritedTheme} />;
+}
+"#;
+        let mut file_parses = BTreeMap::new();
+        file_parses.insert(
+            "src/App.tsx".to_string(),
+            parse_file(provider_src, "src/App.tsx"),
+        );
+        file_parses.insert(
+            "src/ThemeButton.tsx".to_string(),
+            parse_file(consumer_src, "src/ThemeButton.tsx"),
+        );
+
+        let model = build_project_state_model(&file_parses, &BTreeMap::new());
+        assert_eq!(
+            model.context_graph.len(),
+            1,
+            "graph should contain unique provider→consumer edges rather than duplicating repeated reads"
+        );
+        assert_eq!(model.context_graph[0].context_name, "ThemeContext");
+    }
+
+    #[test]
+    fn project_state_model_does_not_link_consumer_to_provider_in_same_component() {
+        let src = r#"
+function ThemeBridge() {
+    const theme = useContext(ThemeContext);
+    return <ThemeContext.Provider value={theme}><button /></ThemeContext.Provider>;
+}
+"#;
+        let mut file_parses = BTreeMap::new();
+        file_parses.insert(
+            "src/ThemeBridge.tsx".to_string(),
+            parse_file(src, "src/ThemeBridge.tsx"),
+        );
+
+        let model = build_project_state_model(&file_parses, &BTreeMap::new());
+        assert!(
+            model.context_graph.is_empty(),
+            "same-component providers should not satisfy useContext in that component"
+        );
+    }
+
+    #[test]
+    fn project_state_model_avoids_ambiguous_context_provider_edges() {
+        let provider_a_src = r#"
+function ThemeShell() {
+    return <ThemeContext.Provider value={theme}><Outlet /></ThemeContext.Provider>;
+}
+"#;
+        let provider_b_src = r#"
+function ThemeModal() {
+    return <ThemeContext.Provider value={theme}><Dialog /></ThemeContext.Provider>;
+}
+"#;
+        let consumer_src = r#"
+function ThemeButton() {
+    const theme = useContext(ThemeContext);
+    return <button />;
+}
+"#;
+        let mut file_parses = BTreeMap::new();
+        file_parses.insert(
+            "src/ThemeShell.tsx".to_string(),
+            parse_file(provider_a_src, "src/ThemeShell.tsx"),
+        );
+        file_parses.insert(
+            "src/ThemeModal.tsx".to_string(),
+            parse_file(provider_b_src, "src/ThemeModal.tsx"),
+        );
+        file_parses.insert(
+            "src/ThemeButton.tsx".to_string(),
+            parse_file(consumer_src, "src/ThemeButton.tsx"),
+        );
+
+        let model = build_project_state_model(&file_parses, &BTreeMap::new());
+        assert!(
+            model.context_graph.is_empty(),
+            "multiple candidate providers should stay unresolved until ancestry is known"
+        );
     }
 
     #[test]

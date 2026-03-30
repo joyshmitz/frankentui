@@ -15,8 +15,8 @@
 //! 3. **Prop constraint inference** — resolves each prop value to its source
 //!    (state, parent prop, context, literal) and infers type annotations from
 //!    the component's declared props type.
-//! 4. **Deterministic ordering** — children IDs are ordered by source line,
-//!    producing identical output from identical input.
+//! 4. **Deterministic ordering** — child references are canonicalized into a
+//!    stable sorted order, producing identical output from identical input.
 
 use std::collections::BTreeMap;
 #[cfg(test)]
@@ -646,23 +646,23 @@ fn build_children_for_component(
     jsx_elements: &[JsxElement],
     all_components: &[ComponentDecl],
 ) -> Vec<IrNodeId> {
-    // Find JSX elements that are direct children of this component's render.
-    // Heuristic: elements between this component's line and the next component's line
-    // (or end of file), at the top nesting level within that range.
+    // Resolve JSX child tags to actual component declaration node IDs in this file.
+    // Using the JSX line number here is wrong because view-tree node IDs are keyed
+    // by component definitions, not call sites.
     let comp_end = estimate_component_end(component, all_components);
-
-    let child_elements: Vec<&JsxElement> = jsx_elements
+    let component_ids_by_name: BTreeMap<&str, IrNodeId> = all_components
         .iter()
-        .filter(|e| e.line > component.line && e.line < comp_end && e.is_component)
+        .map(|decl| (decl.name.as_str(), make_component_id(file_path, decl)))
         .collect();
 
-    child_elements
+    let mut children = jsx_elements
         .iter()
-        .map(|e| {
-            let content = format!("{}:{}:{}", file_path, e.tag, e.line);
-            make_node_id(content.as_bytes())
-        })
-        .collect()
+        .filter(|e| e.line > component.line && e.line < comp_end && e.is_component)
+        .filter_map(|element| component_ids_by_name.get(element.tag.as_str()).cloned())
+        .collect::<Vec<_>>();
+    children.sort();
+    children.dedup();
+    children
 }
 
 fn estimate_component_end(component: &ComponentDecl, all_components: &[ComponentDecl]) -> usize {
@@ -869,6 +869,7 @@ mod tests {
 
         ProjectParse {
             files,
+            file_contents: BTreeMap::new(),
             symbol_table: BTreeMap::new(),
             component_count: 2,
             hook_usage_count: 2,
@@ -1083,6 +1084,7 @@ mod tests {
     fn empty_project_produces_empty_tree() {
         let project = ProjectParse {
             files: BTreeMap::new(),
+            file_contents: BTreeMap::new(),
             symbol_table: BTreeMap::new(),
             component_count: 0,
             hook_usage_count: 0,
@@ -1131,6 +1133,32 @@ mod tests {
             !app.children.is_empty(),
             "App should have child component references"
         );
+    }
+
+    #[test]
+    fn same_file_children_resolve_to_real_component_nodes() {
+        let project = make_test_project();
+        let result = extract_composition_semantics(&project);
+        let app = result
+            .component_tree
+            .nodes
+            .values()
+            .find(|n| n.component_name == "App")
+            .unwrap();
+        let counter = result
+            .component_tree
+            .nodes
+            .values()
+            .find(|n| n.component_name == "Counter")
+            .unwrap();
+
+        assert_eq!(
+            app.children,
+            vec![counter.id.clone()],
+            "App should point at the Counter component definition node, not a synthetic call-site ID"
+        );
+        assert_eq!(counter.parent_id.as_ref(), Some(&app.id));
+        assert_eq!(result.component_tree.roots, vec![app.id.clone()]);
     }
 
     #[test]

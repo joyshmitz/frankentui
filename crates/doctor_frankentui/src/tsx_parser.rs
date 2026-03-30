@@ -179,6 +179,8 @@ pub struct FileParse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectParse {
     pub files: BTreeMap<String, FileParse>,
+    #[serde(default)]
+    pub file_contents: BTreeMap<String, String>,
     pub symbol_table: BTreeMap<SymbolId, SymbolEntry>,
     pub component_count: usize,
     pub hook_usage_count: usize,
@@ -214,6 +216,7 @@ pub fn parse_file(content: &str, file_path: &str) -> FileParse {
 pub fn parse_project(snapshot_root: &Path, files: &[String]) -> ProjectParse {
     let mut project = ProjectParse {
         files: BTreeMap::new(),
+        file_contents: BTreeMap::new(),
         symbol_table: BTreeMap::new(),
         component_count: 0,
         hook_usage_count: 0,
@@ -239,6 +242,7 @@ pub fn parse_project(snapshot_root: &Path, files: &[String]) -> ProjectParse {
         };
 
         let file_parse = parse_file(&content, file_rel);
+        project.file_contents.insert(file_rel.clone(), content);
 
         project.component_count += file_parse.components.len();
         project.hook_usage_count += file_parse.hooks.len();
@@ -1713,6 +1717,12 @@ export function Button({ label }: ButtonProps) {
         );
 
         assert_eq!(project.files.len(), 2);
+        assert_eq!(
+            project.file_contents.get("src/App.tsx").map(String::as_str),
+            Some(
+                "\nimport { Button } from './Button';\nexport function App() {\n    return <Button label=\"Hi\" />;\n}\n"
+            )
+        );
         assert_eq!(project.component_count, 2);
         assert!(project.type_count >= 1);
         assert!(!project.symbol_table.is_empty());
@@ -1724,6 +1734,7 @@ export function Button({ label }: ButtonProps) {
         let project = parse_project(dir.path(), &["nonexistent.tsx".to_string()]);
 
         assert_eq!(project.files.len(), 0);
+        assert!(project.file_contents.is_empty());
         assert_eq!(project.diagnostics.len(), 1);
         assert_eq!(project.diagnostics[0].severity, DiagnosticSeverity::Error);
         assert_eq!(project.diagnostics[0].code, "E001");

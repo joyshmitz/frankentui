@@ -864,6 +864,7 @@ mod tests {
             )]
             .into_iter()
             .collect(),
+            file_contents: BTreeMap::new(),
             symbol_table: BTreeMap::new(),
             component_count: 1,
             hook_usage_count: 1,

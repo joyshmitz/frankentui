@@ -110,9 +110,8 @@ pub fn lower_to_ir(
 pub fn lower_project(config: &LoweringConfig, project: &ProjectParse) -> LoweringResult {
     let composition = composition_semantics::extract_composition_semantics(project);
     let styles = style_semantics::extract_style_semantics(project);
-    // state_effects requires file contents for global store detection; use empty map for now.
-    let empty_contents = BTreeMap::new();
-    let state_model = state_effects::build_project_state_model(&project.files, &empty_contents);
+    let state_model =
+        state_effects::build_project_state_model(&project.files, &project.file_contents);
 
     lower_to_ir(config, project, &composition, &styles, &state_model)
 }
@@ -171,11 +170,16 @@ fn lower_state_graph(
     diagnostics: &mut Vec<LoweringDiagnostic>,
 ) -> StateIdMap {
     let mut state_id_map = StateIdMap::new();
+    let mut context_provider_ids: BTreeMap<(String, String), Vec<IrNodeId>> = BTreeMap::new();
+    let mut context_consumer_ids: BTreeMap<(String, String), Vec<IrNodeId>> = BTreeMap::new();
 
     for (comp_name, comp_model) in &state_model.components {
         // State variables
-        for var in &comp_model.state_vars {
-            let id_content = format!("state:{}:{}:{}", comp_model.file, comp_name, var.name);
+        for (state_idx, var) in comp_model.state_vars.iter().enumerate() {
+            let id_content = format!(
+                "state:{}:{}:{}:{}:{}",
+                comp_model.file, comp_name, var.line, var.name, state_idx
+            );
             let id = migration_ir::make_node_id(id_content.as_bytes());
 
             state_id_map.insert((comp_name.clone(), var.name.clone()), id.clone());
@@ -205,10 +209,82 @@ fn lower_state_graph(
             });
         }
 
+        for (provider_idx, provider) in comp_model.context_providers.iter().enumerate() {
+            let id_content = format!(
+                "context_provider:{}:{}:{}:{}:{}",
+                comp_model.file, comp_name, provider.line, provider.context_name, provider_idx
+            );
+            let id = migration_ir::make_node_id(id_content.as_bytes());
+            context_provider_ids
+                .entry((comp_name.clone(), provider.context_name.clone()))
+                .or_default()
+                .push(id.clone());
+
+            builder.add_state_variable(StateVariable {
+                id,
+                name: provider.context_name.clone(),
+                scope: StateScope::Context,
+                type_annotation: None,
+                initial_value: provider.value_expression.clone(),
+                readers: BTreeSet::new(),
+                writers: BTreeSet::new(),
+                provenance: Provenance {
+                    file: comp_model.file.clone(),
+                    line: provider.line,
+                    column: None,
+                    source_name: Some(format!("{}::{}", comp_name, provider.context_name)),
+                    policy_category: Some("context".to_string()),
+                },
+            });
+        }
+
+        for (consumer_idx, consumer) in comp_model.context_consumers.iter().enumerate() {
+            let id_content = format!(
+                "context_consumer:{}:{}:{}:{}:{}",
+                comp_model.file, comp_name, consumer.line, consumer.context_name, consumer_idx
+            );
+            let id = migration_ir::make_node_id(id_content.as_bytes());
+            let display_name = consumer
+                .binding
+                .clone()
+                .unwrap_or_else(|| consumer.context_name.clone());
+            context_consumer_ids
+                .entry((comp_name.clone(), consumer.context_name.clone()))
+                .or_default()
+                .push(id.clone());
+            state_id_map.insert(
+                (comp_name.clone(), consumer.context_name.clone()),
+                id.clone(),
+            );
+            if let Some(binding) = &consumer.binding {
+                state_id_map.insert((comp_name.clone(), binding.clone()), id.clone());
+            }
+
+            builder.add_state_variable(StateVariable {
+                id,
+                name: display_name.clone(),
+                scope: StateScope::Context,
+                type_annotation: None,
+                initial_value: None,
+                readers: BTreeSet::new(),
+                writers: BTreeSet::new(),
+                provenance: Provenance {
+                    file: comp_model.file.clone(),
+                    line: consumer.line,
+                    column: None,
+                    source_name: Some(format!("{}::{}", comp_name, display_name)),
+                    policy_category: Some("context".to_string()),
+                },
+            });
+        }
+
         // Derived state (useMemo, useCallback)
-        for derived in &comp_model.derived {
+        for (derived_idx, derived) in comp_model.derived.iter().enumerate() {
             let name = derived.name.as_deref().unwrap_or("anonymous_derived");
-            let id_content = format!("derived:{}:{}:{}", comp_model.file, comp_name, name);
+            let id_content = format!(
+                "derived:{}:{}:{}:{}:{}",
+                comp_model.file, comp_name, derived.line, name, derived_idx
+            );
             let id = migration_ir::make_node_id(id_content.as_bytes());
 
             // Resolve dependency IDs.
@@ -269,11 +345,15 @@ fn lower_state_graph(
         let provider_key = (edge.provider_component.clone(), edge.context_name.clone());
         let consumer_key = (edge.consumer_component.clone(), edge.context_name.clone());
 
-        if let (Some(from_id), Some(to_id)) = (
-            state_id_map.get(&provider_key),
-            state_id_map.get(&consumer_key),
+        if let (Some(from_ids), Some(to_ids)) = (
+            context_provider_ids.get(&provider_key),
+            context_consumer_ids.get(&consumer_key),
         ) {
-            builder.add_data_flow(from_id.clone(), to_id.clone());
+            for from_id in from_ids {
+                for to_id in to_ids {
+                    builder.add_data_flow(from_id.clone(), to_id.clone());
+                }
+            }
         }
     }
 
@@ -301,8 +381,8 @@ fn lower_events(
     diagnostics: &mut Vec<LoweringDiagnostic>,
 ) {
     for (comp_name, comp_model) in &state_model.components {
-        for transition in &comp_model.event_transitions {
-            let event_id = make_event_id(&comp_model.file, comp_name, transition);
+        for (event_idx, transition) in comp_model.event_transitions.iter().enumerate() {
+            let event_id = make_event_id(&comp_model.file, comp_name, transition, event_idx);
 
             let kind = classify_event_kind(&transition.event_name);
 
@@ -358,10 +438,15 @@ fn lower_events(
     }
 }
 
-fn make_event_id(file: &str, comp_name: &str, transition: &EventStateTransition) -> IrNodeId {
+fn make_event_id(
+    file: &str,
+    comp_name: &str,
+    transition: &EventStateTransition,
+    event_idx: usize,
+) -> IrNodeId {
     let content = format!(
-        "event:{}:{}:{}:{}",
-        file, comp_name, transition.event_name, transition.line
+        "event:{}:{}:{}:{}:{}",
+        file, comp_name, transition.event_name, transition.line, event_idx
     );
     migration_ir::make_node_id(content.as_bytes())
 }
@@ -413,8 +498,8 @@ fn lower_effects(
     for (comp_name, comp_model) in &state_model.components {
         for (idx, effect) in comp_model.effects.iter().enumerate() {
             let id_content = format!(
-                "effect:{}:{}:{}:{}",
-                comp_model.file, comp_name, effect.hook, effect.line
+                "effect:{}:{}:{}:{}:{}",
+                comp_model.file, comp_name, effect.hook, effect.line, idx
             );
             let id = migration_ir::make_node_id(id_content.as_bytes());
 
@@ -670,6 +755,7 @@ mod tests {
     fn make_project(files: Vec<(&str, FileParse)>) -> ProjectParse {
         ProjectParse {
             files: files.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+            file_contents: BTreeMap::new(),
             symbol_table: BTreeMap::new(),
             component_count: 0,
             hook_usage_count: 0,
@@ -763,6 +849,46 @@ mod tests {
         }
     }
 
+    fn make_nested_component_file(path: &str) -> FileParse {
+        FileParse {
+            file: path.to_string(),
+            components: vec![
+                ComponentDecl {
+                    name: "App".to_string(),
+                    kind: ComponentKind::FunctionComponent,
+                    is_default_export: true,
+                    is_named_export: false,
+                    props_type: None,
+                    hooks: Vec::new(),
+                    event_handlers: Vec::new(),
+                    line: 1,
+                },
+                ComponentDecl {
+                    name: "Counter".to_string(),
+                    kind: ComponentKind::FunctionComponent,
+                    is_default_export: false,
+                    is_named_export: true,
+                    props_type: None,
+                    hooks: Vec::new(),
+                    event_handlers: Vec::new(),
+                    line: 20,
+                },
+            ],
+            hooks: Vec::new(),
+            jsx_elements: vec![JsxElement {
+                tag: "Counter".to_string(),
+                is_component: true,
+                is_fragment: false,
+                is_self_closing: true,
+                props: Vec::new(),
+                line: 8,
+            }],
+            types: Vec::new(),
+            symbols: Vec::new(),
+            diagnostics: Vec::new(),
+        }
+    }
+
     // ── Basic pipeline ──────────────────────────────────────────────────
 
     #[test]
@@ -812,6 +938,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn same_file_nested_components_produce_valid_view_edges() {
+        let project = make_project(vec![(
+            "src/App.tsx",
+            make_nested_component_file("src/App.tsx"),
+        )]);
+        let result = lower_project(&test_config(), &project);
+        let errors = validate_ir(&result.ir);
+        assert!(errors.is_empty(), "Validation errors: {:?}", errors);
+
+        let app = result
+            .ir
+            .view_tree
+            .nodes
+            .values()
+            .find(|node| node.name == "App")
+            .expect("App view node");
+        let counter_id = result
+            .ir
+            .view_tree
+            .nodes
+            .iter()
+            .find(|(_, node)| node.name == "Counter")
+            .map(|(id, _)| id.clone())
+            .expect("Counter view node");
+
+        assert_eq!(app.children, vec![counter_id]);
+        assert_eq!(result.ir.view_tree.roots, vec![app.id.clone()]);
+    }
+
     // ── View tree lowering ──────────────────────────────────────────────
 
     #[test]
@@ -820,7 +976,7 @@ mod tests {
         let composition = composition_semantics::extract_composition_semantics(&project);
         let styles = style_semantics::extract_style_semantics(&project);
         let state_model =
-            state_effects::build_project_state_model(&project.files, &BTreeMap::new());
+            state_effects::build_project_state_model(&project.files, &project.file_contents);
 
         let result = lower_to_ir(
             &test_config(),
@@ -1018,7 +1174,7 @@ mod tests {
         let composition = composition_semantics::extract_composition_semantics(&project);
         let styles = style_semantics::extract_style_semantics(&project);
         let state_model =
-            state_effects::build_project_state_model(&project.files, &BTreeMap::new());
+            state_effects::build_project_state_model(&project.files, &project.file_contents);
 
         let result = lower_to_ir(
             &test_config(),
@@ -1036,6 +1192,354 @@ mod tests {
         assert_eq!(
             result.ir.capabilities.optional,
             state_model.optional_capabilities
+        );
+    }
+
+    #[test]
+    fn context_provider_consumer_data_flow_is_lowered() {
+        let provider_src = r#"
+function App() {
+    return <ThemeContext.Provider value={theme}><ThemeButton /></ThemeContext.Provider>;
+}
+"#;
+        let consumer_src = r#"
+function ThemeButton() {
+    const theme = useContext(ThemeContext);
+    return <button />;
+}
+"#;
+
+        let mut files = BTreeMap::new();
+        files.insert(
+            "src/App.tsx".to_string(),
+            crate::tsx_parser::parse_file(provider_src, "src/App.tsx"),
+        );
+        files.insert(
+            "src/ThemeButton.tsx".to_string(),
+            crate::tsx_parser::parse_file(consumer_src, "src/ThemeButton.tsx"),
+        );
+        let mut file_contents = BTreeMap::new();
+        file_contents.insert("src/App.tsx".to_string(), provider_src.to_string());
+        file_contents.insert("src/ThemeButton.tsx".to_string(), consumer_src.to_string());
+        let project = ProjectParse {
+            files,
+            file_contents,
+            symbol_table: BTreeMap::new(),
+            component_count: 2,
+            hook_usage_count: 1,
+            type_count: 0,
+            diagnostics: Vec::new(),
+            external_imports: BTreeSet::new(),
+        };
+
+        let result = lower_project(&test_config(), &project);
+
+        let provider_id = result
+            .ir
+            .state_graph
+            .variables
+            .iter()
+            .find(|(_, var)| {
+                var.scope == StateScope::Context
+                    && var.name == "ThemeContext"
+                    && var.provenance.file == "src/App.tsx"
+            })
+            .map(|(id, _)| id.clone())
+            .expect("provider context state");
+        let consumer_id = result
+            .ir
+            .state_graph
+            .variables
+            .iter()
+            .find(|(_, var)| {
+                var.scope == StateScope::Context
+                    && var.name == "theme"
+                    && var.provenance.file == "src/ThemeButton.tsx"
+            })
+            .map(|(id, _)| id.clone())
+            .expect("consumer context state");
+
+        assert!(
+            result
+                .ir
+                .state_graph
+                .data_flow
+                .get(&provider_id)
+                .is_some_and(|targets| targets.contains(&consumer_id)),
+            "expected provider to feed consumer through context data flow"
+        );
+    }
+
+    #[test]
+    fn same_component_context_provider_and_consumer_stay_distinct_without_self_edge() {
+        let src = r#"
+function ThemeBridge() {
+    const theme = useContext(ThemeContext);
+    return <ThemeContext.Provider value={theme}><button /></ThemeContext.Provider>;
+}
+"#;
+
+        let mut files = BTreeMap::new();
+        files.insert(
+            "src/ThemeBridge.tsx".to_string(),
+            crate::tsx_parser::parse_file(src, "src/ThemeBridge.tsx"),
+        );
+        let mut file_contents = BTreeMap::new();
+        file_contents.insert("src/ThemeBridge.tsx".to_string(), src.to_string());
+        let project = ProjectParse {
+            files,
+            file_contents,
+            symbol_table: BTreeMap::new(),
+            component_count: 1,
+            hook_usage_count: 1,
+            type_count: 0,
+            diagnostics: Vec::new(),
+            external_imports: BTreeSet::new(),
+        };
+
+        let result = lower_project(&test_config(), &project);
+
+        let provider_id = result
+            .ir
+            .state_graph
+            .variables
+            .iter()
+            .find(|(_, var)| {
+                var.scope == StateScope::Context
+                    && var.name == "ThemeContext"
+                    && var.provenance.file == "src/ThemeBridge.tsx"
+            })
+            .map(|(id, _)| id.clone())
+            .expect("provider context state");
+        let consumer_id = result
+            .ir
+            .state_graph
+            .variables
+            .iter()
+            .find(|(_, var)| {
+                var.scope == StateScope::Context
+                    && var.name == "theme"
+                    && var.provenance.file == "src/ThemeBridge.tsx"
+            })
+            .map(|(id, _)| id.clone())
+            .expect("consumer context state");
+
+        assert_ne!(provider_id, consumer_id);
+        assert!(
+            !result
+                .ir
+                .state_graph
+                .data_flow
+                .get(&provider_id)
+                .is_some_and(|targets| targets.contains(&consumer_id)),
+            "same-component provider should not feed a useContext call in that component"
+        );
+    }
+
+    #[test]
+    fn duplicate_context_consumers_in_one_component_keep_distinct_state_nodes() {
+        let provider_src = r#"
+function App() {
+    return <ThemeContext.Provider value={theme}><ThemePanel /></ThemeContext.Provider>;
+}
+"#;
+        let consumer_src = r#"
+function ThemePanel() {
+    const theme = useContext(ThemeContext);
+    const fallbackTheme = useContext(ThemeContext);
+    return <section />;
+}
+"#;
+
+        let mut files = BTreeMap::new();
+        files.insert(
+            "src/App.tsx".to_string(),
+            crate::tsx_parser::parse_file(provider_src, "src/App.tsx"),
+        );
+        files.insert(
+            "src/ThemePanel.tsx".to_string(),
+            crate::tsx_parser::parse_file(consumer_src, "src/ThemePanel.tsx"),
+        );
+        let mut file_contents = BTreeMap::new();
+        file_contents.insert("src/App.tsx".to_string(), provider_src.to_string());
+        file_contents.insert("src/ThemePanel.tsx".to_string(), consumer_src.to_string());
+        let project = ProjectParse {
+            files,
+            file_contents,
+            symbol_table: BTreeMap::new(),
+            component_count: 2,
+            hook_usage_count: 2,
+            type_count: 0,
+            diagnostics: Vec::new(),
+            external_imports: BTreeSet::new(),
+        };
+
+        let result = lower_project(&test_config(), &project);
+
+        let consumer_vars = result
+            .ir
+            .state_graph
+            .variables
+            .iter()
+            .filter(|(_, var)| {
+                var.scope == StateScope::Context && var.provenance.file == "src/ThemePanel.tsx"
+            })
+            .map(|(id, var)| (id.clone(), var.name.clone()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(consumer_vars.len(), 2);
+        assert!(
+            consumer_vars.iter().any(|(_, name)| name == "theme"),
+            "expected a context node for the first useContext binding"
+        );
+        assert!(
+            consumer_vars
+                .iter()
+                .any(|(_, name)| name == "fallbackTheme"),
+            "expected a distinct context node for the second useContext binding"
+        );
+        assert_ne!(consumer_vars[0].0, consumer_vars[1].0);
+
+        let provider_id = result
+            .ir
+            .state_graph
+            .variables
+            .iter()
+            .find(|(_, var)| {
+                var.scope == StateScope::Context
+                    && var.name == "ThemeContext"
+                    && var.provenance.file == "src/App.tsx"
+            })
+            .map(|(id, _)| id.clone())
+            .expect("provider context state");
+
+        let targets = result
+            .ir
+            .state_graph
+            .data_flow
+            .get(&provider_id)
+            .expect("provider data flow edges");
+        for (consumer_id, _) in &consumer_vars {
+            assert!(
+                targets.contains(consumer_id),
+                "expected provider to feed each context consumer binding"
+            );
+        }
+    }
+
+    #[test]
+    fn same_line_unbound_state_hooks_keep_distinct_state_nodes() {
+        let src = r#"
+function App() { useRef(null); useRef(null); return <div />; }
+"#;
+
+        let project = ProjectParse {
+            files: BTreeMap::from([(
+                "src/App.tsx".to_string(),
+                crate::tsx_parser::parse_file(src, "src/App.tsx"),
+            )]),
+            file_contents: BTreeMap::from([("src/App.tsx".to_string(), src.to_string())]),
+            symbol_table: BTreeMap::new(),
+            component_count: 1,
+            hook_usage_count: 2,
+            type_count: 0,
+            diagnostics: Vec::new(),
+            external_imports: BTreeSet::new(),
+        };
+
+        let result = lower_project(&test_config(), &project);
+        let ref_vars = result
+            .ir
+            .state_graph
+            .variables
+            .values()
+            .filter(|var| var.provenance.file == "src/App.tsx" && var.name == "ref")
+            .count();
+
+        assert_eq!(ref_vars, 2, "each unbound useRef should survive lowering");
+    }
+
+    #[test]
+    fn same_line_anonymous_derived_hooks_keep_distinct_nodes() {
+        let src = r#"
+function App() { useMemo(() => 1, []); useMemo(() => 2, []); return <div />; }
+"#;
+
+        let project = ProjectParse {
+            files: BTreeMap::from([(
+                "src/App.tsx".to_string(),
+                crate::tsx_parser::parse_file(src, "src/App.tsx"),
+            )]),
+            file_contents: BTreeMap::from([("src/App.tsx".to_string(), src.to_string())]),
+            symbol_table: BTreeMap::new(),
+            component_count: 1,
+            hook_usage_count: 2,
+            type_count: 0,
+            diagnostics: Vec::new(),
+            external_imports: BTreeSet::new(),
+        };
+
+        let result = lower_project(&test_config(), &project);
+        assert_eq!(
+            result.ir.state_graph.derived.len(),
+            2,
+            "same-line anonymous useMemo hooks should not overwrite each other"
+        );
+    }
+
+    #[test]
+    fn same_line_duplicate_events_keep_distinct_event_nodes() {
+        let src = r#"
+function App() { return <><button onClick={handleA} /><button onClick={handleB} /></>; }
+"#;
+
+        let project = ProjectParse {
+            files: BTreeMap::from([(
+                "src/App.tsx".to_string(),
+                crate::tsx_parser::parse_file(src, "src/App.tsx"),
+            )]),
+            file_contents: BTreeMap::from([("src/App.tsx".to_string(), src.to_string())]),
+            symbol_table: BTreeMap::new(),
+            component_count: 1,
+            hook_usage_count: 0,
+            type_count: 0,
+            diagnostics: Vec::new(),
+            external_imports: BTreeSet::new(),
+        };
+
+        let result = lower_project(&test_config(), &project);
+        assert_eq!(
+            result.ir.event_catalog.events.len(),
+            2,
+            "same-line event handlers should each produce an event node"
+        );
+    }
+
+    #[test]
+    fn same_line_duplicate_effects_keep_distinct_effect_nodes() {
+        let src = r#"
+function App() { useEffect(() => {}, []); useEffect(() => {}, []); return <div />; }
+"#;
+
+        let project = ProjectParse {
+            files: BTreeMap::from([(
+                "src/App.tsx".to_string(),
+                crate::tsx_parser::parse_file(src, "src/App.tsx"),
+            )]),
+            file_contents: BTreeMap::from([("src/App.tsx".to_string(), src.to_string())]),
+            symbol_table: BTreeMap::new(),
+            component_count: 1,
+            hook_usage_count: 2,
+            type_count: 0,
+            diagnostics: Vec::new(),
+            external_imports: BTreeSet::new(),
+        };
+
+        let result = lower_project(&test_config(), &project);
+        assert_eq!(
+            result.ir.effect_registry.effects.len(),
+            2,
+            "same-line useEffect hooks should not overwrite each other"
         );
     }
 }
