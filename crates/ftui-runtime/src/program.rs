@@ -2744,10 +2744,17 @@ impl<M: Send + 'static> EffectQueue<M> {
 
     fn enqueue(&self, spec: TaskSpec, task: Box<dyn FnOnce() -> M + Send>) {
         if self.closed {
+            crate::effect_system::record_queue_drop("post_shutdown");
             tracing::debug!("rejecting task enqueue after effect queue shutdown");
             return;
         }
-        let _ = self.sender.send(EffectCommand::Enqueue(spec, task));
+        if self
+            .sender
+            .send(EffectCommand::Enqueue(spec, task))
+            .is_err()
+        {
+            crate::effect_system::record_queue_drop("channel_closed");
+        }
     }
 
     /// Timeout for the effect-queue thread to finish after sending Shutdown.
@@ -3972,6 +3979,8 @@ pub struct Program<M: Model, E: BackendEventSource<Error = io::Error>, W: Write 
     running: bool,
     /// Current tick rate (if any).
     tick_rate: Option<Duration>,
+    /// Total commands actually executed by the runtime.
+    executed_cmd_count: usize,
     /// Last tick time.
     last_tick: Instant,
     /// Whether the UI needs to be redrawn.
@@ -4165,6 +4174,7 @@ impl<M: Model> Program<M, CrosstermEventSource, Stdout> {
             backend_features: initial_features,
             running: true,
             tick_rate: None,
+            executed_cmd_count: 0,
             last_tick: Instant::now(),
             dirty: true,
             frame_idx: 0,
@@ -4288,6 +4298,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             backend_features,
             running: true,
             tick_rate: None,
+            executed_cmd_count: 0,
             last_tick: Instant::now(),
             dirty: true,
             frame_idx: 0,
@@ -5012,6 +5023,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
 
     /// Execute a command.
     fn execute_cmd(&mut self, cmd: Cmd<M::Message>) -> io::Result<()> {
+        self.executed_cmd_count = self.executed_cmd_count.saturating_add(1);
         match cmd {
             Cmd::None => {}
             Cmd::Quit => self.running = false,
@@ -5749,6 +5761,18 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
     /// Check if the program is running.
     pub fn is_running(&self) -> bool {
         self.running
+    }
+
+    /// Get the current tick rate, if one has been installed.
+    #[must_use]
+    pub const fn tick_rate(&self) -> Option<Duration> {
+        self.tick_rate
+    }
+
+    /// Get the number of commands actually executed by the runtime.
+    #[must_use]
+    pub const fn executed_cmd_count(&self) -> usize {
+        self.executed_cmd_count
     }
 
     /// Request a quit.
@@ -7812,6 +7836,70 @@ mod tests {
             .expect("effect queue thread joins after rejecting post-shutdown work");
     }
 
+    #[test]
+    fn effect_queue_enqueue_after_shutdown_records_drop() {
+        let (tx, rx) = mpsc::channel::<EffectCommand<u32>>();
+        drop(rx);
+
+        let queue = EffectQueue {
+            sender: tx,
+            handle: None,
+            closed: true,
+        };
+        let runs = Arc::new(AtomicUsize::new(0));
+        let before = crate::effect_system::effects_queue_dropped();
+
+        queue.enqueue(
+            TaskSpec::default(),
+            Box::new({
+                let runs = Arc::clone(&runs);
+                move || {
+                    runs.fetch_add(1, Ordering::SeqCst);
+                    7
+                }
+            }),
+        );
+
+        let after = crate::effect_system::effects_queue_dropped();
+        assert_eq!(runs.load(Ordering::SeqCst), 0);
+        assert!(
+            after > before,
+            "enqueue after shutdown should increment dropped counter"
+        );
+    }
+
+    #[test]
+    fn effect_queue_enqueue_with_closed_channel_records_drop() {
+        let (tx, rx) = mpsc::channel::<EffectCommand<u32>>();
+        drop(rx);
+
+        let queue = EffectQueue {
+            sender: tx,
+            handle: None,
+            closed: false,
+        };
+        let runs = Arc::new(AtomicUsize::new(0));
+        let before = crate::effect_system::effects_queue_dropped();
+
+        queue.enqueue(
+            TaskSpec::default(),
+            Box::new({
+                let runs = Arc::clone(&runs);
+                move || {
+                    runs.fetch_add(1, Ordering::SeqCst);
+                    9
+                }
+            }),
+        );
+
+        let after = crate::effect_system::effects_queue_dropped();
+        assert_eq!(runs.load(Ordering::SeqCst), 0);
+        assert!(
+            after > before,
+            "enqueue into a closed queue channel should increment dropped counter"
+        );
+    }
+
     // =========================================================================
     // Backpressure tests (bd-2zd0a)
     // =========================================================================
@@ -9031,6 +9119,7 @@ mod tests {
             backend_features: initial_features,
             running: true,
             tick_rate: None,
+            executed_cmd_count: 0,
             last_tick: Instant::now(),
             dirty: true,
             frame_idx: 0,

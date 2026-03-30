@@ -70,9 +70,7 @@ proptest! {
         ops in prop::collection::vec(style_op_strategy(), 0..30),
     ) {
         let mut view = StyleResolutionView::new("proptest", base_hash);
-        let mut epoch = 1u64;
-
-        for op in &ops {
+        for (epoch, op) in (1u64..).zip(ops.iter()) {
             let mut batch = DeltaBatch::new(epoch);
             match op {
                 StyleOp::Insert(k, v) => {
@@ -83,7 +81,6 @@ proptest! {
                 }
             }
             view.apply_delta(&batch);
-            epoch += 1;
         }
 
         // The materialized view must match full_recompute.
@@ -421,16 +418,13 @@ proptest! {
     ) {
         let mut view: FilteredListView<u32, i32> =
             FilteredListView::new("subset_test", |_k: &u32, v: &i32| *v > 0);
-        let mut epoch = 1u64;
-
-        for op in &ops {
+        for (epoch, op) in (1u64..).zip(ops.iter()) {
             let mut batch = DeltaBatch::new(epoch);
             match op {
                 FilterOp::Insert(k, v) => batch.insert(*k, *v, 0),
                 FilterOp::Delete(k) => batch.delete(*k, 0),
             }
             view.apply_delta(&batch);
-            epoch += 1;
         }
 
         prop_assert!(
@@ -454,16 +448,13 @@ proptest! {
     ) {
         let mut view: FilteredListView<u32, i32> =
             FilteredListView::new("correctness", |_k: &u32, v: &i32| *v > 0);
-        let mut epoch = 1u64;
-
-        for op in &ops {
+        for (epoch, op) in (1u64..).zip(ops.iter()) {
             let mut batch = DeltaBatch::new(epoch);
             match op {
                 FilterOp::Insert(k, v) => batch.insert(*k, *v, 0),
                 FilterOp::Delete(k) => batch.delete(*k, 0),
             }
             view.apply_delta(&batch);
-            epoch += 1;
         }
 
         let full = view.full_recompute();
@@ -538,12 +529,10 @@ proptest! {
         ops in prop::collection::vec(style_op_strategy(), 1..30),
     ) {
         let mut view = StyleResolutionView::new("xor_check", base_hash);
-        let mut epoch = 1u64;
-
         // Track overrides ourselves for cross-checking.
         let mut expected_overrides: HashMap<u32, u64> = HashMap::new();
 
-        for op in &ops {
+        for (epoch, op) in (1u64..).zip(ops.iter()) {
             let mut batch = DeltaBatch::new(epoch);
             match op {
                 StyleOp::Insert(k, v) => {
@@ -556,7 +545,6 @@ proptest! {
                 }
             }
             view.apply_delta(&batch);
-            epoch += 1;
         }
 
         let full = view.full_recompute();
@@ -589,12 +577,10 @@ proptest! {
         // Filter: positive values only.
         let mut view: FilteredListView<u32, i32> =
             FilteredListView::new("filter_check", |_k: &u32, v: &i32| *v > 0);
-        let mut epoch = 1u64;
-
         // Track all items ourselves.
         let mut expected_all: HashMap<u32, i32> = HashMap::new();
 
-        for op in &ops {
+        for (epoch, op) in (1u64..).zip(ops.iter()) {
             let mut batch = DeltaBatch::new(epoch);
             match op {
                 FilterOp::Insert(k, v) => {
@@ -607,7 +593,6 @@ proptest! {
                 }
             }
             view.apply_delta(&batch);
-            epoch += 1;
         }
 
         // Expected visible = filter(expected_all).
@@ -730,9 +715,7 @@ proptest! {
     ) {
         let mut view = StyleResolutionView::new("multi_batch", base_hash);
         let mut expected: HashMap<u32, u64> = HashMap::new();
-        let mut epoch = 1u64;
-
-        for batch_group in &batch_ops {
+        for (epoch, batch_group) in (1u64..).zip(batch_ops.iter()) {
             let mut batch = DeltaBatch::new(epoch);
             for op in batch_group {
                 match op {
@@ -747,7 +730,6 @@ proptest! {
                 }
             }
             view.apply_delta(&batch);
-            epoch += 1;
         }
 
         let full = view.full_recompute();
@@ -777,9 +759,7 @@ proptest! {
         let mut view: FilteredListView<u32, i32> =
             FilteredListView::new("multi_batch", |_k: &u32, v: &i32| *v > 0);
         let mut expected_all: HashMap<u32, i32> = HashMap::new();
-        let mut epoch = 1u64;
-
-        for batch_group in &batch_ops {
+        for (epoch, batch_group) in (1u64..).zip(batch_ops.iter()) {
             let mut batch = DeltaBatch::new(epoch);
             for op in batch_group {
                 match op {
@@ -794,7 +774,6 @@ proptest! {
                 }
             }
             view.apply_delta(&batch);
-            epoch += 1;
         }
 
         let expected_visible: HashMap<u32, i32> = expected_all
@@ -824,9 +803,7 @@ proptest! {
     ) {
         let mut view: FilteredListView<u32, i32> =
             FilteredListView::new("delta_check", |_k: &u32, v: &i32| *v > 0);
-        let mut epoch = 1u64;
-
-        for op in &ops {
+        for (epoch, op) in (1u64..).zip(ops.iter()) {
             let size_before = view.materialized_size();
             let mut batch = DeltaBatch::new(epoch);
             match op {
@@ -846,7 +823,6 @@ proptest! {
                     size_before, size_after
                 );
             }
-            epoch += 1;
         }
     }
 }

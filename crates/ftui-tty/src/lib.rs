@@ -918,6 +918,32 @@ impl TtyEventSource {
         event
     }
 
+    #[inline]
+    fn parser_timeout_wait_budget(&self) -> Option<Duration> {
+        if !self.parser.has_pending_timeout_state() {
+            return None;
+        }
+        Some(
+            self.last_input_byte_at
+                .map(|last| PARSER_TIMEOUT_GRACE.saturating_sub(last.elapsed()))
+                .unwrap_or(Duration::ZERO),
+        )
+    }
+
+    /// Give immediately ready bytes one last chance to complete an ambiguous
+    /// parser state before synthesizing a timeout event.
+    fn drain_ready_bytes_before_parser_timeout(&mut self) -> io::Result<bool> {
+        if self.tty_reader.is_none() {
+            return Ok(false);
+        }
+        if self.reader_nonblocking {
+            self.drain_available_bytes()?;
+        } else {
+            let _ = self.poll_tty(Duration::ZERO)?;
+        }
+        Ok(!self.event_queue.is_empty())
+    }
+
     /// Poll the tty fd for available data using `poll(2)`.
     #[cfg(unix)]
     fn poll_tty(&mut self, timeout: Duration) -> io::Result<bool> {
@@ -1065,44 +1091,59 @@ impl BackendEventSource for TtyEventSource {
             return Ok(true);
         }
 
-        #[cfg(unix)]
-        if self.resize_rx.is_some() && timeout != Duration::ZERO {
-            // `poll(2)` won't reliably wake on SIGWINCH (signal handlers are installed
-            // with SA_RESTART). Time-slice to bound resize latency without busy looping.
-            let deadline = std::time::Instant::now()
-                .checked_add(timeout)
-                .unwrap_or_else(std::time::Instant::now);
-            let slice_max = Duration::from_millis(50);
-            loop {
-                let now = std::time::Instant::now();
-                if now >= deadline {
-                    // Overall timeout reached. Check for pending incomplete sequences (e.g. bare Escape).
-                    if let Some(event) = self.parser_timeout_event_if_due() {
-                        self.event_queue.push_back(event);
-                        return Ok(true);
-                    }
-                    return Ok(false);
-                }
-                let remaining = deadline.saturating_duration_since(now);
-                let poll_for = remaining.min(slice_max);
-                let _ = self.poll_tty(poll_for)?;
-                self.drain_resize_notifications();
-                if !self.event_queue.is_empty() {
-                    return Ok(true);
-                }
+        if timeout == Duration::ZERO {
+            let ready = self.poll_tty(Duration::ZERO)?;
+            if !ready && self.drain_ready_bytes_before_parser_timeout()? {
+                return Ok(true);
             }
-        }
-
-        let ready = self.poll_tty(timeout)?;
-        if !ready {
-            // No bytes became ready. Even for zero-timeout polls, resolve
-            // pending ambiguous parser states once grace has elapsed.
-            if let Some(event) = self.parser_timeout_event_if_due() {
+            if !ready && let Some(event) = self.parser_timeout_event_if_due() {
                 self.event_queue.push_back(event);
                 return Ok(true);
             }
+            return Ok(!self.event_queue.is_empty());
         }
-        Ok(!self.event_queue.is_empty())
+
+        let deadline = std::time::Instant::now()
+            .checked_add(timeout)
+            .unwrap_or_else(std::time::Instant::now);
+        #[cfg(unix)]
+        let slice_max = self.resize_rx.as_ref().map(|_| Duration::from_millis(50));
+
+        loop {
+            if !self.event_queue.is_empty() {
+                return Ok(true);
+            }
+
+            if self.parser.has_pending_timeout_state() {
+                if self.drain_ready_bytes_before_parser_timeout()? {
+                    return Ok(true);
+                }
+                if let Some(event) = self.parser_timeout_event_if_due() {
+                    self.event_queue.push_back(event);
+                    return Ok(true);
+                }
+            }
+
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return Ok(false);
+            }
+
+            let mut poll_for = deadline.saturating_duration_since(now);
+            #[cfg(unix)]
+            if let Some(slice_max) = slice_max {
+                // `poll(2)` won't reliably wake on SIGWINCH (signal handlers are installed
+                // with SA_RESTART). Time-slice to bound resize latency without busy looping.
+                poll_for = poll_for.min(slice_max);
+            }
+            if let Some(parser_wait_budget) = self.parser_timeout_wait_budget() {
+                poll_for = poll_for.min(parser_wait_budget);
+            }
+
+            let _ = self.poll_tty(poll_for)?;
+            #[cfg(unix)]
+            self.drain_resize_notifications();
+        }
     }
 
     fn read_event(&mut self) -> Result<Option<Event>, Self::Error> {
@@ -1110,17 +1151,26 @@ impl BackendEventSource for TtyEventSource {
             return Ok(Some(event));
         }
 
+        #[cfg(unix)]
+        {
+            self.drain_resize_notifications();
+            if let Some(event) = self.event_queue.pop_front() {
+                return Ok(Some(event));
+            }
+        }
+
         // Opportunistically drain any newly-arrived bytes when the reader is nonblocking.
         //
         // This reduces poll(2) syscalls in bursty workloads by allowing the consumer's
         // `while let Some(e) = read_event()` drain loop to pick up additional input
         // without requiring another `poll_event()` round-trip.
-        if self.reader_nonblocking && self.tty_reader.is_some() {
-            self.drain_available_bytes()?;
-            return Ok(self.event_queue.pop_front());
+        if self.drain_ready_bytes_before_parser_timeout()?
+            && let Some(event) = self.event_queue.pop_front()
+        {
+            return Ok(Some(event));
         }
 
-        Ok(None)
+        Ok(self.parser_timeout_event_if_due())
     }
 }
 
@@ -2188,6 +2238,111 @@ mod tests {
             event,
             Some(Event::Key(KeyEvent {
                 code: KeyCode::Escape,
+                ..
+            }))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nonzero_poll_waits_for_pending_escape_to_become_ready() {
+        use ftui_core::event::{KeyCode, KeyEvent};
+        let (reader, mut writer) = pipe_pair();
+        let mut src = TtyEventSource::from_reader(80, 24, reader);
+
+        writer.write_all(b"\x1b").unwrap();
+
+        let ready = src.poll_event(Duration::from_millis(200)).unwrap();
+        assert!(
+            ready,
+            "poll should wait for pending ESC to resolve within timeout"
+        );
+        assert!(matches!(
+            src.read_event().unwrap(),
+            Some(Event::Key(KeyEvent {
+                code: KeyCode::Escape,
+                ..
+            }))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resize_aware_poll_resolves_pending_escape_before_outer_timeout() {
+        use ftui_core::event::{KeyCode, KeyEvent};
+        let (reader, mut writer) = pipe_pair();
+        let (_resize_tx, resize_rx) = mpsc::sync_channel(1);
+        let mut src = TtyEventSource::from_reader(80, 24, reader);
+        src.live = true;
+        src.resize_rx = Some(resize_rx);
+
+        writer.write_all(b"\x1b").unwrap();
+
+        let start = Instant::now();
+        let ready = src.poll_event(Duration::from_millis(250)).unwrap();
+        let elapsed = start.elapsed();
+        assert!(
+            ready,
+            "poll should resolve pending ESC while timeout budget remains"
+        );
+        assert!(
+            elapsed < Duration::from_millis(200),
+            "pending ESC should resolve near parser grace, not at outer deadline: {elapsed:?}"
+        );
+        assert!(matches!(
+            src.read_event().unwrap(),
+            Some(Event::Key(KeyEvent {
+                code: KeyCode::Escape,
+                ..
+            }))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn speculative_read_resolves_pending_escape_after_grace() {
+        use ftui_core::event::{KeyCode, KeyEvent};
+        let (reader, mut writer) = pipe_pair();
+        let mut src = TtyEventSource::from_reader(80, 24, reader);
+
+        writer.write_all(b"\x1b").unwrap();
+
+        let ready = src.poll_event(Duration::ZERO).unwrap();
+        assert!(!ready, "pending ESC should wait for timeout grace");
+
+        std::thread::sleep(PARSER_TIMEOUT_GRACE + Duration::from_millis(10));
+
+        let event = src.read_event().unwrap();
+        assert!(matches!(
+            event,
+            Some(Event::Key(KeyEvent {
+                code: KeyCode::Escape,
+                ..
+            }))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn speculative_read_prefers_ready_bytes_over_timeout_resolution_on_blocking_reader() {
+        use ftui_core::event::{KeyCode, KeyEvent};
+        let (reader, mut writer) = pipe_pair();
+        let mut src = TtyEventSource::from_reader(80, 24, reader);
+        src.reader_nonblocking = false;
+
+        writer.write_all(b"\x1b").unwrap();
+
+        let ready = src.poll_event(Duration::ZERO).unwrap();
+        assert!(!ready, "pending ESC should wait for timeout grace");
+
+        writer.write_all(b"[B").unwrap();
+        std::thread::sleep(PARSER_TIMEOUT_GRACE + Duration::from_millis(10));
+
+        let event = src.read_event().unwrap();
+        assert!(matches!(
+            event,
+            Some(Event::Key(KeyEvent {
+                code: KeyCode::Down,
                 ..
             }))
         ));

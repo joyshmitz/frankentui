@@ -3,18 +3,27 @@
 //! Exercises identical workloads through both runtime lanes and compares outputs.
 //! Mismatches produce detailed evidence showing exactly where behavior diverged.
 //!
-//! The comparator uses `ProgramSimulator` as the deterministic execution engine
-//! and `RuntimeLane` to label which lane is under test.
+//! The comparator drives a real headless `Program` with lane-specific runtime
+//! configuration and a scripted event source so the comparison goes through the
+//! actual runtime loop instead of the simulator-only fast path.
 
 #![forbid(unsafe_code)]
 
-use ftui_core::event::Event;
+use ftui_core::event::{Event, KeyCode, KeyEvent};
+use ftui_core::terminal_capabilities::TerminalCapabilities;
 use ftui_harness::failure_signatures::FailureClass;
 use ftui_harness::validation_matrix::AssertionCategory;
 use ftui_render::frame::Frame;
-use ftui_runtime::program::{Cmd, Model, RuntimeLane};
-use ftui_runtime::simulator::ProgramSimulator;
+use ftui_render::grapheme_pool::GraphemePool;
+use ftui_render::sanitize::sanitize;
+use ftui_runtime::program::{Cmd, Model, Program, ProgramConfig, RuntimeLane};
+use ftui_runtime::terminal_writer::TerminalWriter;
+use ftui_runtime::{BackendEventSource, BackendFeatures};
 use serde::Serialize;
+use std::collections::VecDeque;
+use std::io::{self, Write};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 // ============================================================================
@@ -31,12 +40,14 @@ struct LaneResult {
     tick_rate: Option<Duration>,
     cmd_log_len: usize,
     frame_hashes: Vec<u64>,
+    terminal_output: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MismatchReasonCode {
     Trace,
     Log,
+    TerminalOutput,
     RunningState,
     TickRate,
     CommandLogLength,
@@ -49,6 +60,7 @@ impl MismatchReasonCode {
         match self {
             Self::Trace => "TRACE_DIVERGENCE",
             Self::Log => "LOG_DIVERGENCE",
+            Self::TerminalOutput => "TERMINAL_OUTPUT_DIVERGENCE",
             Self::RunningState => "RUNNING_STATE_DIVERGENCE",
             Self::TickRate => "TICK_RATE_DIVERGENCE",
             Self::CommandLogLength => "COMMAND_LOG_LENGTH_DIVERGENCE",
@@ -59,7 +71,11 @@ impl MismatchReasonCode {
 
     const fn root_cause_class(self) -> &'static str {
         match self {
-            Self::Trace | Self::RunningState | Self::FrameHash | Self::FrameCount => "semantic",
+            Self::Trace
+            | Self::TerminalOutput
+            | Self::RunningState
+            | Self::FrameHash
+            | Self::FrameCount => "semantic",
             Self::Log | Self::CommandLogLength => "observability",
             Self::TickRate => "policy",
         }
@@ -67,9 +83,11 @@ impl MismatchReasonCode {
 
     const fn failure_class(self) -> FailureClass {
         match self {
-            Self::Trace | Self::RunningState | Self::FrameHash | Self::FrameCount => {
-                FailureClass::ShadowDivergence
-            }
+            Self::Trace
+            | Self::TerminalOutput
+            | Self::RunningState
+            | Self::FrameHash
+            | Self::FrameCount => FailureClass::ShadowDivergence,
             Self::Log | Self::CommandLogLength => FailureClass::Mismatch,
             Self::TickRate => FailureClass::Rollback,
         }
@@ -113,6 +131,8 @@ struct LaneSummary {
     tick_rate_ms: Option<u64>,
     cmd_log_len: usize,
     frame_hashes: Vec<u64>,
+    terminal_output_bytes: usize,
+    terminal_output_hash: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -164,6 +184,7 @@ fn mismatch_reason(field: &str) -> MismatchReasonCode {
     match field {
         "trace" => MismatchReasonCode::Trace,
         "logs" => MismatchReasonCode::Log,
+        "terminal_output" => MismatchReasonCode::TerminalOutput,
         "running" => MismatchReasonCode::RunningState,
         "tick_rate" => MismatchReasonCode::TickRate,
         "cmd_log_len" => MismatchReasonCode::CommandLogLength,
@@ -220,6 +241,16 @@ fn compare_results(
             "logs",
             format!("{:?}", legacy.logs),
             format!("{:?}", structured.logs),
+        );
+    }
+
+    if legacy.terminal_output != structured.terminal_output {
+        push_mismatch(
+            &mut mismatches,
+            scenario,
+            "terminal_output",
+            terminal_output_signature(&legacy.terminal_output),
+            terminal_output_signature(&structured.terminal_output),
         );
     }
 
@@ -282,50 +313,220 @@ fn hash_buffer(buf: &ftui_render::buffer::Buffer) -> u64 {
     hasher.finish()
 }
 
+fn hash_bytes(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn terminal_output_signature(bytes: &[u8]) -> String {
+    let preview_len = bytes.len().min(80);
+    let preview = String::from_utf8_lossy(&bytes[..preview_len]);
+    format!(
+        "len={} hash={:016x} preview={:?}",
+        bytes.len(),
+        hash_bytes(bytes),
+        preview
+    )
+}
+
+#[derive(Default)]
+struct ShadowHarnessState {
+    pending_tasks: AtomicUsize,
+    scenario_quit: AtomicBool,
+}
+
+impl ShadowHarnessState {
+    fn task_spawned(&self) {
+        self.pending_tasks.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn task_completed(&self) {
+        let mut current = self.pending_tasks.load(Ordering::SeqCst);
+        while current > 0 {
+            match self.pending_tasks.compare_exchange(
+                current,
+                current - 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => break,
+                Err(observed) => current = observed,
+            }
+        }
+    }
+
+    fn pending_tasks(&self) -> usize {
+        self.pending_tasks.load(Ordering::SeqCst)
+    }
+
+    fn mark_scenario_quit(&self) {
+        self.scenario_quit.store(true, Ordering::SeqCst);
+    }
+
+    fn scenario_quit(&self) -> bool {
+        self.scenario_quit.load(Ordering::SeqCst)
+    }
+}
+
+#[derive(Clone, Default)]
+struct SharedWriteBuffer {
+    bytes: Arc<Mutex<Vec<u8>>>,
+}
+
+impl SharedWriteBuffer {
+    fn snapshot(&self) -> Vec<u8> {
+        self.bytes
+            .lock()
+            .map(|bytes| bytes.clone())
+            .unwrap_or_default()
+    }
+}
+
+impl Write for SharedWriteBuffer {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let mut bytes = self
+            .bytes
+            .lock()
+            .map_err(|_| io::Error::other("shared write buffer poisoned"))?;
+        bytes.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+struct ScriptedEventSource {
+    width: u16,
+    height: u16,
+    features: BackendFeatures,
+    remaining_steps: usize,
+    shared: Arc<ShadowHarnessState>,
+    shutdown_armed: bool,
+    shutdown_emitted: bool,
+}
+
+impl ScriptedEventSource {
+    fn new(
+        width: u16,
+        height: u16,
+        features: BackendFeatures,
+        remaining_steps: usize,
+        shared: Arc<ShadowHarnessState>,
+    ) -> Self {
+        Self {
+            width,
+            height,
+            features,
+            remaining_steps,
+            shared,
+            shutdown_armed: false,
+            shutdown_emitted: false,
+        }
+    }
+
+    fn drive_event() -> Event {
+        Event::Key(KeyEvent::new(KeyCode::Char('n')))
+    }
+
+    fn shutdown_event() -> Event {
+        Event::Key(KeyEvent::new(KeyCode::Char('q')))
+    }
+}
+
+impl BackendEventSource for ScriptedEventSource {
+    type Error = io::Error;
+
+    fn size(&self) -> Result<(u16, u16), io::Error> {
+        Ok((self.width, self.height))
+    }
+
+    fn set_features(&mut self, features: BackendFeatures) -> Result<(), io::Error> {
+        self.features = features;
+        Ok(())
+    }
+
+    fn poll_event(&mut self, _timeout: Duration) -> Result<bool, io::Error> {
+        if self.shutdown_emitted {
+            return Ok(false);
+        }
+        if self.shutdown_armed {
+            return Ok(true);
+        }
+        // Advance one top-level scripted event only after spawned work drains so
+        // both runtime lanes observe the same task completion frontier.
+        if self.remaining_steps > 0
+            && !self.shared.scenario_quit()
+            && self.shared.pending_tasks() == 0
+        {
+            return Ok(true);
+        }
+        if self.shared.pending_tasks() == 0 {
+            self.shutdown_armed = true;
+        }
+        Ok(false)
+    }
+
+    fn read_event(&mut self) -> Result<Option<Event>, io::Error> {
+        if self.shutdown_emitted {
+            return Ok(None);
+        }
+        if self.shutdown_armed {
+            self.shutdown_armed = false;
+            self.shutdown_emitted = true;
+            return Ok(Some(Self::shutdown_event()));
+        }
+        if self.remaining_steps > 0
+            && !self.shared.scenario_quit()
+            && self.shared.pending_tasks() == 0
+        {
+            self.remaining_steps -= 1;
+            return Ok(Some(Self::drive_event()));
+        }
+        Ok(None)
+    }
+}
+
+fn render_model_frame_hash<M: Model>(model: &M, width: u16, height: u16) -> u64 {
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(width, height, &mut pool);
+    model.view(&mut frame);
+    hash_buffer(&frame.buffer)
+}
+
+fn observed_log_lines(output: &[u8]) -> Vec<String> {
+    String::from_utf8_lossy(output)
+        .split_inclusive("\r\n")
+        .filter_map(|segment| segment.strip_suffix("\r\n"))
+        .map(sanitize)
+        .map(|line| line.into_owned())
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
 // ============================================================================
 // Shadow model: records trace for comparison
 // ============================================================================
 
 struct ShadowModel {
     trace: Vec<String>,
+    script: VecDeque<SMsg>,
+    shared: Arc<ShadowHarnessState>,
 }
 
 impl ShadowModel {
-    fn new() -> Self {
-        Self { trace: vec![] }
-    }
-}
-
-#[derive(Debug)]
-enum SMsg {
-    Init,
-    Step(String),
-    Batch(Vec<String>),
-    Sequence(Vec<String>),
-    Nested(u32),
-    Task(String),
-    TaskResult(String),
-    Log(String),
-    Tick,
-    Quit,
-    QuitInBatch(usize),
-}
-
-impl From<Event> for SMsg {
-    fn from(_: Event) -> Self {
-        Self::Step("event".into())
-    }
-}
-
-impl Model for ShadowModel {
-    type Message = SMsg;
-
-    fn init(&mut self) -> Cmd<Self::Message> {
-        self.trace.push("init".into());
-        Cmd::msg(SMsg::Init)
+    fn new(script: Vec<SMsg>, shared: Arc<ShadowHarnessState>) -> Self {
+        Self {
+            trace: vec![],
+            script: VecDeque::from(script),
+            shared,
+        }
     }
 
-    fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+    fn apply_scripted_message(&mut self, msg: SMsg) -> Cmd<SMsg> {
         match msg {
             SMsg::Init => {
                 self.trace.push("update:init".into());
@@ -363,10 +564,12 @@ impl Model for ShadowModel {
             }
             SMsg::Task(label) => {
                 self.trace.push(format!("task:{label}"));
+                self.shared.task_spawned();
                 let task_label = label.clone();
                 Cmd::task(move || SMsg::TaskResult(task_label))
             }
             SMsg::TaskResult(label) => {
+                self.shared.task_completed();
                 self.trace.push(format!("task-done:{label}"));
                 Cmd::none()
             }
@@ -375,15 +578,18 @@ impl Model for ShadowModel {
                 Cmd::log(text)
             }
             SMsg::Tick => {
+                let duration = Duration::from_millis(100);
                 self.trace.push("tick".into());
-                Cmd::tick(Duration::from_millis(100))
+                Cmd::tick(duration)
             }
             SMsg::Quit => {
                 self.trace.push("quit".into());
+                self.shared.mark_scenario_quit();
                 Cmd::quit()
             }
             SMsg::QuitInBatch(count) => {
                 self.trace.push(format!("quit-batch:{count}"));
+                self.shared.mark_scenario_quit();
                 let mut commands: Vec<Cmd<SMsg>> = (0..count)
                     .map(|idx| Cmd::msg(SMsg::Step(format!("pre-{idx}"))))
                     .collect();
@@ -391,7 +597,55 @@ impl Model for ShadowModel {
                 commands.push(Cmd::msg(SMsg::Step("post-quit".into())));
                 Cmd::batch(commands)
             }
+            SMsg::DriveNext => {
+                if let Some(next) = self.script.pop_front() {
+                    self.apply_scripted_message(next)
+                } else {
+                    Cmd::none()
+                }
+            }
+            SMsg::HarnessQuit => Cmd::quit(),
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum SMsg {
+    Init,
+    Step(String),
+    Batch(Vec<String>),
+    Sequence(Vec<String>),
+    Nested(u32),
+    Task(String),
+    TaskResult(String),
+    Log(String),
+    Tick,
+    Quit,
+    QuitInBatch(usize),
+    DriveNext,
+    HarnessQuit,
+}
+
+impl From<Event> for SMsg {
+    fn from(event: Event) -> Self {
+        match event {
+            Event::Key(key) if key.code == KeyCode::Char('q') => Self::HarnessQuit,
+            Event::Key(_) => Self::DriveNext,
+            _ => Self::DriveNext,
+        }
+    }
+}
+
+impl Model for ShadowModel {
+    type Message = SMsg;
+
+    fn init(&mut self) -> Cmd<Self::Message> {
+        self.trace.push("init".into());
+        Cmd::msg(SMsg::Init)
+    }
+
+    fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+        self.apply_scripted_message(msg)
     }
 
     fn view(&self, frame: &mut Frame) {
@@ -407,27 +661,67 @@ impl Model for ShadowModel {
 
 /// Run a scenario through a specific lane and capture results.
 fn run_lane(lane: RuntimeLane, msgs: Vec<SMsg>, capture_frames: &[(u16, u16)]) -> LaneResult {
-    let mut sim = ProgramSimulator::new(ShadowModel::new());
-    sim.init();
+    let shared = Arc::new(ShadowHarnessState::default());
+    let terminal_width = capture_frames
+        .iter()
+        .map(|(width, _)| *width)
+        .max()
+        .unwrap_or(80)
+        .max(1);
+    let terminal_height = capture_frames
+        .iter()
+        .map(|(_, height)| *height)
+        .max()
+        .unwrap_or(24)
+        .max(1);
+    let mut config = ProgramConfig::default()
+        .with_lane(lane)
+        .with_forced_size(terminal_width, terminal_height);
+    config.poll_timeout = Duration::ZERO;
+    config.intercept_signals = false;
 
-    for msg in msgs {
-        sim.send(msg);
-    }
+    let capabilities = TerminalCapabilities::basic();
+    let initial_features = BackendFeatures {
+        mouse_capture: config.resolved_mouse_capture(),
+        bracketed_paste: config.bracketed_paste,
+        focus_events: config.focus_reporting,
+        kitty_keyboard: config.kitty_keyboard,
+    };
+    let output = SharedWriteBuffer::default();
+    let writer = TerminalWriter::with_diff_config(
+        output.clone(),
+        config.screen_mode,
+        config.ui_anchor,
+        capabilities,
+        config.diff_config.clone(),
+    );
+    let model = ShadowModel::new(msgs, Arc::clone(&shared));
+    let events = ScriptedEventSource::new(
+        terminal_width,
+        terminal_height,
+        initial_features,
+        model.script.len(),
+        Arc::clone(&shared),
+    );
+    let mut program = Program::with_event_source(model, events, initial_features, writer, config)
+        .expect("headless program for shadow comparator");
+    program.run().expect("run shadow comparator lane");
 
     let mut frame_hashes = Vec::new();
     for &(width, height) in capture_frames {
-        let buf = sim.capture_frame(width, height);
-        frame_hashes.push(hash_buffer(buf));
+        frame_hashes.push(render_model_frame_hash(program.model(), width, height));
     }
+    let terminal_output = output.snapshot();
 
     LaneResult {
         lane,
-        trace: sim.model().trace.clone(),
-        logs: sim.logs().to_vec(),
-        running: sim.is_running(),
-        tick_rate: sim.tick_rate(),
-        cmd_log_len: sim.command_log().len(),
+        trace: program.model().trace.clone(),
+        logs: observed_log_lines(&terminal_output),
+        running: program.is_running(),
+        tick_rate: program.tick_rate(),
+        cmd_log_len: program.executed_cmd_count(),
         frame_hashes,
+        terminal_output,
     }
 }
 
@@ -442,6 +736,8 @@ fn lane_summary(result: &LaneResult) -> LaneSummary {
             .and_then(|duration| u64::try_from(duration.as_millis()).ok()),
         cmd_log_len: result.cmd_log_len,
         frame_hashes: result.frame_hashes.clone(),
+        terminal_output_bytes: result.terminal_output.len(),
+        terminal_output_hash: hash_bytes(&result.terminal_output),
     }
 }
 
@@ -790,6 +1086,15 @@ fn shadow_empty_scenario() {
 }
 
 #[test]
+fn shadow_lane_result_reports_stopped_after_harness_shutdown() {
+    let result = run_lane(RuntimeLane::Legacy, scenario_basic_steps(), FRAMES_SMALL);
+    assert!(
+        !result.running,
+        "run_lane should report the runtime as stopped after Program::run() returns"
+    );
+}
+
+#[test]
 fn shadow_large_batch() {
     shadow_compare(
         "large_batch",
@@ -810,6 +1115,12 @@ fn mismatch_reason_codes_cover_runtime_fields() {
     let cases = [
         ("trace", "TRACE_DIVERGENCE", "semantic", "SHADOW_DIVERGENCE"),
         ("logs", "LOG_DIVERGENCE", "observability", "MISMATCH"),
+        (
+            "terminal_output",
+            "TERMINAL_OUTPUT_DIVERGENCE",
+            "semantic",
+            "SHADOW_DIVERGENCE",
+        ),
         (
             "running",
             "RUNNING_STATE_DIVERGENCE",
@@ -918,11 +1229,45 @@ fn shadow_deterministic_across_multiple_runs() {
 
     for (idx, result) in results.iter().enumerate().skip(1) {
         assert_eq!(result.trace, results[0].trace, "run {idx} trace diverged");
+        assert_eq!(result.logs, results[0].logs, "run {idx} logs diverged");
+        assert_eq!(
+            result.terminal_output, results[0].terminal_output,
+            "run {idx} terminal output diverged"
+        );
         assert_eq!(
             result.frame_hashes, results[0].frame_hashes,
             "run {idx} frame hashes diverged"
         );
     }
+}
+
+#[test]
+fn compare_results_flags_terminal_output_divergence() {
+    let legacy = LaneResult {
+        lane: RuntimeLane::Legacy,
+        trace: vec!["init".into()],
+        logs: vec!["same".into()],
+        running: false,
+        tick_rate: None,
+        cmd_log_len: 1,
+        frame_hashes: vec![1],
+        terminal_output: b"legacy bytes".to_vec(),
+    };
+    let structured = LaneResult {
+        lane: RuntimeLane::Structured,
+        trace: vec!["init".into()],
+        logs: vec!["same".into()],
+        running: false,
+        tick_rate: None,
+        cmd_log_len: 1,
+        frame_hashes: vec![1],
+        terminal_output: b"structured bytes".to_vec(),
+    };
+
+    let mismatches = compare_results("terminal_output", &legacy, &structured);
+    assert!(mismatches.iter().any(|mismatch| {
+        mismatch.field == "terminal_output" && mismatch.reason_code == "TERMINAL_OUTPUT_DIVERGENCE"
+    }));
 }
 
 // ============================================================================
