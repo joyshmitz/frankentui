@@ -70,11 +70,20 @@ Derived from `PresentStats`:
 
 ### 5.3 Runtime Loop
 - `tick_count`
-- `event_queue_len` (if available)
+- `input_backlog_len` (if the runtime exposes one separately from the effect queue)
 - `last_frame_ms` (end-to-end frame time)
 - `dropped_frames` (if frame skipping is enabled)
 
-### 5.4 Capabilities (Compact)
+### 5.4 Runtime Pressure + Control Plane
+Derived from the runtime-performance control contract:
+- `runtime_mode` (`healthy`, `stressed`, `degraded`, `recovered`)
+- `pressure_class`
+- `work_disposition` summary (canonical values: `preserved`, `coalesced`, `deferred`, `dropped_with_reason`, `failed_fast`)
+- effect-queue depth (`in_flight`), `capacity`, `high_water`, `dropped_count`
+- `coalescing_state`, `coalesced_count`, `deferred_count`
+- resize `regime` and whether a hard-deadline apply was recently forced
+
+### 5.5 Capabilities (Compact)
 - `sync_output` (DEC 2026)
 - `scroll_region` support
 - `osc8` hyperlinks
@@ -96,6 +105,9 @@ Derived from `PresentStats`:
 
 ### 6.2 Full Layout
 - Adds runtime loop stats, capability flags, and sampling window statistics.
+- Adds runtime mode, pressure class, queue occupancy/capacity, active
+  coalescing state, deferred/coalesced/dropped counts, and work-disposition
+  rows.
 - Adds a mini “budget bar” (filled proportionally to elapsed/total).
 
 ### 6.3 Minimal Layout
@@ -122,15 +134,25 @@ Derived from `PresentStats`:
 
 Evidence ledger fields:
 - `hud_level` (hidden/compact/full/minimal)
-- `reason` (terminal_size, budget_overrun, no_stats)
+- `reason_code` (`terminal_size`, `budget_overrun`, `no_stats`)
 - `degradation_level`
+- `runtime_mode`
+- `pressure_class`
+- `coalescing_state`
+- `coalesced_count`
+- `deferred_count`
+- `work_disposition`
+- `queue_depth`
+- `queue_capacity`
+- `queue_high_water`
+- `dropped_count`
 - `elapsed_ms`, `total_ms`
 
 ---
 
 ## 9) Performance & Optimization Protocol
 
-- Baseline render cost (p50/p95/p99) with `hyperfine` running demo show case.
+- Baseline render cost (p50/p95/p99) with `hyperfine` running demo showcase.
 - Profile CPU + allocations to confirm HUD does not dominate frame time.
 - Opportunity matrix (Impact×Confidence/Effort ≥ 2.0 to act).
 - Isomorphism proof: metric ordering + formatting string are stable; golden
@@ -162,6 +184,9 @@ Evidence ledger fields:
   - `frame_idx`, `elapsed_ms`, `total_ms`
   - `cells_changed`, `run_count`, `bytes_emitted`
   - `degradation_level`, `drops`
+  - `runtime_mode`, `pressure_class`, `coalescing_state`, `work_disposition`
+  - `coalesced_count`, `deferred_count`, `dropped_count`
+  - `queue_depth`, `queue_capacity`, `queue_high_water`
   - terminal `rows`, `cols`
 
 ---

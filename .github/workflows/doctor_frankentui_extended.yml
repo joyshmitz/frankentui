@@ -155,6 +155,12 @@ jobs:
             ./scripts/doctor_frankentui_happy_e2e.sh "${DOCTOR_FTUI_ARTIFACT_ROOT}/happy_conservative" \
               2>&1 | tee "${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/happy_conservative_e2e.log"
 
+      - name: Run doctor_frankentui shadow comparison (extended)
+        run: |
+          set -euo pipefail
+          ./scripts/doctor_frankentui_shadow_compare.sh "${DOCTOR_FTUI_ARTIFACT_ROOT}/shadow" all \
+            2>&1 | tee "${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/shadow_compare.log"
+
       - name: Write artifact map
         if: always()
         run: |
@@ -195,6 +201,12 @@ jobs:
             echo "happy_conservative_events_jsonl=${DOCTOR_FTUI_ARTIFACT_ROOT}/happy_conservative/meta/events.jsonl"
             echo "happy_conservative_events_validation_report=${DOCTOR_FTUI_ARTIFACT_ROOT}/happy_conservative/meta/events_validation_report.json"
             echo "happy_conservative_artifact_manifest=${DOCTOR_FTUI_ARTIFACT_ROOT}/happy_conservative/meta/artifact_manifest.json"
+            echo "shadow_compare_log=${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/shadow_compare.log"
+            echo "shadow_report_json=${DOCTOR_FTUI_ARTIFACT_ROOT}/shadow/artifacts/shadow_report.json"
+            echo "shadow_summary_json=${DOCTOR_FTUI_ARTIFACT_ROOT}/shadow/meta/summary.json"
+            echo "shadow_summary_txt=${DOCTOR_FTUI_ARTIFACT_ROOT}/shadow/meta/summary.txt"
+            echo "shadow_artifact_manifest=${DOCTOR_FTUI_ARTIFACT_ROOT}/shadow/meta/artifact_manifest.json"
+            echo "shadow_replay_sh=${DOCTOR_FTUI_ARTIFACT_ROOT}/shadow/artifacts/replay.sh"
             echo "artifact_map_json=${artifact_map_json}"
           } > "${artifact_map_txt}"
 

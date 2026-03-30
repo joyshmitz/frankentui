@@ -52,8 +52,8 @@ Point-in-time events for auditable decisions.
 
 | Event Name | Description | Fields |
 |------------|-------------|--------|
-| `ftui.decision.degradation` | Degradation level change | `level`, `reason`, `budget_remaining` |
-| `ftui.decision.fallback` | Capability fallback | `capability`, `fallback_to`, `reason` |
+| `ftui.decision.degradation` | Degradation level change | `degradation_level`, `reason_code`, `budget_remaining` |
+| `ftui.decision.fallback` | Capability fallback | `capability`, `fallback_to`, `reason_code` |
 | `ftui.decision.resize` | Resize handling decision | `strategy`, `debounce_active`, `coalesced`, `same_size`, `width`, `height`, `rate_hz` |
 | `ftui.decision.screen_mode` | Screen mode selection | `mode`, `ui_height`, `anchor` |
 
@@ -63,12 +63,20 @@ For the runtime-performance lane, degradation and fallback events are not comple
 unless they also explain the user-visible service mode:
 
 - `ftui.decision.degradation`
-  - must carry `runtime_mode_before`, `runtime_mode_after`, `pressure_class`,
-    `degradation_level`, `strict_guarantees`, `degraded_behaviors`, and
-    `recovery_target`
+  - must carry `runtime_mode`, `runtime_mode_before`,
+    `runtime_mode_after`, `pressure_class`,
+    `degradation_level`, `queue_depth`, `queue_capacity`,
+    `queue_high_water`, `coalescing_state`, `coalesced_count`,
+    `deferred_count`,
+    `dropped_count`, `reason_code`, `strict_guarantees`,
+    `degraded_behaviors`, `recovery_target`, `signal_surface`, and
+    `work_disposition`; if it closes a degraded interval, it must also carry
+    `recovery_completed`, `recovery_latency_ms`, and `degraded_interval_ms`
 - `ftui.decision.fallback`
   - must carry `runtime_mode`, `rollback_required`, `operator_action`, and the
-    fallback reason in machine-readable form
+    `reason_code`; if the fallback changes active service quality, it must also
+    carry `pressure_class`, any active `degradation_level`, and
+    `work_disposition`
 
 Recovery does not need a separate OTEL event name if it is represented as a
 `ftui.decision.degradation` transition back toward `healthy`, but the closing
@@ -389,28 +397,36 @@ for any scenario that enters `stressed`, `degraded`, or `recovered` mode.
 Required fields:
 - `run_id`
 - `event_idx`
+- `runtime_mode`
 - `runtime_mode_before` / `runtime_mode_after`
   - `healthy`, `stressed`, `degraded`, `recovered`
 - `pressure_class`
   - `steady_state`, `input_backpressure`, `mixed_workload`, `shutdown_pressure`, `capability_fallback`
 - `degradation_level`
-- `reason`
+- `queue_depth`
+- `queue_capacity`
+- `queue_high_water`
+- `coalescing_state`
+- `coalesced_count`
+- `deferred_count`
+- `dropped_count`
+- `reason_code`
 - `strict_guarantees`
 - `degraded_behaviors`
 - `recovery_target`
+- `signal_surface`
 - `work_disposition`
+
+When `mode_transition` closes a degraded interval, it must also include:
+- `recovery_completed`
+- `recovery_latency_ms`
+- `degraded_interval_ms`
 
 #### Event: `recovery_complete`
 
 Required fields:
-- `run_id`
-- `event_idx`
-- `runtime_mode_before`
-- `runtime_mode_after`
-- `recovery_latency_ms`
-- `degraded_interval_ms`
+- all fields required by `mode_transition` when it closes a degraded interval
 - `pending_work_drained`
-- `reason`
 
 These additions may be emitted via OTEL events, the local evidence sink, or both.
 Once the runtime-performance lane adopts them, missing mode/recovery evidence is

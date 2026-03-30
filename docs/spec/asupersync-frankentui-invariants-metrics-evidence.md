@@ -115,7 +115,7 @@ control policy changes.
 | --- | --- | --- |
 | Runtime evidence / telemetry | Mode transitions, degradation level, pressure class, reason code, strict guarantees preserved, work disposition | "What mode was the runtime in, why did it change, and what was allowed to degrade?" |
 | `doctor_frankentui` summaries and manifests | Active degraded/fallback interval, dominant reason code, recovery outcome, artifact links | "Did this run degrade, and can I diagnose it without raw log spelunking?" |
-| UI-facing hooks (HUD/status line) when available | Current mode, visible degradation tier, whether input/render updates are being coalesced | "What should the user expect right now?" |
+| UI-facing hooks (HUD/status line) when available | Current mode, visible degradation tier, queue occupancy versus cap (or explicit uncapped state), active coalescing state, and work disposition | "What should the user expect right now?" |
 | Validation artifacts | Mode timeline, transition checksum, strict-guarantee report | "Did this run obey the contract, and is it reproducible?" |
 
 ### Scenario Classes
@@ -132,6 +132,84 @@ control policy changes.
 2. Recovery must be hysteretic and explicit; oscillating `healthy`/`degraded` state on single-sample noise is a contract violation.
 3. Deferred, coalesced, or dropped work must be counted and reason-coded so operators can distinguish preserved throughput from silent loss.
 4. A run is not fully recovered until the runtime returns to `healthy`, backlog drains within policy, and the closing evidence identifies the degraded interval's duration.
+
+## Queueing Envelope and Admission/Coalescing Policy
+
+This section is the canonical `bd-cu54l` contract. It turns the runtime-mode
+contract above into an explicit control policy that later governor and
+scheduling beads must implement rather than reinterpret.
+
+### Required Measured Inputs
+
+The controller must derive its decision from already-existing runtime signals,
+not from a fresh set of undocumented heuristics:
+
+- effect-queue telemetry: `enqueued`, `processed`, `dropped`, `high_water`, `in_flight`
+- latency metrics: `MET-RT-EFFECT-TURNAROUND-*`, `MET-RT-SUBSCRIPTION-STOP-LATENCY-*`, `MET-RT-PROCESS-CANCEL-LATENCY-*`, `MET-RT-SHUTDOWN-LATENCY-*`
+- pressure metrics: `MET-RT-DEADLINE-BREACH-RATE`, `MET-RT-DEGRADED-DUTY-CYCLE`, `MET-RT-RECOVERY-LATENCY-*`, `MET-RT-STRICT-BEHAVIOR-VIOLATION-RATE`
+- resize evidence: coalescer regime, pending window age, forced-deadline applies, and latest-wins state
+- frame-budget evidence: current degradation tier plus recent `budget_decision` history
+
+### Envelope Classes
+
+| Envelope | Entry signals | Required runtime mode | Required posture |
+| --- | --- | --- | --- |
+| `steady_state` | Strict latency metrics are within configured bounds; no queue drops; no active degradation; and, when a queue cap exists, `in_flight < 0.5 * max_queue_depth`. | `healthy` | Admit all work normally; do not invent degradation or backlog shedding. |
+| `soft_overload` | Strict guarantees still hold, but pressure is visible: queue occupancy reaches the stressed watermark, the resize coalescer enters burst mode, forced applies begin to appear, or budget pressure becomes sustained. | `stressed` | Preserve strict work, start bounded coalescing, and slow background admission before user-visible ambiguity appears. |
+| `hard_overload` | Any of: queue backpressure/drop fires, `in_flight >= 0.8 * max_queue_depth`, deadline-breach budget is exceeded, user-visible degradation is active, or recovery from a previous degraded interval is still incomplete. | `degraded` | Preserve strict work, defer background work, and allow only declared fidelity loss and bounded coalescing. |
+| `unsafe` | Terminal safety, bounded shutdown, evidence continuity, or another strict guarantee can no longer be preserved with the current workload. | `n/a` (terminal condition) | Stop optimistic degradation and surface an explicit failure with evidence. |
+
+Notes:
+
+- The stressed watermark is `0.5 * max_queue_depth`, the degraded watermark is
+  `0.8 * max_queue_depth`, and the recovery watermark is `0.25 * max_queue_depth`.
+- If `max_queue_depth == 0` (unbounded queue), mode changes must be driven by
+  latency, deadline, and degradation evidence rather than raw depth alone.
+- `unsafe` is not a steady-state runtime mode. It is the terminal condition
+  that requires fail-fast from the current mode when a strict guarantee would
+  otherwise be violated.
+
+### Work Classes And Allowed Disposition
+
+| Work class | Examples | `healthy` | `stressed` | `degraded` |
+| --- | --- | --- | --- | --- |
+| `strict_interactive` | accepted input ordering, active cursor/focus updates, terminal restore, cancellation, shutdown, evidence rows required to explain a decision | Admit immediately. | Admit immediately; never drop; only bounded coalescing already covered by a declared contract is allowed. | Admit immediately; if this cannot be preserved, fail-fast. |
+| `visible_coalescible` | resize-driven rerenders, non-essential refreshes, HUD updates, optional trace payload generation | Admit normally. | Coalesce with hard deadlines and explicit reason codes. | Coalesce aggressively, allow fidelity loss, and keep latest-wins semantics explicit. |
+| `background_deferrable` | queued `Cmd::Task`, low-priority subscription work, artifact post-processing, shadow helpers | Admit while within steady-state envelope. | Admit only while projected queue occupancy stays below the degraded watermark when capped, or below the controller's latency-derived admission threshold when uncapped, and strict latencies remain healthy. | Defer until recovery unless needed to preserve a strict guarantee. |
+| `best_effort_droppable` | optional sampling, verbose diagnostics expansion, speculative analysis, advisory summaries | Admit opportunistically. | Drop first when pressure rises; emit reason-coded evidence. | Drop by default; re-enable only during recovery. |
+
+### Canonical Control Rules
+
+1. `healthy` mode is the no-surprises baseline: all work classes are admitted,
+   queue drops are forbidden, and resize/frame controllers may optimize locally
+   but must not claim degraded service.
+2. `stressed` mode is an early intervention band, not permission for vague
+   slowdowns. The controller may coalesce `visible_coalescible` work and defer
+   `background_deferrable` work, but it must keep strict latency metrics within
+   budget and preserve comprehensible user behavior.
+3. `degraded` mode is the only band where explicit shedding is allowed. In this
+   band, `strict_interactive` work remains strict, `visible_coalescible` work
+   follows bounded coalescing plus existing degradation tiers, and
+   `best_effort_droppable` work is dropped with explicit evidence.
+4. Recovery is staged. Deferred work may be re-admitted only after three
+   consecutive control intervals with no new drops, no new forced-deadline
+   applies, queue occupancy below the recovery watermark when capped or below
+   the latency-derived recovery threshold when uncapped, and the frame budget
+   back at the baseline tier.
+5. `recovered` is a real mode, not a log flourish. It closes the interval,
+   reports recovery latency, and records what happened to deferred, coalesced,
+   and dropped work before the runtime returns to `healthy`.
+
+### Verification Requirements For Later Implementation Beads
+
+- unit tests must cover steady/stressed/degraded/unsafe classification,
+  watermark behavior, and the `max_queue_depth == 0` case
+- stress scripts must cover `input_backpressure`, `mixed_workload`,
+  `shutdown_pressure`, and a negative-control idle run
+- evidence and HUD surfaces must show `runtime_mode`, `pressure_class`,
+  queue occupancy versus cap (or an explicit uncapped state), active
+  coalescing state, and deferred/coalesced/dropped work counts whenever the
+  runtime is not `healthy`
 
 ## Mapping To Existing Runtime Metrics And Schema Facilities
 
@@ -207,21 +285,33 @@ Any record that enters, exits, or reports `stressed`, `degraded`, or `recovered`
 behavior must include:
 
 - `runtime_mode`
-- `mode_before`
-- `mode_after`
+- `runtime_mode_before`
+- `runtime_mode_after`
 - `pressure_class`
 - `degradation_level`
+- `queue_depth`
+- `queue_capacity`
+- `queue_high_water`
+- `coalescing_state`
+- `coalesced_count`
+- `deferred_count`
+- `dropped_count`
+- `reason_code`
 - `strict_guarantees`
   - machine-readable list of guarantees still being held strict
 - `degraded_behaviors`
   - machine-readable list of behaviors currently allowed to degrade
 - `recovery_target`
-- `recovery_completed`
-- `recovery_latency_ms`
 - `signal_surface`
   - e.g. `otel`, `evidence_jsonl`, `doctor_summary`, `hud`
 - `work_disposition`
   - `preserved`, `deferred`, `coalesced`, `dropped_with_reason`, or `failed_fast`
+
+Any record that closes a degraded interval must also include:
+
+- `recovery_completed`
+- `recovery_latency_ms`
+- `degraded_interval_ms`
 
 ### Required Integrity Fields
 

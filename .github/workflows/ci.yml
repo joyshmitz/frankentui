@@ -1150,6 +1150,12 @@ jobs:
           cp crates/doctor_frankentui/coverage/thresholds.toml "${DOCTOR_FTUI_ARTIFACT_ROOT}/coverage/thresholds.toml"
           cp crates/doctor_frankentui/coverage/e2e_jsonl_schema.json "${DOCTOR_FTUI_ARTIFACT_ROOT}/coverage/e2e_jsonl_schema.json"
 
+      - name: Run doctor_frankentui shadow comparison
+        run: |
+          set -euo pipefail
+          ./scripts/doctor_frankentui_shadow_compare.sh "${DOCTOR_FTUI_ARTIFACT_ROOT}/shadow" happy \
+            2>&1 | tee "${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/shadow_compare.log"
+
       - name: Write artifact map
         if: always()
         run: |
@@ -1185,6 +1191,12 @@ jobs:
             echo "telemetry_schema_json=${DOCTOR_FTUI_ARTIFACT_ROOT}/coverage/e2e_jsonl_schema.json"
             echo "coverage_report_json=${DOCTOR_FTUI_ARTIFACT_ROOT}/coverage/coverage_gate_report.json"
             echo "coverage_report_txt=${DOCTOR_FTUI_ARTIFACT_ROOT}/coverage/coverage_gate_report.txt"
+            echo "shadow_compare_log=${DOCTOR_FTUI_ARTIFACT_ROOT}/logs/shadow_compare.log"
+            echo "shadow_report_json=${DOCTOR_FTUI_ARTIFACT_ROOT}/shadow/artifacts/shadow_report.json"
+            echo "shadow_summary_json=${DOCTOR_FTUI_ARTIFACT_ROOT}/shadow/meta/summary.json"
+            echo "shadow_summary_txt=${DOCTOR_FTUI_ARTIFACT_ROOT}/shadow/meta/summary.txt"
+            echo "shadow_artifact_manifest=${DOCTOR_FTUI_ARTIFACT_ROOT}/shadow/meta/artifact_manifest.json"
+            echo "shadow_replay_sh=${DOCTOR_FTUI_ARTIFACT_ROOT}/shadow/artifacts/replay.sh"
             echo "artifact_map_json=${artifact_map_json}"
           } > "${artifact_map_txt}"
 

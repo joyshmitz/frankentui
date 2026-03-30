@@ -358,6 +358,28 @@ These fields make the decision rule explainable and auditable.
 - **Monotonic evidence**: if `log_lr_t` is consistently positive, `log_e_t`
   should be non‑decreasing until it hits `log_e_max`.
 
+### 8.6) Runtime Control-Policy Integration
+
+The resize scheduler is one contributor to the broader runtime control plane; it
+does not get to redefine service semantics on its own.
+
+- Resize coalescing belongs to the `visible_coalescible` work class from the
+  runtime control contract. It may degrade cadence, but it may not weaken
+  terminal safety, accepted input ordering, shutdown visibility, or evidence
+  continuity.
+- In `healthy` mode, resize decisions may coalesce locally but must not claim
+  degraded service. Repeated forced-deadline applies or persistent burst-mode
+  residency are pressure signals that feed the runtime-mode classifier.
+- In `stressed` mode, the scheduler may stay in burst mode longer, but
+  latest-wins semantics and the hard deadline remain strict.
+- In `degraded` mode, `skip_frame` is permitted only as an explicit,
+  reason-coded work-disposition choice paired with the active runtime mode and
+  degradation tier. It is never an invisible optimization.
+- Any resize decision that forces an apply, drops a frame, or prolongs burst
+  residency must emit enough evidence for the HUD and runtime-mode ledger to
+  surface `pressure_class`, `coalescing_state`, `work_disposition`, and
+  `reason_code`.
+
 ---
 
 ## 9) Pseudocode
@@ -517,7 +539,7 @@ Evidence ledger fields:
 - `posterior_mean`, `posterior_variance`
 - `e_value`, `e_threshold`
 - `events_since_sample`, `time_since_sample_ms`
-- `reason` (forced / min_interval / voi_ge_cost / voi_lt_cost)
+- `reason_code` (`forced`, `min_interval`, `voi_ge_cost`, `voi_lt_cost`)
 
 ### Implementation
 - `crates/ftui-runtime/src/voi_sampling.rs`

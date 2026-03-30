@@ -17,6 +17,7 @@ The `doctor_frankentui` verification stack is enforced by CI gates that cover:
 - a no-fake realism policy gate (with explicit allow markers for unavoidable synthetic helpers)
 - e2e workflows producing validated JSONL telemetry, per-step logs, and artifact manifests
 - determinism soak runs with non-volatile divergence detection and actionable first-diff pointers
+- shadow comparisons that pair default and conservative workflows and compare artifact/replay quality
 - a coverage gate with explicit per-module floors and deterministic diagnostics
 
 All CI lanes publish a machine-readable artifact index (`artifact_map.txt` and `artifact_map.json`)
@@ -42,6 +43,7 @@ High-signal artifact_map keys (non-exhaustive):
 - `failure_summary`, `failure_events_jsonl`, `failure_events_validation_report`, `failure_case_results`
 - `replay_triage_report_json`
 - `determinism_run_index`, `determinism_report_json`, `determinism_report_txt`
+- `shadow_report_json`, `shadow_summary_json`, `shadow_summary_txt`, `shadow_artifact_manifest`
 - `coverage_report_json`, `coverage_report_txt`, `coverage_thresholds_toml`, `telemetry_schema_json`
 
 ## Unit/Integration Coverage Outcomes
@@ -99,6 +101,23 @@ Replay/triage helper (failure workflow):
 - Script: `scripts/doctor_frankentui_replay_triage.py`
 - Output: `replay_triage_report_json`
 
+Shadow comparison suite:
+
+- Script: `scripts/doctor_frankentui_shadow_compare.sh`
+- Outputs:
+  - `shadow_report_json`
+  - `shadow_summary_json`
+  - `shadow_summary_txt`
+  - `shadow_artifact_manifest`
+  - `shadow_replay_sh`
+
+Contract:
+
+- PR gate compares the happy-path workflow in default vs conservative mode.
+- Extended lane compares both the happy-path and failure-path workflows.
+- The report must surface status drift, missing artifacts, replay-command inventory drift,
+  fallback-coverage regressions, and average/tail turnaround metrics.
+
 ## Determinism + Flake Diagnostics Outcomes
 
 Determinism soak runner:
@@ -130,6 +149,7 @@ Extended lane:
 - Adds:
   - determinism soak at higher iteration count
   - an additional conservative-mode happy-path run
+  - full happy+failure shadow comparison
   - longer artifact retention
 
 ## Residual Risk Register
@@ -160,6 +180,7 @@ Evidence is linked by rule:
   - primary evidence: `happy_*` and `failure_*` artifacts (events JSONL + summaries + manifests)
   - determinism evidence: `determinism_*` artifacts
   - replay/triage evidence: `replay_triage_report_json`
+  - shadow evidence: `shadow_*` artifacts
 
 If a row is changed (new behavior, new artifacts, new tools), update:
 

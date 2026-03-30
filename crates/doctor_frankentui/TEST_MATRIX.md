@@ -52,6 +52,7 @@ The artifact map provides stable keys for evidence discovery (examples):
 - `happy_events_jsonl`, `happy_events_validation_report`, `happy_artifact_manifest`
 - `failure_events_jsonl`, `failure_case_results`, `replay_triage_report_json`
 - `determinism_report_json`, `determinism_run_index`
+- `shadow_report_json`, `shadow_summary_json`, `shadow_artifact_manifest`, `shadow_replay_sh`
 - `coverage_report_json`, `coverage_thresholds_toml`, `telemetry_schema_json`
 
 ## Status Legend
@@ -119,6 +120,8 @@ The artifact map provides stable keys for evidence discovery (examples):
 | DF-E2E-001 | command workflow | e2e | happy-path command chain across doctor/capture/suite/report | scripted shell workflow + deterministic profile set | all commands pass and produce complete artifact tree | hidden failures despite zero exit | per-step stdout/stderr + artifact manifest + summary | implemented |
 | DF-E2E-002 | command workflow | e2e | failure-path matrix validates expected non-zero exits and messages | scripted negative cases | each case asserts expected code and signature | ambiguous or silent failure semantics | case logs + case_results.json | implemented |
 | DF-E2E-003 | command workflow | e2e | JSON mode contract preserved end-to-end for all commands | run key commands with `SQLMODEL_JSON=1` | output parseable as JSON per command | human status leakage into JSON streams | raw stdout archives | implemented |
+| DF-E2E-004 | command workflow | e2e | shadow comparison keeps default and conservative doctor workflows comparable enough for operator trust | paired default/conservative happy workflow in PR gate; happy+failure pair in extended lane | machine-readable comparison report with status parity, artifact-manifest inventory, replay-command inventory, and turnaround metrics | silent drift between optimized and conservative lanes | `shadow_report_json`, `shadow_summary_json`, `shadow_artifact_manifest`, `shadow_compare_log` | implemented |
+| DF-E2E-005 | command workflow | e2e | replay-validation remains available across failure shadow lanes | paired default/conservative failure workflow artifacts | both lanes emit replay triage output with stable status/signal counts and replay pointers | replay helper missing or materially degraded on one lane | `shadow_report_json`, `shadow_replay_sh`, `replay_triage_report_json` | implemented |
 
 ## Traceability to Current Beads (bd-36je8)
 
@@ -128,3 +131,13 @@ The artifact map provides stable keys for evidence discovery (examples):
 - `bd-36je8.5` (closeout): matrix truth reconciliation and final verification report.
 - `bd-36je8.5.1` (this task): reconcile row statuses + traceability links.
 - `bd-36je8.5.2` (next): final verification report linking each major matrix slice to evidence artifacts.
+
+## Validation Suite Intent (bd-zmcvz)
+
+The optimization validation suite exists to prove more than “it got faster”:
+
+- soak: repeated happy/failure workflows must stay deterministic once volatile artifacts are normalized
+- shadow: default and conservative workflows must remain comparable in status, evidence inventory, replay inventory, and operator-facing turnaround
+- replay: failure-path artifacts must stay triageable without rerunning the workflow
+
+The explicit negative-control slice is the failure-path shadow lane, while the positive-control slice is the happy-path shadow lane. When adding new doctor workflows or artifacts, update the shadow suite and artifact-map keys in lockstep so the contract stays discoverable.
