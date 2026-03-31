@@ -1024,11 +1024,23 @@ impl Scrim {
                     return Self::color_or_theme(color, theme).with_opacity(strength);
                 }
 
-                // Normalized distance to center in [0, 1].
+                // Normalized distance to center in [-1, 1].
+                // We use half-width/height as the scale factor.
+                // 
+                // We normalize for aspect ratio to ensure a circular vignette
+                // even on non-square regions.
                 let cx = (w as f64 - 1.0) * 0.5;
                 let cy = (h as f64 - 1.0) * 0.5;
-                let dx = (x as f64 - cx) / cx;
-                let dy = (y as f64 - cy) / cy;
+                
+                // Avoid division by zero if width/height is exactly 1 (already guarded above,
+                // but we use max(1.0) here for robustness).
+                let rx = cx.max(1.0);
+                let ry = cy.max(1.0);
+                
+                let dx = (x as f64 - cx) / rx;
+                let dy = (y as f64 - cy) / ry;
+                
+                // r is in [0, sqrt(2)] before clamp.
                 let r = (dx * dx + dy * dy).sqrt().clamp(0.0, 1.0);
 
                 // Smoothstep-ish curve to avoid a harsh ring.
@@ -3087,9 +3099,9 @@ mod tests {
         frame.set_degradation(DegradationLevel::Full);
 
         let area = Rect::new(0, 0, 10, 5);
+        // Should render normally
         backdrop.render(area, &mut frame);
 
-        // Should render normally
         let cell = frame.buffer.get(0, 0).unwrap();
         assert_ne!(cell.bg, PackedRgba::TRANSPARENT);
     }

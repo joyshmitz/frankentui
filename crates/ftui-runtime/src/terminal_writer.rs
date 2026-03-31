@@ -566,6 +566,18 @@ impl<W: Write> TerminalWriter<W> {
         let auto_ui_height = None;
         let diff_strategy = DiffStrategySelector::new(diff_config.strategy_config.clone());
 
+        // Increment the inline-active gauge.
+        // We do this BEFORE potentially returning/panicking to maintain invariant
+        // that a TerminalWriter in inline mode ALWAYS has a corresponding increment,
+        // which will be decremented on Drop.
+        let is_inline = matches!(
+            screen_mode,
+            ScreenMode::Inline { .. } | ScreenMode::InlineAuto { .. }
+        );
+        if is_inline {
+            INLINE_ACTIVE_WIDGETS.fetch_add(1, Ordering::SeqCst);
+        }
+
         // Log inline mode activation.
         match screen_mode {
             ScreenMode::Inline { ui_height } => {
@@ -587,15 +599,6 @@ impl<W: Write> TerminalWriter<W> {
                 );
             }
             ScreenMode::AltScreen => {}
-        }
-
-        // Bump the inline-active gauge.
-        let is_inline = matches!(
-            screen_mode,
-            ScreenMode::Inline { .. } | ScreenMode::InlineAuto { .. }
-        );
-        if is_inline {
-            INLINE_ACTIVE_WIDGETS.fetch_add(1, Ordering::Relaxed);
         }
 
         let mut diff_scratch = BufferDiff::new();
@@ -1098,7 +1101,9 @@ impl<W: Write> TerminalWriter<W> {
 
         if let Ok(stats) = result {
             // 3-buffer rotation: reuse clone_buf's allocation to avoid per-frame alloc.
-            // Rotation: clone_buf ← spare ← prev ← new_copy.
+            // Only advance the diff baseline after a successful present. If a write
+            // failed partway through, the terminal state is unknown, so keeping the
+            // old baseline forces a conservative repaint on the next frame.
             let new_prev = match self.clone_buf.take() {
                 Some(mut buf)
                     if buf.width() == buffer.width() && buf.height() == buffer.height() =>
@@ -1696,6 +1701,8 @@ impl<W: Write> TerminalWriter<W> {
             let mut show_cursor = false;
             if cursor_visible
                 && let Some((cx, cy)) = cursor
+                && cx < buffer.width()
+                && cy < buffer.height()
                 && cy < visible_height
             {
                 // Move to UI start + cursor y
@@ -1990,12 +1997,41 @@ impl<W: Write> TerminalWriter<W> {
 
     /// Clear the screen.
     pub fn clear_screen(&mut self) -> io::Result<()> {
-        self.writer().write_all(b"\x1b[2J\x1b[1;1H")?;
-        self.writer().flush()?;
+        let mut first_error = None;
+        if self.in_sync_block {
+            if self.capabilities.use_sync_output()
+                && let Err(err) = self.writer().write_all(SYNC_END)
+            {
+                first_error = Some(err);
+            }
+            self.in_sync_block = false;
+        }
+        if self.cursor_saved {
+            if let Err(err) = self.writer().write_all(CURSOR_RESTORE) {
+                first_error.get_or_insert(err);
+            }
+            self.cursor_saved = false;
+        }
+        if self.scroll_region_active {
+            if let Err(err) = self.writer().write_all(b"\x1b[r") {
+                first_error.get_or_insert(err);
+            }
+            self.scroll_region_active = false;
+        }
+        if let Err(err) = self.writer().write_all(b"\x1b[2J\x1b[1;1H") {
+            first_error.get_or_insert(err);
+        }
+        if let Err(err) = self.writer().flush() {
+            first_error.get_or_insert(err);
+        }
         self.prev_buffer = None;
         self.last_inline_region = None;
         self.reset_diff_strategy();
-        Ok(())
+        if let Some(err) = first_error {
+            Err(err)
+        } else {
+            Ok(())
+        }
     }
 
     fn set_cursor_visibility(&mut self, visible: bool) -> io::Result<()> {
@@ -2118,6 +2154,10 @@ impl<W: Write> TerminalWriter<W> {
         presenter.finish_frame_best_effort();
         let writer = presenter.counting_writer_mut();
 
+        // Ensure erase operations clear to the terminal default background.
+        // Without this, background color leakage occurs during cleanup.
+        let _ = writer.write_all(SGR_BG_DEFAULT);
+
         // Emit restorations unconditionally: write errors can occur after bytes
         // were partially written, so internal flags may be stale.
         if self.in_sync_block {
@@ -2145,6 +2185,9 @@ impl<W: Write> TerminalWriter<W> {
         };
         presenter.finish_frame_best_effort();
         let writer = presenter.counting_writer_mut();
+
+        // Ensure erase operations clear to the terminal default background.
+        let _ = writer.write_all(SGR_BG_DEFAULT);
 
         // End any pending sync block
         if self.in_sync_block {
@@ -2186,7 +2229,7 @@ impl<W: Write> Drop for TerminalWriter<W> {
             self.screen_mode,
             ScreenMode::Inline { .. } | ScreenMode::InlineAuto { .. }
         ) {
-            INLINE_ACTIVE_WIDGETS.fetch_sub(1, Ordering::Relaxed);
+            INLINE_ACTIVE_WIDGETS.fetch_sub(1, Ordering::SeqCst);
         }
         self.cleanup();
     }
@@ -2196,7 +2239,10 @@ impl<W: Write> Drop for TerminalWriter<W> {
 mod tests {
     use super::*;
     use ftui_render::cell::{Cell, CellAttrs, CellContent, PackedRgba, StyleFlags};
+    use std::cell::RefCell;
+    use std::io;
     use std::path::PathBuf;
+    use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn max_cursor_row(output: &[u8]) -> u16 {
@@ -2271,6 +2317,48 @@ mod tests {
             id
         ));
         path
+    }
+
+    #[derive(Default)]
+    struct FaultState {
+        bytes: Vec<u8>,
+        write_calls: usize,
+        injected_failure_triggered: bool,
+    }
+
+    struct SingleWriteFaultWriter {
+        state: Rc<RefCell<FaultState>>,
+        fail_on_call: usize,
+        max_chunk_len: usize,
+    }
+
+    impl SingleWriteFaultWriter {
+        fn new(state: Rc<RefCell<FaultState>>, fail_on_call: usize, max_chunk_len: usize) -> Self {
+            Self {
+                state,
+                fail_on_call,
+                max_chunk_len: max_chunk_len.max(1),
+            }
+        }
+    }
+
+    impl Write for SingleWriteFaultWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let mut state = self.state.borrow_mut();
+            state.write_calls = state.write_calls.saturating_add(1);
+            if !state.injected_failure_triggered && state.write_calls == self.fail_on_call {
+                state.injected_failure_triggered = true;
+                return Err(io::Error::other("injected partial-write fault"));
+            }
+
+            let write_len = buf.len().min(self.max_chunk_len);
+            state.bytes.extend_from_slice(&buf[..write_len]);
+            Ok(write_len)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
 
     #[test]
@@ -3887,6 +3975,60 @@ mod tests {
         );
     }
 
+    #[test]
+    fn present_ui_inline_skips_cursor_position_when_x_is_out_of_bounds() {
+        let mut output = Vec::new();
+        {
+            let mut writer = TerminalWriter::new(
+                &mut output,
+                ScreenMode::Inline { ui_height: 5 },
+                UiAnchor::Bottom,
+                basic_caps(),
+            );
+            writer.set_size(80, 24);
+
+            let buffer = Buffer::new(4, 5);
+            writer.present_ui(&buffer, Some((4, 1)), true).unwrap();
+        }
+
+        let restore_idx = find_nth(&output, CURSOR_RESTORE, 1).expect("expected cursor restore");
+        let after_restore = &output[restore_idx..];
+        let invalid_pos = b"\x1b[21;5H";
+        assert!(
+            !after_restore
+                .windows(invalid_pos.len())
+                .any(|w| w == invalid_pos),
+            "inline cursor should not move to x outside the buffer width"
+        );
+    }
+
+    #[test]
+    fn present_ui_inline_skips_cursor_position_when_y_is_below_buffer_height() {
+        let mut output = Vec::new();
+        {
+            let mut writer = TerminalWriter::new(
+                &mut output,
+                ScreenMode::Inline { ui_height: 5 },
+                UiAnchor::Bottom,
+                basic_caps(),
+            );
+            writer.set_size(80, 24);
+
+            let buffer = Buffer::new(4, 2);
+            writer.present_ui(&buffer, Some((1, 4)), true).unwrap();
+        }
+
+        let restore_idx = find_nth(&output, CURSOR_RESTORE, 1).expect("expected cursor restore");
+        let after_restore = &output[restore_idx..];
+        let invalid_pos = b"\x1b[24;2H";
+        assert!(
+            !after_restore
+                .windows(invalid_pos.len())
+                .any(|w| w == invalid_pos),
+            "inline cursor should not move below the buffer height just because the inline region is taller"
+        );
+    }
+
     // =========================================================================
     // RuntimeDiffConfig tests
     // =========================================================================
@@ -5038,6 +5180,210 @@ mod tests {
         assert!(
             output.windows(4).any(|w| w == b"\x1b[2J"),
             "clear_screen should emit ED2 sequence"
+        );
+    }
+
+    #[test]
+    fn clear_screen_resets_active_scroll_region_before_clearing() {
+        let mut output = Vec::new();
+        {
+            let mut writer = TerminalWriter::new(
+                &mut output,
+                ScreenMode::Inline { ui_height: 5 },
+                UiAnchor::Bottom,
+                scroll_region_caps(),
+            );
+            writer.set_size(80, 24);
+
+            let buffer = Buffer::new(80, 5);
+            writer.present_ui(&buffer, None, true).unwrap();
+            assert!(writer.scroll_region_active());
+
+            writer.clear_screen().unwrap();
+            assert!(
+                !writer.scroll_region_active(),
+                "clear_screen should leave no active scroll region"
+            );
+        }
+
+        let reset_idx = output
+            .windows(b"\x1b[r".len())
+            .position(|w| w == b"\x1b[r")
+            .expect("expected scroll-region reset");
+        let clear_idx = output
+            .windows(b"\x1b[2J".len())
+            .position(|w| w == b"\x1b[2J")
+            .expect("expected full clear");
+        assert!(
+            reset_idx < clear_idx,
+            "clear_screen should reset DECSTBM before full-screen clear"
+        );
+    }
+
+    #[test]
+    fn clear_screen_restores_saved_cursor_before_clearing() {
+        let mut output = Vec::new();
+        {
+            let mut writer = TerminalWriter::new(
+                &mut output,
+                ScreenMode::Inline { ui_height: 5 },
+                UiAnchor::Bottom,
+                basic_caps(),
+            );
+            writer.cursor_saved = true;
+
+            writer.clear_screen().unwrap();
+            assert!(
+                !writer.cursor_saved,
+                "clear_screen should clear stale saved-cursor state"
+            );
+        }
+
+        let restore_idx = output
+            .windows(CURSOR_RESTORE.len())
+            .position(|w| w == CURSOR_RESTORE)
+            .expect("expected cursor restore");
+        let clear_idx = output
+            .windows(b"\x1b[2J".len())
+            .position(|w| w == b"\x1b[2J")
+            .expect("expected full clear");
+        assert!(
+            restore_idx < clear_idx,
+            "clear_screen should restore any saved cursor before clearing"
+        );
+    }
+
+    #[test]
+    fn clear_screen_closes_stale_sync_block_before_clearing() {
+        let mut output = Vec::new();
+        {
+            let mut writer = TerminalWriter::new(
+                &mut output,
+                ScreenMode::Inline { ui_height: 5 },
+                UiAnchor::Bottom,
+                full_caps(),
+            );
+            writer.in_sync_block = true;
+
+            writer.clear_screen().unwrap();
+            assert!(
+                !writer.in_sync_block,
+                "clear_screen should clear stale sync-block state"
+            );
+        }
+
+        let sync_end_idx = output
+            .windows(SYNC_END.len())
+            .position(|w| w == SYNC_END)
+            .expect("expected sync end");
+        let clear_idx = output
+            .windows(b"\x1b[2J".len())
+            .position(|w| w == b"\x1b[2J")
+            .expect("expected full clear");
+        assert!(
+            sync_end_idx < clear_idx,
+            "clear_screen should end any open sync block before clearing"
+        );
+    }
+
+    #[test]
+    fn clear_screen_skips_sync_end_in_mux_while_clearing_stale_state() {
+        let mut output = Vec::new();
+        {
+            let mut writer = TerminalWriter::new(
+                &mut output,
+                ScreenMode::Inline { ui_height: 5 },
+                UiAnchor::Bottom,
+                mux_caps(),
+            );
+            writer.in_sync_block = true;
+
+            writer.clear_screen().unwrap();
+            assert!(
+                !writer.in_sync_block,
+                "clear_screen should clear stale sync state even when sync output is disabled"
+            );
+        }
+
+        assert!(
+            !output.windows(SYNC_END.len()).any(|w| w == SYNC_END),
+            "clear_screen must not emit sync_end in mux environments"
+        );
+        assert!(
+            output.windows(b"\x1b[2J".len()).any(|w| w == b"\x1b[2J"),
+            "clear_screen should still clear the screen"
+        );
+    }
+
+    #[test]
+    fn clear_screen_invalidates_cached_state_even_when_flush_fails() {
+        let state = Rc::new(RefCell::new(FaultState::default()));
+        let writer_backend = SingleWriteFaultWriter::new(Rc::clone(&state), 1, 1);
+        let mut writer = TerminalWriter::new(
+            writer_backend,
+            ScreenMode::Inline { ui_height: 5 },
+            UiAnchor::Bottom,
+            basic_caps(),
+        );
+        writer.cursor_saved = true;
+        writer.prev_buffer = Some(Buffer::new(4, 2));
+        writer.last_inline_region = Some(InlineRegion {
+            start: 19,
+            height: 5,
+        });
+        writer.last_diff_strategy = Some(DiffStrategy::DirtyRows);
+
+        let err = writer
+            .clear_screen()
+            .expect_err("expected injected flush write failure");
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+        assert!(state.borrow().injected_failure_triggered);
+        assert!(
+            writer.prev_buffer.is_none(),
+            "clear_screen should invalidate cached frame state after flush failure"
+        );
+        assert!(
+            writer.last_inline_region.is_none(),
+            "clear_screen should drop inline region cache after flush failure"
+        );
+        assert!(
+            writer.last_diff_strategy.is_none(),
+            "clear_screen should reset diff strategy after flush failure"
+        );
+    }
+
+    #[test]
+    fn present_ui_retry_after_write_failure_forces_repaint() {
+        let state = Rc::new(RefCell::new(FaultState::default()));
+        let writer_backend = SingleWriteFaultWriter::new(Rc::clone(&state), 1, 1);
+        let mut writer = TerminalWriter::new(
+            writer_backend,
+            ScreenMode::AltScreen,
+            UiAnchor::Bottom,
+            basic_caps(),
+        );
+        writer.set_size(4, 2);
+
+        let mut buffer = Buffer::new(4, 2);
+        buffer.set_raw(0, 0, Cell::from_char('A'));
+
+        let err = writer
+            .present_ui(&buffer, None, true)
+            .expect_err("first present should hit the injected write fault");
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+        assert!(
+            writer.prev_buffer.is_none(),
+            "failed present must not advance the diff baseline"
+        );
+
+        writer
+            .present_ui(&buffer, None, true)
+            .expect("retry after transient failure should succeed");
+
+        let bytes = state.borrow().bytes.clone();
+        assert!(
+            bytes.contains(&b'A'),
+            "retry should emit the missing cell content after a failed present"
         );
     }
 

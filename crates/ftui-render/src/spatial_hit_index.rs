@@ -628,15 +628,11 @@ impl SpatialHitIndex {
             self.id_to_entry.insert(entry.id, idx as u32);
         }
 
-        // Rebuild buckets (separate loop to avoid borrow conflict)
-        let entry_rects: Vec<(u32, Rect)> = self
-            .entries
-            .iter()
-            .enumerate()
-            .map(|(idx, e)| (idx as u32, e.rect))
-            .collect();
-        for (idx, rect) in entry_rects {
-            self.add_to_buckets_internal(idx, rect);
+        // Rebuild buckets by iterating over entry indices to avoid borrowing
+        // the entire entries vector while modifying buckets.
+        for idx in 0..self.entries.len() {
+            let rect = self.entries[idx].rect;
+            self.add_to_buckets_internal(idx as u32, rect);
         }
 
         self.dirty.clear();

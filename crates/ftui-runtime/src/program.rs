@@ -2045,6 +2045,8 @@ pub struct EffectQueueConfig {
     /// a `tracing::warn!` and the `effects_queue_dropped` counter increments.
     /// A value of `0` means unbounded (no backpressure).
     pub max_queue_depth: usize,
+    /// Whether the backend selection was set explicitly by the caller.
+    explicit_backend: bool,
 }
 
 impl Default for EffectQueueConfig {
@@ -2063,6 +2065,7 @@ impl Default for EffectQueueConfig {
             backend: TaskExecutorBackend::Spawned,
             scheduler,
             max_queue_depth: 0,
+            explicit_backend: false,
         }
     }
 }
@@ -2077,6 +2080,7 @@ impl EffectQueueConfig {
         } else {
             TaskExecutorBackend::Spawned
         };
+        self.explicit_backend = true;
         self
     }
 
@@ -2085,6 +2089,7 @@ impl EffectQueueConfig {
     pub fn with_backend(mut self, backend: TaskExecutorBackend) -> Self {
         self.enabled = matches!(backend, TaskExecutorBackend::EffectQueue);
         self.backend = backend;
+        self.explicit_backend = true;
         self
     }
 
@@ -2103,6 +2108,11 @@ impl EffectQueueConfig {
     pub fn with_max_queue_depth(mut self, depth: usize) -> Self {
         self.max_queue_depth = depth;
         self
+    }
+
+    #[must_use]
+    fn uses_legacy_default_backend(&self) -> bool {
+        !self.explicit_backend && !self.enabled && self.backend == TaskExecutorBackend::Spawned
     }
 }
 
@@ -2209,6 +2219,25 @@ impl RuntimeLane {
     #[must_use]
     pub fn uses_structured_cancellation(self) -> bool {
         matches!(self, Self::Structured | Self::Asupersync)
+    }
+
+    /// Resolve the default task executor backend for this lane.
+    #[must_use]
+    fn task_executor_backend(self) -> TaskExecutorBackend {
+        match self {
+            Self::Legacy => TaskExecutorBackend::Spawned,
+            Self::Structured => TaskExecutorBackend::EffectQueue,
+            Self::Asupersync => {
+                #[cfg(feature = "asupersync-executor")]
+                {
+                    TaskExecutorBackend::Asupersync
+                }
+                #[cfg(not(feature = "asupersync-executor"))]
+                {
+                    TaskExecutorBackend::EffectQueue
+                }
+            }
+        }
     }
 
     /// Read the lane from the `FTUI_RUNTIME_LANE` environment variable.
@@ -2704,6 +2733,17 @@ impl ProgramConfig {
             self.rollout_policy = policy;
         }
         self
+    }
+
+    #[must_use]
+    fn resolved_effect_queue_config(&self) -> EffectQueueConfig {
+        if !self.effect_queue.uses_legacy_default_backend() {
+            return self.effect_queue.clone();
+        }
+
+        self.effect_queue
+            .clone()
+            .with_backend(self.runtime_lane.resolve().task_executor_backend())
     }
 }
 
@@ -4075,6 +4115,8 @@ impl<M: Model> Program<M, CrosstermEventSource, Stdout> {
     where
         M::Message: Send + 'static,
     {
+        let resolved_lane = config.runtime_lane.resolve();
+        let effect_queue_config = config.resolved_effect_queue_config();
         let capabilities = TerminalCapabilities::with_overrides();
         let mouse_capture = config.resolved_mouse_capture();
         let requested_features = BackendFeatures {
@@ -4149,14 +4191,13 @@ impl<M: Model> Program<M, CrosstermEventSource, Stdout> {
             .clone()
             .map(InlineAutoRemeasureState::new);
         let task_executor = TaskExecutor::new(
-            &config.effect_queue,
+            &effect_queue_config,
             task_sender.clone(),
             evidence_sink.clone(),
         )?;
         let guardrails = FrameGuardrails::new(config.guardrails);
 
         // Log runtime lane and rollout policy at startup (bd-2crbt)
-        let resolved_lane = config.runtime_lane.resolve();
         tracing::info!(
             target: "ftui.runtime",
             requested_lane = config.runtime_lane.label(),
@@ -4237,6 +4278,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
     where
         M::Message: Send + 'static,
     {
+        let effect_queue_config = config.resolved_effect_queue_config();
         let (width, height) = config
             .forced_size
             .unwrap_or_else(|| events.size().unwrap_or((80, 24)));
@@ -4284,7 +4326,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             .clone()
             .map(InlineAutoRemeasureState::new);
         let task_executor = TaskExecutor::new(
-            &config.effect_queue,
+            &effect_queue_config,
             task_sender.clone(),
             evidence_sink.clone(),
         )?;
@@ -7670,6 +7712,7 @@ mod tests {
                 preemptive: false,
                 ..Default::default()
             },
+            explicit_backend: true,
             ..Default::default()
         };
 
@@ -7709,6 +7752,7 @@ mod tests {
                 preemptive: false,
                 ..Default::default()
             },
+            explicit_backend: true,
             ..Default::default()
         };
 
@@ -7756,6 +7800,7 @@ mod tests {
                 preemptive: false,
                 ..Default::default()
             },
+            explicit_backend: true,
             ..Default::default()
         };
 
@@ -7798,6 +7843,7 @@ mod tests {
                 preemptive: false,
                 ..Default::default()
             },
+            explicit_backend: true,
             ..Default::default()
         };
 
@@ -9062,6 +9108,7 @@ mod tests {
         M::Message: Send + 'static,
     {
         clear_termination_signal();
+        let effect_queue_config = config.resolved_effect_queue_config();
         let capabilities = TerminalCapabilities::basic();
         let mut writer = TerminalWriter::with_diff_config(
             Vec::new(),
@@ -9106,7 +9153,7 @@ mod tests {
             .map(InlineAutoRemeasureState::new);
         let guardrails = FrameGuardrails::new(config.guardrails);
         let task_executor = TaskExecutor::new(
-            &config.effect_queue,
+            &effect_queue_config,
             task_sender.clone(),
             evidence_sink.clone(),
         )
@@ -10338,21 +10385,37 @@ mod tests {
     }
 
     #[test]
-    fn headless_default_task_executor_is_spawned() {
+    fn headless_default_task_executor_is_queued_for_structured_lane() {
         let program =
             headless_program_with_config(TestModel { value: 0 }, ProgramConfig::default());
-        assert_eq!(program.task_executor.kind_name(), "spawned");
+        assert_eq!(program.task_executor.kind_name(), "queued");
     }
 
     #[test]
-    fn headless_spawned_task_executor_writes_backend_evidence() {
-        let evidence_path = temp_evidence_path("task_executor_spawned_backend");
+    fn headless_structured_lane_task_executor_writes_queued_backend_evidence() {
+        let evidence_path = temp_evidence_path("task_executor_queued_backend");
         let sink_config = EvidenceSinkConfig::enabled_file(&evidence_path);
         let config = ProgramConfig::default().with_evidence_sink(sink_config);
         let _program = headless_program_with_config(TestModel { value: 0 }, config);
 
         let backend_line = read_evidence_event(&evidence_path, "task_executor_backend");
-        assert_eq!(backend_line["backend"], "spawned");
+        assert_eq!(backend_line["backend"], "queued");
+    }
+
+    #[test]
+    fn headless_legacy_lane_task_executor_is_spawned() {
+        let config = ProgramConfig::default().with_lane(RuntimeLane::Legacy);
+        let program = headless_program_with_config(TestModel { value: 0 }, config);
+        assert_eq!(program.task_executor.kind_name(), "spawned");
+    }
+
+    #[test]
+    fn headless_explicit_spawned_backend_overrides_structured_lane_default() {
+        let config = ProgramConfig::default().with_effect_queue(
+            EffectQueueConfig::default().with_backend(TaskExecutorBackend::Spawned),
+        );
+        let program = headless_program_with_config(TestModel { value: 0 }, config);
+        assert_eq!(program.task_executor.kind_name(), "spawned");
     }
 
     #[cfg(feature = "asupersync-executor")]
@@ -10584,6 +10647,7 @@ mod tests {
                 max_queue_size: 0,
                 ..Default::default()
             },
+            explicit_backend: true,
             ..Default::default()
         };
         let config = ProgramConfig::default().with_effect_queue(effect_queue);
@@ -10641,7 +10705,9 @@ mod tests {
 
         let evidence_path = temp_evidence_path("task_executor_spawned_complete");
         let sink_config = EvidenceSinkConfig::enabled_file(&evidence_path);
-        let config = ProgramConfig::default().with_evidence_sink(sink_config);
+        let config = ProgramConfig::default()
+            .with_lane(RuntimeLane::Legacy)
+            .with_evidence_sink(sink_config);
         let mut program = headless_program_with_config(TaskModel { done: false }, config);
 
         program
@@ -11382,6 +11448,7 @@ mod tests {
         let config = EffectQueueConfig::default();
         assert!(!config.enabled);
         assert_eq!(config.backend, TaskExecutorBackend::Spawned);
+        assert!(!config.explicit_backend);
         assert!(config.scheduler.smith_enabled);
         assert!(!config.scheduler.force_fifo);
         assert!(!config.scheduler.preemptive);
@@ -11392,6 +11459,15 @@ mod tests {
         let config = EffectQueueConfig::default().with_enabled(true);
         assert!(config.enabled);
         assert_eq!(config.backend, TaskExecutorBackend::EffectQueue);
+        assert!(config.explicit_backend);
+    }
+
+    #[test]
+    fn effect_queue_config_with_enabled_false_marks_explicit_spawned_backend() {
+        let config = EffectQueueConfig::default().with_enabled(false);
+        assert!(!config.enabled);
+        assert_eq!(config.backend, TaskExecutorBackend::Spawned);
+        assert!(config.explicit_backend);
     }
 
     #[test]
@@ -11399,6 +11475,7 @@ mod tests {
         let config = EffectQueueConfig::default().with_backend(TaskExecutorBackend::EffectQueue);
         assert!(config.enabled);
         assert_eq!(config.backend, TaskExecutorBackend::EffectQueue);
+        assert!(config.explicit_backend);
     }
 
     #[cfg(feature = "asupersync-executor")]
@@ -11997,6 +12074,31 @@ mod tests {
     fn program_config_with_lane() {
         let config = ProgramConfig::default().with_lane(RuntimeLane::Asupersync);
         assert_eq!(config.runtime_lane, RuntimeLane::Asupersync);
+    }
+
+    #[test]
+    fn program_config_default_lane_resolves_to_effect_queue_backend() {
+        let resolved = ProgramConfig::default().resolved_effect_queue_config();
+        assert!(resolved.enabled);
+        assert_eq!(resolved.backend, TaskExecutorBackend::EffectQueue);
+    }
+
+    #[test]
+    fn program_config_legacy_lane_resolves_to_spawned_backend() {
+        let resolved = ProgramConfig::default()
+            .with_lane(RuntimeLane::Legacy)
+            .resolved_effect_queue_config();
+        assert!(!resolved.enabled);
+        assert_eq!(resolved.backend, TaskExecutorBackend::Spawned);
+    }
+
+    #[test]
+    fn program_config_explicit_spawned_backend_is_preserved() {
+        let resolved = ProgramConfig::default()
+            .with_effect_queue(EffectQueueConfig::default().with_enabled(false))
+            .resolved_effect_queue_config();
+        assert!(!resolved.enabled);
+        assert_eq!(resolved.backend, TaskExecutorBackend::Spawned);
     }
 
     #[test]

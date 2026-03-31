@@ -82,6 +82,38 @@ const SIGNAL_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 const SIGNAL_SHUTDOWN_POLL: Duration = Duration::from_millis(10);
 static LIVE_SIGNAL_INTERCEPT_SESSIONS: AtomicUsize = AtomicUsize::new(0);
 
+#[cfg(unix)]
+#[derive(Debug)]
+struct SignalInterceptGuard {
+    active: bool,
+}
+
+#[cfg(unix)]
+impl SignalInterceptGuard {
+    fn new(enabled: bool) -> Self {
+        if enabled {
+            LIVE_SIGNAL_INTERCEPT_SESSIONS.fetch_add(1, Ordering::SeqCst);
+            install_termination_signal_hook();
+        }
+        Self { active: enabled }
+    }
+
+    fn disarm(&mut self) -> bool {
+        let was_active = self.active;
+        self.active = false;
+        was_active
+    }
+}
+
+#[cfg(unix)]
+impl Drop for SignalInterceptGuard {
+    fn drop(&mut self) {
+        if self.active {
+            LIVE_SIGNAL_INTERCEPT_SESSIONS.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+}
+
 #[derive(Debug)]
 struct InputTrace {
     seq: u64,
@@ -855,7 +887,14 @@ impl TtyEventSource {
                 tty.read(&mut buf)
             };
             match read_result {
-                Ok(0) => return Ok(()),
+                Ok(0) => {
+                    // Treat EOF as terminal source exhaustion. Keeping the fd alive
+                    // after a hangup causes future timed polls to wake immediately
+                    // on POLLHUP and spin until the outer deadline.
+                    self.tty_reader = None;
+                    self.reader_nonblocking = false;
+                    return Ok(());
+                }
                 Ok(n) => {
                     self.last_input_byte_at = Some(Instant::now());
                     parsed_events.clear();
@@ -1114,6 +1153,10 @@ impl BackendEventSource for TtyEventSource {
                 return Ok(true);
             }
 
+            if self.tty_reader.is_none() && !self.parser.has_pending_timeout_state() {
+                return Ok(false);
+            }
+
             if self.parser.has_pending_timeout_state() {
                 if self.drain_ready_bytes_before_parser_timeout()? {
                     return Ok(true);
@@ -1322,12 +1365,7 @@ impl TtyBackend {
         // Enter raw mode first — if this fails, nothing to clean up.
         let raw_mode = RawModeGuard::enter()?;
         install_abort_panic_hook();
-        let mut signal_interception_active = false;
-        if options.intercept_signals {
-            LIVE_SIGNAL_INTERCEPT_SESSIONS.fetch_add(1, Ordering::SeqCst);
-            signal_interception_active = true;
-            install_termination_signal_hook();
-        }
+        let mut signal_guard = SignalInterceptGuard::new(options.intercept_signals);
         let capabilities = TerminalCapabilities::with_overrides();
         let requested_features = options.features;
         let effective_features = sanitize_feature_request(requested_features, capabilities);
@@ -1372,9 +1410,6 @@ impl TtyBackend {
                 &mut stdout,
             );
             let _ = stdout.flush();
-            if signal_interception_active {
-                LIVE_SIGNAL_INTERCEPT_SESSIONS.fetch_sub(1, Ordering::SeqCst);
-            }
             return Err(err);
         }
 
@@ -1385,7 +1420,7 @@ impl TtyBackend {
             events,
             presenter: TtyPresenter::live(capabilities),
             alt_screen_active,
-            signal_interception_active,
+            signal_interception_active: signal_guard.disarm(),
             raw_mode: Some(raw_mode),
         })
     }
@@ -2130,9 +2165,31 @@ mod tests {
         // poll_event should return false (no data) without panicking.
         let result = src.poll_event(Duration::from_millis(50));
         assert!(result.is_ok(), "poll_event after EOF should not error");
+        assert!(
+            src.tty_reader.is_none(),
+            "EOF should retire the exhausted reader"
+        );
         // read_event should also return None cleanly.
         let event = src.read_event().unwrap();
         assert!(event.is_none(), "read_event after EOF should be None");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn eof_disables_reader_for_future_polls() {
+        let (reader, writer) = pipe_pair();
+        let mut src = TtyEventSource::from_reader(80, 24, reader);
+        drop(writer);
+
+        assert!(!src.poll_event(Duration::from_millis(20)).unwrap());
+        assert!(src.tty_reader.is_none(), "EOF should clear the reader");
+
+        let start = Instant::now();
+        assert!(!src.poll_event(Duration::from_millis(200)).unwrap());
+        assert!(
+            start.elapsed() < Duration::from_millis(50),
+            "polls after EOF should return immediately once the reader is retired"
+        );
     }
 
     #[cfg(unix)]
@@ -2929,6 +2986,29 @@ mod tests {
         assert!(sanitized.bracketed_paste);
         assert!(!sanitized.focus_events);
         assert!(!sanitized.kitty_keyboard);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signal_intercept_guard_disabled_reports_inactive() {
+        let mut guard = SignalInterceptGuard::new(false);
+        assert!(
+            !guard.disarm(),
+            "disabled guard should report inactive ownership"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signal_intercept_guard_disarm_transfers_ownership() {
+        let mut guard = SignalInterceptGuard::new(true);
+        assert!(
+            guard.disarm(),
+            "enabled guard should report transferred ownership on disarm"
+        );
+        // Exact counter values are process-global and therefore unstable under
+        // parallel test execution. We only restore our borrowed slot here.
+        LIVE_SIGNAL_INTERCEPT_SESSIONS.fetch_sub(1, Ordering::SeqCst);
     }
 
     #[test]

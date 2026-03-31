@@ -305,6 +305,19 @@ impl InputParser {
                     KeyEvent::new(KeyCode::Char(c)).with_modifiers(Modifiers::CTRL),
                 ))
             }
+            // Ctrl+\, Ctrl+], Ctrl+^, Ctrl+_ (0x1C-0x1F)
+            0x1C => Some(Event::Key(
+                KeyEvent::new(KeyCode::Char('\\')).with_modifiers(Modifiers::CTRL),
+            )),
+            0x1D => Some(Event::Key(
+                KeyEvent::new(KeyCode::Char(']')).with_modifiers(Modifiers::CTRL),
+            )),
+            0x1E => Some(Event::Key(
+                KeyEvent::new(KeyCode::Char('^')).with_modifiers(Modifiers::CTRL),
+            )),
+            0x1F => Some(Event::Key(
+                KeyEvent::new(KeyCode::Char('_')).with_modifiers(Modifiers::CTRL),
+            )),
             // Backspace (DEL)
             0x7F => Some(Event::Key(KeyEvent::new(KeyCode::Backspace))),
             // Printable ASCII

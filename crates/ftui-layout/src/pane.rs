@@ -2037,10 +2037,29 @@ fn scale_div_round(
     denominator: i64,
     rounding: PaneCoordinateRoundingPolicy,
 ) -> Result<i64, PaneCoordinateNormalizationError> {
-    let scaled = value
-        .checked_mul(numerator)
-        .ok_or(PaneCoordinateNormalizationError::CoordinateOverflow)?;
-    div_round(scaled, denominator, rounding)
+    if denominator <= 0 {
+        return Err(PaneCoordinateNormalizationError::CoordinateOverflow);
+    }
+    
+    let scaled = (value as i128) * (numerator as i128);
+    let den = denominator as i128;
+    
+    let floor = scaled.div_euclid(den);
+    let remainder = scaled.rem_euclid(den);
+    
+    let mut result = floor;
+    
+    if remainder != 0 && rounding != PaneCoordinateRoundingPolicy::TowardNegativeInfinity {
+        let twice_remainder = remainder * 2;
+        if twice_remainder > den {
+            result += 1;
+        } else if twice_remainder == den {
+            // Simplified round half up for legacy pane logic
+            result += 1;
+        }
+    }
+    
+    result.try_into().map_err(|_| PaneCoordinateNormalizationError::CoordinateOverflow)
 }
 
 fn div_round(
@@ -2048,25 +2067,7 @@ fn div_round(
     denominator: i64,
     rounding: PaneCoordinateRoundingPolicy,
 ) -> Result<i64, PaneCoordinateNormalizationError> {
-    if denominator <= 0 {
-        return Err(PaneCoordinateNormalizationError::CoordinateOverflow);
-    }
-
-    let floor = value.div_euclid(denominator);
-    let remainder = value.rem_euclid(denominator);
-    if remainder == 0 || rounding == PaneCoordinateRoundingPolicy::TowardNegativeInfinity {
-        return Ok(floor);
-    }
-
-    let twice_remainder = remainder
-        .checked_mul(2)
-        .ok_or(PaneCoordinateNormalizationError::CoordinateOverflow)?;
-    if twice_remainder > denominator {
-        return floor
-            .checked_add(1)
-            .ok_or(PaneCoordinateNormalizationError::CoordinateOverflow);
-    }
-    Ok(floor)
+    scale_div_round(value, 1, denominator, rounding)
 }
 
 fn to_i32(value: i64) -> Result<i32, PaneCoordinateNormalizationError> {

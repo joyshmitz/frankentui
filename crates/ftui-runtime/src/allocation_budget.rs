@@ -269,8 +269,8 @@ pub struct BudgetAlert {
 #[derive(Debug, Clone)]
 pub struct AllocationBudget {
     config: BudgetConfig,
-    /// E-process wealth.
-    e_value: f64,
+    /// E-process wealth (log-space for numerical stability).
+    log_e_value: f64,
     /// CUSUM upper (detect increase).
     cusum_plus: CusumState,
     /// CUSUM lower (detect decrease).
@@ -298,7 +298,7 @@ impl AllocationBudget {
     pub fn new(config: BudgetConfig) -> Self {
         Self {
             config,
-            e_value: 1.0,
+            log_e_value: 0.0,
             cusum_plus: CusumState::default(),
             cusum_minus: CusumState::default(),
             frame: 0,
@@ -357,6 +357,10 @@ impl AllocationBudget {
             || !self.config.mu_0.is_finite()
             || !self.config.cusum_k.is_finite()
             || !self.config.cusum_h.is_finite()
+            || !self.config.sigma_sq.is_finite()
+            || !self.config.lambda.is_finite()
+            || !self.config.alpha.is_finite()
+            || !(0.0..1.0).contains(&self.config.alpha)
         {
             return None;
         }
@@ -394,14 +398,16 @@ impl AllocationBudget {
         let sigma_sq = self.config.sigma_sq.max(SIGMA2_MIN);
         let lambda = self.config.lambda;
         let log_increment = lambda * residual - lambda * lambda * sigma_sq / 2.0;
-        self.e_value = (self.e_value * log_increment.exp()).clamp(E_MIN, E_MAX);
+
+        // Update in log-space to prevent precision loss and overflow.
+        self.log_e_value = (self.log_e_value + log_increment).clamp(E_MIN.ln(), E_MAX.ln());
 
         let e_threshold = 1.0 / self.config.alpha;
-        let e_process_triggered = self.e_value >= e_threshold;
+        let e_process_triggered = self.log_e_value >= e_threshold.ln();
 
         // Alert if e-process alone triggers (formal guarantee)
         // or both CUSUM and e-process agree.
-        let alert = e_process_triggered || (cusum_triggered && self.e_value > 1.0);
+        let alert = e_process_triggered || (cusum_triggered && self.log_e_value > 0.0);
 
         // Record evidence.
         let entry = BudgetEvidence {
@@ -410,7 +416,7 @@ impl AllocationBudget {
             residual,
             cusum_plus: self.cusum_plus.s,
             cusum_minus: self.cusum_minus.s,
-            e_value: self.e_value,
+            e_value: self.log_e_value.exp(),
             alert,
         };
         if let Some(ref sink) = self.evidence_sink {
@@ -429,11 +435,11 @@ impl AllocationBudget {
         if alert {
             self.total_alerts += 1;
             let estimated_shift = self.running_mean() - self.config.mu_0;
-            let e_value_at_alert = self.e_value;
+            let e_value_at_alert = self.log_e_value.exp();
             let cusum_plus_at_alert = self.cusum_plus.s;
 
             // Reset after alert.
-            self.e_value = 1.0;
+            self.log_e_value = 0.0;
             self.cusum_plus.s = 0.0;
             self.cusum_minus.s = 0.0;
             self.cusum_plus.alarm_count = 0;
@@ -462,7 +468,7 @@ impl AllocationBudget {
 
     /// Current e-process value.
     pub fn e_value(&self) -> f64 {
-        self.e_value
+        self.log_e_value.exp()
     }
 
     /// Current CUSUM S⁺ value.
@@ -492,7 +498,7 @@ impl AllocationBudget {
 
     /// Reset all state (keep config).
     pub fn reset(&mut self) {
-        self.e_value = 1.0;
+        self.log_e_value = 0.0;
         self.cusum_plus = CusumState::default();
         self.cusum_minus = CusumState::default();
         self.frame = 0;
@@ -507,7 +513,7 @@ impl AllocationBudget {
         BudgetSummary {
             frames: self.frame,
             total_alerts: self.total_alerts,
-            e_value: self.e_value,
+            e_value: self.log_e_value.exp(),
             cusum_plus: self.cusum_plus.s,
             cusum_minus: self.cusum_minus.s,
             running_mean: self.running_mean(),
@@ -1369,5 +1375,31 @@ mod tests {
             monitor.observe(0.0);
         }
         assert_eq!(monitor.frames(), 7);
+    }
+
+    #[test]
+    fn observe_with_nan_lambda_is_noop() {
+        let mut monitor = AllocationBudget::new(BudgetConfig {
+            lambda: f64::NAN,
+            ..Default::default()
+        });
+
+        assert!(monitor.observe(10.0).is_none());
+        assert_eq!(monitor.frames(), 0);
+        assert!(monitor.ledger().is_empty());
+        assert_eq!(monitor.e_value(), 1.0);
+    }
+
+    #[test]
+    fn observe_with_alpha_out_of_range_is_noop() {
+        let mut monitor = AllocationBudget::new(BudgetConfig {
+            alpha: 2.0,
+            ..Default::default()
+        });
+
+        assert!(monitor.observe(10.0).is_none());
+        assert_eq!(monitor.frames(), 0);
+        assert!(monitor.ledger().is_empty());
+        assert_eq!(monitor.e_value(), 1.0);
     }
 }

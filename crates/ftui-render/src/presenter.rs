@@ -40,6 +40,7 @@ use crate::cell::{Cell, CellAttrs, GraphemeId, PackedRgba, StyleFlags};
 use crate::char_width;
 use crate::counting_writer::{CountingWriter, PresentStats, StatsCollector};
 use crate::diff::{BufferDiff, ChangeRun};
+use crate::display_width;
 use crate::grapheme_pool::GraphemePool;
 use crate::link_registry::LinkRegistry;
 use crate::sanitize::sanitize;
@@ -635,15 +636,19 @@ impl<W: Write> Presenter<W> {
                     let cell = &row[idx];
                     self.emit_cell(idx as u16, cell, pool, links)?;
 
-                    // Repair invalid wide-char tails for direct wide chars.
+                    // Repair invalid wide-char tails.
                     //
-                    // We intentionally restrict this to direct chars (not grapheme-pool refs)
-                    // so multi-column grapheme payloads cannot trigger broad row rewrites.
-                    // This preserves correctness for broken width-2 char tails (e.g. missing
-                    // CONTINUATION) without reintroducing long-width drift in unrelated content.
+                    // Direct wide chars are always safe to repair because they can
+                    // only span a small, fixed number of cells. Grapheme-pool refs
+                    // may encode much wider payloads (up to 15 cells), so blindly
+                    // repairing all missing tails can erase unrelated content later in
+                    // the row. We only extend the repair to width-2 grapheme refs,
+                    // where clearing a single orphan tail cell is still bounded.
                     let mut advance = 1usize;
                     let width = cell.content.width();
-                    if width > 1 && cell.content.as_char().is_some() {
+                    let should_repair_invalid_tail = cell.content.as_char().is_some()
+                        || (cell.content.is_grapheme() && width == 2);
+                    if width > 1 && should_repair_invalid_tail {
                         for off in 1..width {
                             let tx = idx + off;
                             if tx >= row.len() {
@@ -655,8 +660,9 @@ impl<W: Write> Presenter<W> {
                                 }
                                 continue;
                             }
+                            // Orphan detected: repair with a space.
                             self.move_cursor_optimal(tx as u16, span.y)?;
-                            self.emit_cell(tx as u16, &row[tx], pool, links)?;
+                            self.emit_orphan_continuation_space(tx as u16, links)?;
                             if tx <= end {
                                 advance = advance.max(off + 1);
                             }
@@ -730,19 +736,17 @@ impl<W: Write> Presenter<W> {
         // continuation cell was missing/overwritten in an invalid buffer state).
         //
         // If we detect drift, we force a re-synchronization.
-        if let Some(cx) = self.cursor_x
-            && cx != x
-        {
-            // If we are ahead (cx > x), it means the previous char was wider than expected
-            // by the buffer iteration (or we skipped something).
-            // If we are behind (cx < x), we missed something.
-            // In either case, if the cell is NOT a continuation, we must be at `x`.
-            // (If it IS a continuation, we handle it below).
-            if !cell.is_continuation() {
+        if let Some(cx) = self.cursor_x {
+            if cx != x && !cell.is_continuation() {
                 // Re-sync. We assume cursor_y is set because we are in a run.
                 if let Some(y) = self.cursor_y {
                     self.move_cursor_optimal(x, y)?;
                 }
+            }
+        } else {
+            // No known cursor position: must sync.
+            if let Some(y) = self.cursor_y {
+                self.move_cursor_optimal(x, y)?;
             }
         }
 
@@ -1077,12 +1081,13 @@ impl<W: Write> Presenter<W> {
                     && let Some(text) = pool.get(grapheme_id)
                 {
                     let safe = sanitize(text);
-                    if !safe.is_empty() {
+                    if !safe.is_empty() && display_width(safe.as_ref()) == raw_width {
                         return self.writer.write_all(safe.as_bytes());
                     }
                 }
-                // Fallback: emit replacement characters matching expected width
-                // to maintain cursor synchronization.
+                // Fallback when sanitization strips bytes or changes display width:
+                // emit width-1 placeholders so the terminal cursor advances by the
+                // exact number of cells encoded in the grapheme ID.
                 if raw_width > 0 {
                     for _ in 0..raw_width {
                         self.writer.write_all(b"?")?;
@@ -4218,6 +4223,50 @@ mod tests {
         assert!(
             !output_str.contains("\x1b[31m"),
             "raw escape sequence must not be emitted"
+        );
+    }
+
+    #[test]
+    fn emit_content_grapheme_width_mismatch_uses_placeholders() {
+        let mut presenter = test_presenter();
+        let mut pool = GraphemePool::new();
+        let gid = pool.intern("A\x07", 2);
+
+        presenter
+            .emit_content(PreparedContent::Grapheme(gid), 2, Some(&pool))
+            .unwrap();
+
+        let output = presenter.into_inner().unwrap();
+        assert_eq!(output, b"??");
+    }
+
+    #[test]
+    fn wide_grapheme_tail_repair_does_not_blank_unrelated_following_cells() {
+        let mut presenter = test_presenter();
+        let mut pool = GraphemePool::new();
+        let gid = pool.intern("XYZ", 3);
+        let mut buffer = Buffer::new(8, 1);
+
+        buffer.set_raw(0, 0, Cell::new(CellContent::from_grapheme(gid)));
+        buffer.set_raw(1, 0, Cell::from_char('a'));
+        buffer.set_raw(2, 0, Cell::from_char('b'));
+        buffer.set_raw(3, 0, Cell::from_char('c'));
+
+        let old = Buffer::new(8, 1);
+        let diff = BufferDiff::compute(&old, &buffer);
+
+        presenter
+            .present_with_pool(&buffer, &diff, Some(&pool), None)
+            .unwrap();
+
+        let output = presenter.into_inner().unwrap();
+        let output_str = String::from_utf8_lossy(&output);
+        let visible = sanitize(output_str.as_ref());
+
+        assert!(
+            visible.contains("XYZabc"),
+            "width-3 grapheme repair must not erase following cells: {:?}",
+            visible
         );
     }
 

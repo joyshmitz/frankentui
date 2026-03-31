@@ -664,6 +664,7 @@ fn minimize_crossings(
     // Scratch buffers reused across all barycenter_sort calls
     let mut scratch_pos: Vec<usize> = Vec::new();
     let mut scratch_member: Vec<bool> = Vec::new();
+    let mut scratch_bary: Vec<(usize, f64)> = Vec::new();
 
     for iter in 0..max_iterations {
         if *budget == 0 {
@@ -683,6 +684,7 @@ fn minimize_crossings(
                     budget,
                     &mut scratch_pos,
                     &mut scratch_member,
+                    &mut scratch_bary,
                 );
             }
         } else {
@@ -697,6 +699,7 @@ fn minimize_crossings(
                     budget,
                     &mut scratch_pos,
                     &mut scratch_member,
+                    &mut scratch_bary,
                 );
             }
         }
@@ -764,6 +767,7 @@ fn barycenter_sort(
     budget: &mut usize,
     scratch_pos: &mut Vec<usize>,
     scratch_member: &mut Vec<bool>,
+    scratch_bary: &mut Vec<(usize, f64)>,
 ) {
     if layers.is_empty() || layer_idx >= layers.len() {
         return;
@@ -800,7 +804,7 @@ fn barycenter_sort(
 
     // Compute barycenters for nodes in current layer
     let layer = &layers[layer_idx];
-    let mut bary: Vec<(usize, f64)> = Vec::with_capacity(layer.len());
+    scratch_bary.clear();
 
     for &v in layer {
         *budget = budget.saturating_sub(1);
@@ -817,16 +821,16 @@ fn barycenter_sort(
         }
 
         if count == 0 {
-            bary.push((v, f64::MAX));
+            scratch_bary.push((v, f64::MAX));
         } else {
-            bary.push((v, sum / count as f64));
+            scratch_bary.push((v, sum / count as f64));
         }
     }
 
     // Sort by barycenter, tiebreak by node index
-    bary.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+    scratch_bary.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
 
-    layers[layer_idx] = bary.into_iter().map(|(v, _)| v).collect();
+    layers[layer_idx] = scratch_bary.iter().map(|(v, _)| *v).collect();
 }
 
 /// Sifting refinement pass for crossing minimization.
@@ -1607,7 +1611,7 @@ mod tests {
     fn cycle_removal_multi_cycle() {
         let ir = make_test_ir(
             &["A", "B", "C", "D"],
-            &[(0, 1), (1, 0), (2, 3), (3, 2)],
+            &[(0, 1), (1, 2), (2, 0), (2, 3)],
             GraphDirection::TB,
         );
         let config = LayoutConfig::default();
@@ -2314,18 +2318,18 @@ mod tests {
             vec![],   // 11
         ];
         let radj = vec![
-            vec![],
-            vec![],
-            vec![],
-            vec![],
-            vec![1],
-            vec![3],
-            vec![2],
-            vec![0],
-            vec![5],
-            vec![7],
-            vec![6],
-            vec![4],
+            vec![],   // 0
+            vec![1],  // 1 <- 0
+            vec![2],  // 2 <- 0
+            vec![3],  // 3 <- 0
+            vec![0],  // 4 <- 0
+            vec![0],  // 5 <- 0
+            vec![0],  // 6 <- 0
+            vec![0],  // 7 <- 0
+            vec![5],  // 8 -> 5
+            vec![6],  // 9 -> 6
+            vec![7],  // 10 -> 7
+            vec![4],  // 11 -> 4
         ];
         let mut budget = 50_000;
         let result = minimize_crossings(&layer_assignment, &adj, &radj, 12, 20, &mut budget);

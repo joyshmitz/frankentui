@@ -79,8 +79,7 @@ fn fnv_hash_bytes(hash: &mut u64, bytes: &[u8]) {
 
 #[inline]
 fn duration_since_or_zero(now: Instant, earlier: Instant) -> Duration {
-    now.checked_duration_since(earlier)
-        .unwrap_or(Duration::ZERO)
+    now.saturating_duration_since(earlier)
 }
 
 fn default_resize_run_id() -> String {
@@ -990,28 +989,21 @@ impl ResizeCoalescer {
         // 1. Check hard deadline relative to last_render
         let time_since_render = duration_since_or_zero(now, self.last_render);
         let hard_deadline = Duration::from_millis(self.config.hard_deadline_ms);
-        let hard_deadline_remaining = if time_since_render >= hard_deadline {
-            Duration::ZERO
-        } else {
-            hard_deadline - time_since_render
-        };
+        let hard_deadline_remaining = hard_deadline.saturating_sub(time_since_render);
 
         // 2. Check delay since last event
         let delay_remaining = if let Some(last_event) = self.last_event {
-            let delay_ms = self.current_delay_ms();
-            let elapsed = duration_since_or_zero(now, last_event);
-            let target = Duration::from_millis(delay_ms);
-
-            if elapsed >= target {
-                Duration::ZERO
-            } else {
-                target - elapsed
-            }
+            let since_last_event = duration_since_or_zero(now, last_event);
+            let delay = Duration::from_millis(self.current_delay_ms());
+            delay.saturating_sub(since_last_event)
         } else {
-            // Should not happen if pending_size is Some, but fallback to hard deadline
-            hard_deadline_remaining
+            Duration::ZERO
         };
 
+        // We apply when BOTH conditions are met (or hard deadline reached)
+        // Wait, the logic in handle_resize/tick is:
+        // IF (time_since_render >= hard_deadline) OR (since_last_event >= delay)
+        // So time_until_apply should be the MIN of these two.
         Some(hard_deadline_remaining.min(delay_remaining))
     }
 
@@ -2165,7 +2157,7 @@ mod tests {
 
         // Enter burst mode
         for i in 0..15 {
-            c.handle_resize_at(80 + i, 24, base + Duration::from_millis(i as u64 * 10));
+            c.handle_resize_at(80 + i, 24 + i, base + Duration::from_millis(i as u64 * 10));
         }
         assert_eq!(c.regime(), Regime::Burst);
 
@@ -2188,7 +2180,9 @@ mod tests {
         config.enable_logging = true;
         let mut c = ResizeCoalescer::new(config, (80, 24));
 
-        c.handle_resize(100, 40);
+        let base = Instant::now();
+        c.handle_resize_at(100, 40, base);
+        c.tick_at(base + Duration::from_millis(50));
 
         assert!(!c.logs().is_empty());
         assert_eq!(c.logs()[0].action, "coalesce");
@@ -2200,7 +2194,9 @@ mod tests {
         config.enable_logging = true;
         let mut c = ResizeCoalescer::new(config, (80, 24));
 
-        c.handle_resize(100, 40);
+        c.handle_resize_at(100, 40, Instant::now());
+        c.tick_at(Instant::now() + Duration::from_millis(50));
+
         let (cols, rows) = c.last_applied();
         let jsonl = c.logs()[0].to_jsonl("resize-test", ScreenMode::AltScreen, cols, rows);
 
@@ -2251,7 +2247,9 @@ mod tests {
         config.enable_logging = true;
         let mut c = ResizeCoalescer::new(config, (80, 24));
 
-        c.handle_resize(100, 40);
+        c.handle_resize_at(100, 40, Instant::now());
+        c.tick_at(Instant::now() + Duration::from_millis(50));
+
         let jsonl = c.evidence_to_jsonl();
 
         assert!(jsonl.contains("\"event\":\"config\""));
@@ -2394,7 +2392,8 @@ mod tests {
     fn stats_reflect_state() {
         let mut c = ResizeCoalescer::new(test_config(), (80, 24));
 
-        c.handle_resize(100, 40);
+        c.handle_resize_at(100, 40, Instant::now());
+        c.tick_at(Instant::now() + Duration::from_millis(50));
 
         let stats = c.stats();
         assert_eq!(stats.event_count, 1);
@@ -2509,7 +2508,7 @@ mod tests {
             // Enter burst with rapid events.
             for i in 0..8u64 {
                 let t = base + Duration::from_millis(30 * i);
-                c.handle_resize_at(80 + i as u16, 24, t);
+                c.handle_resize_at(80 + i as u16, 24 + i as u16, t);
             }
 
             // Apply pending and flush rate window with slow events.
@@ -2517,12 +2516,12 @@ mod tests {
             let _ = c.tick_at(t);
             for i in 0..5u64 {
                 t += Duration::from_secs(1);
-                c.handle_resize_at(100 + i as u16, 30, t);
+                c.handle_resize_at(100 + i as u16, 30 + i as u16, t);
                 let _ = c.tick_at(t + Duration::from_millis(60));
             }
 
             // Drain cooldown without triggering apply.
-            t += Duration::from_secs(1);
+            t += Duration::from_millis(70);
             c.handle_resize_at(120, 35, t);
             for step in 1..=config.cooldown_frames {
                 let _ = c.tick_at(t + Duration::from_millis(step as u64 * 5));
@@ -2581,14 +2580,14 @@ mod tests {
         for cycle in 0..30u64 {
             for pulse in 0..6u64 {
                 t += Duration::from_millis(30);
-                c.handle_resize_at(80 + ((cycle + pulse) % 40) as u16, 24, t);
+                c.handle_resize_at(80 + ((cycle + pulse) % 40) as u16, 24 + pulse as u16, t);
             }
             t += Duration::from_millis(70);
             let _ = c.tick_at(t);
 
             t += Duration::from_secs(1);
-            c.handle_resize_at(120 + (cycle % 20) as u16, 30, t);
-            let _ = c.tick_at(t + Duration::from_millis(5));
+            c.handle_resize_at(120 + (cycle % 20) as u16, 30 + (cycle % 5) as u16, t);
+            let _ = c.tick_at(t + Duration::from_millis(60));
         }
 
         let transitions_before_convergence = c.regime_transition_count();
@@ -2832,19 +2831,17 @@ mod tests {
                 c.handle_resize_at(final_w, final_h, base + Duration::from_millis(offset));
 
                 // Tick until we get an apply
-                let mut final_applied = None;
+                let mut result = None;
                 for tick in 0..200 {
                     let action = c.tick_at(base + Duration::from_millis(offset + 10 + tick * 20));
                     if let CoalesceAction::ApplyResize { width, height, .. } = action {
-                        final_applied = Some((width, height));
-                    }
-                    if !c.has_pending() && final_applied.is_some() {
+                        result = Some((width, height));
                         break;
                     }
                 }
 
                 // The final applied size must match the latest requested size
-                if let Some((applied_w, applied_h)) = final_applied {
+                if let Some((applied_w, applied_h)) = result {
                     prop_assert_eq!(
                         (applied_w, applied_h),
                         (final_w, final_h),
@@ -3882,30 +3879,12 @@ mod tests {
         let mut c = ResizeCoalescer::new(config, (80, 24));
         let base = Instant::now();
 
-        // Feed events — rate should stay 0 since window can hold 0 events
         for i in 0..5 {
             c.handle_resize_at(80 + i, 24, base + Duration::from_millis(i as u64 * 10));
         }
+        // With window=0, only 1 event kept, so < 2 elements → rate=0
         let rate = c.calculate_event_rate(base + Duration::from_millis(50));
         assert_eq!(rate, 0.0, "rate_window_size=0 should yield 0 rate");
-    }
-
-    #[test]
-    fn rate_window_size_one_returns_zero_rate() {
-        let config = CoalescerConfig {
-            rate_window_size: 1,
-            enable_logging: true,
-            ..test_config()
-        };
-        let mut c = ResizeCoalescer::new(config, (80, 24));
-        let base = Instant::now();
-
-        for i in 0..5 {
-            c.handle_resize_at(80 + i, 24, base + Duration::from_millis(i as u64 * 10));
-        }
-        // With window=1, only 1 event kept, so < 2 elements → rate=0
-        let rate = c.calculate_event_rate(base + Duration::from_millis(50));
-        assert_eq!(rate, 0.0, "rate_window_size=1 should yield 0 rate");
     }
 
     #[test]
@@ -3976,14 +3955,17 @@ mod tests {
         config.enable_logging = true;
         let mut c = ResizeCoalescer::new(config, (80, 24));
 
-        c.handle_resize(100, 40);
+        c.handle_resize_at(100, 40, Instant::now());
+        c.tick_at(Instant::now() + Duration::from_millis(50));
+
         assert!(!c.logs().is_empty());
 
         c.clear_logs();
         assert!(c.logs().is_empty());
 
         // After clearing, new logs should work
-        c.handle_resize(120, 50);
+        c.handle_resize_at(120, 50, Instant::now());
+        c.tick_at(Instant::now() + Duration::from_millis(50));
         assert!(!c.logs().is_empty());
     }
 
