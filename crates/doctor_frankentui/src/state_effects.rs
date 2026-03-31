@@ -945,11 +945,13 @@ fn extract_writes_from_snippet(snippet: &str) -> Vec<String> {
 /// Detect global state store patterns in file content.
 pub fn detect_global_stores(content: &str, file: &str) -> Vec<GlobalStoreInfo> {
     let mut stores = Vec::new();
+    let recoil_atom_re = Regex::new(r"atom\(\s*\{").expect("recoil atom regex");
+    let recoil_selector_re = Regex::new(r"selector\(\s*\{").expect("recoil selector regex");
+    let declarations = detect_store_declarations(content);
 
     let patterns: &[(&str, GlobalStoreKind)] = &[
         ("createStore", GlobalStoreKind::Redux),
         ("configureStore", GlobalStoreKind::Redux),
-        ("createSlice", GlobalStoreKind::Redux),
         ("create(", GlobalStoreKind::Zustand),
         ("atom(", GlobalStoreKind::Jotai),
         ("atomWithStorage", GlobalStoreKind::Jotai),
@@ -961,43 +963,232 @@ pub fn detect_global_stores(content: &str, file: &str) -> Vec<GlobalStoreInfo> {
     ];
 
     for (pattern, kind) in patterns {
-        if content.contains(pattern) {
-            let assignment_pattern = match (kind, *pattern) {
-                (GlobalStoreKind::Jotai, "atom(") => r"atom\(\s*[^\s\{]".to_string(),
-                (GlobalStoreKind::Recoil, "atom({") => r"atom\(\s*\{".to_string(),
-                (GlobalStoreKind::Recoil, "selector({") => r"selector\(\s*\{".to_string(),
-                _ => regex_lite::escape(pattern),
-            };
-            // Try to extract the store name.
-            let re_name = Regex::new(&format!(
-                r"(?:const|let|export\s+const)\s+(\w+)\s*=\s*(?s:.*?){assignment_pattern}"
-            ))
-            .ok();
-            let matched_name = re_name
-                .as_ref()
-                .and_then(|re| re.captures(content))
-                .map(|captures| captures[1].to_string());
+        let pattern_present = match (kind, *pattern) {
+            (GlobalStoreKind::Recoil, "atom({") => recoil_atom_re.is_match(content),
+            (GlobalStoreKind::Recoil, "selector({") => recoil_selector_re.is_match(content),
+            _ => content.contains(pattern),
+        };
+        if pattern_present {
+            let matched_names = declarations
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, (_, initializer_start, name))| {
+                    let initializer_end = declarations
+                        .get(idx + 1)
+                        .map(|(next_decl_start, _, _)| *next_decl_start)
+                        .unwrap_or(content.len());
+                    let initializer = content[*initializer_start..initializer_end]
+                        .trim()
+                        .trim_end_matches(';')
+                        .trim();
+                    let matches_pattern = match (kind, *pattern) {
+                        (GlobalStoreKind::Jotai, "atom(") => {
+                            initializer.contains("atom(") && !recoil_atom_re.is_match(initializer)
+                        }
+                        (GlobalStoreKind::Recoil, "atom({") => recoil_atom_re.is_match(initializer),
+                        (GlobalStoreKind::Recoil, "selector({") => {
+                            recoil_selector_re.is_match(initializer)
+                        }
+                        _ => initializer.contains(pattern),
+                    };
+                    matches_pattern.then(|| name.clone())
+                })
+                .collect::<BTreeSet<_>>();
             let requires_structural_match = matches!(
                 (kind, *pattern),
                 (GlobalStoreKind::Jotai, "atom(")
                     | (GlobalStoreKind::Recoil, "atom({")
                     | (GlobalStoreKind::Recoil, "selector({")
             );
-            if requires_structural_match && matched_name.is_none() {
+            if requires_structural_match && matched_names.is_empty() {
                 continue;
             }
 
-            let name = matched_name.unwrap_or_else(|| format!("{kind:?}Store"));
+            if matched_names.is_empty() {
+                stores.push(GlobalStoreInfo {
+                    kind: kind.clone(),
+                    name: format!("{kind:?}Store"),
+                    file: file.to_string(),
+                });
+                continue;
+            }
 
-            stores.push(GlobalStoreInfo {
-                kind: kind.clone(),
-                name,
-                file: file.to_string(),
-            });
+            for name in matched_names {
+                stores.push(GlobalStoreInfo {
+                    kind: kind.clone(),
+                    name,
+                    file: file.to_string(),
+                });
+            }
         }
     }
 
     stores
+}
+
+fn detect_store_declarations(content: &str) -> Vec<(usize, usize, String)> {
+    let declaration_head_re = Regex::new(r"(?m)(?:^|[;\n])\s*(?:export\s+)?(?:const|let)\s+(\w+)")
+        .expect("store declaration regex");
+    declaration_head_re
+        .captures_iter(content)
+        .filter_map(|captures| {
+            let declaration = captures.get(0)?;
+            let name = captures.get(1)?;
+            let initializer_start = find_declaration_initializer_start(content, name.end())?;
+            Some((
+                declaration.start(),
+                initializer_start,
+                name.as_str().to_string(),
+            ))
+        })
+        .collect()
+}
+
+fn find_declaration_initializer_start(content: &str, mut index: usize) -> Option<usize> {
+    index = skip_whitespace_and_comments(content, index);
+    if content[index..].starts_with(':') {
+        index += ':'.len_utf8();
+        index = skip_type_annotation(content, index)?;
+    }
+    index = skip_whitespace_and_comments(content, index);
+    if !content[index..].starts_with('=') {
+        return None;
+    }
+    index += '='.len_utf8();
+    Some(skip_whitespace_and_comments(content, index))
+}
+
+fn skip_type_annotation(content: &str, mut index: usize) -> Option<usize> {
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut brace_depth = 0usize;
+    let mut angle_depth = 0usize;
+    let mut string_delimiter: Option<char> = None;
+    let mut escaped = false;
+
+    while index < content.len() {
+        if let Some(next_index) = skip_comment(content, index) {
+            index = next_index;
+            continue;
+        }
+
+        let ch = content[index..].chars().next()?;
+        if let Some(delimiter) = string_delimiter {
+            index += ch.len_utf8();
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == delimiter {
+                string_delimiter = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' | '\'' | '`' => {
+                string_delimiter = Some(ch);
+                index += ch.len_utf8();
+            }
+            '(' => {
+                paren_depth += 1;
+                index += ch.len_utf8();
+            }
+            ')' => {
+                paren_depth = paren_depth.saturating_sub(1);
+                index += ch.len_utf8();
+            }
+            '[' => {
+                bracket_depth += 1;
+                index += ch.len_utf8();
+            }
+            ']' => {
+                bracket_depth = bracket_depth.saturating_sub(1);
+                index += ch.len_utf8();
+            }
+            '{' => {
+                brace_depth += 1;
+                index += ch.len_utf8();
+            }
+            '}' => {
+                brace_depth = brace_depth.saturating_sub(1);
+                index += ch.len_utf8();
+            }
+            '<' => {
+                angle_depth += 1;
+                index += ch.len_utf8();
+            }
+            '>' => {
+                angle_depth = angle_depth.saturating_sub(1);
+                index += ch.len_utf8();
+            }
+            '=' if paren_depth == 0
+                && bracket_depth == 0
+                && brace_depth == 0
+                && angle_depth == 0
+                && !content[index..].starts_with("=>") =>
+            {
+                return Some(index);
+            }
+            ';' | '\n'
+                if paren_depth == 0
+                    && bracket_depth == 0
+                    && brace_depth == 0
+                    && angle_depth == 0 =>
+            {
+                return None;
+            }
+            _ => {
+                index += ch.len_utf8();
+            }
+        }
+    }
+
+    None
+}
+
+fn skip_whitespace_and_comments(content: &str, mut index: usize) -> usize {
+    while index < content.len() {
+        let remaining = &content[index..];
+        let Some(ch) = remaining.chars().next() else {
+            break;
+        };
+        if ch.is_whitespace() {
+            index += ch.len_utf8();
+            continue;
+        }
+        if let Some(next_index) = skip_comment(content, index) {
+            index = next_index;
+            continue;
+        }
+        break;
+    }
+    index
+}
+
+fn skip_comment(content: &str, index: usize) -> Option<usize> {
+    let remaining = &content[index..];
+    if remaining.starts_with("//") {
+        return Some(
+            remaining
+                .find('\n')
+                .map(|offset| index + offset)
+                .unwrap_or(content.len()),
+        );
+    }
+    if remaining.starts_with("/*") {
+        return Some(
+            remaining
+                .find("*/")
+                .map(|offset| index + offset + 2)
+                .unwrap_or(content.len()),
+        );
+    }
+    None
 }
 
 /// Build project-level state model from all file parses.
@@ -1432,6 +1623,123 @@ export const themeAtom = atom({
         assert_eq!(stores.len(), 1);
         assert_eq!(stores[0].kind, GlobalStoreKind::Recoil);
         assert_eq!(stores[0].name, "themeAtom");
+    }
+
+    #[test]
+    fn detect_global_stores_multiline_recoil_atom_with_delayed_object_start() {
+        let content = r#"
+export const themeAtom = atom(
+    {
+        key: 'theme',
+        default: 'light',
+    }
+);
+"#;
+        let stores = detect_global_stores(content, "state.ts");
+        assert_eq!(stores.len(), 1);
+        assert_eq!(stores[0].kind, GlobalStoreKind::Recoil);
+        assert_eq!(stores[0].name, "themeAtom");
+    }
+
+    #[test]
+    fn detect_global_stores_recoil_atom_with_whitespace_after_paren() {
+        let content = r#"
+export const themeAtom = atom(
+{
+    key: 'theme',
+    default: 'light',
+});
+"#;
+        let stores = detect_global_stores(content, "state.ts");
+        assert_eq!(stores.len(), 1);
+        assert_eq!(stores[0].kind, GlobalStoreKind::Recoil);
+        assert_eq!(stores[0].name, "themeAtom");
+    }
+
+    #[test]
+    fn detect_global_stores_recoil_selector_with_whitespace_after_paren() {
+        let content = r#"
+export const themeSelector = selector(
+{
+    key: 'themeSelector',
+    get: () => 'light',
+});
+"#;
+        let stores = detect_global_stores(content, "state.ts");
+        assert_eq!(stores.len(), 1);
+        assert_eq!(stores[0].kind, GlobalStoreKind::Recoil);
+        assert_eq!(stores[0].name, "themeSelector");
+    }
+
+    #[test]
+    fn detect_global_stores_skips_prior_unrelated_assignment_names() {
+        let content = r#"
+const noise = 1;
+export const realStore = configureStore({ reducer: rootReducer });
+"#;
+        let stores = detect_global_stores(content, "store.ts");
+        assert_eq!(stores.len(), 1);
+        assert_eq!(stores[0].kind, GlobalStoreKind::Redux);
+        assert_eq!(stores[0].name, "realStore");
+    }
+
+    #[test]
+    fn detect_global_stores_collects_multiple_jotai_atoms() {
+        let content = r#"
+export const firstAtom = atom(0);
+export const secondAtom = atom(1);
+"#;
+        let stores = detect_global_stores(content, "state.ts");
+        let mut names = stores
+            .iter()
+            .filter(|store| store.kind == GlobalStoreKind::Jotai)
+            .map(|store| store.name.as_str())
+            .collect::<Vec<_>>();
+        names.sort_unstable();
+        assert_eq!(names, vec!["firstAtom", "secondAtom"]);
+    }
+
+    #[test]
+    fn detect_global_stores_redux_slice_is_not_misclassified_as_store() {
+        let content = r#"
+export const todosSlice = createSlice({
+    name: 'todos',
+    initialState: [],
+    reducers: {},
+});
+"#;
+        let stores = detect_global_stores(content, "store.ts");
+        assert!(stores.is_empty());
+    }
+
+    #[test]
+    fn detect_global_stores_typed_jotai_atom_preserves_name() {
+        let content = "export const countAtom: PrimitiveAtom<number> = atom(0);";
+        let stores = detect_global_stores(content, "state.ts");
+        assert_eq!(stores.len(), 1);
+        assert_eq!(stores[0].kind, GlobalStoreKind::Jotai);
+        assert_eq!(stores[0].name, "countAtom");
+    }
+
+    #[test]
+    fn detect_global_stores_typed_recoil_atom_preserves_name() {
+        let content = "export const themeAtom: RecoilState<string> = atom({ key: 'theme', default: 'light' });";
+        let stores = detect_global_stores(content, "state.ts");
+        assert_eq!(stores.len(), 1);
+        assert_eq!(stores[0].kind, GlobalStoreKind::Recoil);
+        assert_eq!(stores[0].name, "themeAtom");
+    }
+
+    #[test]
+    fn detect_global_stores_export_let_with_typed_initializer_preserves_name() {
+        let content = r#"
+type StoreState = { count: number };
+export let useStore: StoreApi<StoreState> = create((set) => ({ count: 0 }));
+"#;
+        let stores = detect_global_stores(content, "store.ts");
+        assert_eq!(stores.len(), 1);
+        assert_eq!(stores[0].kind, GlobalStoreKind::Zustand);
+        assert_eq!(stores[0].name, "useStore");
     }
 
     #[test]

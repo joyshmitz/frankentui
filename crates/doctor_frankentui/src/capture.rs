@@ -3,7 +3,8 @@ use std::io::{BufRead, BufReader, Write};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -1605,22 +1606,6 @@ fn run_vhs_with_driver(
             break status.and_then(|value| value.code()).unwrap_or(125);
         }
 
-        if fatal_capture_reason.is_none()
-            && let Some(reason) = detect_vhs_fatal_reason(vhs_log)
-        {
-            eprintln!(
-                "[doctor:subprocess] vhs log fatal pid={} reason={} elapsed={}ms",
-                child_pid,
-                reason,
-                spawn_instant.elapsed().as_millis()
-            );
-            fatal_capture_reason = Some(reason);
-            terminate_process_group(child_pid);
-            let _ = child.kill();
-            let status = child.wait_timeout(Duration::from_secs(2))?;
-            break status.and_then(|value| value.code()).unwrap_or(125);
-        }
-
         if !defunct_ttyd_observed && has_defunct_ttyd_child(child_pid) {
             defunct_ttyd_observed = true;
             eprintln!(
@@ -1654,6 +1639,9 @@ fn run_vhs_with_driver(
 
     if vhs_exit != 0 {
         if fatal_capture_reason.is_none() {
+            // Fall back to a one-shot logfile scan after the pumps finish. This keeps
+            // early fatal detection on the streamed stdout/stderr path without
+            // rescanning the full logfile on every watchdog poll.
             fatal_capture_reason = detect_vhs_fatal_reason(vhs_log);
         }
         terminate_process_group(child_pid);
@@ -1729,6 +1717,158 @@ struct FinalizationInput {
     timed_out: bool,
     conservative: bool,
     capture_timeout_seconds: u64,
+}
+
+enum SeedDemoThreadOutcome {
+    Completed(i32),
+    Canceled,
+}
+
+struct SeedDemoThread {
+    cancel: Arc<AtomicBool>,
+    handle: thread::JoinHandle<SeedDemoThreadOutcome>,
+}
+
+fn wait_for_seed_launch(delay: Duration, cancel: &AtomicBool) -> bool {
+    let deadline = std::time::Instant::now() + delay;
+    while std::time::Instant::now() < deadline {
+        if cancel.load(Ordering::Acquire) {
+            return false;
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        thread::sleep(remaining.min(Duration::from_millis(25)));
+    }
+
+    !cancel.load(Ordering::Acquire)
+}
+
+fn spawn_seed_demo_thread(
+    current_exe: PathBuf,
+    seed_delay: Duration,
+    seed_config: SeedDemoConfig,
+    seed_stdout_log: PathBuf,
+    seed_stderr_log: PathBuf,
+) -> SeedDemoThread {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel_for_thread = Arc::clone(&cancel);
+
+    let handle = thread::spawn(move || {
+        if !wait_for_seed_launch(seed_delay, cancel_for_thread.as_ref()) {
+            return SeedDemoThreadOutcome::Canceled;
+        }
+
+        let stdout_log_file = match OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&seed_stdout_log)
+        {
+            Ok(file) => file,
+            Err(error) => {
+                let _ = write_string(&seed_stderr_log, &error.to_string());
+                return SeedDemoThreadOutcome::Completed(1);
+            }
+        };
+        let stderr_log_file = match OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&seed_stderr_log)
+        {
+            Ok(file) => file,
+            Err(error) => {
+                let _ = write_string(&seed_stderr_log, &error.to_string());
+                return SeedDemoThreadOutcome::Completed(1);
+            }
+        };
+
+        let mut child = match Command::new(&current_exe)
+            .arg("seed-demo")
+            .arg("--host")
+            .arg(seed_config.host)
+            .arg("--port")
+            .arg(seed_config.port)
+            .arg("--path")
+            .arg(seed_config.http_path)
+            .arg("--auth-token")
+            .arg(seed_config.auth_bearer)
+            .arg("--project-key")
+            .arg(seed_config.project_key)
+            .arg("--agent-a")
+            .arg(seed_config.agent_a)
+            .arg("--agent-b")
+            .arg(seed_config.agent_b)
+            .arg("--messages")
+            .arg(seed_config.messages.to_string())
+            .arg("--timeout")
+            .arg(seed_config.timeout_seconds.to_string())
+            .arg("--log-file")
+            .arg(
+                seed_config
+                    .log_file
+                    .unwrap_or_else(|| PathBuf::from("seed.log")),
+            )
+            .stdout(Stdio::from(stdout_log_file))
+            .stderr(Stdio::from(stderr_log_file))
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) => {
+                let _ = write_string(&seed_stderr_log, &error.to_string());
+                return SeedDemoThreadOutcome::Completed(1);
+            }
+        };
+
+        wait_for_seed_child_exit(&mut child, cancel_for_thread.as_ref(), &seed_stderr_log)
+    });
+
+    SeedDemoThread { cancel, handle }
+}
+
+fn wait_for_seed_child_exit(
+    child: &mut Child,
+    cancel: &AtomicBool,
+    seed_stderr_log: &Path,
+) -> SeedDemoThreadOutcome {
+    loop {
+        if cancel.load(Ordering::Acquire) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return SeedDemoThreadOutcome::Canceled;
+        }
+
+        match child.wait_timeout(Duration::from_millis(25)) {
+            Ok(Some(status)) => {
+                return SeedDemoThreadOutcome::Completed(status.code().unwrap_or(1));
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let _ = write_string(seed_stderr_log, &error.to_string());
+                return SeedDemoThreadOutcome::Completed(1);
+            }
+        }
+    }
+}
+
+fn cancel_seed_demo_thread(seed_thread: Option<SeedDemoThread>) {
+    let _ = finish_seed_demo_thread(seed_thread, true);
+}
+
+fn finish_seed_demo_thread(
+    seed_thread: Option<SeedDemoThread>,
+    cancel_incomplete: bool,
+) -> Option<i32> {
+    let seed_thread = seed_thread?;
+
+    if cancel_incomplete {
+        seed_thread.cancel.store(true, Ordering::Release);
+    }
+
+    match seed_thread.handle.join() {
+        Ok(SeedDemoThreadOutcome::Completed(code)) => Some(code),
+        Ok(SeedDemoThreadOutcome::Canceled) => None,
+        Err(_) => Some(1),
+    }
 }
 
 fn resolve_snapshot_capture_result(
@@ -2144,70 +2284,20 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
             log_file: Some(seed_log.clone()),
         };
 
-        seed_thread = Some(thread::spawn(move || {
-            thread::sleep(seed_delay);
-
-            let output = Command::new(&current_exe)
-                .arg("seed-demo")
-                .arg("--host")
-                .arg(seed_config.host)
-                .arg("--port")
-                .arg(seed_config.port)
-                .arg("--path")
-                .arg(seed_config.http_path)
-                .arg("--auth-token")
-                .arg(seed_config.auth_bearer)
-                .arg("--project-key")
-                .arg(seed_config.project_key)
-                .arg("--agent-a")
-                .arg(seed_config.agent_a)
-                .arg("--agent-b")
-                .arg(seed_config.agent_b)
-                .arg("--messages")
-                .arg(seed_config.messages.to_string())
-                .arg("--timeout")
-                .arg(seed_config.timeout_seconds.to_string())
-                .arg("--log-file")
-                .arg(
-                    seed_config
-                        .log_file
-                        .unwrap_or_else(|| PathBuf::from("seed.log")),
-                )
-                .output();
-
-            match output {
-                Ok(result) => {
-                    if let Ok(mut file) = OpenOptions::new()
-                        .create(true)
-                        .truncate(true)
-                        .write(true)
-                        .open(&seed_stdout_log)
-                    {
-                        let _ = file.write_all(&result.stdout);
-                    }
-                    if let Ok(mut file) = OpenOptions::new()
-                        .create(true)
-                        .truncate(true)
-                        .write(true)
-                        .open(&seed_stderr_log)
-                    {
-                        let _ = file.write_all(&result.stderr);
-                    }
-
-                    result.status.code().unwrap_or(1)
-                }
-                Err(error) => {
-                    let _ = write_string(&seed_stderr_log, &error.to_string());
-                    1
-                }
-            }
-        }));
+        seed_thread = Some(spawn_seed_demo_thread(
+            current_exe,
+            seed_delay,
+            seed_config,
+            seed_stdout_log.clone(),
+            seed_stderr_log.clone(),
+        ));
     }
 
     ui.info("running VHS capture");
     let vhs_outcome = match run_vhs_with_driver(&cfg, &run_dir, &tape_path, &vhs_log, &ui) {
         Ok(outcome) => outcome,
         Err(error) => {
+            cancel_seed_demo_thread(seed_thread.take());
             finalize_tmux_observer(tmux_observer.as_ref(), cfg.tmux_keep_open);
             return Err(error);
         }
@@ -2224,14 +2314,10 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
 
     finalize_tmux_observer(tmux_observer.as_ref(), cfg.tmux_keep_open);
 
-    let seed_exit = if let Some(handle) = seed_thread {
-        match handle.join() {
-            Ok(code) => Some(code),
-            Err(_) => Some(1),
-        }
-    } else {
-        None
-    };
+    // Preserve the pre-refactor success-path semantics: once capture finishes
+    // normally, wait for any in-flight seed-demo work to complete instead of
+    // cancelling it and converting a real success into a synthetic failure.
+    let seed_exit = finish_seed_demo_thread(seed_thread, false);
 
     let mut snapshot_status = if cfg.no_snapshot {
         "skipped".to_string()
@@ -2528,6 +2614,10 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     use tempfile::tempdir;
 
@@ -2535,6 +2625,7 @@ mod tests {
         CaptureArgs, FinalizationInput, ObserveMode, ResolvedCaptureConfig, VhsDriver,
         resolve_finalization_result,
     };
+    use crate::seed::SeedDemoConfig;
 
     fn minimal_args() -> CaptureArgs {
         CaptureArgs {
@@ -2764,6 +2855,156 @@ mod tests {
         args.app_command = Some("echo explicit-command".to_string());
         cfg.apply_args(&args);
         assert_eq!(cfg.app_command.as_deref(), Some("echo explicit-command"));
+    }
+
+    #[test]
+    fn wait_for_seed_launch_returns_false_when_cancelled() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_for_thread = Arc::clone(&cancel);
+        let start = Instant::now();
+        let handle = thread::spawn(move || {
+            super::wait_for_seed_launch(Duration::from_millis(250), cancel_for_thread.as_ref())
+        });
+
+        thread::sleep(Duration::from_millis(30));
+        cancel.store(true, Ordering::Release);
+
+        assert!(
+            !handle
+                .join()
+                .expect("seed wait thread should return a bool"),
+            "cancelled seed wait should not proceed to launch"
+        );
+        assert!(
+            start.elapsed() < Duration::from_millis(200),
+            "cancelled wait should stop promptly"
+        );
+    }
+
+    #[test]
+    fn cancel_seed_demo_thread_stops_before_subprocess_launch() {
+        let temp = tempdir().expect("tempdir");
+        let stdout_log = temp.path().join("seed.stdout.log");
+        let stderr_log = temp.path().join("seed.stderr.log");
+        let seed = super::spawn_seed_demo_thread(
+            std::env::current_exe().expect("current exe"),
+            Duration::from_secs(5),
+            SeedDemoConfig {
+                host: "127.0.0.1".to_string(),
+                port: "8879".to_string(),
+                http_path: "/mcp/".to_string(),
+                auth_bearer: String::new(),
+                project_key: "/tmp/project".to_string(),
+                agent_a: "AgentA".to_string(),
+                agent_b: "AgentB".to_string(),
+                messages: 1,
+                timeout_seconds: 1,
+                log_file: Some(temp.path().join("seed.log")),
+            },
+            stdout_log.clone(),
+            stderr_log.clone(),
+        );
+
+        let start = Instant::now();
+        super::cancel_seed_demo_thread(Some(seed));
+
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "cancelling a delayed seed thread should not wait for the full delay"
+        );
+        assert!(!stdout_log.exists());
+        assert!(!stderr_log.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wait_for_seed_child_exit_kills_running_child_when_cancelled() {
+        let temp = tempdir().expect("tempdir");
+        let stderr_log = temp.path().join("seed.stderr.log");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_for_thread = Arc::clone(&cancel);
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 5")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn sleep");
+
+        let canceller = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            cancel_for_thread.store(true, Ordering::Release);
+        });
+
+        let start = Instant::now();
+        let outcome = super::wait_for_seed_child_exit(&mut child, cancel.as_ref(), &stderr_log);
+        canceller.join().expect("join canceller");
+
+        assert!(
+            matches!(outcome, super::SeedDemoThreadOutcome::Canceled),
+            "cancelled child should be reported as canceled"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "cancelling a running child should be prompt"
+        );
+        assert!(
+            !stderr_log.exists(),
+            "cancellation should not record a wait error"
+        );
+    }
+
+    #[test]
+    fn finish_seed_demo_thread_cancels_pending_launch_and_reports_none() {
+        let temp = tempdir().expect("tempdir");
+        let seed = super::spawn_seed_demo_thread(
+            std::env::current_exe().expect("current exe"),
+            Duration::from_secs(5),
+            SeedDemoConfig {
+                host: "127.0.0.1".to_string(),
+                port: "8879".to_string(),
+                http_path: "/mcp/".to_string(),
+                auth_bearer: String::new(),
+                project_key: "/tmp/project".to_string(),
+                agent_a: "AgentA".to_string(),
+                agent_b: "AgentB".to_string(),
+                messages: 1,
+                timeout_seconds: 1,
+                log_file: Some(temp.path().join("seed.log")),
+            },
+            temp.path().join("seed.stdout.log"),
+            temp.path().join("seed.stderr.log"),
+        );
+
+        let start = Instant::now();
+        let exit_code = super::finish_seed_demo_thread(Some(seed), true);
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "finishing a delayed seed thread should cancel promptly"
+        );
+        assert_eq!(
+            exit_code, None,
+            "canceled seed work should not be reported as success"
+        );
+    }
+
+    #[test]
+    fn finish_seed_demo_thread_without_cancel_waits_for_completion() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let started = Instant::now();
+        let handle = thread::spawn(|| {
+            thread::sleep(Duration::from_millis(40));
+            super::SeedDemoThreadOutcome::Completed(7)
+        });
+
+        let exit_code =
+            super::finish_seed_demo_thread(Some(super::SeedDemoThread { cancel, handle }), false);
+
+        assert!(
+            started.elapsed() >= Duration::from_millis(40),
+            "normal finalization should wait for in-flight seed work to finish"
+        );
+        assert_eq!(exit_code, Some(7));
     }
 
     #[test]
@@ -3348,6 +3589,27 @@ mod tests {
 
         let reason = super::detect_vhs_fatal_reason(&log_path);
         assert!(reason.is_none());
+    }
+
+    #[test]
+    fn spawn_vhs_log_pump_sets_fatal_reason_from_streamed_lines() {
+        let temp = tempdir().expect("tempdir");
+        let sink_path = temp.path().join("vhs.log");
+        let sink = fs::File::create(&sink_path).expect("create sink");
+        let fatal_reason = Arc::new(Mutex::new(None::<String>));
+        let reader = std::io::Cursor::new(
+            b"File: /tmp/run/capture.tape\ncould not open ttyd: EOF\n".to_vec(),
+        );
+
+        let handle = super::spawn_vhs_log_pump(reader, sink, Arc::clone(&fatal_reason));
+        handle.join().expect("join log pump");
+
+        let streamed = fs::read_to_string(&sink_path).expect("read sink");
+        assert!(streamed.contains("could not open ttyd: EOF"));
+        assert_eq!(
+            fatal_reason.lock().expect("fatal reason mutex").as_deref(),
+            Some("vhs could not open ttyd (EOF)")
+        );
     }
 
     #[test]

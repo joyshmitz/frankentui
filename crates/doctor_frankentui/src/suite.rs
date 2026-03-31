@@ -1,7 +1,7 @@
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use clap::Args;
 use serde::Serialize;
@@ -83,6 +83,26 @@ struct SuiteArtifactPaths<'a> {
     manifest_path: &'a std::path::Path,
 }
 
+#[derive(Debug, Clone)]
+struct SuiteRunPlan {
+    profile: String,
+    run_name: String,
+    log_path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+struct SuiteRunExecution {
+    plan: SuiteRunPlan,
+    exit_code: Option<i32>,
+}
+
+#[derive(Debug, Clone)]
+struct SuiteRunRecord {
+    plan: SuiteRunPlan,
+    exit_code: Option<i32>,
+    run_meta: Option<RunMeta>,
+}
+
 struct SuiteCounts {
     success_count: usize,
     failure_count: usize,
@@ -154,6 +174,114 @@ fn effective_fail_fast(fail_fast: bool, keep_going: bool) -> bool {
     if keep_going { false } else { fail_fast }
 }
 
+fn sanitize_path_component(value: &str, fallback: &str) -> String {
+    let mut sanitized = String::with_capacity(value.len());
+    let mut previous_was_separator = false;
+
+    for ch in value.chars() {
+        let mapped = if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            ch
+        } else {
+            '_'
+        };
+
+        if mapped == '_' {
+            if previous_was_separator {
+                continue;
+            }
+            previous_was_separator = true;
+        } else {
+            previous_was_separator = false;
+        }
+
+        sanitized.push(mapped);
+    }
+
+    let trimmed = sanitized.trim_matches('_');
+    if trimmed.is_empty() {
+        fallback.to_string()
+    } else if trimmed.len() == sanitized.len() {
+        sanitized
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn resolve_suite_name(requested: Option<String>) -> String {
+    let raw = requested.unwrap_or_else(|| format!("suite_{}", now_compact_timestamp()));
+    sanitize_path_component(&raw, "suite")
+}
+
+fn suite_run_name(suite_name: &str, run_index: usize, profile: &str) -> String {
+    let profile_component = sanitize_path_component(profile, "profile");
+    format!("{}_{}_{profile_component}", suite_name, run_index + 1)
+}
+
+fn build_suite_run_plans(
+    suite_name: &str,
+    suite_dir: &std::path::Path,
+    profiles: &[String],
+) -> Vec<SuiteRunPlan> {
+    profiles
+        .iter()
+        .enumerate()
+        .map(|(run_index, profile)| {
+            let run_name = suite_run_name(suite_name, run_index, profile);
+            let log_path = suite_dir.join(format!("{run_name}.runner.log"));
+            SuiteRunPlan {
+                profile: profile.clone(),
+                run_name,
+                log_path,
+            }
+        })
+        .collect()
+}
+
+fn suite_run_dir(suite_dir: &std::path::Path, run_name: &str) -> PathBuf {
+    suite_dir.join(run_name)
+}
+
+fn suite_run_meta_path(suite_dir: &std::path::Path, run_name: &str) -> PathBuf {
+    suite_run_dir(suite_dir, run_name).join("run_meta.json")
+}
+
+fn run_capture_subprocess_to_log(command: &mut Command, log_path: &std::path::Path) -> Result<i32> {
+    let stdout_log = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(log_path)?;
+    let stderr_log = stdout_log.try_clone()?;
+    let mut spawn_error_log = stdout_log.try_clone()?;
+
+    command
+        .stdout(Stdio::from(stdout_log))
+        .stderr(Stdio::from(stderr_log));
+
+    match command.status() {
+        Ok(status) => Ok(status.code().unwrap_or(1)),
+        Err(error) => {
+            let _ = writeln!(
+                spawn_error_log,
+                "suite failed to launch capture subprocess: {error}"
+            );
+            Err(error.into())
+        }
+    }
+}
+
+fn prepare_suite_dir(path: &std::path::Path) -> Result<()> {
+    ensure_dir(path)?;
+    let mut entries = fs::read_dir(path)?;
+    if entries.next().transpose()?.is_some() {
+        return Err(DoctorError::invalid(format!(
+            "suite directory already exists and is not empty: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
 fn resolve_suite_outcome(failure_count: usize, report_failed: bool) -> SuiteOutcome {
     if failure_count > 0 {
         SuiteOutcome::FailedRuns
@@ -210,43 +338,146 @@ fn build_suite_json_summary(
     })
 }
 
-fn build_suite_observability_summary(runs: &[RunMeta]) -> SuiteObservabilitySummary {
+fn missing_run_meta_reason(exit_code: i32) -> String {
+    if exit_code == 0 {
+        "capture subprocess exited successfully but did not write run_meta.json".to_string()
+    } else {
+        format!("capture subprocess exited with code {exit_code} before run_meta.json was written")
+    }
+}
+
+fn suite_run_record_status(run: &SuiteRunRecord) -> String {
+    match (run.run_meta.as_ref(), run.exit_code) {
+        (Some(meta), _) => meta.status.clone(),
+        (None, Some(0)) => "contract_error".to_string(),
+        (None, Some(_)) => "failed".to_string(),
+        (None, None) => "skipped".to_string(),
+    }
+}
+
+fn load_suite_run_records(
+    suite_dir: &std::path::Path,
+    executions: &[SuiteRunExecution],
+) -> Result<Vec<SuiteRunRecord>> {
+    executions
+        .iter()
+        .map(|execution| {
+            let path = suite_run_meta_path(suite_dir, &execution.plan.run_name);
+            Ok(SuiteRunRecord {
+                plan: execution.plan.clone(),
+                exit_code: execution.exit_code,
+                run_meta: path
+                    .exists()
+                    .then(|| RunMeta::from_path(&path))
+                    .transpose()?,
+            })
+        })
+        .collect()
+}
+
+fn validate_suite_run_contracts(
+    records: &[SuiteRunRecord],
+    ui: &crate::util::CliOutput,
+    summary: &mut String,
+) -> (Vec<RunMeta>, usize, usize) {
+    let mut runs = Vec::new();
+    let mut success_count = 0_usize;
+    let mut failure_count = 0_usize;
+
+    for record in records {
+        match (record.exit_code, record.run_meta.as_ref()) {
+            (Some(0), Some(meta)) => {
+                success_count = success_count.saturating_add(1);
+                runs.push(meta.clone());
+            }
+            (Some(0), None) => {
+                failure_count = failure_count.saturating_add(1);
+                let message = format!(
+                    "[suite] profile={} status=failed reason={}",
+                    record.plan.profile,
+                    missing_run_meta_reason(0)
+                );
+                ui.error(&message);
+                summary.push_str(&format!("{message}\n"));
+            }
+            (Some(_), Some(meta)) => {
+                failure_count = failure_count.saturating_add(1);
+                runs.push(meta.clone());
+            }
+            (Some(_), None) => {
+                failure_count = failure_count.saturating_add(1);
+            }
+            (None, _) => {}
+        }
+    }
+
+    (runs, success_count, failure_count)
+}
+
+fn build_suite_observability_summary(
+    runs: &[SuiteRunRecord],
+    suite_dir: &std::path::Path,
+) -> SuiteObservabilitySummary {
     let mut trace_ids = Vec::new();
     let mut fallback_profiles = Vec::new();
     let mut capture_error_profiles = Vec::new();
     let mut run_index = Vec::with_capacity(runs.len());
 
     for run in runs {
-        if let Some(trace_id) = run.trace_id.as_ref().filter(|value| !value.is_empty()) {
-            trace_ids.push(trace_id.clone());
+        if let Some(meta) = run.run_meta.as_ref() {
+            if let Some(trace_id) = meta.trace_id.as_ref().filter(|value| !value.is_empty()) {
+                trace_ids.push(trace_id.clone());
+            }
+            if meta
+                .fallback_reason
+                .as_ref()
+                .is_some_and(|value| !value.is_empty())
+            {
+                fallback_profiles.push(meta.profile.clone());
+            }
+            if meta
+                .capture_error_reason
+                .as_ref()
+                .is_some_and(|value| !value.is_empty())
+            {
+                capture_error_profiles.push(meta.profile.clone());
+            }
+            run_index.push(SuiteRunIndexEntry {
+                profile: meta.profile.clone(),
+                status: meta.status.clone(),
+                run_dir: meta.run_dir.clone(),
+                trace_id: meta.trace_id.clone(),
+                fallback_reason: meta.fallback_reason.clone(),
+                capture_error_reason: meta.capture_error_reason.clone(),
+                evidence_ledger: meta.evidence_ledger.clone(),
+                artifact_manifest: meta.artifact_manifest.clone(),
+                ttyd_runtime_log: meta.ttyd_runtime_log.clone(),
+                tmux_session: meta.tmux_session.clone(),
+                tmux_pane_capture: meta.tmux_pane_capture.clone(),
+                tmux_pane_log: meta.tmux_pane_log.clone(),
+            });
+            continue;
         }
-        if run
-            .fallback_reason
-            .as_ref()
-            .is_some_and(|value| !value.is_empty())
-        {
-            fallback_profiles.push(run.profile.clone());
-        }
-        if run
-            .capture_error_reason
-            .as_ref()
-            .is_some_and(|value| !value.is_empty())
-        {
-            capture_error_profiles.push(run.profile.clone());
+
+        let capture_error_reason = run.exit_code.map(missing_run_meta_reason);
+        if capture_error_reason.is_some() {
+            capture_error_profiles.push(run.plan.profile.clone());
         }
         run_index.push(SuiteRunIndexEntry {
-            profile: run.profile.clone(),
-            status: run.status.clone(),
-            run_dir: run.run_dir.clone(),
-            trace_id: run.trace_id.clone(),
-            fallback_reason: run.fallback_reason.clone(),
-            capture_error_reason: run.capture_error_reason.clone(),
-            evidence_ledger: run.evidence_ledger.clone(),
-            artifact_manifest: run.artifact_manifest.clone(),
-            ttyd_runtime_log: run.ttyd_runtime_log.clone(),
-            tmux_session: run.tmux_session.clone(),
-            tmux_pane_capture: run.tmux_pane_capture.clone(),
-            tmux_pane_log: run.tmux_pane_log.clone(),
+            profile: run.plan.profile.clone(),
+            status: suite_run_record_status(run),
+            run_dir: suite_run_dir(suite_dir, &run.plan.run_name)
+                .display()
+                .to_string(),
+            trace_id: None,
+            fallback_reason: None,
+            capture_error_reason,
+            evidence_ledger: None,
+            artifact_manifest: None,
+            ttyd_runtime_log: None,
+            tmux_session: None,
+            tmux_pane_capture: None,
+            tmux_pane_log: None,
         });
     }
 
@@ -281,9 +512,7 @@ fn run_suite_with_integration(args: SuiteArgs, integration: &OutputIntegration) 
     let run_root = args
         .run_root
         .unwrap_or_else(|| PathBuf::from("/tmp/doctor_frankentui/suites"));
-    let suite_name = args
-        .suite_name
-        .unwrap_or_else(|| format!("suite_{}", now_compact_timestamp()));
+    let suite_name = resolve_suite_name(args.suite_name.clone());
 
     ensure_exists(&project_dir)?;
     ensure_dir(&run_root)?;
@@ -308,7 +537,8 @@ fn run_suite_with_integration(args: SuiteArgs, integration: &OutputIntegration) 
     }
 
     let suite_dir = run_root.join(&suite_name);
-    ensure_dir(&suite_dir)?;
+    prepare_suite_dir(&suite_dir)?;
+    let run_plans = build_suite_run_plans(&suite_name, &suite_dir, &profiles);
 
     let summary_path = suite_dir.join("suite_summary.txt");
     let report_log = suite_dir.join("suite_report.log");
@@ -327,16 +557,13 @@ fn run_suite_with_integration(args: SuiteArgs, integration: &OutputIntegration) 
         project_dir.display(),
     );
 
-    let mut success_count = 0_usize;
-    let mut failure_count = 0_usize;
     let fail_fast = effective_fail_fast(args.fail_fast, args.keep_going);
+    let mut executions = Vec::with_capacity(run_plans.len());
 
     let current_exe = std::env::current_exe()?;
 
-    for profile in &profiles {
-        let run_name = format!("{}_{}", suite_name, profile);
-        let log_path = suite_dir.join(format!("{run_name}.runner.log"));
-
+    for plan in &run_plans {
+        let profile = &plan.profile;
         let mut command = Command::new(&current_exe);
         command
             .arg("capture")
@@ -347,7 +574,7 @@ fn run_suite_with_integration(args: SuiteArgs, integration: &OutputIntegration) 
             .arg("--run-root")
             .arg(&suite_dir)
             .arg("--run-name")
-            .arg(&run_name);
+            .arg(&plan.run_name);
 
         if let Some(app_command) = &app_command {
             command.arg("--app-command").arg(app_command);
@@ -373,23 +600,15 @@ fn run_suite_with_integration(args: SuiteArgs, integration: &OutputIntegration) 
         ui.info(&format!("suite running profile={profile}"));
         summary.push_str(&format!("[suite] running profile={profile}\n"));
 
-        let output = command.output()?;
-
-        let mut log_file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&log_path)?;
-        log_file.write_all(&output.stdout)?;
-        log_file.write_all(&output.stderr)?;
-
-        let rc = output.status.code().unwrap_or(1);
+        let rc = run_capture_subprocess_to_log(&mut command, &plan.log_path)?;
+        executions.push(SuiteRunExecution {
+            plan: plan.clone(),
+            exit_code: Some(rc),
+        });
         if rc == 0 {
-            success_count = success_count.saturating_add(1);
             ui.success(&format!("suite profile={profile} status=ok exit={rc}"));
             summary.push_str(&format!("[suite] profile={profile} status=ok exit={rc}\n"));
         } else {
-            failure_count = failure_count.saturating_add(1);
             ui.error(&format!("suite profile={profile} status=failed exit={rc}"));
             summary.push_str(&format!(
                 "[suite] profile={profile} status=failed exit={rc}\n"
@@ -402,6 +621,16 @@ fn run_suite_with_integration(args: SuiteArgs, integration: &OutputIntegration) 
         }
     }
 
+    for plan in run_plans.iter().skip(executions.len()) {
+        executions.push(SuiteRunExecution {
+            plan: plan.clone(),
+            exit_code: None,
+        });
+    }
+
+    let records = load_suite_run_records(&suite_dir, &executions)?;
+    let (runs, success_count, failure_count) =
+        validate_suite_run_contracts(&records, &ui, &mut summary);
     let finished_at = now_utc_iso();
     summary.push_str(&format!(
         "finished_at={}\nsuccess_count={}\nfailure_count={}\n",
@@ -409,23 +638,13 @@ fn run_suite_with_integration(args: SuiteArgs, integration: &OutputIntegration) 
     ));
     write_string(&summary_path, &summary)?;
 
-    let mut runs = Vec::new();
-    for profile in &profiles {
-        let path = suite_dir
-            .join(format!("{}_{}", suite_name, profile))
-            .join("run_meta.json");
-        if path.exists() {
-            runs.push(RunMeta::from_path(&path)?);
-        }
-    }
-
     let mut report_failed = false;
     let report_json_path = suite_dir.join("report.json");
     let report_html_path = suite_dir.join("index.html");
     let report_log_path = suite_dir.join("suite_report.log");
     if !args.skip_report {
         let report_mode = format!(
-            "report_input=preloaded_runmeta dedupe_applied=true run_count={}\n",
+            "report_input=preloaded_runmeta indexed_run_names=true run_count={}\n",
             runs.len()
         );
         let report_result = run_report_with_runs(
@@ -466,38 +685,41 @@ fn run_suite_with_integration(args: SuiteArgs, integration: &OutputIntegration) 
         report_html: (!args.skip_report && !report_failed && report_html_path.exists())
             .then(|| report_html_path.display().to_string()),
     };
-    let observability = build_suite_observability_summary(&runs);
+    let observability = build_suite_observability_summary(&records, &suite_dir);
 
-    if !runs.is_empty() {
-        let manifest = SuiteManifest {
-            suite_name: suite_name.clone(),
-            suite_dir: suite_dir.display().to_string(),
-            started_at,
-            finished_at,
-            success_count,
-            failure_count,
-            summary_path: summary_path.display().to_string(),
-            report_log: report_artifacts.report_log.clone(),
-            report_json: report_artifacts.report_json.clone(),
-            report_html: report_artifacts.report_html.clone(),
-            report_failed,
-            trace_ids: observability.trace_ids.clone(),
-            fallback_profiles: observability.fallback_profiles.clone(),
-            capture_error_profiles: observability.capture_error_profiles.clone(),
-            run_index: observability.run_index.clone(),
-            runs,
-        };
-        let content = serde_json::to_string_pretty(&manifest)?;
-        write_string(&suite_dir.join("suite_manifest.json"), &content)?;
-    }
+    let manifest = SuiteManifest {
+        suite_name: suite_name.clone(),
+        suite_dir: suite_dir.display().to_string(),
+        started_at,
+        finished_at,
+        success_count,
+        failure_count,
+        summary_path: summary_path.display().to_string(),
+        report_log: report_artifacts.report_log.clone(),
+        report_json: report_artifacts.report_json.clone(),
+        report_html: report_artifacts.report_html.clone(),
+        report_failed,
+        trace_ids: observability.trace_ids.clone(),
+        fallback_profiles: observability.fallback_profiles.clone(),
+        capture_error_profiles: observability.capture_error_profiles.clone(),
+        run_index: observability.run_index.clone(),
+        runs,
+    };
+    let content = serde_json::to_string_pretty(&manifest)?;
+    let manifest_path = suite_dir.join("suite_manifest.json");
+    write_string(&manifest_path, &content)?;
 
-    if report_failed {
-        ui.warning(&format!(
+    let suite_outcome = resolve_suite_outcome(failure_count, report_failed);
+    match suite_outcome {
+        SuiteOutcome::Ok => ui.success(&format!("suite complete: {}", suite_dir.display())),
+        SuiteOutcome::FailedRuns => ui.warning(&format!(
+            "suite complete with failed runs: {}",
+            suite_dir.display()
+        )),
+        SuiteOutcome::ReportFailed => ui.warning(&format!(
             "suite complete with report failures: {}",
             suite_dir.display()
-        ));
-    } else {
-        ui.success(&format!("suite complete: {}", suite_dir.display()));
+        )),
     }
     ui.info(&format!(
         "suite counts success={} failure={}",
@@ -505,15 +727,12 @@ fn run_suite_with_integration(args: SuiteArgs, integration: &OutputIntegration) 
     ));
     ui.info(&format!("summary={}", summary_path.display()));
 
-    let manifest_path = suite_dir.join("suite_manifest.json");
     if manifest_path.exists() {
         ui.info(&format!("manifest={}", manifest_path.display()));
     }
     if report_html_path.exists() {
         ui.info(&format!("report={}", report_html_path.display()));
     }
-
-    let suite_outcome = resolve_suite_outcome(failure_count, report_failed);
 
     if integration.should_emit_json() {
         let stdout_summary = build_suite_json_summary(
@@ -546,10 +765,12 @@ fn run_suite_with_integration(args: SuiteArgs, integration: &OutputIntegration) 
 mod tests {
     use std::fs;
     use std::path::PathBuf;
+    use std::process::Command;
 
     use tempfile::tempdir;
 
     use super::SuiteArgs;
+    use super::{SuiteRunExecution, SuiteRunPlan};
     use crate::util::OutputIntegration;
 
     fn base_suite_args(project_dir: PathBuf, run_root: PathBuf, suite_name: &str) -> SuiteArgs {
@@ -626,6 +847,57 @@ mod tests {
             command.as_deref(),
             Some("cargo run -q -p ftui-demo-showcase")
         );
+    }
+
+    #[test]
+    fn sanitize_path_component_collapses_unsafe_characters() {
+        assert_eq!(
+            super::sanitize_path_component("../analytics empty", "fallback"),
+            "analytics_empty"
+        );
+        assert_eq!(
+            super::sanitize_path_component("////", "fallback"),
+            "fallback"
+        );
+    }
+
+    #[test]
+    fn suite_run_name_is_indexed_and_profile_safe() {
+        assert_eq!(
+            super::suite_run_name("suite_case", 0, "../analytics empty"),
+            "suite_case_1_analytics_empty"
+        );
+        assert_eq!(
+            super::suite_run_name("suite_case", 1, "../analytics empty"),
+            "suite_case_2_analytics_empty"
+        );
+    }
+
+    #[test]
+    fn resolve_suite_name_sanitizes_unsafe_input() {
+        assert_eq!(
+            super::resolve_suite_name(Some("../unsafe suite".to_string())),
+            "unsafe_suite"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_capture_subprocess_to_log_streams_stdout_and_stderr() {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("runner.log");
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("printf 'stdout-line\\n'; printf 'stderr-line\\n' 1>&2; exit 7");
+
+        let exit_code = super::run_capture_subprocess_to_log(&mut command, &log_path)
+            .expect("command should run");
+
+        assert_eq!(exit_code, 7);
+        let log = fs::read_to_string(&log_path).expect("read log");
+        assert!(log.contains("stdout-line"));
+        assert!(log.contains("stderr-line"));
     }
 
     #[test]
@@ -738,12 +1010,18 @@ mod tests {
         );
         assert!(
             suite_dir
-                .join(format!("{}_not-a-real-profile.runner.log", suite_name))
+                .join(format!(
+                    "{}.runner.log",
+                    super::suite_run_name(suite_name, 0, "not-a-real-profile")
+                ))
                 .exists()
         );
         assert!(
             !suite_dir
-                .join(format!("{}_also-not-real.runner.log", suite_name))
+                .join(format!(
+                    "{}.runner.log",
+                    super::suite_run_name(suite_name, 1, "also-not-real")
+                ))
                 .exists()
         );
     }
@@ -769,7 +1047,10 @@ mod tests {
         let suite_dir = run_root.join(suite_name);
         assert!(
             suite_dir
-                .join(format!("{}_not-a-real-profile.runner.log", suite_name))
+                .join(format!(
+                    "{}.runner.log",
+                    super::suite_run_name(suite_name, 0, "not-a-real-profile")
+                ))
                 .exists(),
             "expected runner log to be written"
         );
@@ -804,12 +1085,18 @@ mod tests {
         assert!(!summary.contains("fail-fast enabled; stopping."));
         assert!(
             suite_dir
-                .join(format!("{}_not-a-real-profile.runner.log", suite_name))
+                .join(format!(
+                    "{}.runner.log",
+                    super::suite_run_name(suite_name, 0, "not-a-real-profile")
+                ))
                 .exists()
         );
         assert!(
             suite_dir
-                .join(format!("{}_also-not-real.runner.log", suite_name))
+                .join(format!(
+                    "{}.runner.log",
+                    super::suite_run_name(suite_name, 1, "also-not-real")
+                ))
                 .exists()
         );
     }
@@ -838,17 +1125,32 @@ mod tests {
         let report_log = fs::read_to_string(suite_dir.join("suite_report.log"))
             .expect("suite_report.log should exist");
         assert!(report_log.contains("report_input=preloaded_runmeta"));
-        assert!(report_log.contains("dedupe_applied=true"));
+        assert!(report_log.contains("indexed_run_names=true"));
         assert!(report_log.contains("run_count=0"));
         assert!(report_log.contains("report generation failed"));
         assert!(
             report_log.contains("No run_meta.json files found under"),
             "unexpected suite report log: {report_log}"
         );
+        let manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(suite_dir.join("suite_manifest.json")).expect("read manifest"),
+        )
+        .expect("parse manifest");
+        assert_eq!(manifest["failure_count"], 1);
+        assert_eq!(manifest["runs"], serde_json::json!([]));
+        assert_eq!(manifest["run_index"].as_array().map(Vec::len), Some(1));
+        assert_eq!(manifest["run_index"][0]["profile"], "not-a-real-profile");
+        assert_eq!(manifest["run_index"][0]["status"], "failed");
+        assert!(
+            manifest["run_index"][0]["capture_error_reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("before run_meta.json was written")
+        );
     }
 
     #[test]
-    fn run_suite_writes_manifest_and_report_when_run_meta_present() {
+    fn run_suite_rejects_preloaded_run_meta_in_nonempty_suite_dir() {
         let temp = tempdir().expect("tempdir");
         let project_dir = temp.path().join("project");
         let run_root = temp.path().join("suite_runs");
@@ -857,7 +1159,7 @@ mod tests {
         let suite_name = "manifest_case";
         let suite_dir = run_root.join(suite_name);
         let profile = "not-a-real-profile";
-        let run_name = format!("{suite_name}_{profile}");
+        let run_name = super::suite_run_name(suite_name, 0, profile);
         let run_dir = suite_dir.join(&run_name);
         fs::create_dir_all(&run_dir).expect("mkdir run dir");
 
@@ -880,46 +1182,12 @@ mod tests {
         args.profiles = Some(profile.to_string());
         args.skip_report = false;
 
-        let _ = super::run_suite(args);
-
-        assert!(suite_dir.join("suite_manifest.json").exists());
-        assert!(suite_dir.join("report.json").exists());
-        assert!(suite_dir.join("index.html").exists());
-        let report_log =
-            fs::read_to_string(suite_dir.join("suite_report.log")).expect("read suite report log");
-        assert!(report_log.contains("report_input=preloaded_runmeta"));
-        assert!(report_log.contains("dedupe_applied=true"));
-        assert!(report_log.contains("run_count=1"));
-        assert!(report_log.contains("report generation succeeded"));
-
-        let manifest: serde_json::Value = serde_json::from_str(
-            &fs::read_to_string(suite_dir.join("suite_manifest.json")).expect("read manifest"),
-        )
-        .expect("parse manifest");
-        assert_eq!(
-            manifest["summary_path"],
-            suite_dir.join("suite_summary.txt").display().to_string()
-        );
-        assert_eq!(
-            manifest["report_json"],
-            suite_dir.join("report.json").display().to_string()
-        );
-        assert_eq!(
-            manifest["report_html"],
-            suite_dir.join("index.html").display().to_string()
-        );
-        assert_eq!(
-            manifest["report_log"],
-            suite_dir.join("suite_report.log").display().to_string()
-        );
-        assert_eq!(manifest["report_failed"], false);
-        assert_eq!(manifest["trace_ids"][0], "trace-manifest");
-        assert_eq!(manifest["fallback_profiles"][0], profile);
-        assert_eq!(manifest["capture_error_profiles"][0], profile);
-        assert_eq!(manifest["run_index"][0]["trace_id"], "trace-manifest");
-        assert_eq!(
-            manifest["run_index"][0]["fallback_reason"],
-            "capture degraded"
+        let error = super::run_suite(args).expect_err("stale run meta should block suite reuse");
+        assert!(
+            error
+                .to_string()
+                .contains("suite directory already exists and is not empty"),
+            "unexpected error: {error}"
         );
     }
 
@@ -943,6 +1211,97 @@ mod tests {
             sqlmodel_agent: false,
         };
         let _ = super::run_suite_with_integration(args, &integration);
+    }
+
+    #[test]
+    fn run_suite_uses_distinct_indexed_run_names_for_duplicate_profiles() {
+        let temp = tempdir().expect("tempdir");
+        let project_dir = temp.path().join("project");
+        let run_root = temp.path().join("suite_runs");
+        fs::create_dir_all(&project_dir).expect("project dir");
+
+        let suite_name = "duplicate_profiles_case";
+        let mut args = base_suite_args(project_dir, run_root.clone(), suite_name);
+        args.profiles = Some("not-a-real-profile,not-a-real-profile".to_string());
+
+        let error =
+            super::run_suite(args).expect_err("suite should fail when capture subprocesses fail");
+        assert!(
+            error.to_string().contains("suite contains failed runs"),
+            "unexpected error: {error}"
+        );
+
+        let suite_dir = run_root.join(suite_name);
+        let first_log = suite_dir.join(format!(
+            "{}.runner.log",
+            super::suite_run_name(suite_name, 0, "not-a-real-profile")
+        ));
+        let second_log = suite_dir.join(format!(
+            "{}.runner.log",
+            super::suite_run_name(suite_name, 1, "not-a-real-profile")
+        ));
+        assert!(
+            first_log.exists(),
+            "expected first duplicate-profile runner log"
+        );
+        assert!(
+            second_log.exists(),
+            "expected second duplicate-profile runner log"
+        );
+        assert_ne!(first_log, second_log, "duplicate profiles must not collide");
+    }
+
+    #[test]
+    fn run_suite_sanitizes_runner_log_paths_for_unsafe_profile_names() {
+        let temp = tempdir().expect("tempdir");
+        let project_dir = temp.path().join("project");
+        let run_root = temp.path().join("suite_runs");
+        fs::create_dir_all(&project_dir).expect("project dir");
+
+        let suite_name = "unsafe_profile_case";
+        let mut args = base_suite_args(project_dir, run_root.clone(), suite_name);
+        args.profiles = Some("../not-a-real-profile".to_string());
+
+        let error =
+            super::run_suite(args).expect_err("suite should fail when capture subprocesses fail");
+        assert!(
+            error.to_string().contains("suite contains failed runs"),
+            "unexpected error: {error}"
+        );
+
+        let suite_dir = run_root.join(suite_name);
+        let sanitized_log = suite_dir.join(format!(
+            "{}.runner.log",
+            super::suite_run_name(suite_name, 0, "../not-a-real-profile")
+        ));
+        assert!(sanitized_log.exists(), "expected sanitized runner log");
+        let escaped_log = run_root.join("not-a-real-profile.runner.log");
+        assert!(
+            !escaped_log.exists(),
+            "unsafe profile names must not escape the suite directory"
+        );
+    }
+
+    #[test]
+    fn run_suite_rejects_nonempty_existing_suite_dir() {
+        let temp = tempdir().expect("tempdir");
+        let project_dir = temp.path().join("project");
+        let run_root = temp.path().join("suite_runs");
+        fs::create_dir_all(&project_dir).expect("project dir");
+
+        let suite_name = "stale_suite_case";
+        let suite_dir = run_root.join(suite_name);
+        fs::create_dir_all(&suite_dir).expect("suite dir");
+        fs::write(suite_dir.join("stale.txt"), "stale").expect("stale marker");
+
+        let args = base_suite_args(project_dir, run_root, suite_name);
+        let error = super::run_suite(args).expect_err("nonempty suite dir must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("suite directory already exists and is not empty"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -1069,28 +1428,50 @@ mod tests {
 
     #[test]
     fn build_suite_observability_summary_collects_trace_and_failure_metadata() {
-        let summary = super::build_suite_observability_summary(&[
-            crate::runmeta::RunMeta {
-                status: "degraded".to_string(),
-                profile: "profile-a".to_string(),
-                run_dir: "/tmp/run-a".to_string(),
-                trace_id: Some("trace-a".to_string()),
-                fallback_reason: Some("capture degraded".to_string()),
-                evidence_ledger: Some("/tmp/run-a/evidence_ledger.jsonl".to_string()),
-                artifact_manifest: Some("/tmp/run-a/run_artifact_manifest.json".to_string()),
-                ..crate::runmeta::RunMeta::default()
-            },
-            crate::runmeta::RunMeta {
-                status: "failed".to_string(),
-                profile: "profile-b".to_string(),
-                run_dir: "/tmp/run-b".to_string(),
-                trace_id: Some("trace-b".to_string()),
-                capture_error_reason: Some("timeout exceeded".to_string()),
-                tmux_session: Some("tmux-b".to_string()),
-                tmux_pane_log: Some("/tmp/run-b/tmux_pane.log".to_string()),
-                ..crate::runmeta::RunMeta::default()
-            },
-        ]);
+        let suite_dir = PathBuf::from("/tmp/suite");
+        let summary = super::build_suite_observability_summary(
+            &[
+                super::SuiteRunRecord {
+                    plan: SuiteRunPlan {
+                        profile: "profile-a".to_string(),
+                        run_name: "run_a".to_string(),
+                        log_path: suite_dir.join("run_a.runner.log"),
+                    },
+                    exit_code: Some(0),
+                    run_meta: Some(crate::runmeta::RunMeta {
+                        status: "degraded".to_string(),
+                        profile: "profile-a".to_string(),
+                        run_dir: "/tmp/run-a".to_string(),
+                        trace_id: Some("trace-a".to_string()),
+                        fallback_reason: Some("capture degraded".to_string()),
+                        evidence_ledger: Some("/tmp/run-a/evidence_ledger.jsonl".to_string()),
+                        artifact_manifest: Some(
+                            "/tmp/run-a/run_artifact_manifest.json".to_string(),
+                        ),
+                        ..crate::runmeta::RunMeta::default()
+                    }),
+                },
+                super::SuiteRunRecord {
+                    plan: SuiteRunPlan {
+                        profile: "profile-b".to_string(),
+                        run_name: "run_b".to_string(),
+                        log_path: suite_dir.join("run_b.runner.log"),
+                    },
+                    exit_code: Some(7),
+                    run_meta: Some(crate::runmeta::RunMeta {
+                        status: "failed".to_string(),
+                        profile: "profile-b".to_string(),
+                        run_dir: "/tmp/run-b".to_string(),
+                        trace_id: Some("trace-b".to_string()),
+                        capture_error_reason: Some("timeout exceeded".to_string()),
+                        tmux_session: Some("tmux-b".to_string()),
+                        tmux_pane_log: Some("/tmp/run-b/tmux_pane.log".to_string()),
+                        ..crate::runmeta::RunMeta::default()
+                    }),
+                },
+            ],
+            &suite_dir,
+        );
 
         assert_eq!(summary.trace_ids, vec!["trace-a", "trace-b"]);
         assert_eq!(summary.fallback_profiles, vec!["profile-a"]);
@@ -1108,6 +1489,134 @@ mod tests {
         assert_eq!(
             summary.run_index[1].tmux_pane_log.as_deref(),
             Some("/tmp/run-b/tmux_pane.log")
+        );
+    }
+
+    #[test]
+    fn build_suite_observability_summary_tracks_missing_run_meta_and_skipped_runs() {
+        let suite_dir = PathBuf::from("/tmp/suite");
+        let summary = super::build_suite_observability_summary(
+            &[
+                super::SuiteRunRecord {
+                    plan: SuiteRunPlan {
+                        profile: "profile-a".to_string(),
+                        run_name: "run_a".to_string(),
+                        log_path: suite_dir.join("run_a.runner.log"),
+                    },
+                    exit_code: Some(0),
+                    run_meta: None,
+                },
+                super::SuiteRunRecord {
+                    plan: SuiteRunPlan {
+                        profile: "profile-b".to_string(),
+                        run_name: "run_b".to_string(),
+                        log_path: suite_dir.join("run_b.runner.log"),
+                    },
+                    exit_code: None,
+                    run_meta: None,
+                },
+            ],
+            &suite_dir,
+        );
+
+        assert_eq!(summary.trace_ids, Vec::<String>::new());
+        assert_eq!(summary.fallback_profiles, Vec::<String>::new());
+        assert_eq!(summary.capture_error_profiles, vec!["profile-a"]);
+        assert_eq!(summary.run_index.len(), 2);
+        assert_eq!(summary.run_index[0].status, "contract_error");
+        assert!(
+            summary.run_index[0]
+                .capture_error_reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("did not write run_meta.json")
+        );
+        assert_eq!(summary.run_index[1].status, "skipped");
+        assert!(summary.run_index[1].capture_error_reason.is_none());
+        assert_eq!(summary.run_index[1].run_dir, "/tmp/suite/run_b");
+    }
+
+    #[test]
+    fn validate_suite_run_contracts_requires_run_meta_for_successful_subprocesses() {
+        let mut summary = String::new();
+        let integration = OutputIntegration {
+            fastapi_mode: "plain".to_string(),
+            fastapi_agent: false,
+            fastapi_ci: false,
+            fastapi_tty: false,
+            sqlmodel_mode: "plain".to_string(),
+            sqlmodel_agent: false,
+        };
+        let ui = crate::util::output_for(&integration);
+        let records = vec![
+            super::SuiteRunRecord {
+                plan: SuiteRunPlan {
+                    profile: "profile-a".to_string(),
+                    run_name: "run_a".to_string(),
+                    log_path: PathBuf::from("/tmp/run_a.runner.log"),
+                },
+                exit_code: Some(0),
+                run_meta: None,
+            },
+            super::SuiteRunRecord {
+                plan: SuiteRunPlan {
+                    profile: "profile-b".to_string(),
+                    run_name: "run_b".to_string(),
+                    log_path: PathBuf::from("/tmp/run_b.runner.log"),
+                },
+                exit_code: Some(0),
+                run_meta: Some(crate::runmeta::RunMeta {
+                    profile: "profile-b".to_string(),
+                    run_dir: "/tmp/run-b".to_string(),
+                    status: "ok".to_string(),
+                    ..crate::runmeta::RunMeta::default()
+                }),
+            },
+        ];
+
+        let (runs, success_count, failure_count) =
+            super::validate_suite_run_contracts(&records, &ui, &mut summary);
+
+        assert_eq!(success_count, 1);
+        assert_eq!(failure_count, 1);
+        assert_eq!(runs.len(), 1);
+        assert!(summary.contains("did not write run_meta.json"));
+    }
+
+    #[test]
+    fn load_suite_run_records_reads_expected_run_meta_paths() {
+        let temp = tempdir().expect("tempdir");
+        let suite_dir = temp.path().join("suite");
+        fs::create_dir_all(&suite_dir).expect("suite dir");
+        let run_name = "run_a";
+        let run_dir = suite_dir.join(run_name);
+        fs::create_dir_all(&run_dir).expect("run dir");
+        crate::runmeta::RunMeta {
+            profile: "profile-a".to_string(),
+            run_dir: run_dir.display().to_string(),
+            status: "ok".to_string(),
+            ..crate::runmeta::RunMeta::default()
+        }
+        .write_to_path(&run_dir.join("run_meta.json"))
+        .expect("write run meta");
+
+        let records = super::load_suite_run_records(
+            &suite_dir,
+            &[SuiteRunExecution {
+                plan: SuiteRunPlan {
+                    profile: "profile-a".to_string(),
+                    run_name: run_name.to_string(),
+                    log_path: suite_dir.join("run_a.runner.log"),
+                },
+                exit_code: Some(0),
+            }],
+        )
+        .expect("load records");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].run_meta.as_ref().expect("run meta").profile,
+            "profile-a"
         );
     }
 }

@@ -983,10 +983,14 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
     ));
 
     if integration.should_emit_json() {
-        let stdout_summary = json!({
-            "doctor_summary": doctor_summary,
-            "doctor_summary_path": doctor_summary_path.display().to_string(),
-        });
+        let mut stdout_summary = doctor_summary;
+        let summary_object = stdout_summary
+            .as_object_mut()
+            .expect("doctor summary must be a JSON object");
+        summary_object.insert(
+            "doctor_summary_path".to_string(),
+            json!(doctor_summary_path.display().to_string()),
+        );
         println!("{stdout_summary}");
     }
 
