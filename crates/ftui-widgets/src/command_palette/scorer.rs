@@ -527,13 +527,13 @@ impl BayesianScorer {
 
         // Check exact match
         if query_lower == title_lower {
-            let positions: Vec<usize> = (0..title.len()).collect();
+            let positions: Vec<usize> = (0..title.chars().count()).collect();
             return (MatchType::Exact, positions);
         }
 
         // Check prefix match
         if title_lower.starts_with(query_lower) {
-            let positions: Vec<usize> = (0..query_lower.len()).collect();
+            let positions: Vec<usize> = (0..query_lower.chars().count()).collect();
             return (MatchType::Prefix, positions);
         }
 
@@ -543,8 +543,10 @@ impl BayesianScorer {
         }
 
         // Check contiguous substring
-        if let Some(start) = title_lower.find(query_lower) {
-            let positions: Vec<usize> = (start..start + query_lower.len()).collect();
+        if let Some(byte_start) = title_lower.find(query_lower) {
+            let char_start = title_lower[..byte_start].chars().count();
+            let char_len = query_lower.chars().count();
+            let positions: Vec<usize> = (char_start..char_start + char_len).collect();
             return (MatchType::Substring, positions);
         }
 
@@ -599,6 +601,7 @@ impl BayesianScorer {
         let mut query_chars = query.chars().peekable();
 
         let title_bytes = title.as_bytes();
+        let mut char_index = 0usize;
         for (i, c) in title.char_indices() {
             // Is this a word start?
             let is_word_start = i == 0 || {
@@ -613,9 +616,10 @@ impl BayesianScorer {
                 && let Some(&qc) = query_chars.peek()
                 && c == qc
             {
-                positions.push(i);
+                positions.push(char_index);
                 query_chars.next();
             }
+            char_index += 1;
         }
 
         if query_chars.peek().is_none() {
@@ -672,11 +676,11 @@ impl BayesianScorer {
         let mut positions = Vec::new();
         let mut query_chars = query.chars().peekable();
 
-        for (i, c) in title.char_indices() {
+        for (char_index, c) in title.chars().enumerate() {
             if let Some(&qc) = query_chars.peek()
                 && c == qc
             {
-                positions.push(i);
+                positions.push(char_index);
                 query_chars.next();
             }
         }

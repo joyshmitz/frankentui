@@ -368,6 +368,11 @@ pub struct CommandPalette {
     generation: u64,
     /// Maximum visible results.
     max_visible: usize,
+    /// Custom title for the palette border (default: " Command Palette ").
+    title: String,
+    /// When true, use the full `Rect` passed to `render()` instead of
+    /// computing a centered sub-area.
+    fill_area: bool,
     /// Telemetry timing anchor (only when tracing feature is enabled).
     #[cfg(feature = "tracing")]
     opened_at: Option<Instant>,
@@ -398,6 +403,8 @@ impl CommandPalette {
             match_filter: MatchFilter::All,
             generation: 0,
             max_visible: 10,
+            title: " Command Palette ".to_string(),
+            fill_area: false,
             #[cfg(feature = "tracing")]
             opened_at: None,
         }
@@ -420,6 +427,39 @@ impl CommandPalette {
     pub fn with_max_visible(mut self, n: usize) -> Self {
         self.max_visible = n;
         self
+    }
+
+    /// Set a custom title for the palette border (builder).
+    ///
+    /// Defaults to `" Command Palette "`. The title is rendered centered in the
+    /// top border. Surrounding spaces are the caller's responsibility.
+    #[must_use]
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = title.into();
+        self
+    }
+
+    /// Set a custom title for the palette border.
+    pub fn set_title(&mut self, title: impl Into<String>) {
+        self.title = title.into();
+    }
+
+    /// Use the full area passed to `render()` instead of computing a centered
+    /// sub-area (builder).
+    ///
+    /// When `true`, the palette fills the entire `Rect` handed to
+    /// [`Widget::render`], letting the caller control position and size
+    /// externally. When `false` (the default), the palette computes its own
+    /// dimensions (~60 % width, centered, 1/6 from top).
+    #[must_use]
+    pub fn with_fill_area(mut self, fill: bool) -> Self {
+        self.fill_area = fill;
+        self
+    }
+
+    /// Set whether the palette should fill the entire render area.
+    pub fn set_fill_area(&mut self, fill: bool) {
+        self.fill_area = fill;
     }
 
     /// Enable or disable evidence tracking for match results.
@@ -893,17 +933,21 @@ impl Widget for CommandPalette {
             return;
         }
 
-        // Calculate palette dimensions: centered, ~60% width, height based on results.
-        let palette_width = (area.width * 3 / 5).max(30).min(area.width - 2);
-        let result_rows = self.filtered.len().min(self.max_visible);
-        // +3 for: border top, query line, border bottom. +1 if empty hint.
-        let palette_height = (result_rows as u16 + 3)
-            .max(5)
-            .min(area.height.saturating_sub(2));
-        let palette_x = area.x + (area.width.saturating_sub(palette_width)) / 2;
-        let palette_y = area.y + area.height / 6; // ~1/6 from top
-
-        let palette_area = Rect::new(palette_x, palette_y, palette_width, palette_height);
+        let palette_area = if self.fill_area {
+            // Caller controls layout — use the full area as-is.
+            area
+        } else {
+            // Calculate palette dimensions: centered, ~60% width, height based on results.
+            let palette_width = (area.width * 3 / 5).max(30).min(area.width - 2);
+            let result_rows = self.filtered.len().min(self.max_visible);
+            // +3 for: border top, query line, border bottom. +1 if empty hint.
+            let palette_height = (result_rows as u16 + 3)
+                .max(5)
+                .min(area.height.saturating_sub(2));
+            let palette_x = area.x + (area.width.saturating_sub(palette_width)) / 2;
+            let palette_y = area.y + area.height / 6; // ~1/6 from top
+            Rect::new(palette_x, palette_y, palette_width, palette_height)
+        };
 
         // Clear the palette area.
         self.clear_area(palette_area, frame);
@@ -1002,8 +1046,8 @@ impl CommandPalette {
             frame.buffer.set_fast(area.right() - 1, area.y, cell);
         }
 
-        // Title "Command Palette" in top border.
-        let title = " Command Palette ";
+        // Title in top border.
+        let title = &self.title;
         let title_width = display_width(title).min(area.width as usize);
         let title_x = area.x + (area.width.saturating_sub(title_width as u16)) / 2;
         let title_style = Style::new().fg(PackedRgba::rgb(200, 200, 220)).bg(bg);
