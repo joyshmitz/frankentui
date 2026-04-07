@@ -19,8 +19,10 @@
 use core::time::Duration;
 use std::collections::VecDeque;
 use std::io::{self, BufWriter, Read, Write};
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock, mpsc};
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 use ftui_backend::{Backend, BackendClock, BackendEventSource, BackendFeatures, BackendPresenter};
@@ -471,14 +473,24 @@ struct ResizeSignalGuard {
 
 #[cfg(unix)]
 impl ResizeSignalGuard {
-    fn new(tx: mpsc::SyncSender<()>) -> io::Result<Self> {
+    fn new(mut wake_writer: UnixStream) -> io::Result<Self> {
+        wake_writer.set_nonblocking(true)?;
         let mut signals = Signals::new([SIGWINCH]).map_err(io::Error::other)?;
         let handle = signals.handle();
         let thread = std::thread::spawn(move || {
+            let pulse = [1u8; 1];
             for _ in signals.forever() {
-                // Coalesce storms: a single pending notification is enough since we
-                // query the authoritative size via ioctl when generating the Event.
-                let _ = tx.try_send(());
+                match wake_writer.write(&pulse) {
+                    // The read side coalesces by draining all pending bytes before
+                    // querying winsize, so any successful wake byte is enough.
+                    Ok(_) => {}
+                    Err(err)
+                        if matches!(
+                            err.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                        ) => {}
+                    Err(_) => break,
+                }
             }
         });
 
@@ -529,9 +541,12 @@ pub struct TtyEventSource {
     /// When true, escape sequences are actually written to stdout.
     /// False in test/headless mode.
     live: bool,
-    /// Resize notifications (SIGWINCH) are delivered through this channel.
+    /// Read end of the resize wake stream.
+    ///
+    /// The SIGWINCH listener thread writes a byte here so the event loop can
+    /// block in `poll(2)` until a resize actually happens.
     #[cfg(unix)]
-    resize_rx: Option<mpsc::Receiver<()>>,
+    resize_reader: Option<UnixStream>,
     /// Owns the SIGWINCH handler thread (kept alive by this field).
     #[cfg(unix)]
     _resize_guard: Option<ResizeSignalGuard>,
@@ -565,7 +580,7 @@ impl TtyEventSource {
             inferred_pixel_height: 0,
             live: false,
             #[cfg(unix)]
-            resize_rx: None,
+            resize_reader: None,
             #[cfg(unix)]
             _resize_guard: None,
             parser: InputParser::new(),
@@ -597,12 +612,18 @@ impl TtyEventSource {
         }
 
         #[cfg(unix)]
-        let (resize_guard, resize_rx) = {
-            let (resize_tx, resize_rx) = mpsc::sync_channel(1);
-            match ResizeSignalGuard::new(resize_tx) {
-                Ok(guard) => (Some(guard), Some(resize_rx)),
-                Err(_) => (None, None),
+        let (resize_guard, resize_reader) = match UnixStream::pair() {
+            Ok((resize_reader, resize_writer)) => {
+                if resize_reader.set_nonblocking(true).is_ok() {
+                    match ResizeSignalGuard::new(resize_writer) {
+                        Ok(guard) => (Some(guard), Some(resize_reader)),
+                        Err(_) => (None, None),
+                    }
+                } else {
+                    (None, None)
+                }
             }
+            Err(_) => (None, None),
         };
 
         Ok(Self {
@@ -617,7 +638,7 @@ impl TtyEventSource {
             inferred_pixel_height: 0,
             live: true,
             #[cfg(unix)]
-            resize_rx,
+            resize_reader,
             #[cfg(unix)]
             _resize_guard: resize_guard,
             parser: InputParser::new(),
@@ -648,7 +669,7 @@ impl TtyEventSource {
             inferred_pixel_height: 0,
             live: false,
             #[cfg(unix)]
-            resize_rx: None,
+            resize_reader: None,
             #[cfg(unix)]
             _resize_guard: None,
             parser: InputParser::new(),
@@ -847,21 +868,42 @@ impl TtyEventSource {
     }
 
     #[cfg(unix)]
+    fn drain_resize_wake_bytes(&mut self) -> bool {
+        let Some(reader) = self.resize_reader.as_mut() else {
+            return false;
+        };
+        let mut any = false;
+        let mut retire_reader = false;
+        let mut buf = [0u8; 64];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => {
+                    retire_reader = true;
+                    break;
+                }
+                Ok(_) => any = true,
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+                Err(_) => {
+                    retire_reader = true;
+                    break;
+                }
+            }
+        }
+        if retire_reader {
+            self.resize_reader = None;
+        }
+        any
+    }
+
+    #[cfg(unix)]
     fn drain_resize_notifications(&mut self) {
         if !self.live {
             return;
         }
         // Drain all pending SIGWINCH notifications, coalescing into a single
         // resize query (the authoritative size comes from ioctl, not the signal).
-        let got_resize = if let Some(ref rx) = self.resize_rx {
-            let mut any = false;
-            while rx.try_recv().is_ok() {
-                any = true;
-            }
-            any
-        } else {
-            false
-        };
+        let got_resize = self.drain_resize_wake_bytes();
         if got_resize && let Some(ws) = self.query_tty_winsize() {
             self.pixel_width = ws.ws_xpixel;
             self.pixel_height = ws.ws_ypixel;
@@ -987,28 +1029,62 @@ impl TtyEventSource {
     #[cfg(unix)]
     fn poll_tty(&mut self, timeout: Duration) -> io::Result<bool> {
         use std::os::fd::AsFd;
-        let ready = {
+        let (tty_ready, resize_ready) = {
             let Some(ref tty) = self.tty_reader else {
                 return Ok(false);
             };
-            let mut poll_fds = [nix::poll::PollFd::new(
+            let mut poll_fds = Vec::with_capacity(2);
+            poll_fds.push(nix::poll::PollFd::new(
                 tty.as_fd(),
                 nix::poll::PollFlags::POLLIN,
-            )];
+            ));
+            let resize_index = if let Some(ref resize_reader) = self.resize_reader {
+                poll_fds.push(nix::poll::PollFd::new(
+                    resize_reader.as_fd(),
+                    nix::poll::PollFlags::POLLIN,
+                ));
+                Some(1usize)
+            } else {
+                None
+            };
             // Use i32 for timeout to allow values > 65s (up to ~24 days).
             // poll(2) takes milliseconds as a signed int.
             let timeout_ms: i32 = timeout.as_millis().try_into().unwrap_or(i32::MAX);
-            match nix::poll::poll(
+            let _ = match nix::poll::poll(
                 &mut poll_fds,
                 nix::poll::PollTimeout::try_from(timeout_ms).unwrap_or(nix::poll::PollTimeout::MAX),
             ) {
                 Ok(n) => n,
                 Err(nix::errno::Errno::EINTR) => return Ok(false),
                 Err(e) => return Err(io::Error::other(e)),
-            }
+            };
+            let tty_ready = poll_fds
+                .first()
+                .and_then(nix::poll::PollFd::revents)
+                .is_some_and(|revents| {
+                    revents.intersects(
+                        nix::poll::PollFlags::POLLIN
+                            | nix::poll::PollFlags::POLLERR
+                            | nix::poll::PollFlags::POLLHUP,
+                    )
+                });
+            let resize_ready = resize_index
+                .and_then(|idx| poll_fds.get(idx))
+                .and_then(nix::poll::PollFd::revents)
+                .is_some_and(|revents| {
+                    revents.intersects(
+                        nix::poll::PollFlags::POLLIN
+                            | nix::poll::PollFlags::POLLERR
+                            | nix::poll::PollFlags::POLLHUP,
+                    )
+                });
+            (tty_ready, resize_ready)
         };
-        if ready > 0 {
+        if tty_ready {
             self.drain_available_bytes()?;
+        }
+        if resize_ready {
+            self.drain_resize_notifications();
         }
         Ok(!self.event_queue.is_empty())
     }
@@ -1145,8 +1221,6 @@ impl BackendEventSource for TtyEventSource {
         let deadline = std::time::Instant::now()
             .checked_add(timeout)
             .unwrap_or_else(std::time::Instant::now);
-        #[cfg(unix)]
-        let slice_max = self.resize_rx.as_ref().map(|_| Duration::from_millis(50));
 
         loop {
             if !self.event_queue.is_empty() {
@@ -1173,12 +1247,6 @@ impl BackendEventSource for TtyEventSource {
             }
 
             let mut poll_for = deadline.saturating_duration_since(now);
-            #[cfg(unix)]
-            if let Some(slice_max) = slice_max {
-                // `poll(2)` won't reliably wake on SIGWINCH (signal handlers are installed
-                // with SA_RESTART). Time-slice to bound resize latency without busy looping.
-                poll_for = poll_for.min(slice_max);
-            }
             if let Some(parser_wait_budget) = self.parser_timeout_wait_budget() {
                 poll_for = poll_for.min(parser_wait_budget);
             }
@@ -2328,10 +2396,11 @@ mod tests {
     fn resize_aware_poll_resolves_pending_escape_before_outer_timeout() {
         use ftui_core::event::{KeyCode, KeyEvent};
         let (reader, mut writer) = pipe_pair();
-        let (_resize_tx, resize_rx) = mpsc::sync_channel(1);
+        let (resize_reader, _resize_writer) = UnixStream::pair().unwrap();
+        resize_reader.set_nonblocking(true).unwrap();
         let mut src = TtyEventSource::from_reader(80, 24, reader);
         src.live = true;
-        src.resize_rx = Some(resize_rx);
+        src.resize_reader = Some(resize_reader);
 
         writer.write_all(b"\x1b").unwrap();
 
@@ -2353,6 +2422,29 @@ mod tests {
                 ..
             }))
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resize_wake_bytes_are_drained_and_coalesced() {
+        let (resize_reader, mut resize_writer) = UnixStream::pair().unwrap();
+        resize_reader.set_nonblocking(true).unwrap();
+        resize_writer.set_nonblocking(true).unwrap();
+
+        let mut src = TtyEventSource::new(80, 24);
+        src.live = true;
+        src.resize_reader = Some(resize_reader);
+
+        resize_writer.write_all(&[1, 1, 1]).unwrap();
+
+        assert!(
+            src.drain_resize_wake_bytes(),
+            "pending wake bytes should be observed"
+        );
+        assert!(
+            !src.drain_resize_wake_bytes(),
+            "draining should coalesce all pending wake bytes"
+        );
     }
 
     #[cfg(unix)]
