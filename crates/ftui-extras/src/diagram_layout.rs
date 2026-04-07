@@ -2318,18 +2318,18 @@ mod tests {
             vec![],   // 11
         ];
         let radj = vec![
-            vec![],   // 0
-            vec![1],  // 1 <- 0
-            vec![2],  // 2 <- 0
-            vec![3],  // 3 <- 0
-            vec![0],  // 4 <- 0
-            vec![0],  // 5 <- 0
-            vec![0],  // 6 <- 0
-            vec![0],  // 7 <- 0
-            vec![5],  // 8 -> 5
-            vec![6],  // 9 -> 6
-            vec![7],  // 10 -> 7
-            vec![4],  // 11 -> 4
+            vec![],  // 0
+            vec![1], // 1 <- 0
+            vec![2], // 2 <- 0
+            vec![3], // 3 <- 0
+            vec![0], // 4 <- 0
+            vec![0], // 5 <- 0
+            vec![0], // 6 <- 0
+            vec![0], // 7 <- 0
+            vec![5], // 8 -> 5
+            vec![6], // 9 -> 6
+            vec![7], // 10 -> 7
+            vec![4], // 11 -> 4
         ];
         let mut budget = 50_000;
         let result = minimize_crossings(&layer_assignment, &adj, &radj, 12, 20, &mut budget);

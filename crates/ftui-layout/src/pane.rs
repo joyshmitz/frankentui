@@ -2040,15 +2040,15 @@ fn scale_div_round(
     if denominator <= 0 {
         return Err(PaneCoordinateNormalizationError::CoordinateOverflow);
     }
-    
+
     let scaled = (value as i128) * (numerator as i128);
     let den = denominator as i128;
-    
+
     let floor = scaled.div_euclid(den);
     let remainder = scaled.rem_euclid(den);
-    
+
     let mut result = floor;
-    
+
     if remainder != 0 && rounding != PaneCoordinateRoundingPolicy::TowardNegativeInfinity {
         let twice_remainder = remainder * 2;
         if twice_remainder > den {
@@ -2058,8 +2058,10 @@ fn scale_div_round(
             result += 1;
         }
     }
-    
-    result.try_into().map_err(|_| PaneCoordinateNormalizationError::CoordinateOverflow)
+
+    result
+        .try_into()
+        .map_err(|_| PaneCoordinateNormalizationError::CoordinateOverflow)
 }
 
 fn div_round(
