@@ -1100,12 +1100,14 @@ impl TtyEventSource {
             // POLLNVAL, but the fd is valid for nonblocking reads.
             if self.reader_nonblocking {
                 self.drain_available_bytes()?;
-                if !self.event_queue.is_empty() {
-                    if resize_ready {
-                        self.drain_resize_notifications();
-                    }
-                    return Ok(true);
-                }
+            }
+            // Always process resize even on the POLLNVAL path — the resize
+            // fd is a UnixStream, not /dev/tty, so poll(2) works fine on it.
+            if resize_ready {
+                self.drain_resize_notifications();
+            }
+            if !self.event_queue.is_empty() {
+                return Ok(true);
             }
             if timeout != Duration::ZERO {
                 std::thread::sleep(timeout.min(TTY_UNAVAILABLE_BACKOFF));
