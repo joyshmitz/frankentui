@@ -1026,10 +1026,20 @@ impl TtyEventSource {
     }
 
     /// Poll the tty fd for available data using `poll(2)`.
+    ///
+    /// On macOS, `poll(2)` on `/dev/tty` always returns `POLLNVAL` even though
+    /// the fd is valid for `open()`, `fcntl()`, and nonblocking `read()`.  When
+    /// this happens we fall back to a nonblocking `drain_available_bytes()` call
+    /// (if the reader is in nonblocking mode) so that input still works.  A
+    /// short backoff sleep prevents a tight spin loop.
     #[cfg(unix)]
     fn poll_tty(&mut self, timeout: Duration) -> io::Result<bool> {
         use std::os::fd::AsFd;
-        let (tty_ready, resize_ready) = {
+
+        /// Backoff sleep when poll(2) reports POLLNVAL (macOS /dev/tty).
+        const TTY_UNAVAILABLE_BACKOFF: Duration = Duration::from_millis(8);
+
+        let (tty_ready, tty_unavailable, resize_ready) = {
             let Some(ref tty) = self.tty_reader else {
                 return Ok(false);
             };
@@ -1058,16 +1068,19 @@ impl TtyEventSource {
                 Err(nix::errno::Errno::EINTR) => return Ok(false),
                 Err(e) => return Err(io::Error::other(e)),
             };
-            let tty_ready = poll_fds
+            let tty_revents = poll_fds
                 .first()
-                .and_then(nix::poll::PollFd::revents)
-                .is_some_and(|revents| {
-                    revents.intersects(
-                        nix::poll::PollFlags::POLLIN
-                            | nix::poll::PollFlags::POLLERR
-                            | nix::poll::PollFlags::POLLHUP,
-                    )
-                });
+                .and_then(nix::poll::PollFd::revents);
+            let tty_ready = tty_revents.is_some_and(|revents| {
+                revents.intersects(
+                    nix::poll::PollFlags::POLLIN
+                        | nix::poll::PollFlags::POLLERR
+                        | nix::poll::PollFlags::POLLHUP,
+                )
+            });
+            let tty_unavailable = tty_revents.is_some_and(|revents| {
+                revents.intersects(nix::poll::PollFlags::POLLNVAL)
+            });
             let resize_ready = resize_index
                 .and_then(|idx| poll_fds.get(idx))
                 .and_then(nix::poll::PollFd::revents)
@@ -1078,10 +1091,26 @@ impl TtyEventSource {
                             | nix::poll::PollFlags::POLLHUP,
                     )
                 });
-            (tty_ready, resize_ready)
+            (tty_ready, tty_unavailable, resize_ready)
         };
         if tty_ready {
             self.drain_available_bytes()?;
+        } else if tty_unavailable {
+            // macOS: /dev/tty doesn't support poll(2) and always returns
+            // POLLNVAL, but the fd is valid for nonblocking reads.
+            if self.reader_nonblocking {
+                self.drain_available_bytes()?;
+                if !self.event_queue.is_empty() {
+                    if resize_ready {
+                        self.drain_resize_notifications();
+                    }
+                    return Ok(true);
+                }
+            }
+            if timeout != Duration::ZERO {
+                std::thread::sleep(timeout.min(TTY_UNAVAILABLE_BACKOFF));
+            }
+            return Ok(!self.event_queue.is_empty());
         }
         if resize_ready {
             self.drain_resize_notifications();
