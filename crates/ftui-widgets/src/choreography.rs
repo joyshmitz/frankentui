@@ -22,10 +22,19 @@
 //! let mut choreo = Choreography::new("filter_update");
 //!
 //! // Global specification: when filter changes, update list + status + header
-//! choreo.step("filter", Action::Emit("filter_changed"));
-//! choreo.step("list", Action::Handle("filter_changed", "scroll_to_top"));
-//! choreo.step("status", Action::Handle("filter_changed", "update_count"));
-//! choreo.step("header", Action::Handle("filter_changed", "highlight_filter"));
+//! choreo.step("filter", Action::Emit("filter_changed".to_string()));
+//! choreo.step(
+//!     "list",
+//!     Action::Handle("filter_changed".to_string(), "scroll_to_top".to_string()),
+//! );
+//! choreo.step(
+//!     "status",
+//!     Action::Handle("filter_changed".to_string(), "update_count".to_string()),
+//! );
+//! choreo.step(
+//!     "header",
+//!     Action::Handle("filter_changed".to_string(), "highlight_filter".to_string()),
+//! );
 //!
 //! // Project to per-widget handlers
 //! let projection = choreo.project();

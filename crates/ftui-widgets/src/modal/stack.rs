@@ -1481,6 +1481,7 @@ mod tests {
     #[test]
     fn tracing_modal_render_span_has_required_fields() {
         let state = Arc::new(Mutex::new(TraceState::default()));
+        let _trace_test_guard = crate::tracing_test_support::acquire();
         let subscriber = tracing_subscriber::registry().with(TraceCapture {
             state: Arc::clone(&state),
         });
@@ -1520,6 +1521,7 @@ mod tests {
         use crate::focus::{FocusManager, FocusNode};
 
         let state = Arc::new(Mutex::new(TraceState::default()));
+        let _trace_test_guard = crate::tracing_test_support::acquire();
         let subscriber = tracing_subscriber::registry().with(TraceCapture {
             state: Arc::clone(&state),
         });

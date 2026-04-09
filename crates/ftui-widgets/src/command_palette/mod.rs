@@ -2265,6 +2265,7 @@ mod widget_tests {
         let capture = EventCapture {
             events: Arc::clone(&events),
         };
+        let _trace_test_guard = crate::tracing_test_support::acquire();
 
         let subscriber = tracing_subscriber::registry()
             .with(capture)

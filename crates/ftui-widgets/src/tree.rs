@@ -2294,6 +2294,7 @@ mod tests {
     #[test]
     fn tree_tracing_span_and_toggle_events_are_emitted() {
         let trace_state = Arc::new(Mutex::new(TreeTraceState::default()));
+        let _trace_test_guard = crate::tracing_test_support::acquire();
         let subscriber = tracing_subscriber::registry().with(TreeTraceCapture {
             state: Arc::clone(&trace_state),
         });

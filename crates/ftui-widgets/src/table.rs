@@ -3050,6 +3050,7 @@ mod tests {
     #[test]
     fn tracing_table_render_span_reports_row_counts() {
         let trace_state = Arc::new(Mutex::new(TableTraceState::default()));
+        let _trace_test_guard = crate::tracing_test_support::acquire();
         let subscriber = tracing_subscriber::registry().with(TableTraceCapture {
             state: Arc::clone(&trace_state),
         });

@@ -748,6 +748,7 @@ mod tests {
     #[test]
     fn tabs_tracing_span_and_switch_event_emitted() {
         let state = Arc::new(Mutex::new(TabsTraceState::default()));
+        let _trace_test_guard = crate::tracing_test_support::acquire();
         let subscriber = tracing_subscriber::registry().with(TabsTraceCapture {
             state: Arc::clone(&state),
         });

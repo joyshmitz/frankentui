@@ -2264,6 +2264,7 @@ mod tests {
     #[test]
     fn tracing_input_edit_span_tracks_cursor_positions() {
         let state = Arc::new(Mutex::new(InputTraceState::default()));
+        let _trace_test_guard = crate::tracing_test_support::acquire();
         let subscriber = tracing_subscriber::registry().with(InputTraceCapture {
             state: Arc::clone(&state),
         });

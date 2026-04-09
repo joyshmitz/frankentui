@@ -2098,6 +2098,7 @@ mod tests {
     #[test]
     fn list_tracing_span_and_selection_events_are_emitted() {
         let trace_state = Arc::new(Mutex::new(ListTraceState::default()));
+        let _trace_test_guard = crate::tracing_test_support::acquire();
         let subscriber = tracing_subscriber::registry().with(ListTraceCapture {
             state: Arc::clone(&trace_state),
         });

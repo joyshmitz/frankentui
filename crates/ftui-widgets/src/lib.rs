@@ -216,6 +216,34 @@ pub mod validation_error;
 pub mod virtualized;
 pub mod voi_debug_overlay;
 
+#[cfg(all(test, feature = "tracing"))]
+pub(crate) mod tracing_test_support {
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    /// Serialize tests that install tracing subscribers and rebuild the
+    /// callsite interest cache.
+    pub(crate) struct TraceTestGuard {
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl Drop for TraceTestGuard {
+        fn drop(&mut self) {
+            tracing::callsite::rebuild_interest_cache();
+        }
+    }
+
+    pub(crate) fn acquire() -> TraceTestGuard {
+        static TRACE_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+        let lock = TRACE_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("ftui-widgets tracing test lock poisoned");
+        tracing::callsite::rebuild_interest_cache();
+        TraceTestGuard { _lock: lock }
+    }
+}
+
 pub use align::{Align, VerticalAlignment};
 pub use badge::Badge;
 pub use cached::{CacheKey, CachedWidget, CachedWidgetState, FnKey, HashKey, NoCacheKey};
