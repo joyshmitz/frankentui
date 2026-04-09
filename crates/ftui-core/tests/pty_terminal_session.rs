@@ -168,6 +168,9 @@ fn spawn_cleanup_child(mode: &str, panic_child: bool) -> io::Result<PtyHarness> 
         "pty_cleanup_child"
     };
     cmd.args(["--exact", test_name, "--nocapture"]);
+    // Force a deterministic non-dumb profile so cleanup assertions prove the
+    // teardown path rather than inheriting host-specific capability drift.
+    cmd.env("FTUI_TEST_PROFILE", "modern");
     cmd.env("FTUI_PTY_CHILD", "1");
     cmd.env("FTUI_PTY_MODE", mode);
     PtyHarness::spawn(cmd)

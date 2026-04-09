@@ -265,7 +265,7 @@ If you aren't 100% sure how to use a third-party library, **SEARCH ONLINE** to f
 
 ### What It Does
 
-Provides a layered terminal UI framework with an Elm/Bubbletea-style runtime, deterministic buffer-diff rendering, RAII terminal lifecycle management, and a library of 37+ widgets. Supports both inline (scrollback-preserving) and alt-screen modes.
+Provides a layered terminal UI framework with an Elm/Bubbletea-style runtime, deterministic buffer-diff rendering, RAII terminal lifecycle management, and a broad widget library. Supports both inline (scrollback-preserving) and alt-screen modes.
 
 ### Architecture
 
@@ -307,7 +307,7 @@ frankentui/
 │   ├── ftui-text/                     # Spans, segments, rope editor
 │   ├── ftui-layout/                   # Flex + Grid solvers
 │   ├── ftui-runtime/                  # Elm/Bubbletea runtime
-│   ├── ftui-widgets/                  # Core widget library (37 widgets)
+│   ├── ftui-widgets/                  # Core widget library
 │   ├── ftui-extras/                   # Feature-gated add-ons (VFX, opt-level=3)
 │   ├── ftui-harness/                  # Test utilities + snapshot framework
 │   ├── ftui-i18n/                     # Internationalization support
@@ -317,13 +317,16 @@ frankentui/
 │   ├── ftui-tty/                      # TTY backend
 │   ├── ftui-web/                      # Web backend
 │   ├── ftui-showcase-wasm/            # WASM showcase build
-│   ├── ftui-demo-showcase/            # Reference app + snapshots
-│   ├── frankenterm-core/              # Terminal emulator core
-│   └── frankenterm-web/               # Terminal emulator web frontend
+│   └── ftui-demo-showcase/            # Reference app + snapshots
 ├── scripts/                           # E2E test scripts + benchmarks
 ├── tests/                             # Cross-component integration tests
 └── fuzz/                              # Fuzz testing (excluded from workspace)
 ```
+
+**Note:** some specs and integration docs still refer to `frankenterm-core` and
+`frankenterm-web`, but those crates are not currently vendored inside this
+workspace. Treat them as adjacent/external unless the code tree actually
+contains them.
 
 ### Key Files
 
@@ -336,7 +339,7 @@ frankentui/
 | `ftui-render` | `src/presenter.rs` | State-tracked ANSI emitter |
 | `ftui-runtime` | `src/program.rs` | Main event loop (Elm architecture) |
 | `ftui-runtime` | `src/terminal_writer.rs` | One-writer rule enforcement |
-| `ftui-widgets` | `src/lib.rs` | Widget trait + 37 implementations |
+| `ftui-widgets` | `src/lib.rs` | Widget traits + the core widget library |
 | `ftui-demo-showcase` | `src/app.rs` | Demo application model |
 
 ### Core Types Quick Reference

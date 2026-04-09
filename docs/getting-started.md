@@ -44,8 +44,14 @@ Optional / higher-churn:
 
 ## Embedding In `frankentui_website` (Next.js + bun)
 
-This section is for the web stack (`ftui-web` + `frankenterm-web`) and is
-explicitly **xterm.js-free**.
+This section is for the web stack and is explicitly **xterm.js-free**.
+
+Current repo reality:
+
+- This checkout contains the in-tree web foundations: `ftui-web` and `ftui-showcase-wasm`.
+- This checkout does **not** currently vendor a local `crates/frankenterm-web` package.
+- If your website also embeds `FrankenTermWeb`, that browser-facing bundle must
+  come from the adjacent/external repo or worktree that owns it.
 
 ### 1. Build artifacts from this repo
 
@@ -58,24 +64,22 @@ rustup target add wasm32-unknown-unknown
 # Verify ftui-web compiles for wasm32 (backend crate used by the web stack)
 cargo check -p ftui-web --target wasm32-unknown-unknown
 
+# Verify the in-tree WASM showcase target also compiles
+cargo check -p ftui-showcase-wasm --target wasm32-unknown-unknown
+
 # Optional: emit ftui-web release artifacts into target/wasm32-unknown-unknown/release/deps/
 cargo build -p ftui-web --target wasm32-unknown-unknown --release
-
-# Build frankenterm-web for browser consumption and write directly into the website repo
-wasm-pack build crates/frankenterm-web \
-  --target web \
-  --release \
-  --out-dir ../frankentui_website/src/wasm/frankenterm-web \
-  --out-name FrankenTerm
 ```
 
-Expected output files in `frankentui_website/src/wasm/frankenterm-web/`:
-
-- `FrankenTerm.js`
-- `FrankenTerm_bg.wasm`
-- `FrankenTerm.d.ts`
+If you need a browser-facing `FrankenTermWeb` bundle, build or import that
+package from the adjacent/external repo that owns it. Do not run
+`wasm-pack build crates/frankenterm-web` from this checkout because that path is
+not present here.
 
 ### 2. Initialize in a Next.js client component
+
+The snippet below assumes your website repo already contains a `FrankenTermWeb`
+bundle at `@/wasm/frankenterm-web/FrankenTerm` from that adjacent build.
 
 ```tsx
 "use client";
@@ -149,7 +153,7 @@ term.input({
 
 `ftui-web` currently provides the WASM-friendly backend core in Rust, but does
 not yet expose a public `wasm-bindgen` JS wrapper by itself. The browser-facing
-entrypoint today is `frankenterm-web` (which exports `FrankenTermWeb`).
+`FrankenTermWeb` wrapper remains adjacent/out-of-tree from this checkout.
 
 Do **not** embed xterm.js as a fallback for this integration path.
 

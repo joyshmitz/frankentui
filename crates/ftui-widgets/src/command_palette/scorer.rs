@@ -601,8 +601,7 @@ impl BayesianScorer {
         let mut query_chars = query.chars().peekable();
 
         let title_bytes = title.as_bytes();
-        let mut char_index = 0usize;
-        for (i, c) in title.char_indices() {
+        for (char_index, (i, c)) in title.char_indices().enumerate() {
             // Is this a word start?
             let is_word_start = i == 0 || {
                 let prev = title_bytes
@@ -619,7 +618,6 @@ impl BayesianScorer {
                 positions.push(char_index);
                 query_chars.next();
             }
-            char_index += 1;
         }
 
         if query_chars.peek().is_none() {

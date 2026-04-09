@@ -1068,9 +1068,7 @@ impl TtyEventSource {
                 Err(nix::errno::Errno::EINTR) => return Ok(false),
                 Err(e) => return Err(io::Error::other(e)),
             };
-            let tty_revents = poll_fds
-                .first()
-                .and_then(nix::poll::PollFd::revents);
+            let tty_revents = poll_fds.first().and_then(nix::poll::PollFd::revents);
             let tty_ready = tty_revents.is_some_and(|revents| {
                 revents.intersects(
                     nix::poll::PollFlags::POLLIN
@@ -1078,9 +1076,8 @@ impl TtyEventSource {
                         | nix::poll::PollFlags::POLLHUP,
                 )
             });
-            let tty_unavailable = tty_revents.is_some_and(|revents| {
-                revents.intersects(nix::poll::PollFlags::POLLNVAL)
-            });
+            let tty_unavailable = tty_revents
+                .is_some_and(|revents| revents.intersects(nix::poll::PollFlags::POLLNVAL));
             let resize_ready = resize_index
                 .and_then(|idx| poll_fds.get(idx))
                 .and_then(nix::poll::PollFd::revents)

@@ -13,13 +13,13 @@
   <img src="frankentui_illustration.webp" alt="FrankenTUI - Minimal, high-performance terminal UI kernel">
 </div>
 
-High‑performance terminal UI kernel -- 850K+ lines of Rust across 20 crates, 106 widget implementations, 46 interactive demo screens, a Bayesian intelligence layer, resizable pane workspaces, and a web/WASM backend -- focused on correctness, determinism, and clean architecture.
+High‑performance terminal UI kernel -- 850K+ lines of Rust across 20 crates, 80+ widget/stateful-widget implementations, 46 interactive demo screens, a Bayesian intelligence layer, resizable pane workspaces, and in-tree web/WASM backends -- focused on correctness, determinism, and clean architecture.
 
 ![status](https://img.shields.io/badge/status-WIP-yellow)
 ![rust](https://img.shields.io/badge/rust-nightly-blue)
 ![license](https://img.shields.io/badge/license-MIT%2BOpenAI%2FAnthropic%20Rider-green)
 ![crates](https://img.shields.io/badge/crates-20-blue)
-![widgets](https://img.shields.io/badge/widgets-106-blue)
+![widgets](https://img.shields.io/badge/widgets-80%2B-blue)
 ![screens](https://img.shields.io/badge/demo_screens-46-blue)
 
 ## Quick Run (from source)
@@ -61,9 +61,9 @@ cargo run -p ftui-demo-showcase
 | **One‑writer rule** | Serializes output for correctness | `TerminalWriter` owns all stdout writes |
 | **RAII cleanup** | Terminal state restored even on panic | `TerminalSession` in `ftui-core` |
 | **Composable crates** | Layout, text, style, runtime, widgets | Add only what you need |
-| **106 widgets** | Block, Paragraph, Table, Input, Tree, Modal, Command Palette, etc. | 50 widget source files across `ftui-widgets` |
+| **80+ widgets** | Block, Paragraph, Table, Input, Tree, Modal, Command Palette, etc. | Direct `Widget` / `StatefulWidget` implementations across `ftui-widgets` |
 | **Pane workspaces** | Drag‑to‑resize, docking, magnetic snap, inertial throw, undo/redo | `PaneTree` + `PaneDragResizeMachine` in `ftui-layout` |
-| **Web/WASM backend** | Same Rust core renders to browser canvas | `ftui-web` + `frankenterm-web` crates |
+| **Web/WASM backend** | Same Rust core renders in browser-oriented environments | In-tree `ftui-web` + `ftui-showcase-wasm` |
 | **Bayesian intelligence** | Statistical diff strategy, resize coalescing, capability detection | BOCPD, VOI, conformal prediction, e‑processes |
 | **Shadow‑run validation** | Prove rendering determinism across runtime migrations | `ShadowRun::compare()` in `ftui-harness` |
 | **46 demo screens** | Dashboard, visual effects, widget gallery, layout lab, and more | `cargo run -p ftui-demo-showcase` |
@@ -79,9 +79,9 @@ For web embedding into `frankentui_website` (Next.js + bun), see the
 `Embedding In frankentui_website` section in
 [`docs/getting-started.md`](docs/getting-started.md). It includes:
 
-- exact build commands for `ftui-web` and `frankenterm-web`,
-- expected wasm/js output locations in the website repo,
-- runtime initialization using `FrankenTermWeb`,
+- in-tree build/check guidance for `ftui-web` and `ftui-showcase-wasm`,
+- a clear note that `FrankenTermWeb` is currently adjacent/out-of-tree from this checkout,
+- runtime initialization guidance for `FrankenTermWeb` once that bundle is available,
 - and explicit no-`xterm.js` guidance.
 
 ---
@@ -214,7 +214,7 @@ fn main() -> std::io::Result<()> {
 | `ftui-text` | Spans, segments, rope editor, cursor, BiDi, shaping, normalization | Implemented |
 | `ftui-layout` | Flex + Grid solvers, **pane workspace system** (9K+ lines), e‑graph optimizer | Implemented |
 | `ftui-runtime` | Elm/Bubbletea runtime, effect system, subscriptions, rollout policy, telemetry schema (13K+ line program.rs) | Implemented |
-| `ftui-widgets` | 106 widget implementations across 50 source files | Implemented |
+| `ftui-widgets` | 80+ direct `Widget` / `StatefulWidget` implementations across the library | Implemented |
 | `ftui-extras` | Feature‑gated add‑ons, VFX rasterizer (opt‑level=3) | Implemented |
 
 ### Backend & Platform
@@ -258,7 +258,7 @@ fn main() -> std::io::Result<()> {
 | Bayesian diff strategy | ✅ Adaptive | ❌ Fixed | ❌ Fixed | ❌ N/A |
 | Shadow‑run validation harness | ✅ Built‑in | ❌ | ❌ | ❌ |
 | Snapshot/time‑travel harness | ✅ Built‑in | ❌ | ❌ | ❌ |
-| Widget count | 106 | ~20 | ~12 | 0 |
+| Widget count | 80+ direct impls | ~20 | ~12 | 0 |
 | Demo screens | 46 | ~5 | ~5 | 0 |
 
 **When to use FrankenTUI:**
@@ -690,25 +690,33 @@ FrankenTUI targets both native terminals and web browsers from a single Rust cod
 |-------|---------|
 | `ftui-web` | Web adapter with pointer/touch parity, DPR/zoom handling |
 | `ftui-showcase-wasm` | WASM build target for the demo showcase |
-| `frankenterm-core` | Terminal emulator core (shared between backends) |
-| `frankenterm-web` | Browser frontend for the terminal emulator |
 
 The web adapter translates browser pointer events into the same `PaneSemanticInputEvent` stream used by the terminal backend, ensuring interaction parity across platforms.
 
+This checkout does **not** currently vendor local `crates/frankenterm-core` or
+`crates/frankenterm-web` workspace members. Those names still appear in specs and
+adjacent integration docs, but the in-tree browser surface today is `ftui-web`
+plus the `ftui-showcase-wasm` target. `ftui-pty` integrates with an external
+`frankenterm-core` dependency rather than a local workspace crate.
+
 ---
 
-## Terminal Emulator (FrankenTerm)
+## FrankenTerm Integration
 
-FrankenTUI includes a **terminal emulator** built on the same rendering kernel:
+FrankenTUI shares contracts and backend primitives with the broader
+FrankenTerm effort, but this repository currently contains the ftui-side
+integration pieces rather than a vendored local browser-terminal crate.
 
-| Crate | Purpose |
-|-------|---------|
-| `frankenterm-core` | VT100/VT220/xterm parser, screen buffer, escape sequence handling |
-| `frankenterm-web` | Browser frontend; renders via `ftui-web`, no xterm.js dependency |
+What is in-tree right now:
+- `ftui-web` backend primitives, patch formats, and deterministic host-driven runtime support
+- `ftui-showcase-wasm` as the WASM demo/showcase target
+- `ftui-pty` integration against the external `frankenterm-core` crate
 
-**Design goal:** replace xterm.js with a Rust-native terminal emulator that shares FrankenTUI's deterministic rendering guarantees, enabling terminal-in-browser without a JavaScript terminal library.
+What remains adjacent/out-of-tree from this checkout:
+- a browser-facing `FrankenTermWeb` bundle/package
+- the local `crates/frankenterm-core` / `crates/frankenterm-web` layout still referenced by some specs
 
-The emulator handles:
+The adjacent terminal-emulator design target still includes:
 - **CSI/OSC/DCS sequences** for cursor control, colors, and window operations
 - **Alternate screen** buffer switching (like vim/less)
 - **Mouse reporting** protocols (X10, SGR, URXVT)
@@ -1203,7 +1211,7 @@ Inline mode uses synchronized output where supported. If you’re in a very old 
 | Capability | Current State | Planned |
 |------------|---------------|---------|
 | Stable API | ❌ Not yet | Yes (post‑v1) |
-| Widget ecosystem | ✅ 106 implementations | Expanding |
+| Widget ecosystem | ✅ 80+ direct widget implementations | Expanding |
 | Formal compatibility matrix | ⚠️ In progress | Yes |
 | Asupersync execution lane | ⚠️ Falls back to Structured | Migration infrastructure complete, executor pending |
 | crates.io publishing | ⚠️ 3 of 20 crates | Remaining in publish queue |
@@ -1218,7 +1226,7 @@ A modular kernel assembled from focused, composable parts. A deliberate, enginee
 
 ### Is this a full framework?
 
-It’s a kernel plus 106 widgets plus a demo showcase with 46 screens plus a full pane workspace system. You can build a framework on top, but expect APIs to evolve.
+It’s a kernel plus a large widget library plus a demo showcase with 46 screens plus a full pane workspace system. You can build a framework on top, but expect APIs to evolve.
 
 ### Does it work on Windows?
 
@@ -1241,7 +1249,7 @@ BLESS=1 cargo test -p ftui-demo-showcase
 
 ### How many lines of code is it?
 
-850,000+ lines of Rust across 20 crates, with 106 widget implementations, 46 demo screens, and 69 E2E scripts.
+850,000+ lines of Rust across 20 crates, with 80+ direct widget implementations, 46 demo screens, and a broad PTY/scripted E2E surface.
 
 ### What's the performance like?
 
@@ -2115,9 +2123,9 @@ Intervention: if input_latency > threshold OR F < 0.8:
 
 ---
 
-## Widget System (106 Implementations)
+## Widget System (80+ Direct Implementations)
 
-FrankenTUI ships 106 `Widget` and `StatefulWidget` implementations across 50 source files in `ftui-widgets`.
+FrankenTUI ships 80+ direct `Widget` and `StatefulWidget` implementations across `ftui-widgets`.
 
 ### Core Widgets
 
