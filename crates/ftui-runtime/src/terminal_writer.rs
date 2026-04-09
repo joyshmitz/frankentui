@@ -5953,26 +5953,29 @@ mod tests {
     /// Note: Tests use relative deltas because the global counter is shared.
     #[test]
     fn noninterference_inline_gauge_balanced_across_lifecycle() {
-        let before = inline_active_widgets();
+        let _lock = GAUGE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
 
-        let output = Vec::new();
-        let writer = TerminalWriter::new(
-            output,
-            ScreenMode::Inline { ui_height: 3 },
-            UiAnchor::Bottom,
-            basic_caps(),
-        );
-        let during = inline_active_widgets();
-        assert!(
-            during > before,
-            "gauge must increase while inline writer alive"
-        );
-        drop(writer);
-        let after = inline_active_widgets();
-        assert!(
-            after < during,
-            "gauge must decrease after inline writer drop"
-        );
+        for _ in 0..64 {
+            let before = inline_active_widgets();
+            let writer = TerminalWriter::new(
+                Vec::new(),
+                ScreenMode::Inline { ui_height: 3 },
+                UiAnchor::Bottom,
+                basic_caps(),
+            );
+            let during = inline_active_widgets();
+            drop(writer);
+            let after = inline_active_widgets();
+
+            if during == before.saturating_add(1) && after == before {
+                return;
+            }
+            std::thread::yield_now();
+        }
+
+        panic!("failed to observe stable inline lifecycle gauge transition");
     }
 
     /// CONTRACT: AltScreen writers do NOT affect the inline gauge.
@@ -5981,30 +5984,36 @@ mod tests {
     /// other tests; here we just verify the code path distinction.)
     #[test]
     fn noninterference_altscreen_does_not_affect_inline_gauge() {
+        let _lock = GAUGE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+
         // The contract is verified structurally: ScreenMode::AltScreen does
         // not match the inline pattern in both the constructor (fetch_add)
         // and the Drop impl (fetch_sub). We verify this by checking that
         // creating and immediately dropping an AltScreen writer round-trips
         // without affecting the delta observed from a controlled inline writer.
-        let before = inline_active_widgets();
-        let output = Vec::new();
-        // Create and immediately drop an AltScreen writer
-        drop(TerminalWriter::new(
-            output,
-            ScreenMode::AltScreen,
-            UiAnchor::Bottom,
-            basic_caps(),
-        ));
-        let after = inline_active_widgets();
-        // The gauge should be the same or could have changed due to other
-        // parallel tests, but the NET effect of our AltScreen create+drop
-        // must be zero. Since we can't isolate from parallel tests, we verify
-        // the invariant holds: gauge didn't go below what it was before.
-        // The real verification is structural: AltScreen doesn't match the
-        // inline branch in with_diff_config() or Drop.
+        let mut observed_stable = false;
+        for _ in 0..64 {
+            let before = inline_active_widgets();
+            drop(TerminalWriter::new(
+                Vec::new(),
+                ScreenMode::AltScreen,
+                UiAnchor::Bottom,
+                basic_caps(),
+            ));
+            let after = inline_active_widgets();
+
+            if after == before {
+                observed_stable = true;
+                break;
+            }
+            std::thread::yield_now();
+        }
+
         assert!(
-            after >= before.saturating_sub(1),
-            "AltScreen create+drop must not reduce gauge below baseline"
+            observed_stable,
+            "failed to observe stable altscreen lifecycle gauge transition"
         );
 
         // Also verify the structural contract directly:
@@ -6020,59 +6029,69 @@ mod tests {
     /// CONTRACT: InlineAuto also tracks the inline gauge correctly.
     #[test]
     fn noninterference_inline_auto_gauge_balanced() {
-        let before = inline_active_widgets();
-        let output = Vec::new();
-        let writer = TerminalWriter::new(
-            output,
-            ScreenMode::InlineAuto {
-                min_height: 3,
-                max_height: 10,
-            },
-            UiAnchor::Bottom,
-            basic_caps(),
-        );
-        let during = inline_active_widgets();
-        assert!(during > before, "InlineAuto must increment gauge");
-        drop(writer);
-        let after = inline_active_widgets();
-        assert!(after < during, "InlineAuto drop must decrement gauge");
+        let _lock = GAUGE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+
+        for _ in 0..64 {
+            let before = inline_active_widgets();
+            let writer = TerminalWriter::new(
+                Vec::new(),
+                ScreenMode::InlineAuto {
+                    min_height: 3,
+                    max_height: 10,
+                },
+                UiAnchor::Bottom,
+                basic_caps(),
+            );
+            let during = inline_active_widgets();
+            drop(writer);
+            let after = inline_active_widgets();
+
+            if during == before.saturating_add(1) && after == before {
+                return;
+            }
+            std::thread::yield_now();
+        }
+
+        panic!("failed to observe stable inline-auto lifecycle gauge transition");
     }
 
     /// CONTRACT: into_inner() performs cleanup before releasing the writer.
     /// The returned output must contain cursor-show and flush.
     #[test]
     fn noninterference_into_inner_performs_cleanup() {
-        let before_gauge = inline_active_widgets();
+        let _lock = GAUGE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
 
-        let mut writer = TerminalWriter::new(
-            Vec::new(),
-            ScreenMode::Inline { ui_height: 5 },
-            UiAnchor::Bottom,
-            basic_caps(),
-        );
-        writer.set_size(80, 24);
-
-        let during_gauge = inline_active_widgets();
-        assert!(
-            during_gauge > before_gauge,
-            "gauge must increase while writer alive"
-        );
-
-        let output = writer.into_inner().expect("should return writer");
-
-        // Gauge must be decremented by into_inner (Drop runs after consumption)
-        let after_gauge = inline_active_widgets();
-        assert!(
-            after_gauge < during_gauge,
-            "into_inner must decrement inline gauge"
-        );
-
-        // Output must contain cursor show sequence
         let cursor_show = b"\x1b[?25h";
-        assert!(
-            output.windows(cursor_show.len()).any(|w| w == cursor_show),
-            "into_inner must emit cursor show during cleanup"
-        );
+        for _ in 0..64 {
+            let before_gauge = inline_active_widgets();
+
+            let mut writer = TerminalWriter::new(
+                Vec::new(),
+                ScreenMode::Inline { ui_height: 5 },
+                UiAnchor::Bottom,
+                basic_caps(),
+            );
+            writer.set_size(80, 24);
+
+            let during_gauge = inline_active_widgets();
+            let output = writer.into_inner().expect("should return writer");
+            let after_gauge = inline_active_widgets();
+
+            if during_gauge == before_gauge.saturating_add(1) && after_gauge == before_gauge {
+                assert!(
+                    output.windows(cursor_show.len()).any(|w| w == cursor_show),
+                    "into_inner must emit cursor show during cleanup"
+                );
+                return;
+            }
+            std::thread::yield_now();
+        }
+
+        panic!("failed to observe stable into_inner gauge transition");
     }
 
     /// CONTRACT: Cleanup output from inline mode must contain cursor restore

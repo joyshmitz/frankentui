@@ -2391,14 +2391,31 @@ mod tests {
     #[test]
     fn stats_reflect_state() {
         let mut c = ResizeCoalescer::new(test_config(), (80, 24));
+        let base = Instant::now();
 
-        c.handle_resize_at(100, 40, Instant::now());
-        c.tick_at(Instant::now() + Duration::from_millis(50));
+        c.handle_resize_at(100, 40, base);
+        let action = c.tick_at(base + Duration::from_millis(5));
+        assert_eq!(action, CoalesceAction::None);
 
         let stats = c.stats();
         assert_eq!(stats.event_count, 1);
         assert!(stats.has_pending);
         assert_eq!(stats.last_applied, (80, 24));
+
+        let action = c.tick_at(base + Duration::from_millis(50));
+        assert_eq!(
+            action,
+            CoalesceAction::ApplyResize {
+                width: 100,
+                height: 40,
+                coalesce_time: Duration::from_millis(50),
+                forced_by_deadline: false,
+            }
+        );
+
+        let stats = c.stats();
+        assert!(!stats.has_pending);
+        assert_eq!(stats.last_applied, (100, 40));
     }
 
     #[test]
