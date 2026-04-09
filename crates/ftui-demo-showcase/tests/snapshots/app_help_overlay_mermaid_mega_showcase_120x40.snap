@@ -21,11 +21,11 @@
 ││                      ║ [Ctrl+Z]                 Undo                                        ║                      ││
 ││                      ║ [Ctrl+Y / Ctrl+Shift+Z]  Redo                                        ║                      ││
 ││                      ║                                                                      ║e: 0/0                ││
-││            ⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿║ Global                                                               ║: MISS                ││
-││            ⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿║ [Ctrl+T]                 Cycle color theme                           ║                      ││
-││            ⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿║ [H/M/L]                  A11y: high contrast, reduced motion, large  ║                      ││
-││            ⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿║ [Ctrl+1..6]              Palette: filter by category                 ║                      ││
-││            ⠘⠛⠛⠛⠛⠛⠛⠛⠛⠛║ [Ctrl+0]                 Palette: clear category filter              ║                      ││
+││                      ║ Global                                                               ║: MISS                ││
+││                      ║ [Ctrl+T]                 Cycle color theme                           ║                      ││
+││                      ║ [H/M/L]                  A11y: high contrast, reduced motion, large  ║                      ││
+││                      ║ [Ctrl+1..6]              Palette: filter by category                 ║                      ││
+││                      ║ [Ctrl+0]                 Palette: clear category filter              ║                      ││
 ││                      ║ [Ctrl+F]                 Palette: toggle favorite                    ║                      ││
 ││                      ║ [Ctrl+Shift+F]           Palette: favorites only                     ║                      ││
 ││                      ║ [Ctrl+C]                 Quit application                            ║                      ││

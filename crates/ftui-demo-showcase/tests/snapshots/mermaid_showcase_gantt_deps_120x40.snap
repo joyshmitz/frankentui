@@ -1,18 +1,18 @@
 Mermaid Showcase | Gantt Dependencies (27/29) | Layout: Auto | Score: -3.0 | Viewport: auto | OK                        
 ╭───────────Samples───────────╮╭──────────────────────────Viewport──────────────────────────╮╭────────Controls────────╮ 
-│  Flow Basic [flow, S, branch││                                                            ││Layout: Auto (l)        │ 
-│  Flow Subgraphs [flow, M, su││                                                            ││Tier: auto (t)          │ 
-│  Flow Dense [flow, L, dense,││                                                            ││Guard: Default (x)      │ 
-│  Flow Long Labels [flow, M, ││                                                            ││Glyphs: unicode (g)     │ 
-│  Flow Unicode [flow, S, unic││                                                            ││Render: braille (b)     │ 
-│  Flow Styles [flow, M, class││                                                            ││Wrap: wordchar (w)      │ 
-│  Sequence Mini [sequence, S,││                                                            ││Styles: on (s)          │ 
-│  Sequence Checkout [sequence││                                                            ││Links: off (u)          │ 
-│  Sequence Dense [sequence, L││                                                            ││Init: off (I)           │ 
-│  Class Basic [class, S, inhe││                                                            ││Errors: panel (e)       │ 
-│  Class Members [class, M, fi││                                                            ││Viewport: auto (v)      │ 
-│  State Basic [state, S, star││                                                            ││Zoom: 100% (+/-)        │ 
-│  State Composite [state, M, ││                                                            ││Fit: f                  │ 
+│  Flow Basic [flow, S, branch││                       Project Alpha                        ││Layout: Auto (l)        │ 
+│  Flow Subgraphs [flow, M, su││──────────────2024-01-01──────────────────────────2024-02-0─││Tier: auto (t)          │ 
+│  Flow Dense [flow, L, dense,││Planning────────────────────────────────────────────────────││Guard: Default (x)      │ 
+│  Flow Long Labels [flow, M, ││ Requirement  ────────                                      ││Glyphs: unicode (g)     │ 
+│  Flow Unicode [flow, S, unic││ Architectur          ──────                                ││Render: braille (b)     │ 
+│  Flow Styles [flow, M, class││Build───────────────────────────────────────────────────────││Wrap: wordchar (w)      │ 
+│  Sequence Mini [sequence, S,││ Backend                    ────────────                    ││Styles: on (s)          │ 
+│  Sequence Checkout [sequence││ Frontend                   ──────────────                  ││Links: off (u)          │ 
+│  Sequence Dense [sequence, L││ Integration                            ──────              ││Init: off (I)           │ 
+│  Class Basic [class, S, inhe││QA──────────────────────────────────────────────────────────││Errors: panel (e)       │ 
+│  Class Members [class, M, fi││ Testing                                      ─────────     ││Viewport: auto (v)      │ 
+│  State Basic [state, S, star││ Staging                                               ───  ││Zoom: 100% (+/-)        │ 
+│  State Composite [state, M, ││ Release                                                   ◆││Fit: f                  │ 
 │  ER Basic [er, M, cardinalit││                                                            ││Metrics: on (m)         │ 
 │  Gantt Basic [gantt, M, sect││                                                            ││                        │ 
 │  Mindmap Seed [mindmap, S, t││                                                            ││                        │ 

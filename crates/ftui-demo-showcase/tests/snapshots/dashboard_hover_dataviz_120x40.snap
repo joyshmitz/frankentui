@@ -5,7 +5,7 @@ FRANKENTUI DASHBOARD
 │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││MEM ▅▂ ▃▁▄▄▂▂▇▅▃▅▂▃▄ 41%││                        ││Status: NOMINAL│   │┃ 14x15  @90 ││ 15x15  @104 ││
 │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││NET ▁▁▁▁▁  ▁   ▇▁▁    14││use ftui_core::event::Ev││FPS: 0 Size: 1 │   │┃            ││             ││
 │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││OUT ▁▁▁▃▁█  ▁▁ ▁  ▁▁▇149││use ftui_render::cell::C││Events/Theme:  │   │┃            ││             ││
-│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││EPS   7 DSK   6 IO      ││use ftui_render::frame::││CPU:  4Alerts: │   │┃            ││             ││
+│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││EPS 77% DSK 67% IO  7%  ││use ftui_render::frame::││CPU:  4Alerts: │   │┃            ││             ││
 │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                        ││use ftui_runtime::{Cmd, ││NET:   Pipelin │   │┃            ││             ││
 │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                        ││                        ││Frame: Headroo │   │┃            ││             ││
 │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                        ││#[derive(Debug, Clone)] ││               │   │┃            ││             ││

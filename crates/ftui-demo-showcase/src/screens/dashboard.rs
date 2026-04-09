@@ -5226,6 +5226,18 @@ impl Dashboard {
         }
 
         let bar_area = Rect::new(area.x + label_width, area.y, bar_width, 1);
+        if bar_area.width <= 5 {
+            let percent = if bar_area.width == 5 {
+                format!(" {:3.0}%", value * 100.0)
+            } else {
+                format!("{:3.0}%", value * 100.0).trim_start().to_owned()
+            };
+            Paragraph::new(percent)
+                .style(Style::new().fg(theme::fg::SECONDARY))
+                .render(bar_area, frame);
+            return;
+        }
+
         MiniBar::new(value, bar_width)
             .colors(colors)
             .show_percent(true)
@@ -6845,6 +6857,32 @@ mod tests {
             top_left.is_some(),
             "Text effects panel should render border character"
         );
+    }
+
+    #[test]
+    fn dashboard_mini_bar_row_keeps_padded_percent_when_only_percent_fits() {
+        let state = Dashboard::new();
+        let colors = MiniBarColors::new(
+            theme::accent::PRIMARY.into(),
+            theme::accent::SUCCESS.into(),
+            theme::accent::WARNING.into(),
+            theme::accent::ACCENT_10.into(),
+        );
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(9, 1, &mut pool);
+
+        state.render_mini_bar_row(&mut frame, Rect::new(0, 0, 9, 1), "DSK", 0.67, colors);
+
+        let rendered: String = (0..9)
+            .map(|x| {
+                frame
+                    .buffer
+                    .get(x, 0)
+                    .and_then(|cell| cell.content.as_char())
+                    .unwrap_or(' ')
+            })
+            .collect();
+        assert_eq!(rendered, "DSK   67%");
     }
 
     #[test]

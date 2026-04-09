@@ -12,18 +12,18 @@ Mermaid Showcase | Class Hierarchy (28/29) | Layout: Auto | Score: 610.3 | Viewp
 │  Class Basic [class, S, inhe││                                                            ││Errors: panel (e)       │ 
 │  Class Members [class, M, fi││                                                            ││Viewport: auto (v)      │ 
 │  State Basic [state, S, star││                                                            ││Zoom: 100% (+/-)        │ 
-│  State Composite [state, M, ││                                                            ││Fit: f                  │ 
-│  ER Basic [er, M, cardinalit││                                                            ││Metrics: on (m)         │ 
-│  Gantt Basic [gantt, M, sect││                                                            ││                        │ 
-│  Mindmap Seed [mindmap, S, t││ ⠿⠿⠿⠿⠿⠿ ⠸⠿⠿⠿⠿⠇ ⠿⠿⠿⠿⠿ ⠸⠿⠿⠿⠿⠇ ⠿⠿⠿⠿⠿ ⠸⠿⠿⠿⠿⠇ ⠿⠿⠿⠿⠿ ⠸⠿⢿⡿⠿⠇ ⠿⠿⠿⠿⠿ ││                        │ 
-│  Mindmap Deep [mindmap, L, d││                                        ⣀⣀⣀⣠⣤⠔⠒⢊⣉⣁⣄⣀⡀       ││                        │ 
-│  Pie Basic [pie, S, title, s││                                        ⠛⠛⡻⠛⠛  ⠘⠛⠛⠛⠛⠃       ││                        │ 
-│  Pie Many [pie, M, many-slic││                                      ⣤⣤⣤⣮⣤⡄                ││                        │ 
-│  Gitgraph Basic [gitgraph, M││                                      ⠉⠉⢹⠉⠉⠁                │╰────────────────────────╯ 
-│  Journey Basic [journey, M, ││                                      ⣶⣶⣾⣶⣶                 │╭────────Metrics─────────╮ 
-│  Requirement Basic [requirem││                                                            ││Cache: hit 0  miss 1  la│ 
-│  Block Beta Basic [block-bet││                                                            ││Warnings: 1             │ 
-│  Block Beta Nested [block-be││                                                            ││Parse: 0.00 ms          │ 
+│  State Composite [state, M, ││ ╭────╮  ╭───╮ ┌───┐  ╭───╮ ╭───╮  ┌───┐ ┌───┐  ┌───┐ ┌───┐ ││Fit: f                  │ 
+│  ER Basic [er, M, cardinalit││ ╰────╯  ╰───╯ └───┘  ╰───╯ ╰───╯  └───┘ └───┘  └───┘ └───┘ ││Metrics: on (m)         │ 
+│  Gantt Basic [gantt, M, sect││                                           ┌──────┼         ││                        │ 
+│  Mindmap Seed [mindmap, S, t││                                           │      ┆         ││                        │ 
+│  Mindmap Deep [mindmap, L, d││                                        *  ◀    * ▼         ││                        │ 
+│  Pie Basic [pie, S, title, s││                                         ┌──                ││                        │ 
+│  Pie Many [pie, M, many-slic││                                         │                  ││                        │ 
+│  Gitgraph Basic [gitgraph, M││                                      ┌───┐                 │╰────────────────────────╯ 
+│  Journey Basic [journey, M, ││                                      └───┘                 │╭────────Metrics─────────╮ 
+│  Requirement Basic [requirem││                                         │                  ││Cache: hit 0  miss 1  la│ 
+│  Block Beta Basic [block-bet││                                         │                  ││Warnings: 1             │ 
+│  Block Beta Nested [block-be││                                      *  ▼                  ││Parse: 0.00 ms          │ 
 │  Flow Node Shapes [flow, S, ││                                                            ││Layout: 0.00 ms         │ 
 │  ER Multi-Entity [er, L, mul││                                                            ││Render: 0.00 ms         │ 
 │  Gantt Dependencies [gantt, ││                                                            ││Viewport: auto          │ 

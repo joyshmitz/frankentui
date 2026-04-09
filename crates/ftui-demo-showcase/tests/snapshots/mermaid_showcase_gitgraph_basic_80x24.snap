@@ -1,17 +1,17 @@
 Mermaid Showcase | Gitgraph Basic (20/29) | Layout: Auto | Score: -3.4 | Viewpor
 ╭───────Samples────────╮╭───────────────────────Viewport───────────────────────╮
 │  Flow Basic [flow, S,││                                                      │
-│  Flow Subgraphs [flow││                ⢠⣾⣿⣦                                  │
-│  Flow Dense [flow, L,││                ⠈⠻⠿⠋                                  │
-│  Flow Long Labels [fl││                                                      │
-│  Flow Unicode [flow, ││                                                      │
-│  Flow Styles [flow, M││                ⣰⣾⣿⣶⡀                                 │
-│  Sequence Mini [seque││                ⢻⣿⣿⣿⠃                                 │
-│  Sequence Checkout [s││                 ⠈⠉                                   │
-│  Sequence Dense [sequ││                                                      │
-│  Class Basic [class, ││                ⢀⣴⣶⣄                                  │
-│  Class Members [class││                ⠘⢿⣿⠟                                  │
-│  State Basic [state, ││                                                      │
+│  Flow Subgraphs [flow││                    ╭────╮     │                      │
+│  Flow Dense [flow, L,││                    ╰────╯     │                      │
+│  Flow Long Labels [fl││                       │       │                      │
+│  Flow Unicode [flow, ││                       │       │                      │
+│  Flow Styles [flow, M││                    ╭────╮     │                      │
+│  Sequence Mini [seque││                    ╰────╯     │                      │
+│  Sequence Checkout [s││                       │       │                      │
+│  Sequence Dense [sequ││                       │       │                      │
+│  Class Basic [class, ││                    ╭────╮     │                      │
+│  Class Members [class││                    ╰────╯     │                      │
+│  State Basic [state, ││                       │       │                      │
 │  State Composite [sta│╰──────────────────────────────────────────────────────╯
 │  ER Basic [er, M, car│╭───────────────────────Metrics────────────────────────╮
 │  Gantt Basic [gantt, ││Cache: hit 0  miss 1  last miss                       │

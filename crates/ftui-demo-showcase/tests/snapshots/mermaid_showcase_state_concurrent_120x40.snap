@@ -7,29 +7,29 @@ Mermaid Showcase | State Concurrent (29/29) | Layout: Auto | Score: 836.2 | View
 │  Flow Unicode [flow, S, unic││                                                            ││Render: braille (b)     │ 
 │  Flow Styles [flow, M, class││                                                            ││Wrap: wordchar (w)      │ 
 │  Sequence Mini [sequence, S,││                                                            ││Styles: on (s)          │ 
-│  Sequence Checkout [sequence││                                                            ││Links: off (u)          │ 
-│  Sequence Dense [sequence, L││                                                            ││Init: off (I)           │ 
-│  Class Basic [class, S, inhe││                                                            ││Errors: panel (e)       │ 
-│  Class Members [class, M, fi││                                                            ││Viewport: auto (v)      │ 
-│  State Basic [state, S, star││                                                            ││Zoom: 100% (+/-)        │ 
-│  State Composite [state, M, ││                   ⢀⣀⣀⣀⣀⣀ ⢀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⡀                   ││Fit: f                  │ 
-│  ER Basic [er, M, cardinalit││                   ⠘⠛⠛⢿⣛⠛⢀⠘⠛⠛⠛⠛⠛⠛⠛⠛⠛⠛⠛⠛⠛⠃                   ││Metrics: on (m)         │ 
-│  Gantt Basic [gantt, M, sect││                       ⠉⣯⣽⣷⣤⣤⣤                              ││                        │ 
-│  Mindmap Seed [mindmap, S, t││                        ⠛⠛⠛⢿⣛⡛  ⡀                           ││                        │ 
-│  Mindmap Deep [mindmap, L, d││                            ⠑⢌⠉⣵⣿⣦⣤⣤⡄                       ││                        │ 
-│  Pie Basic [pie, S, title, s││                              ⠑⢟⠛⠻⢟⣛⡃  ⢀                    ││                        │ 
-│  Pie Many [pie, M, many-slic││                                ⠑⢄  ⠈⠉⢱⣾⣷⣤⣤⣤                ││                        │ 
-│  Gitgraph Basic [gitgraph, M││                                  ⠑⢄  ⠘⠛⠛⢟⠛⠛                │╰────────────────────────╯ 
-│  Journey Basic [journey, M, ││                                    ⠑⢄    ⠉⠢⣀               │╭────────Metrics─────────╮ 
-│  Requirement Basic [requirem││                                      ⠑⢄⣠    ⠑⠤⡀⡄           ││Cache: hit 0  miss 1  la│ 
-│  Block Beta Basic [block-bet││ ⣤⣤⣤⣤⣶⡧⠤⢤⣤⣤⣤⣶⣧⣤⣤⣤⣤⣤⣤⣶⣧⣤⣀⣤⣤⣤⣤⣶⣇⣀⣠⣷⣦⣤⣤⣤⣤⣤⣼⣿⣧⣤⣤⣤⣤⣤⣿⣿⣤⣤⣄⡠⢤⣷⣦⣤⣤⣤ ││Warnings: 12            │ 
-│  Block Beta Nested [block-be││ ⠉⠉⠉⠛⠛⠓⠒⠚⠛⠛⠛⠛⠛⠛⠛⠋⠉⠉⠛⠛⠋⠉⠉⠉⠉⠉⠛⠛⠓⠚⠉⠉⠉⠛⠛⠛⠛⠛⠛⠛⠛⠉⠉⠉⠉⠉⠙⠛⠛⠛⠓⠒⠚⠛⠛⠋⠉⠉ ││Parse: 0.00 ms          │ 
-│  Flow Node Shapes [flow, S, ││                                                            ││Layout: 0.00 ms         │ 
-│  ER Multi-Entity [er, L, mul││                                                            ││Render: 0.00 ms         │ 
-│  Gantt Dependencies [gantt, ││                                                            ││Viewport: auto          │ 
-│  Class Hierarchy [class, L, ││                                                            ││Zoom: 100%              │ 
-│> State Concurrent [state, L,││                                                            ││Iters: 1                │ 
-│                             ││                                                            ││Score: 836.23           │ 
+│  Sequence Checkout [sequence││                   ┌────┐  ┌────────────┐                   ││Links: off (u)          │ 
+│  Sequence Dense [sequence, L││                   └────┘  └────────────┘                   ││Init: off (I)           │ 
+│  Class Basic [class, S, inhe││                      ────┬┐                                ││Errors: panel (e)       │ 
+│  Class Members [class, M, fi││                          ││                                ││Viewport: auto (v)      │ 
+│  State Basic [state, S, star││                        ┌────┐                              ││Zoom: 100% (+/-)        │ 
+│  State Composite [state, M, ││                        └────┘┐                             ││Fit: f                  │ 
+│  ER Basic [er, M, cardinalit││                           ───┼───┐                         ││Metrics: on (m)         │ 
+│  Gantt Basic [gantt, M, sect││                              │   │                         ││                        │ 
+│  Mindmap Seed [mindmap, S, t││                              │┌───┐                        ││                        │ 
+│  Mindmap Deep [mindmap, L, d││                              ┼└───┘                        ││                        │ 
+│  Pie Basic [pie, S, title, s││                                  ┼──────┐                  ││                        │ 
+│  Pie Many [pie, M, many-slic││                                  │      │                  ││                        │ 
+│  Gitgraph Basic [gitgraph, M││                                  │   ┌────┐                │╰────────────────────────╯ 
+│  Journey Basic [journey, M, ││                                  ┼───└────┘                │╭────────Metrics─────────╮ 
+│  Requirement Basic [requirem││                                      │  ────┐              ││Cache: hit 0  miss 1  la│ 
+│  Block Beta Basic [block-bet││                                      │      │              ││Warnings: 12            │ 
+│  Block Beta Nested [block-be││                                      ┼───┐  │              ││Parse: 0.00 ms          │ 
+│  Flow Node Shapes [flow, S, ││                                          │  ┼───┐          ││Layout: 0.00 ms         │ 
+│  ER Multi-Entity [er, L, mul││                                          │      │          ││Render: 0.00 ms         │ 
+│  Gantt Dependencies [gantt, ││                                          │      │          ││Viewport: auto          │ 
+│  Class Hierarchy [class, L, ││ ┌────┐ ┌────┐     ◀    ┌────┐ ┌────┐  ┌───┐  ┌────┐ ┌────┐ ││Zoom: 100%              │ 
+│> State Concurrent [state, L,││ └────┘ └────┘     │    └────┘ └────┘  └───┘  └────┘ └────┘ ││Iters: 1                │ 
+│                             ││    ┴──────┴───────┴───────┴──────┴───────┴──────┴──────┴   ││Score: 836.23           │ 
 │                             ││                                                            ││Cross: 0                │ 
 │                             ││                                                            ││Bends: 5                │ 
 │                             ││                                                            ││Sym: 0.94               │ 
