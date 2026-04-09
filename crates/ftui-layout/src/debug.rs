@@ -498,12 +498,17 @@ impl LayoutDebugger {
 
     /// Enable or disable debugging.
     pub fn set_enabled(&self, enabled: bool) {
-        self.enabled.store(enabled, Ordering::Relaxed);
+        let was_enabled = self.enabled.swap(enabled, Ordering::Relaxed);
+        if was_enabled && !enabled {
+            self.clear();
+        }
     }
 
     /// Toggle debugging on/off.
     pub fn toggle(&self) -> bool {
-        !self.enabled.fetch_xor(true, Ordering::Relaxed)
+        let next = !self.enabled();
+        self.set_enabled(next);
+        next
     }
 
     /// Clear all recorded data.
@@ -541,6 +546,9 @@ impl LayoutDebugger {
         }
 
         if let Ok(mut records) = self.records.lock() {
+            if !self.enabled() {
+                return;
+            }
             records.push(record);
         }
     }
@@ -561,6 +569,9 @@ impl LayoutDebugger {
         }
 
         if let Ok(mut grid_records) = self.grid_records.lock() {
+            if !self.enabled() {
+                return;
+            }
             grid_records.push(record);
         }
     }
@@ -827,8 +838,12 @@ mod tests {
         let debugger = LayoutDebugger::new();
         debugger.set_enabled(true);
         assert!(debugger.enabled());
+        debugger.record(LayoutRecord::new("stale"));
+        assert_eq!(debugger.snapshot().len(), 1);
         debugger.set_enabled(false);
         assert!(!debugger.enabled());
+        assert!(debugger.snapshot().is_empty());
+        assert!(debugger.snapshot_grids().is_empty());
     }
 
     #[test]
@@ -838,9 +853,24 @@ mod tests {
         let result = debugger.toggle();
         assert!(result);
         assert!(debugger.enabled());
+        debugger.record(LayoutRecord::new("stale"));
+        assert_eq!(debugger.snapshot().len(), 1);
         let result = debugger.toggle();
         assert!(!result);
         assert!(!debugger.enabled());
+        assert!(debugger.snapshot().is_empty());
+    }
+
+    #[test]
+    fn debugger_disable_clears_grid_records() {
+        let debugger = LayoutDebugger::new();
+        debugger.set_enabled(true);
+        debugger.record_grid(GridLayoutRecord::new("grid"));
+        assert_eq!(debugger.snapshot_grids().len(), 1);
+
+        debugger.set_enabled(false);
+
+        assert!(debugger.snapshot_grids().is_empty());
     }
 
     #[test]

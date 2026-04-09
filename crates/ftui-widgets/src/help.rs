@@ -828,6 +828,9 @@ impl StatefulWidget for Help {
     fn render(&self, area: Rect, frame: &mut Frame, state: &mut HelpRenderState) {
         if area.is_empty() || area.width == 0 || area.height == 0 {
             state.cache = None;
+            state.dirty_rects.clear();
+            state.dirty_indices.clear();
+            state.enabled_indices.clear();
             return;
         }
 
@@ -2450,11 +2453,17 @@ mod tests {
         // First render populates cache
         StatefulWidget::render(&help, area, &mut frame, &mut state);
         assert!(state.cache.is_some());
+        state.dirty_rects.push(Rect::new(0, 0, 3, 1));
+        state.dirty_indices.push(0);
+        state.enabled_indices.push(0);
 
-        // Render with empty area clears cache
+        // Render with empty area clears cache and transient dirty state.
         let empty = Rect::new(0, 0, 0, 0);
         StatefulWidget::render(&help, empty, &mut frame, &mut state);
         assert!(state.cache.is_none());
+        assert!(state.dirty_rects().is_empty());
+        assert!(state.dirty_indices.is_empty());
+        assert!(state.enabled_indices.is_empty());
     }
 
     #[test]

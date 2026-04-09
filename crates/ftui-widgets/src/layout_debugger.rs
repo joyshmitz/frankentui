@@ -133,7 +133,11 @@ impl LayoutDebugger {
 
     /// Enable or disable the debugger.
     pub fn set_enabled(&mut self, enabled: bool) {
+        let was_enabled = self.enabled;
         self.enabled = enabled;
+        if was_enabled && !enabled {
+            self.clear();
+        }
     }
 
     /// Returns whether the debugger is enabled.
@@ -483,6 +487,24 @@ mod tests {
         assert!(dbg.enabled());
         dbg.set_enabled(false);
         assert!(!dbg.enabled());
+        assert!(dbg.records().is_empty());
+    }
+
+    #[test]
+    fn debugger_disable_clears_stale_records() {
+        let mut dbg = LayoutDebugger::new();
+        dbg.set_enabled(true);
+        dbg.record(LayoutRecord::new(
+            "Widget",
+            Rect::new(0, 0, 10, 5),
+            Rect::new(0, 0, 10, 5),
+            LayoutConstraints::unconstrained(),
+        ));
+        assert_eq!(dbg.records().len(), 1);
+
+        dbg.set_enabled(false);
+
+        assert!(dbg.records().is_empty());
     }
 
     #[test]

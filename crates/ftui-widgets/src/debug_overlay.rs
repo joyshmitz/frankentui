@@ -64,15 +64,18 @@ impl DebugOverlayState {
     pub fn set_enabled(&self, enabled: bool) {
         let prev = self.enabled.swap(enabled, Ordering::Relaxed);
         if prev != enabled {
+            if !enabled {
+                self.clear();
+                self.set_hover(None);
+            }
             #[cfg(feature = "tracing")]
             tracing::info!(enabled = enabled, "Debug overlay toggled");
         }
     }
 
     pub fn toggle(&self) -> bool {
-        let next = !self.enabled.fetch_xor(true, Ordering::Relaxed);
-        #[cfg(feature = "tracing")]
-        tracing::info!(enabled = next, "Debug overlay toggled");
+        let next = !self.enabled();
+        self.set_enabled(next);
         next
     }
 
@@ -95,10 +98,10 @@ impl DebugOverlayState {
     }
 
     pub fn record(&self, info: WidgetDebugInfo) {
-        if !self.enabled() {
-            return;
-        }
         if let Ok(mut entries) = self.entries.lock() {
+            if !self.enabled() {
+                return;
+            }
             entries.push(info);
         }
     }
@@ -126,9 +129,7 @@ impl DebugOverlayState {
             return self.hover_position();
         };
 
-        if matches!(mouse.kind, MouseEventKind::Moved | MouseEventKind::Drag(_)) {
-            self.set_hover(Some((mouse.x, mouse.y)));
-        }
+        self.set_hover(Some(mouse.position()));
         self.hover_position()
     }
 
@@ -626,6 +627,19 @@ mod tests {
     }
 
     #[test]
+    fn disabling_overlay_clears_transient_state() {
+        let state = DebugOverlayState::new();
+        state.set_enabled(true);
+        state.record(WidgetDebugInfo::new("stale", Rect::new(0, 0, 2, 2)));
+        state.set_hover(Some((3, 4)));
+
+        state.set_enabled(false);
+
+        assert!(state.snapshot().is_empty());
+        assert!(state.hover_position().is_none());
+    }
+
+    #[test]
     fn clear_removes_all_entries() {
         let state = DebugOverlayState::new();
         state.set_enabled(true);
@@ -724,6 +738,15 @@ mod tests {
     }
 
     #[test]
+    fn set_hover_while_disabled_tracks_position() {
+        let state = DebugOverlayState::new();
+
+        state.set_hover(Some((4, 5)));
+
+        assert_eq!(state.hover_position(), Some((4, 5)));
+    }
+
+    #[test]
     fn options_default_values() {
         let opts = DebugOverlayOptions::default();
         assert!(opts.show_boundaries);
@@ -794,7 +817,7 @@ mod tests {
     }
 
     #[test]
-    fn overlay_disabled_does_not_clear_entries() {
+    fn overlay_disabled_keeps_state_cleared() {
         let state = DebugOverlayState::new();
         state.set_enabled(true);
         state.record(WidgetDebugInfo::new("Stub", Rect::new(0, 0, 2, 2)));
@@ -805,11 +828,12 @@ mod tests {
         let mut frame = Frame::new(4, 4, &mut pool);
         overlay.render(Rect::new(0, 0, 4, 4), &mut frame);
 
-        assert_eq!(state.snapshot().len(), 1);
+        assert!(state.snapshot().is_empty());
+        assert!(state.hover_position().is_none());
     }
 
     #[test]
-    fn update_hover_from_scroll_event_does_not_change_position() {
+    fn update_hover_from_scroll_event_updates_position() {
         let state = DebugOverlayState::new();
         state.set_hover(Some((3, 4)));
 
@@ -819,7 +843,7 @@ mod tests {
             9,
         ));
 
-        assert_eq!(state.update_hover_from_event(&event), Some((3, 4)));
+        assert_eq!(state.update_hover_from_event(&event), Some((7, 9)));
     }
 
     #[test]
@@ -832,6 +856,20 @@ mod tests {
         ));
 
         assert_eq!(state.update_hover_from_event(&event), Some((7, 9)));
+    }
+
+    #[test]
+    fn update_hover_from_click_event_sets_position() {
+        let state = DebugOverlayState::new();
+        state.set_hover(Some((1, 1)));
+
+        let event = Event::Mouse(ftui_core::event::MouseEvent::new(
+            MouseEventKind::Down(ftui_core::event::MouseButton::Left),
+            8,
+            6,
+        ));
+
+        assert_eq!(state.update_hover_from_event(&event), Some((8, 6)));
     }
 
     #[test]
