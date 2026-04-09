@@ -453,14 +453,27 @@ impl Widget for MiniBar {
         if !deg.render_decorative() {
             if self.show_percent {
                 let pct = format!("{:3.0}%", value * 100.0);
-                crate::draw_text_span(
-                    frame,
-                    area.x,
-                    area.y,
-                    pct.trim_start(),
-                    Style::default(),
-                    area.right(),
-                );
+                let pct_width = display_width(&pct) as u16;
+                if area.width >= pct_width {
+                    let text_x = area.right().saturating_sub(pct_width);
+                    crate::draw_text_span(
+                        frame,
+                        text_x,
+                        area.y,
+                        &pct,
+                        Style::default(),
+                        area.right(),
+                    );
+                } else {
+                    crate::draw_text_span(
+                        frame,
+                        area.x,
+                        area.y,
+                        pct.trim_start(),
+                        Style::default(),
+                        area.right(),
+                    );
+                }
             }
             return;
         }
@@ -1184,6 +1197,25 @@ mod tests {
 
         assert_eq!(cell_at(&frame, 0, 0).content.as_char(), Some('5'));
         assert_eq!(cell_at(&frame, 1, 0).content.as_char(), Some('0'));
+    }
+
+    #[test]
+    fn minibar_essential_only_right_aligns_percent_when_width_allows() {
+        use ftui_render::budget::DegradationLevel;
+
+        let bar = MiniBar::new(0.5, 10).show_percent(true);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(7, 1, &mut pool);
+        frame.buffer.degradation = DegradationLevel::EssentialOnly;
+        Widget::render(&bar, Rect::new(0, 0, 7, 1), &mut frame);
+
+        assert_eq!(cell_at(&frame, 0, 0).content.as_char(), None);
+        assert_eq!(cell_at(&frame, 1, 0).content.as_char(), None);
+        assert_eq!(cell_at(&frame, 2, 0).content.as_char(), None);
+        assert_eq!(cell_at(&frame, 3, 0).content.as_char(), Some(' '));
+        assert_eq!(cell_at(&frame, 4, 0).content.as_char(), Some('5'));
+        assert_eq!(cell_at(&frame, 5, 0).content.as_char(), Some('0'));
+        assert_eq!(cell_at(&frame, 6, 0).content.as_char(), Some('%'));
     }
 
     #[test]
