@@ -2283,23 +2283,25 @@ mod tests {
 
     #[test]
     fn pending_termination_signal_round_trip() {
-        crate::shutdown_signal::clear_pending_termination_signal();
-        assert_eq!(crate::shutdown_signal::pending_termination_signal(), None);
+        crate::shutdown_signal::with_test_signal_serialization(|| {
+            crate::shutdown_signal::clear_pending_termination_signal();
+            assert_eq!(crate::shutdown_signal::pending_termination_signal(), None);
 
-        crate::shutdown_signal::record_pending_termination_signal(2);
-        assert_eq!(
-            crate::shutdown_signal::pending_termination_signal(),
-            Some(2)
-        );
+            crate::shutdown_signal::record_pending_termination_signal(2);
+            assert_eq!(
+                crate::shutdown_signal::pending_termination_signal(),
+                Some(2)
+            );
 
-        // First signal wins until explicitly cleared.
-        crate::shutdown_signal::record_pending_termination_signal(15);
-        assert_eq!(
-            crate::shutdown_signal::pending_termination_signal(),
-            Some(2)
-        );
+            // First signal wins until explicitly cleared.
+            crate::shutdown_signal::record_pending_termination_signal(15);
+            assert_eq!(
+                crate::shutdown_signal::pending_termination_signal(),
+                Some(2)
+            );
 
-        crate::shutdown_signal::clear_pending_termination_signal();
-        assert_eq!(crate::shutdown_signal::pending_termination_signal(), None);
+            crate::shutdown_signal::clear_pending_termination_signal();
+            assert_eq!(crate::shutdown_signal::pending_termination_signal(), None);
+        });
     }
 }

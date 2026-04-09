@@ -63,7 +63,10 @@ pub mod shutdown_signal {
     //! runtime polls it, performs graceful teardown, then clears it to
     //! acknowledge completion back to the signal thread.
 
-    use std::sync::atomic::{AtomicI32, Ordering};
+    use std::sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicI32, Ordering},
+    };
 
     static PENDING_TERMINATION_SIGNAL: AtomicI32 = AtomicI32::new(0);
 
@@ -92,6 +95,26 @@ pub mod shutdown_signal {
     /// Clear any pending graceful-termination request.
     pub fn clear_pending_termination_signal() {
         PENDING_TERMINATION_SIGNAL.store(0, Ordering::SeqCst);
+    }
+
+    /// Serialize tests that touch the process-global termination signal slot.
+    ///
+    /// This helper is intentionally exported so downstream workspace crates can
+    /// wrap signal-sensitive tests with the same lock. Without cross-crate
+    /// serialization, parallel test execution can clear the pending signal out
+    /// from under a runtime test and leave it blocked in the event loop.
+    #[doc(hidden)]
+    pub fn with_test_signal_serialization<R>(f: impl FnOnce() -> R) -> R {
+        static SIGNAL_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+        let _guard = SIGNAL_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("shutdown signal test lock poisoned");
+        clear_pending_termination_signal();
+        let result = f();
+        clear_pending_termination_signal();
+        result
     }
 }
 
