@@ -498,6 +498,8 @@ impl KeyboardDragManager {
         let state = self.state.as_mut()?;
 
         if targets.is_empty() {
+            state.selected_target_index = None;
+            state.mode = KeyboardDragMode::Holding;
             return None;
         }
 
@@ -510,6 +512,8 @@ impl KeyboardDragManager {
             .collect();
 
         if valid_indices.is_empty() {
+            state.selected_target_index = None;
+            state.mode = KeyboardDragMode::Holding;
             self.queue_announcement(Announcement::normal("No valid drop targets available"));
             return None;
         }
@@ -565,11 +569,15 @@ impl KeyboardDragManager {
         };
 
         if target_index >= targets.len() {
+            state.selected_target_index = None;
+            state.mode = KeyboardDragMode::Holding;
             return false;
         }
 
         let target = &targets[target_index];
         if !target.can_accept(&state.payload.drag_type) {
+            state.selected_target_index = None;
+            state.mode = KeyboardDragMode::Holding;
             return false;
         }
 
@@ -598,16 +606,35 @@ impl KeyboardDragManager {
     /// Complete the drag with a specific target and get the drop result info.
     #[must_use = "use the drop result (if any) to apply the drop"]
     pub fn drop_on_target(&mut self, targets: &[DropTargetInfo]) -> Option<KeyboardDropResult> {
+        let (target_idx, drag_type) = {
+            let state = self.state.as_ref()?;
+            (
+                state.selected_target_index?,
+                state.payload.drag_type.clone(),
+            )
+        };
+        let Some(target) = targets.get(target_idx) else {
+            self.clear_selected_target();
+            self.queue_announcement(Announcement::normal("Selected drop target unavailable"));
+            return None;
+        };
+        if !target.can_accept(&drag_type) {
+            self.clear_selected_target();
+            self.queue_announcement(Announcement::normal(
+                "Selected drop target no longer accepts this item",
+            ));
+            return None;
+        }
+        let target_id = target.id;
+        let target_name = target.name.clone();
         let state = self.state.take()?;
-        let target_idx = state.selected_target_index?;
-        let target = targets.get(target_idx)?;
 
-        self.queue_announcement(Announcement::high(format!("Dropped on: {}", target.name)));
+        self.queue_announcement(Announcement::high(format!("Dropped on: {target_name}")));
 
         Some(KeyboardDropResult {
             payload: state.payload,
             source_id: state.source_id,
-            target_id: target.id,
+            target_id,
             target_index: target_idx,
         })
     }
@@ -680,19 +707,32 @@ impl KeyboardDragManager {
 
     /// Queue an announcement for screen readers.
     fn queue_announcement(&mut self, announcement: Announcement) {
+        if self.config.max_announcement_queue == 0 {
+            return;
+        }
         if self.announcements.len() >= self.config.max_announcement_queue {
             // Remove lowest priority announcement
-            if let Some(pos) = self
+            if let Some((pos, lowest_priority)) = self
                 .announcements
                 .iter()
                 .enumerate()
                 .min_by_key(|(_, a)| a.priority)
-                .map(|(i, _)| i)
+                .map(|(i, a)| (i, a.priority))
             {
+                if announcement.priority < lowest_priority {
+                    return;
+                }
                 self.announcements.remove(pos);
             }
         }
         self.announcements.push(announcement);
+    }
+
+    fn clear_selected_target(&mut self) {
+        if let Some(state) = &mut self.state {
+            state.selected_target_index = None;
+            state.mode = KeyboardDragMode::Holding;
+        }
     }
 
     /// Render the target highlight overlay.
@@ -1026,10 +1066,23 @@ mod tests {
     fn manager_navigate_empty_targets() {
         let mut manager = KeyboardDragManager::with_defaults();
         manager.start_drag(WidgetId(1), DragPayload::text("item"));
+        manager
+            .state_mut()
+            .expect("drag active")
+            .selected_target_index = Some(3);
+        manager.state_mut().expect("drag active").mode = KeyboardDragMode::Navigating;
 
         let targets: Vec<DropTargetInfo> = vec![];
         let selected = manager.navigate_targets(Direction::Down, &targets);
         assert!(selected.is_none());
+        assert_eq!(manager.mode(), KeyboardDragMode::Holding);
+        assert!(
+            manager
+                .state()
+                .expect("drag remains active")
+                .selected_target_index
+                .is_none()
+        );
     }
 
     #[test]
@@ -1081,6 +1134,39 @@ mod tests {
         // No target selected
         let result = manager.complete_drag();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn manager_navigate_no_valid_targets_clears_stale_selection() {
+        let mut manager = KeyboardDragManager::with_defaults();
+        manager.start_drag(WidgetId(1), DragPayload::new("text/plain", vec![]));
+
+        let valid_targets = vec![
+            DropTargetInfo::new(WidgetId(10), "Text Target", Rect::new(0, 0, 10, 5))
+                .with_accepted_types(vec!["text/plain".to_string()]),
+        ];
+        let _ = manager.navigate_targets(Direction::Down, &valid_targets);
+        assert_eq!(manager.mode(), KeyboardDragMode::Navigating);
+
+        let invalid_targets = vec![
+            DropTargetInfo::new(WidgetId(11), "Image Target", Rect::new(20, 0, 10, 5))
+                .with_accepted_types(vec!["image/*".to_string()]),
+        ];
+        let selected = manager.navigate_targets(Direction::Down, &invalid_targets);
+
+        assert!(selected.is_none());
+        assert_eq!(manager.mode(), KeyboardDragMode::Holding);
+        assert!(
+            manager
+                .state()
+                .expect("drag remains active")
+                .selected_target_index
+                .is_none()
+        );
+        assert_eq!(
+            manager.handle_key(KeyboardDragKey::Activate),
+            KeyboardDragAction::None
+        );
     }
 
     #[test]
@@ -1147,6 +1233,39 @@ mod tests {
         assert!(manager.announcements().len() <= 2);
     }
 
+    #[test]
+    fn manager_announcement_queue_zero_discards_announcements() {
+        let config = KeyboardDragConfig {
+            max_announcement_queue: 0,
+            ..Default::default()
+        };
+        let mut manager = KeyboardDragManager::new(config);
+
+        assert!(manager.start_drag(WidgetId(1), DragPayload::text("item")));
+        let _ = manager.cancel_drag();
+
+        assert!(manager.announcements().is_empty());
+    }
+
+    #[test]
+    fn manager_lower_priority_announcement_does_not_evict_higher_priority() {
+        let config = KeyboardDragConfig {
+            max_announcement_queue: 1,
+            ..Default::default()
+        };
+        let mut manager = KeyboardDragManager::new(config);
+
+        assert!(manager.start_drag(WidgetId(1), DragPayload::text("item")));
+        let _ = manager.cancel_drag();
+
+        assert_eq!(manager.announcements().len(), 1);
+        assert_eq!(
+            manager.announcements()[0].priority,
+            AnnouncementPriority::High
+        );
+        assert!(manager.announcements()[0].text.contains("Picked up"));
+    }
+
     // === Target filtering tests ===
 
     #[test]
@@ -1204,5 +1323,35 @@ mod tests {
 
         // 5. Manager is now inactive
         assert!(!manager.is_active());
+    }
+
+    #[test]
+    fn manager_drop_on_invalidated_target_keeps_drag_active() {
+        let mut manager = KeyboardDragManager::with_defaults();
+        assert!(manager.start_drag(WidgetId(1), DragPayload::new("text/plain", vec![])));
+
+        let targets = vec![
+            DropTargetInfo::new(WidgetId(10), "Text Target", Rect::new(0, 0, 10, 5))
+                .with_accepted_types(vec!["text/plain".to_string()]),
+        ];
+        let _ = manager.navigate_targets(Direction::Down, &targets);
+        assert_eq!(manager.mode(), KeyboardDragMode::Navigating);
+
+        let invalidated_targets = vec![
+            DropTargetInfo::new(WidgetId(10), "Image Target", Rect::new(0, 0, 10, 5))
+                .with_accepted_types(vec!["image/*".to_string()]),
+        ];
+        let result = manager.drop_on_target(&invalidated_targets);
+
+        assert!(result.is_none());
+        assert!(manager.is_active());
+        assert_eq!(manager.mode(), KeyboardDragMode::Holding);
+        assert!(
+            manager
+                .state()
+                .expect("drag remains active")
+                .selected_target_index
+                .is_none()
+        );
     }
 }
