@@ -60,6 +60,8 @@ enum ArtNode<V> {
         children: Children<V>,
         /// Value stored at this node (if key terminates here).
         value: Option<V>,
+        /// Full key for terminal values stored directly on compressed inner nodes.
+        terminal_key: Option<String>,
     },
 }
 
@@ -142,18 +144,18 @@ impl<V: Clone> AdaptiveRadixTree<V> {
 
     /// Delete a key. Returns the value if it existed.
     pub fn delete(&mut self, key: &str) -> Option<V> {
-        let root = self.root.as_mut()?;
-        let result = delete_recursive(root, key.as_bytes(), 0);
-        if result.is_some() {
+        let result = {
+            let root = self.root.as_mut()?;
+            delete_recursive(root, key.as_bytes(), 0)
+        };
+
+        if result.removed.is_some() {
             self.len -= 1;
-            // Clean up empty root.
-            if let Some(ref root) = self.root
-                && is_empty_node(root)
-            {
+            if result.prune || self.root.as_ref().is_some_and(|root| is_empty_node(root)) {
                 self.root = None;
             }
         }
-        result
+        result.removed
     }
 
     /// Iterate all entries in sorted key order.
@@ -190,6 +192,21 @@ pub struct NodeDistribution {
     pub node16: usize,
     pub node48: usize,
     pub node256: usize,
+}
+
+#[derive(Debug)]
+struct DeleteResult<V> {
+    removed: Option<V>,
+    prune: bool,
+}
+
+impl<V> DeleteResult<V> {
+    const fn not_found() -> Self {
+        Self {
+            removed: None,
+            prune: false,
+        }
+    }
 }
 
 // ============================================================================
@@ -240,13 +257,14 @@ fn insert_recursive<V: Clone>(
 
             if split_depth < existing_bytes.len() {
                 let old_child = Box::new(ArtNode::Leaf {
-                    key: old_key,
+                    key: old_key.clone(),
                     value: old_val.clone(),
                 });
                 children_insert(&mut children, existing_bytes[split_depth], old_child);
             }
 
             let mut inner_value = None;
+            let mut terminal_key = None;
             if split_depth < key_bytes.len() {
                 let new_child = Box::new(ArtNode::Leaf {
                     key: full_key.to_string(),
@@ -255,16 +273,19 @@ fn insert_recursive<V: Clone>(
                 children_insert(&mut children, key_bytes[split_depth], new_child);
             } else {
                 inner_value = Some(value);
+                terminal_key = Some(full_key.to_string());
             }
 
             if split_depth >= existing_bytes.len() {
                 inner_value = Some(old_val);
+                terminal_key = Some(old_key);
             }
 
             *node = ArtNode::Inner {
                 prefix,
                 children,
                 value: inner_value,
+                terminal_key,
             };
             None
         }
@@ -272,6 +293,7 @@ fn insert_recursive<V: Clone>(
             prefix,
             children,
             value: node_value,
+            terminal_key,
         } => {
             let remaining = &key_bytes[depth..];
             let prefix_match = common_prefix_length(remaining, prefix);
@@ -293,6 +315,7 @@ fn insert_recursive<V: Clone>(
                         },
                     ),
                     value: node_value.take(),
+                    terminal_key: terminal_key.take(),
                 };
 
                 let mut new_children = Children::Node4 {
@@ -303,6 +326,7 @@ fn insert_recursive<V: Clone>(
 
                 let new_depth = depth + prefix_match;
                 let mut inner_value = None;
+                let mut new_terminal_key = None;
                 if new_depth < key_bytes.len() {
                     let new_child = Box::new(ArtNode::Leaf {
                         key: full_key.to_string(),
@@ -311,11 +335,13 @@ fn insert_recursive<V: Clone>(
                     children_insert(&mut new_children, key_bytes[new_depth], new_child);
                 } else {
                     inner_value = Some(value);
+                    new_terminal_key = Some(full_key.to_string());
                 }
 
                 *prefix = common;
                 *children = new_children;
                 *node_value = inner_value;
+                *terminal_key = new_terminal_key;
                 return None;
             }
 
@@ -324,6 +350,7 @@ fn insert_recursive<V: Clone>(
                 // Key terminates at this node.
                 let old = node_value.take();
                 *node_value = Some(value);
+                *terminal_key = Some(full_key.to_string());
                 return old;
             }
 
@@ -355,6 +382,7 @@ fn get_recursive<'a, V>(node: &'a ArtNode<V>, key_bytes: &[u8], depth: usize) ->
             prefix,
             children,
             value,
+            terminal_key: _,
         } => {
             let remaining = &key_bytes[depth..];
             if remaining.len() < prefix.len() || &remaining[..prefix.len()] != prefix.as_slice() {
@@ -386,7 +414,8 @@ fn prefix_scan_recursive<'a, V>(
         ArtNode::Inner {
             prefix,
             children,
-            value,
+            value: _,
+            terminal_key: _,
         } => {
             let remaining_prefix = if depth < prefix_bytes.len() {
                 &prefix_bytes[depth..]
@@ -406,12 +435,6 @@ fn prefix_scan_recursive<'a, V>(
 
             if remaining_prefix.len() <= prefix.len() {
                 // The search prefix is fully consumed — collect all descendants.
-                if let Some(v) = value {
-                    // Reconstruct the key for this node — not stored directly.
-                    // We collect from children instead.
-                    let _ = v; // Value at this node needs key reconstruction
-                }
-                // Collect everything under this subtree.
                 if depth + match_len >= prefix_bytes.len() {
                     // Prefix fully matched — collect all.
                     collect_all_inner(node, results);
@@ -446,12 +469,14 @@ fn collect_all_inner<'a, V>(node: &'a ArtNode<V>, results: &mut Vec<(&'a str, &'
             results.push((key.as_str(), value));
         }
         ArtNode::Inner {
-            children, value: _, ..
+            children,
+            value,
+            terminal_key,
+            ..
         } => {
-            // Note: we can't emit the value here since we don't have the full key.
-            // Values at inner nodes are only reachable via exact lookup.
-            // For prefix scan, we skip inner values (they'd need full key reconstruction).
-            // This is acceptable since command palette entries always terminate at leaves.
+            if let (Some(key), Some(value)) = (terminal_key.as_deref(), value.as_ref()) {
+                results.push((key, value));
+            }
             for child in children_iter(children) {
                 collect_all_inner(child, results);
             }
@@ -463,40 +488,56 @@ fn collect_all<'a, V>(node: &'a ArtNode<V>, results: &mut Vec<(&'a str, &'a V)>)
     collect_all_inner(node, results);
 }
 
-fn delete_recursive<V: Clone>(node: &mut ArtNode<V>, key_bytes: &[u8], depth: usize) -> Option<V> {
+fn delete_recursive<V: Clone>(
+    node: &mut ArtNode<V>,
+    key_bytes: &[u8],
+    depth: usize,
+) -> DeleteResult<V> {
     match node {
         ArtNode::Leaf { key, value } => {
             if key.as_bytes() == key_bytes {
-                Some(value.clone())
+                DeleteResult {
+                    removed: Some(value.clone()),
+                    prune: true,
+                }
             } else {
-                None
+                DeleteResult::not_found()
             }
         }
         ArtNode::Inner {
             prefix,
             children,
             value: node_value,
+            terminal_key,
         } => {
             let remaining = &key_bytes[depth..];
             if remaining.len() < prefix.len() || &remaining[..prefix.len()] != prefix.as_slice() {
-                return None;
+                return DeleteResult::not_found();
             }
             let next_depth = depth + prefix.len();
             if next_depth >= key_bytes.len() {
-                return node_value.take();
+                let removed = node_value.take();
+                if removed.is_some() {
+                    *terminal_key = None;
+                }
+                let prune = removed.is_some() && children_count(children) == 0;
+                return DeleteResult { removed, prune };
             }
             let byte = key_bytes[next_depth];
-            let result = children_get_mut(children, byte)
-                .and_then(|child| delete_recursive(child, key_bytes, next_depth + 1));
-            if result.is_some() {
-                // If child became empty leaf, remove it.
-                if let Some(child) = children_get(children, byte)
-                    && is_empty_node(child)
-                {
-                    children_remove(children, byte);
-                }
+            let child_result = if let Some(child) = children_get_mut(children, byte) {
+                delete_recursive(child, key_bytes, next_depth + 1)
+            } else {
+                DeleteResult::not_found()
+            };
+
+            if child_result.prune {
+                children_remove(children, byte);
             }
-            result
+            let removed = child_result.removed;
+            DeleteResult {
+                prune: removed.is_some() && node_value.is_none() && children_count(children) == 0,
+                removed,
+            }
         }
     }
 }
@@ -864,6 +905,37 @@ mod tests {
 
         let scan = art.prefix_scan("test");
         assert_eq!(scan.len(), 4);
+    }
+
+    #[test]
+    fn iter_includes_keys_stored_on_compressed_inner_nodes() {
+        let mut art = AdaptiveRadixTree::new();
+        art.insert("file:save", 1);
+        art.insert("file:save-as", 2);
+
+        let entries = art.iter();
+        let keys: Vec<&str> = entries.iter().map(|(key, _)| *key).collect();
+        assert_eq!(keys, vec!["file:save", "file:save-as"]);
+    }
+
+    #[test]
+    fn deleting_prefix_key_preserves_longer_descendants() {
+        let mut art = AdaptiveRadixTree::new();
+        art.insert("test", 1);
+        art.insert("testing", 2);
+        art.insert("tester", 3);
+
+        assert_eq!(art.delete("test"), Some(1));
+        assert_eq!(art.get("test"), None);
+        assert_eq!(art.get("testing"), Some(&2));
+        assert_eq!(art.get("tester"), Some(&3));
+
+        let keys: Vec<&str> = art
+            .prefix_scan("test")
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect();
+        assert_eq!(keys, vec!["tester", "testing"]);
     }
 
     #[test]
