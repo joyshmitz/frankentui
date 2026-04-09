@@ -2049,13 +2049,17 @@ fn scale_div_round(
 
     let mut result = floor;
 
-    if remainder != 0 && rounding != PaneCoordinateRoundingPolicy::TowardNegativeInfinity {
-        let twice_remainder = remainder * 2;
-        if twice_remainder > den {
-            result += 1;
-        } else if twice_remainder == den {
-            // Simplified round half up for legacy pane logic
-            result += 1;
+    if remainder != 0 {
+        match rounding {
+            PaneCoordinateRoundingPolicy::TowardNegativeInfinity => {}
+            PaneCoordinateRoundingPolicy::NearestHalfTowardNegativeInfinity => {
+                let twice_remainder = remainder * 2;
+                if twice_remainder > den {
+                    result += 1;
+                }
+                // Exact half-way ties deliberately keep the Euclidean floor,
+                // which corresponds to rounding toward negative infinity.
+            }
         }
     }
 
@@ -7952,6 +7956,11 @@ mod tests {
                 position: PanePointerPosition::new(15, 0),
             })
             .expect("positive tie should normalize");
+        let positive_above_tie = nearest
+            .normalize(PaneInputCoordinate::CssPixels {
+                position: PanePointerPosition::new(16, 0),
+            })
+            .expect("positive > half should normalize");
         let negative_tie = nearest
             .normalize(PaneInputCoordinate::CssPixels {
                 position: PanePointerPosition::new(-15, 0),
@@ -7959,6 +7968,7 @@ mod tests {
             .expect("negative tie should normalize");
 
         assert_eq!(positive_tie.local_cell.x, 1);
+        assert_eq!(positive_above_tie.local_cell.x, 2);
         assert_eq!(negative_tie.local_cell.x, -2);
     }
 
