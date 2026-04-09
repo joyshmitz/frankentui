@@ -4043,6 +4043,8 @@ pub struct Program<M: Model, E: BackendEventSource<Error = io::Error>, W: Write 
     forced_size: Option<(u16, u16)>,
     /// Poll timeout when no tick is scheduled.
     poll_timeout: Duration,
+    /// Whether the runtime should observe process-level termination signals.
+    intercept_signals: bool,
     /// Immediate drain policy for bursty input handling.
     immediate_drain_config: ImmediateDrainConfig,
     /// Runtime counters for immediate-drain behavior.
@@ -4227,6 +4229,7 @@ impl<M: Model> Program<M, CrosstermEventSource, Stdout> {
             height,
             forced_size: config.forced_size,
             poll_timeout: config.poll_timeout,
+            intercept_signals: config.intercept_signals,
             immediate_drain_config: config.immediate_drain,
             immediate_drain_stats: ImmediateDrainStats::default(),
             budget,
@@ -4352,6 +4355,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             height,
             forced_size: config.forced_size,
             poll_timeout: config.poll_timeout,
+            intercept_signals: config.intercept_signals,
             immediate_drain_config: config.immediate_drain,
             immediate_drain_stats: ImmediateDrainStats::default(),
             budget,
@@ -4462,6 +4466,15 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
         self.run_event_loop()
     }
 
+    #[inline]
+    fn observed_termination_signal(&self) -> Option<i32> {
+        if self.intercept_signals {
+            check_termination_signal()
+        } else {
+            None
+        }
+    }
+
     /// Access widget scheduling signals captured on the last render.
     #[inline]
     pub fn last_widget_signals(&self) -> &[WidgetSignal] {
@@ -4488,7 +4501,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
         };
         self.execute_cmd(cmd)?;
 
-        let mut termination_signal = check_termination_signal();
+        let mut termination_signal = self.observed_termination_signal();
         if self.running && termination_signal.is_none() {
             // Reconcile initial subscriptions
             self.reconcile_subscriptions();
@@ -4500,7 +4513,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
         // Main loop
         let mut loop_count: u64 = 0;
         while self.running {
-            termination_signal = termination_signal.or_else(check_termination_signal);
+            termination_signal = termination_signal.or_else(|| self.observed_termination_signal());
             if termination_signal.is_some() {
                 self.running = false;
                 break;
@@ -4517,7 +4530,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
 
             // Poll for events with timeout
             let poll_result = self.events.poll_event(timeout)?;
-            termination_signal = termination_signal.or_else(check_termination_signal);
+            termination_signal = termination_signal.or_else(|| self.observed_termination_signal());
             if termination_signal.is_some() {
                 self.running = false;
                 break;
@@ -4528,7 +4541,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             if !self.running {
                 break;
             }
-            termination_signal = termination_signal.or_else(check_termination_signal);
+            termination_signal = termination_signal.or_else(|| self.observed_termination_signal());
             if termination_signal.is_some() {
                 self.running = false;
                 break;
@@ -4551,7 +4564,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             if !self.running {
                 break;
             }
-            termination_signal = termination_signal.or_else(check_termination_signal);
+            termination_signal = termination_signal.or_else(|| self.observed_termination_signal());
             if termination_signal.is_some() {
                 self.running = false;
                 break;
@@ -4671,7 +4684,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
 
             // Detect locale changes outside the event loop.
             self.check_locale_change();
-            termination_signal = termination_signal.or_else(check_termination_signal);
+            termination_signal = termination_signal.or_else(|| self.observed_termination_signal());
             if termination_signal.is_some() {
                 self.running = false;
                 break;
@@ -9100,7 +9113,7 @@ mod tests {
     // HEADLESS PROGRAM TESTS (bd-1av4o.2)
     // =========================================================================
 
-    fn headless_program_with_config<M: Model>(
+    fn headless_program_with_resolved_config<M: Model>(
         model: M,
         config: ProgramConfig,
     ) -> Program<M, HeadlessEventSource, Vec<u8>>
@@ -9178,6 +9191,7 @@ mod tests {
             height,
             forced_size: config.forced_size,
             poll_timeout: config.poll_timeout,
+            intercept_signals: config.intercept_signals,
             immediate_drain_config: config.immediate_drain,
             immediate_drain_stats: ImmediateDrainStats::default(),
             budget,
@@ -9209,6 +9223,28 @@ mod tests {
                 .map(|strategy| Box::new(strategy) as Box<dyn crate::tick_strategy::TickStrategy>),
             last_active_screen_for_strategy: None,
         }
+    }
+
+    fn headless_program_with_config<M: Model>(
+        model: M,
+        config: ProgramConfig,
+    ) -> Program<M, HeadlessEventSource, Vec<u8>>
+    where
+        M::Message: Send + 'static,
+    {
+        // Headless unit tests should not observe process-global shutdown state
+        // unless they explicitly opt into signal interception.
+        headless_program_with_resolved_config(model, config.with_signal_interception(false))
+    }
+
+    fn headless_signal_program_with_config<M: Model>(
+        model: M,
+        config: ProgramConfig,
+    ) -> Program<M, HeadlessEventSource, Vec<u8>>
+    where
+        M::Message: Send + 'static,
+    {
+        headless_program_with_resolved_config(model, config)
     }
 
     fn temp_evidence_path(label: &str) -> PathBuf {
@@ -9770,19 +9806,21 @@ mod tests {
         }
 
         let shutdowns = Arc::new(AtomicUsize::new(0));
-        let mut program = headless_program_with_config(
-            ShutdownModel {
-                shutdowns: Arc::clone(&shutdowns),
-            },
-            ProgramConfig::default(),
-        );
+        ftui_core::shutdown_signal::with_test_signal_serialization(|| {
+            let mut program = headless_signal_program_with_config(
+                ShutdownModel {
+                    shutdowns: Arc::clone(&shutdowns),
+                },
+                ProgramConfig::default().with_signal_interception(true),
+            );
 
-        ftui_core::shutdown_signal::record_pending_termination_signal(2);
-        let err = program.run().expect_err("signal should stop runtime");
+            ftui_core::shutdown_signal::record_pending_termination_signal(2);
+            let err = program.run().expect_err("signal should stop runtime");
 
-        assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
-        assert_eq!(signal_termination_from_error(&err), Some(2));
-        assert_eq!(check_termination_signal(), None);
+            assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
+            assert_eq!(signal_termination_from_error(&err), Some(2));
+            assert_eq!(check_termination_signal(), None);
+        });
     }
 
     #[test]
@@ -9840,21 +9878,23 @@ mod tests {
 
         let render_calls = Arc::new(AtomicUsize::new(0));
         let subscription_starts = Arc::new(AtomicUsize::new(0));
-        let mut program = headless_program_with_config(
-            SignalStopModel {
-                render_calls: Arc::clone(&render_calls),
-                subscription_starts: Arc::clone(&subscription_starts),
-            },
-            ProgramConfig::default(),
-        );
+        ftui_core::shutdown_signal::with_test_signal_serialization(|| {
+            let mut program = headless_signal_program_with_config(
+                SignalStopModel {
+                    render_calls: Arc::clone(&render_calls),
+                    subscription_starts: Arc::clone(&subscription_starts),
+                },
+                ProgramConfig::default().with_signal_interception(true),
+            );
 
-        ftui_core::shutdown_signal::record_pending_termination_signal(15);
-        let err = program.run().expect_err("signal should stop runtime");
+            ftui_core::shutdown_signal::record_pending_termination_signal(15);
+            let err = program.run().expect_err("signal should stop runtime");
 
-        assert_eq!(signal_termination_from_error(&err), Some(15));
-        assert_eq!(render_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(subscription_starts.load(Ordering::SeqCst), 0);
-        assert_eq!(check_termination_signal(), None);
+            assert_eq!(signal_termination_from_error(&err), Some(15));
+            assert_eq!(render_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(subscription_starts.load(Ordering::SeqCst), 0);
+            assert_eq!(check_termination_signal(), None);
+        });
     }
 
     #[test]
