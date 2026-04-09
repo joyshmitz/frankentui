@@ -29,7 +29,7 @@
 //! See `docs/specs/ui-inspector.md` for the full specification.
 
 use ftui_core::geometry::Rect;
-use ftui_render::cell::{Cell, PackedRgba};
+use ftui_render::cell::PackedRgba;
 use ftui_render::frame::{Frame, HitCell, HitData, HitId, HitRegion};
 use ftui_text::display_width;
 
@@ -966,7 +966,7 @@ impl<'a> InspectorOverlay<'a> {
     }
 
     /// Render widget bounds from collected WidgetInfo.
-    fn render_widget_bounds(&self, _area: Rect, frame: &mut Frame) {
+    fn render_widget_bounds(&self, area: Rect, frame: &mut Frame) {
         #[cfg(feature = "tracing")]
         let _span = info_span!(
             "render_widget_bounds",
@@ -974,39 +974,44 @@ impl<'a> InspectorOverlay<'a> {
         )
         .entered();
 
+        let clip = area.intersection(&frame.buffer.bounds());
+        if clip.is_empty() {
+            return;
+        }
+
         let style = &self.state.style;
 
         for widget in &self.state.widgets {
-            self.render_widget_bound(widget, frame, style);
+            self.render_widget_bound(widget, clip, frame, style);
         }
     }
 
     /// Render a single widget's bounds recursively.
-    fn render_widget_bound(&self, widget: &WidgetInfo, frame: &mut Frame, style: &InspectorStyle) {
-        let color = style.bound_color(widget.depth);
+    fn render_widget_bound(
+        &self,
+        widget: &WidgetInfo,
+        clip: Rect,
+        frame: &mut Frame,
+        style: &InspectorStyle,
+    ) {
         let area = widget.area;
+        if !area.is_empty() {
+            let color = style.bound_color(widget.depth);
+            self.draw_rect_outline(area, clip, frame, color);
 
-        // Skip empty areas
-        if area.is_empty() {
-            return;
-        }
-
-        // Draw border outline
-        self.draw_rect_outline(area, frame, color);
-
-        // Draw label if names are enabled
-        if self.state.show_names && !widget.name.is_empty() {
-            self.draw_label(area, frame, &widget.name, style);
+            if self.state.show_names && !widget.name.is_empty() {
+                self.draw_label(area, clip, frame, &widget.name, style);
+            }
         }
 
         // Recursively draw children
         for child in &widget.children {
-            self.render_widget_bound(child, frame, style);
+            self.render_widget_bound(child, clip, frame, style);
         }
     }
 
     /// Draw a rectangle outline with the given color.
-    fn draw_rect_outline(&self, rect: Rect, frame: &mut Frame, color: PackedRgba) {
+    fn draw_rect_outline(&self, rect: Rect, clip: Rect, frame: &mut Frame, color: PackedRgba) {
         if rect.width == 0 || rect.height == 0 {
             return;
         }
@@ -1015,33 +1020,52 @@ impl<'a> InspectorOverlay<'a> {
         let y = rect.y;
         let right = rect.right().saturating_sub(1);
         let bottom = rect.bottom().saturating_sub(1);
+        let clipped = rect.intersection(&clip);
+
+        if clipped.is_empty() {
+            return;
+        }
 
         // Top edge
-        for cx in x..=right {
-            if let Some(cell) = frame.buffer.get_mut(cx, y) {
+        if y >= clip.y
+            && y < clip.bottom()
+            && let Some(row) = frame
+                .buffer
+                .row_cells_mut_span(y, clipped.x, clipped.right())
+        {
+            for cell in row {
                 cell.fg = color;
             }
         }
 
         // Bottom edge
-        if bottom > y {
-            for cx in x..=right {
-                if let Some(cell) = frame.buffer.get_mut(cx, bottom) {
+        if bottom > y
+            && bottom >= clip.y
+            && bottom < clip.bottom()
+            && let Some(row) = frame
+                .buffer
+                .row_cells_mut_span(bottom, clipped.x, clipped.right())
+        {
+            for cell in row {
+                cell.fg = color;
+            }
+        }
+
+        let y0 = clipped.y;
+        let y1 = clipped.bottom();
+
+        // Left edge
+        if x >= clip.x && x < clip.right() {
+            for cy in y0..y1 {
+                if let Some(cell) = frame.buffer.get_mut(x, cy) {
                     cell.fg = color;
                 }
             }
         }
 
-        // Left edge
-        for cy in y..=bottom {
-            if let Some(cell) = frame.buffer.get_mut(x, cy) {
-                cell.fg = color;
-            }
-        }
-
         // Right edge
-        if right > x {
-            for cy in y..=bottom {
+        if right > x && right >= clip.x && right < clip.right() {
+            for cy in y0..y1 {
                 if let Some(cell) = frame.buffer.get_mut(right, cy) {
                     cell.fg = color;
                 }
@@ -1050,16 +1074,30 @@ impl<'a> InspectorOverlay<'a> {
     }
 
     /// Draw a widget name label at the top-left of its area.
-    fn draw_label(&self, area: Rect, frame: &mut Frame, name: &str, style: &InspectorStyle) {
-        let label = format!("[{name}]");
-        let label_len = display_width(&label) as u16;
-
-        // Position label at top-left, clamped to area
+    fn draw_label(
+        &self,
+        area: Rect,
+        clip: Rect,
+        frame: &mut Frame,
+        name: &str,
+        style: &InspectorStyle,
+    ) {
         let x = area.x;
         let y = area.y;
+        if !clip.contains(x, y) {
+            return;
+        }
+
+        let label_len = (display_width(name) as u16).saturating_add(2);
+        let label_width = label_len
+            .min(area.width)
+            .min(clip.right().saturating_sub(x));
+        if label_width == 0 {
+            return;
+        }
 
         // Draw label background
-        let label_area = Rect::new(x, y, label_len.min(area.width), 1);
+        let label_area = Rect::new(x, y, label_width, 1);
         set_style_area(
             &mut frame.buffer,
             label_area,
@@ -1068,7 +1106,10 @@ impl<'a> InspectorOverlay<'a> {
 
         // Draw label text
         let label_style = Style::new().fg(style.label_fg).bg(style.label_bg);
-        draw_text_span(frame, x, y, &label, label_style, area.x + area.width);
+        let max_x = x.saturating_add(label_width);
+        let x = draw_text_span(frame, x, y, "[", label_style, max_x);
+        let x = draw_text_span(frame, x, y, name, label_style, max_x);
+        let _ = draw_text_span(frame, x, y, "]", label_style, max_x);
     }
 
     /// Draw a warning message when something isn't available.
@@ -1095,15 +1136,25 @@ impl<'a> InspectorOverlay<'a> {
     /// Render the detail panel showing selected widget info.
     fn render_detail_panel(&self, area: Rect, frame: &mut Frame) {
         let style = &self.state.style;
+        let clip = area.intersection(&frame.buffer.bounds());
+        if clip.is_empty() {
+            return;
+        }
 
         // Panel dimensions
         let panel_width: u16 = 24;
-        let panel_height = area.height.min(20);
+        let panel_height = clip.height.min(20);
+        if panel_height == 0 {
+            return;
+        }
 
         // Position at right edge
-        let panel_x = area.right().saturating_sub(panel_width + 1);
-        let panel_y = area.y + 1;
-        let panel_area = Rect::new(panel_x, panel_y, panel_width, panel_height);
+        let panel_x = clip.right().saturating_sub(panel_width + 1).max(clip.x);
+        let panel_y = clip.y.saturating_add(1);
+        let panel_area = Rect::new(panel_x, panel_y, panel_width, panel_height).intersection(&clip);
+        if panel_area.is_empty() {
+            return;
+        }
 
         // Draw panel background
         set_style_area(
@@ -1113,14 +1164,26 @@ impl<'a> InspectorOverlay<'a> {
         );
 
         // Draw border
-        self.draw_rect_outline(panel_area, frame, style.label_fg);
+        self.draw_rect_outline(panel_area, clip, frame, style.label_fg);
+
+        let content_area = panel_area.inner(ftui_core::geometry::Sides::all(1));
+        if content_area.is_empty() {
+            return;
+        }
 
         // Draw content
-        let content_x = panel_x + 1;
-        let mut y = panel_y + 1;
+        let content_x = content_area.x;
+        let mut y = content_area.y;
 
         // Title
-        self.draw_panel_text(frame, content_x, y, "Inspector", style.label_fg);
+        self.draw_panel_text(
+            frame,
+            content_area,
+            content_x,
+            y,
+            "Inspector",
+            style.label_fg,
+        );
         y += 2;
 
         // Mode info
@@ -1132,6 +1195,7 @@ impl<'a> InspectorOverlay<'a> {
         };
         self.draw_panel_text(
             frame,
+            content_area,
             content_x,
             y,
             &format!("Mode: {mode_str}"),
@@ -1143,6 +1207,7 @@ impl<'a> InspectorOverlay<'a> {
         if let Some((hx, hy)) = self.state.hover_pos {
             self.draw_panel_text(
                 frame,
+                content_area,
                 content_x,
                 y,
                 &format!("Hover: ({hx},{hy})"),
@@ -1161,6 +1226,7 @@ impl<'a> InspectorOverlay<'a> {
                 let region_str = format!("{:?}", hit.region);
                 self.draw_panel_text(
                     frame,
+                    content_area,
                     content_x,
                     y,
                     &format!("Region: {region_str}"),
@@ -1170,6 +1236,7 @@ impl<'a> InspectorOverlay<'a> {
                 if let Some(id) = hit.widget_id {
                     self.draw_panel_text(
                         frame,
+                        content_area,
                         content_x,
                         y,
                         &format!("ID: {}", id.id()),
@@ -1180,6 +1247,7 @@ impl<'a> InspectorOverlay<'a> {
                 if hit.data != 0 {
                     self.draw_panel_text(
                         frame,
+                        content_area,
                         content_x,
                         y,
                         &format!("Data: {}", hit.data),
@@ -1195,12 +1263,20 @@ impl<'a> InspectorOverlay<'a> {
     }
 
     /// Draw text in the detail panel.
-    fn draw_panel_text(&self, frame: &mut Frame, x: u16, y: u16, text: &str, fg: PackedRgba) {
-        for (i, ch) in text.chars().enumerate() {
-            let cx = x + i as u16;
-            let cell = Cell::from_char(ch).with_fg(fg);
-            frame.buffer.set_fast(cx, y, cell);
+    fn draw_panel_text(
+        &self,
+        frame: &mut Frame,
+        content_area: Rect,
+        x: u16,
+        y: u16,
+        text: &str,
+        fg: PackedRgba,
+    ) {
+        if y < content_area.y || y >= content_area.bottom() || x >= content_area.right() {
+            return;
         }
+
+        draw_text_span(frame, x, y, text, Style::new().fg(fg), content_area.right());
     }
 }
 
@@ -1264,6 +1340,7 @@ impl HitInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_render::cell::Cell;
     use ftui_render::grapheme_pool::GraphemePool;
 
     #[test]
@@ -2007,6 +2084,28 @@ mod tests {
     }
 
     #[test]
+    fn overlay_clips_widget_bounds_to_render_area() {
+        let mut state = InspectorState::new();
+        state.mode = InspectorMode::WidgetBounds;
+        state.show_names = false;
+        state.register_widget(WidgetInfo::new("Clipped", Rect::new(0, 0, 10, 4)));
+
+        let overlay = InspectorOverlay::new(&state);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::with_hit_grid(20, 10, &mut pool);
+
+        let area = Rect::new(5, 0, 15, 10);
+        overlay.render(area, &mut frame);
+
+        let visible_color = InspectorStyle::default().bound_color(0);
+        assert_eq!(frame.buffer.get(4, 0), Some(&Cell::default()));
+        assert_eq!(
+            frame.buffer.get(5, 0).map(|cell| cell.fg),
+            Some(visible_color)
+        );
+    }
+
+    #[test]
     fn overlay_detail_panel_renders_when_enabled() {
         let mut state = InspectorState::new();
         state.mode = InspectorMode::Full;
@@ -2029,6 +2128,37 @@ mod tests {
         // Panel background should be the label_bg color
         let cell = frame.buffer.get(panel_x + 1, panel_y + 1);
         assert!(cell.is_some());
+    }
+
+    #[test]
+    fn overlay_detail_panel_stays_within_render_area() {
+        let mut state = InspectorState::new();
+        state.mode = InspectorMode::Full;
+        state.show_detail_panel = true;
+        state.set_hover(Some((123, 45)));
+
+        let overlay = InspectorOverlay::new(&state);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::with_hit_grid(40, 12, &mut pool);
+
+        let area = Rect::new(0, 0, 10, 12);
+        overlay.render(area, &mut frame);
+
+        assert_eq!(
+            frame.buffer.get(11, 1),
+            Some(&Cell::default()),
+            "detail panel background should not spill past the render area"
+        );
+        assert_eq!(
+            frame.buffer.get(15, 3),
+            Some(&Cell::default()),
+            "detail panel text should be clipped to the render area"
+        );
+        assert_ne!(
+            frame.buffer.get(1, 2),
+            Some(&Cell::default()),
+            "detail panel should still render inside the clipped area"
+        );
     }
 
     #[test]
