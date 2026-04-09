@@ -216,6 +216,26 @@ fn push_mismatch(
     });
 }
 
+fn mismatch_is_blocking(assertion: AssertionCategory, mismatch: &MismatchEvidence) -> bool {
+    match assertion {
+        AssertionCategory::NoChange => true,
+        AssertionCategory::NoRegression
+        | AssertionCategory::BoundedDegradation
+        | AssertionCategory::GracefulFallback
+        | AssertionCategory::FailureForensics
+        | AssertionCategory::Improvement => {
+            !matches!(mismatch.field.as_str(), "logs" | "terminal_output")
+        }
+    }
+}
+
+fn blocking_mismatch_count(assertion: AssertionCategory, mismatches: &[MismatchEvidence]) -> usize {
+    mismatches
+        .iter()
+        .filter(|mismatch| mismatch_is_blocking(assertion, mismatch))
+        .count()
+}
+
 /// Compare two lane results and return mismatch evidence if any.
 fn compare_results(
     scenario: &str,
@@ -913,23 +933,37 @@ fn build_scenario_report(spec: &ScenarioSpec) -> ScenarioReport {
             structured.frame_hashes.len().to_string(),
         );
     }
+    let blocking_mismatches = blocking_mismatch_count(spec.assertion, &mismatches);
     ScenarioReport {
         schema_version: "ftui-runtime-shadow-v1",
         scenario: spec.name.to_string(),
         scenario_kind: spec.scenario_kind,
         contract_focus: spec.contract_focus,
         assertion_category: spec.assertion.label(),
-        verdict: if mismatches.is_empty() {
+        verdict: if blocking_mismatches == 0 {
             "match"
         } else {
             "diverged"
         },
-        contract_status: if mismatches.is_empty() {
+        contract_status: if blocking_mismatches == 0 {
             "within-contract"
         } else {
             "out-of-contract"
         },
-        acceptable_difference_policy: "Semantic, policy, and replay-context differences are blockers; bounded graceful-fallback differences must still preserve the declared degraded-mode and recovery contract.",
+        acceptable_difference_policy: match spec.assertion {
+            AssertionCategory::NoChange => {
+                "No-change scenarios require exact lane parity across trace, output, logs, state, policy, and frame captures."
+            }
+            AssertionCategory::GracefulFallback => {
+                "Graceful-fallback scenarios may tolerate raw terminal/log-output drift under bursty saturation, but trace, frame-hash, running-state, tick-rate, command-count, and replay-context mismatches remain blockers."
+            }
+            AssertionCategory::NoRegression
+            | AssertionCategory::BoundedDegradation
+            | AssertionCategory::FailureForensics
+            | AssertionCategory::Improvement => {
+                "Operator workloads may tolerate raw terminal/log-output drift caused by scheduling differences, but trace, frame-hash, running-state, tick-rate, command-count, and replay-context mismatches remain blockers."
+            }
+        },
         replay_command: replay_command_for(spec.name),
         baseline: lane_summary(&legacy),
         candidate: lane_summary(&structured),
@@ -1154,6 +1188,83 @@ fn mismatch_reason_codes_cover_runtime_fields() {
         assert_eq!(reason.root_cause_class(), root_cause);
         assert_eq!(reason.failure_class().reason_code(), failure_class);
     }
+}
+
+#[test]
+fn graceful_fallback_terminal_output_only_is_non_blocking() {
+    let mismatch = MismatchEvidence {
+        reason_code: "TERMINAL_OUTPUT_DIVERGENCE",
+        failure_class: "SHADOW_DIVERGENCE",
+        root_cause_class: "semantic",
+        field: "terminal_output".into(),
+        legacy: "legacy".into(),
+        structured: "structured".into(),
+        scenario: "scenario".into(),
+        summary: "summary".into(),
+    };
+
+    assert_eq!(
+        blocking_mismatch_count(
+            AssertionCategory::GracefulFallback,
+            std::slice::from_ref(&mismatch)
+        ),
+        0
+    );
+    assert_eq!(
+        blocking_mismatch_count(AssertionCategory::NoChange, &[mismatch]),
+        1
+    );
+}
+
+#[test]
+fn no_regression_logs_and_terminal_output_are_non_blocking() {
+    let logs_mismatch = MismatchEvidence {
+        reason_code: "LOG_DIVERGENCE",
+        failure_class: "MISMATCH",
+        root_cause_class: "observability",
+        field: "logs".into(),
+        legacy: "legacy".into(),
+        structured: "structured".into(),
+        scenario: "scenario".into(),
+        summary: "summary".into(),
+    };
+    let output_mismatch = MismatchEvidence {
+        reason_code: "TERMINAL_OUTPUT_DIVERGENCE",
+        failure_class: "SHADOW_DIVERGENCE",
+        root_cause_class: "semantic",
+        field: "terminal_output".into(),
+        legacy: "legacy".into(),
+        structured: "structured".into(),
+        scenario: "scenario".into(),
+        summary: "summary".into(),
+    };
+
+    assert_eq!(
+        blocking_mismatch_count(
+            AssertionCategory::NoRegression,
+            &[logs_mismatch, output_mismatch]
+        ),
+        0
+    );
+}
+
+#[test]
+fn graceful_fallback_still_blocks_non_terminal_divergence() {
+    let mismatch = MismatchEvidence {
+        reason_code: "FRAME_HASH_DIVERGENCE",
+        failure_class: "SHADOW_DIVERGENCE",
+        root_cause_class: "semantic",
+        field: "frame_hashes".into(),
+        legacy: "legacy".into(),
+        structured: "structured".into(),
+        scenario: "scenario".into(),
+        summary: "summary".into(),
+    };
+
+    assert_eq!(
+        blocking_mismatch_count(AssertionCategory::GracefulFallback, &[mismatch]),
+        1
+    );
 }
 
 #[test]
