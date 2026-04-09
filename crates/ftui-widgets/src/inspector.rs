@@ -566,6 +566,13 @@ impl WidgetInfo {
         self
     }
 
+    /// Attach measured render time in microseconds.
+    #[must_use]
+    pub fn with_render_time_us(mut self, render_time_us: u64) -> Self {
+        self.render_time_us = Some(render_time_us);
+        self
+    }
+
     /// Add a hit region.
     pub fn add_hit_region(&mut self, rect: Rect, region: HitRegion, data: HitData) {
         self.hit_regions.push((rect, region, data));
@@ -581,6 +588,37 @@ impl WidgetInfo {
     /// Add a child widget.
     pub fn add_child(&mut self, child: WidgetInfo) {
         self.children.push(child);
+    }
+
+    fn find_by_hit_id(&self, id: HitId) -> Option<&Self> {
+        if self.hit_id == Some(id) {
+            return Some(self);
+        }
+
+        self.children
+            .iter()
+            .find_map(|child| child.find_by_hit_id(id))
+    }
+
+    fn region_counts(&self) -> Vec<(String, usize)> {
+        let mut counts = Vec::new();
+        self.accumulate_region_counts(&mut counts);
+        counts
+    }
+
+    fn accumulate_region_counts(&self, counts: &mut Vec<(String, usize)>) {
+        for (_, region, _) in &self.hit_regions {
+            let name = format!("{region:?}");
+            if let Some((_, count)) = counts.iter_mut().find(|(existing, _)| *existing == name) {
+                *count += 1;
+            } else {
+                counts.push((name, 1));
+            }
+        }
+
+        for child in &self.children {
+            child.accumulate_region_counts(counts);
+        }
     }
 }
 
@@ -921,6 +959,14 @@ impl<'a> InspectorOverlay<'a> {
         Self { state }
     }
 
+    fn selected_widget(&self) -> Option<&WidgetInfo> {
+        let selected = self.state.selected?;
+        self.state
+            .widgets
+            .iter()
+            .find_map(|widget| widget.find_by_hit_id(selected))
+    }
+
     /// Render hit region overlays from the frame's HitGrid.
     fn render_hit_regions(&self, area: Rect, frame: &mut Frame) {
         #[cfg(feature = "tracing")]
@@ -1118,19 +1164,27 @@ impl<'a> InspectorOverlay<'a> {
         let warning_style = Style::new()
             .fg(PackedRgba::rgb(255, 200, 0))
             .bg(style.label_bg);
+        let clip = area.intersection(&frame.buffer.bounds());
+        if clip.is_empty() {
+            return;
+        }
 
         // Center the message
         let msg_len = display_width(msg) as u16;
-        let x = area.x + area.width.saturating_sub(msg_len) / 2;
-        let y = area.y;
+        let x = clip.x + clip.width.saturating_sub(msg_len) / 2;
+        let y = clip.y;
+        let warning_width = msg_len.min(clip.right().saturating_sub(x));
+        if warning_width == 0 {
+            return;
+        }
 
         set_style_area(
             &mut frame.buffer,
-            Rect::new(x, y, msg_len, 1),
+            Rect::new(x, y, warning_width, 1),
             warning_style,
         );
 
-        draw_text_span(frame, x, y, msg, warning_style, area.x + area.width);
+        draw_text_span(frame, x, y, msg, warning_style, clip.right());
     }
 
     /// Render the detail panel showing selected widget info.
@@ -1186,6 +1240,178 @@ impl<'a> InspectorOverlay<'a> {
         );
         y += 2;
 
+        if let Some(widget) = self.selected_widget() {
+            self.draw_selected_widget_details(frame, content_area, content_x, &mut y, widget);
+            return;
+        }
+
+        if self.draw_hover_details(frame, content_area, content_x, &mut y) {
+            return;
+        }
+
+        if let Some(id) = self.state.selected {
+            self.draw_panel_text(
+                frame,
+                content_area,
+                content_x,
+                y,
+                &format!("Selected: {}", id.id()),
+                style.label_fg,
+            );
+            y += 1;
+            self.draw_panel_text(
+                frame,
+                content_area,
+                content_x,
+                y,
+                "Widget missing",
+                style.label_fg,
+            );
+            return;
+        }
+
+        let empty_message = if self.state.widgets.is_empty() {
+            "No widgets"
+        } else {
+            "No selection"
+        };
+        self.draw_panel_text(
+            frame,
+            content_area,
+            content_x,
+            y,
+            empty_message,
+            style.label_fg,
+        );
+    }
+
+    fn draw_selected_widget_details(
+        &self,
+        frame: &mut Frame,
+        content_area: Rect,
+        content_x: u16,
+        y: &mut u16,
+        widget: &WidgetInfo,
+    ) {
+        let style = &self.state.style;
+        let name = if widget.name.is_empty() {
+            "<unnamed>"
+        } else {
+            widget.name.as_str()
+        };
+        let widget_id = widget.hit_id.or(self.state.selected);
+
+        self.draw_panel_text(
+            frame,
+            content_area,
+            content_x,
+            *y,
+            &format!("Widget: {name}"),
+            style.label_fg,
+        );
+        *y += 1;
+
+        if let Some(id) = widget_id {
+            self.draw_panel_text(
+                frame,
+                content_area,
+                content_x,
+                *y,
+                &format!("ID: {}", id.id()),
+                style.label_fg,
+            );
+            *y += 1;
+        }
+
+        *y += 1;
+        self.draw_panel_text(frame, content_area, content_x, *y, "Area:", style.label_fg);
+        *y += 1;
+        self.draw_panel_text(
+            frame,
+            content_area,
+            content_x,
+            *y,
+            &format!(" x: {}", widget.area.x),
+            style.label_fg,
+        );
+        *y += 1;
+        self.draw_panel_text(
+            frame,
+            content_area,
+            content_x,
+            *y,
+            &format!(" y: {}", widget.area.y),
+            style.label_fg,
+        );
+        *y += 1;
+        self.draw_panel_text(
+            frame,
+            content_area,
+            content_x,
+            *y,
+            &format!(" w: {}", widget.area.width),
+            style.label_fg,
+        );
+        *y += 1;
+        self.draw_panel_text(
+            frame,
+            content_area,
+            content_x,
+            *y,
+            &format!(" h: {}", widget.area.height),
+            style.label_fg,
+        );
+        *y += 1;
+
+        let region_counts = widget.region_counts();
+        if !region_counts.is_empty() {
+            *y += 1;
+            self.draw_panel_text(
+                frame,
+                content_area,
+                content_x,
+                *y,
+                "Hit Regions:",
+                style.label_fg,
+            );
+            *y += 1;
+            for (region, count) in region_counts {
+                self.draw_panel_text(
+                    frame,
+                    content_area,
+                    content_x,
+                    *y,
+                    &format!(" {count} {region}"),
+                    style.label_fg,
+                );
+                *y += 1;
+            }
+        }
+
+        if self.state.show_times
+            && let Some(render_time_us) = widget.render_time_us
+        {
+            *y += 1;
+            self.draw_panel_text(
+                frame,
+                content_area,
+                content_x,
+                *y,
+                &format!("Render: {render_time_us}us"),
+                style.label_fg,
+            );
+        }
+    }
+
+    fn draw_hover_details(
+        &self,
+        frame: &mut Frame,
+        content_area: Rect,
+        content_x: u16,
+        y: &mut u16,
+    ) -> bool {
+        let style = &self.state.style;
+
         // Mode info
         let mode_str = match self.state.mode {
             InspectorMode::Off => "Off",
@@ -1197,11 +1423,11 @@ impl<'a> InspectorOverlay<'a> {
             frame,
             content_area,
             content_x,
-            y,
+            *y,
             &format!("Mode: {mode_str}"),
             style.label_fg,
         );
-        y += 1;
+        *y += 1;
 
         // Hover info
         if let Some((hx, hy)) = self.state.hover_pos {
@@ -1209,11 +1435,11 @@ impl<'a> InspectorOverlay<'a> {
                 frame,
                 content_area,
                 content_x,
-                y,
+                *y,
                 &format!("Hover: ({hx},{hy})"),
                 style.label_fg,
             );
-            y += 1;
+            *y += 1;
 
             // Extract hit info first to avoid borrow conflicts
             let hit_info = frame
@@ -1228,38 +1454,58 @@ impl<'a> InspectorOverlay<'a> {
                     frame,
                     content_area,
                     content_x,
-                    y,
+                    *y,
                     &format!("Region: {region_str}"),
                     style.label_fg,
                 );
-                y += 1;
+                *y += 1;
                 if let Some(id) = hit.widget_id {
                     self.draw_panel_text(
                         frame,
                         content_area,
                         content_x,
-                        y,
+                        *y,
                         &format!("ID: {}", id.id()),
                         style.label_fg,
                     );
-                    y += 1;
+                    *y += 1;
+
+                    if self.state.show_times
+                        && let Some(widget) = self
+                            .state
+                            .widgets
+                            .iter()
+                            .find_map(|widget| widget.find_by_hit_id(id))
+                        && let Some(render_time_us) = widget.render_time_us
+                    {
+                        self.draw_panel_text(
+                            frame,
+                            content_area,
+                            content_x,
+                            *y,
+                            &format!("Render: {render_time_us}us"),
+                            style.label_fg,
+                        );
+                        *y += 1;
+                    }
                 }
                 if hit.data != 0 {
                     self.draw_panel_text(
                         frame,
                         content_area,
                         content_x,
-                        y,
+                        *y,
                         &format!("Data: {}", hit.data),
                         style.label_fg,
                     );
-                    #[allow(unused_assignments)]
-                    {
-                        y += 1;
-                    }
+                    *y += 1;
                 }
+
+                return true;
             }
         }
+
+        false
     }
 
     /// Draw text in the detail panel.
@@ -1342,6 +1588,22 @@ mod tests {
     use super::*;
     use ftui_render::cell::Cell;
     use ftui_render::grapheme_pool::GraphemePool;
+
+    fn frame_text(frame: &Frame) -> String {
+        let mut text = String::new();
+        for y in 0..frame.buffer.height() {
+            for x in 0..frame.buffer.width() {
+                let ch = frame
+                    .buffer
+                    .get(x, y)
+                    .and_then(|cell| cell.content.as_char())
+                    .unwrap_or(' ');
+                text.push(ch);
+            }
+            text.push('\n');
+        }
+        text
+    }
 
     #[test]
     fn inspector_mode_cycle() {
@@ -1440,6 +1702,13 @@ mod tests {
         assert_eq!(info.area, Rect::new(10, 5, 20, 3));
         assert_eq!(info.hit_id, Some(HitId::new(42)));
         assert_eq!(info.depth, 2);
+    }
+
+    #[test]
+    fn widget_info_records_render_time() {
+        let info = WidgetInfo::new("Button", Rect::new(10, 5, 20, 3)).with_render_time_us(42);
+
+        assert_eq!(info.render_time_us, Some(42));
     }
 
     #[test]
@@ -2162,6 +2431,88 @@ mod tests {
     }
 
     #[test]
+    fn overlay_detail_panel_shows_selected_widget_details() {
+        let mut state = InspectorState::new();
+        state.mode = InspectorMode::Full;
+        state.show_detail_panel = true;
+        state.show_times = true;
+        state.select(Some(HitId::new(17)));
+
+        let mut widget = WidgetInfo::new("List", Rect::new(10, 5, 40, 12))
+            .with_hit_id(HitId::new(17))
+            .with_render_time_us(42);
+        widget.add_hit_region(Rect::new(10, 5, 30, 10), HitRegion::Content, 0);
+        widget.add_hit_region(Rect::new(38, 5, 4, 1), HitRegion::Button, 1);
+        widget.add_hit_region(Rect::new(38, 7, 4, 1), HitRegion::Button, 2);
+        state.register_widget(widget);
+
+        let overlay = InspectorOverlay::new(&state);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::with_hit_grid(60, 20, &mut pool);
+
+        overlay.render(Rect::new(0, 0, 60, 20), &mut frame);
+
+        let rendered = frame_text(&frame);
+        assert!(rendered.contains("Widget: List"));
+        assert!(rendered.contains("ID: 17"));
+        assert!(rendered.contains("Area:"));
+        assert!(rendered.contains("x: 10"));
+        assert!(rendered.contains("y: 5"));
+        assert!(rendered.contains("w: 40"));
+        assert!(rendered.contains("h: 12"));
+        assert!(rendered.contains("Hit Regions:"));
+        assert!(rendered.contains("1 Content"));
+        assert!(rendered.contains("2 Button"));
+        assert!(rendered.contains("Render: 42us"));
+    }
+
+    #[test]
+    fn overlay_detail_panel_hides_render_time_when_times_toggle_is_off() {
+        let mut state = InspectorState::new();
+        state.mode = InspectorMode::Full;
+        state.show_detail_panel = true;
+        state.show_times = false;
+        state.select(Some(HitId::new(7)));
+        state.register_widget(
+            WidgetInfo::new("Panel", Rect::new(2, 2, 20, 8))
+                .with_hit_id(HitId::new(7))
+                .with_render_time_us(99),
+        );
+
+        let overlay = InspectorOverlay::new(&state);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::with_hit_grid(50, 16, &mut pool);
+
+        overlay.render(Rect::new(0, 0, 50, 16), &mut frame);
+
+        assert!(!frame_text(&frame).contains("Render: 99us"));
+    }
+
+    #[test]
+    fn overlay_detail_panel_falls_back_to_hover_info_when_selected_widget_is_missing() {
+        let mut state = InspectorState::new();
+        state.mode = InspectorMode::Full;
+        state.show_detail_panel = true;
+        state.select(Some(HitId::new(99)));
+        state.set_hover(Some((3, 2)));
+
+        let overlay = InspectorOverlay::new(&state);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::with_hit_grid(40, 12, &mut pool);
+        frame.register_hit(Rect::new(2, 2, 6, 2), HitId::new(5), HitRegion::Button, 7);
+
+        overlay.render(Rect::new(0, 0, 40, 12), &mut frame);
+
+        let rendered = frame_text(&frame);
+        assert!(rendered.contains("Mode: Full"));
+        assert!(rendered.contains("Hover: (3,2)"));
+        assert!(rendered.contains("Region: Button"));
+        assert!(rendered.contains("ID: 5"));
+        assert!(rendered.contains("Data: 7"));
+        assert!(!rendered.contains("Widget missing"));
+    }
+
+    #[test]
     fn overlay_without_hit_grid_shows_warning() {
         let mut state = InspectorState::new();
         state.mode = InspectorMode::HitRegions;
@@ -2180,6 +2531,30 @@ mod tests {
         if let Some(cell) = frame.buffer.get(10, 0) {
             assert_eq!(cell.content.as_char(), Some('H'));
         }
+    }
+
+    #[test]
+    fn overlay_warning_stays_within_render_area() {
+        let mut state = InspectorState::new();
+        state.mode = InspectorMode::HitRegions;
+
+        let overlay = InspectorOverlay::new(&state);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(30, 4, &mut pool);
+
+        let area = Rect::new(0, 0, 8, 4);
+        overlay.render(area, &mut frame);
+
+        assert_eq!(
+            frame.buffer.get(8, 0),
+            Some(&Cell::default()),
+            "warning background should not spill past the overlay area"
+        );
+        assert_eq!(
+            frame.buffer.get(0, 0).map(|cell| cell.content.as_char()),
+            Some(Some('H')),
+            "warning text should still render inside the clipped area"
+        );
     }
 
     // =========================================================================
