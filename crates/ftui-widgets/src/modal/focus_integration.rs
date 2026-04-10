@@ -165,11 +165,7 @@ impl FocusAwareModalStack {
     pub fn pop(&mut self) -> Option<ModalResult> {
         let result = self.stack.pop()?;
         if let Some(group_id) = result.focus_group_id {
-            self.focus_manager.pop_trap();
-            self.focus_manager.remove_group(group_id);
-            if !self.focus_manager.is_trapped() {
-                self.base_focus = None;
-            }
+            self.close_focus_group(group_id);
         }
         Some(result)
     }
@@ -179,8 +175,11 @@ impl FocusAwareModalStack {
     pub fn pop_id(&mut self, id: ModalId) -> Option<ModalResult> {
         let result = self.stack.pop_id(id)?;
         if let Some(group_id) = result.focus_group_id {
+            let closing_members = self.focus_manager.group_members(group_id);
             self.focus_manager.remove_group(group_id);
             self.rebuild_focus_traps();
+            self.focus_manager
+                .repair_focus_after_excluding_ids(&closing_members);
         }
 
         Some(result)
@@ -190,14 +189,18 @@ impl FocusAwareModalStack {
     pub fn pop_all(&mut self) -> Vec<ModalResult> {
         let results = self.stack.pop_all();
         let mut removed_group = false;
+        let mut removed_members = Vec::new();
         for result in &results {
             if let Some(group_id) = result.focus_group_id {
+                removed_members.extend(self.focus_manager.group_members(group_id));
                 self.focus_manager.remove_group(group_id);
                 removed_group = true;
             }
         }
         if removed_group {
             self.rebuild_focus_traps();
+            self.focus_manager
+                .repair_focus_after_excluding_ids(&removed_members);
         }
         results
     }
@@ -216,11 +219,7 @@ impl FocusAwareModalStack {
         }
         let result = self.stack.handle_event(event, hit)?;
         if let Some(group_id) = result.focus_group_id {
-            self.focus_manager.pop_trap();
-            self.focus_manager.remove_group(group_id);
-            if !self.focus_manager.is_trapped() {
-                self.base_focus = None;
-            }
+            self.close_focus_group(group_id);
         }
         Some(result)
     }
@@ -270,6 +269,17 @@ impl FocusAwareModalStack {
     /// Get a mutable reference to the focus manager.
     pub fn focus_manager_mut(&mut self) -> &mut FocusManager {
         &mut self.focus_manager
+    }
+
+    fn close_focus_group(&mut self, group_id: u32) {
+        let closing_members = self.focus_manager.group_members(group_id);
+        self.focus_manager.pop_trap();
+        self.focus_manager.remove_group(group_id);
+        self.focus_manager
+            .repair_focus_after_excluding_ids(&closing_members);
+        if !self.focus_manager.is_trapped() {
+            self.base_focus = None;
+        }
     }
 
     fn rebuild_focus_traps(&mut self) {
@@ -388,6 +398,31 @@ mod tests {
         modals.pop();
         assert!(!modals.is_focus_trapped());
         assert_eq!(modals.focus_manager().current(), Some(3));
+    }
+
+    #[test]
+    fn pop_skips_closed_modal_focus_ids_when_background_focus_disappears() {
+        let mut modals = FocusAwareModalStack::new();
+        modals
+            .focus_manager_mut()
+            .graph_mut()
+            .insert(make_focus_node(1));
+        modals
+            .focus_manager_mut()
+            .graph_mut()
+            .insert(make_focus_node(50));
+        modals
+            .focus_manager_mut()
+            .graph_mut()
+            .insert(make_focus_node(100));
+
+        modals.focus_manager_mut().focus(100);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![1]);
+        let _ = modals.focus_manager_mut().graph_mut().remove(100);
+
+        modals.pop();
+        assert_eq!(modals.focus_manager().current(), Some(50));
+        assert!(!modals.is_focus_trapped());
     }
 
     #[test]

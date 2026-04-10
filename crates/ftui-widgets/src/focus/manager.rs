@@ -429,12 +429,37 @@ impl FocusManager {
         self.groups.contains_key(&group_id)
     }
 
+    #[must_use]
+    pub(crate) fn group_members(&self, group_id: u32) -> Vec<FocusId> {
+        self.groups
+            .get(&group_id)
+            .map(|group| group.members.clone())
+            .unwrap_or_default()
+    }
+
     pub(crate) fn focus_without_history(&mut self, id: FocusId) -> bool {
         self.set_focus_without_history(id)
     }
 
     pub(crate) fn focus_first_without_history_for_restore(&mut self) -> bool {
         self.focus_first_without_history()
+    }
+
+    pub(crate) fn repair_focus_after_excluding_ids(&mut self, excluded: &[FocusId]) {
+        if self.is_trapped() || !self.current.is_some_and(|id| excluded.contains(&id)) {
+            return;
+        }
+
+        for id in self.graph.tab_order() {
+            if excluded.contains(&id) {
+                continue;
+            }
+            if self.set_focus_without_history(id) {
+                return;
+            }
+        }
+
+        let _ = self.blur();
     }
 
     fn set_focus(&mut self, id: FocusId) -> bool {
@@ -520,8 +545,10 @@ impl FocusManager {
                 }
             }
             None => {
-                if self.current.is_some_and(|id| !self.can_focus(id)) {
-                    let _ = self.focus_first_without_history();
+                if self.current.is_some_and(|id| !self.can_focus(id))
+                    && !self.focus_first_without_history()
+                {
+                    let _ = self.blur();
                 }
             }
         }
@@ -1337,6 +1364,20 @@ mod tests {
         fm.remove_group(10);
         assert!(!fm.is_trapped());
         assert!(!fm.pop_trap());
+    }
+
+    #[test]
+    fn remove_group_blurs_invalid_current_when_no_fallback_exists() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.create_group(10, vec![1]);
+        fm.focus(1);
+
+        let _ = fm.graph_mut().remove(1);
+        fm.remove_group(10);
+
+        assert_eq!(fm.current(), None);
+        assert_eq!(fm.take_focus_event(), Some(FocusEvent::FocusLost { id: 1 }));
     }
 
     // --- FocusGroup ---

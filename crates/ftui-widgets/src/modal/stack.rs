@@ -436,9 +436,15 @@ impl ModalStack {
         event: &Event,
         hit: Option<(HitId, HitRegion, HitData)>,
     ) -> Option<ModalResult> {
-        let top = self.modals.last_mut()?;
-        let hit_id = top.hit_id;
-        let filtered_hit = hit.filter(|(id, _, _)| *id == hit_id);
+        let top_index = self.modals.len().checked_sub(1)?;
+        let hit_id = self.modals[top_index].hit_id;
+        let filtered_hit = hit.filter(|(id, _, _)| {
+            *id == hit_id
+                || self.modals[..top_index]
+                    .iter()
+                    .all(|modal| modal.hit_id != *id)
+        });
+        let top = &mut self.modals[top_index];
         let id = top.id;
         let focus_group_id = top.focus_group_id;
         #[cfg(feature = "tracing")]
@@ -806,8 +812,7 @@ impl<'a> ModalFocusIntegration<'a> {
         if let Some(ref res) = result
             && let Some(group_id) = res.focus_group_id
         {
-            self.focus.pop_trap();
-            self.focus.remove_group(group_id);
+            self.close_focus_group(group_id);
         }
 
         result
@@ -829,8 +834,7 @@ impl<'a> ModalFocusIntegration<'a> {
         if let Some(ref res) = result
             && let Some(group_id) = res.focus_group_id
         {
-            self.focus.pop_trap();
-            self.focus.remove_group(group_id);
+            self.close_focus_group(group_id);
         }
 
         result
@@ -859,6 +863,14 @@ impl<'a> ModalFocusIntegration<'a> {
     /// Get a mutable reference to the underlying focus manager.
     pub fn focus_mut(&mut self) -> &mut crate::focus::FocusManager {
         self.focus
+    }
+
+    fn close_focus_group(&mut self, group_id: u32) {
+        let closing_members = self.focus.group_members(group_id);
+        self.focus.pop_trap();
+        self.focus.remove_group(group_id);
+        self.focus
+            .repair_focus_after_excluding_ids(&closing_members);
     }
 }
 
@@ -891,6 +903,9 @@ mod tests {
 
     #[derive(Debug, Default)]
     struct CloseOnBackdropHitModal;
+
+    #[derive(Debug, Default)]
+    struct CloseOnInnerHitModal;
 
     impl StackModal for CloseOnAnyHitModal {
         fn render_content(&self, _area: Rect, _frame: &mut Frame) {}
@@ -937,6 +952,46 @@ mod tests {
                 && let Some((id, region, _)) = hit
                 && id == hit_id
                 && region == MODAL_HIT_BACKDROP
+            {
+                return Some(ModalResultData::Dismissed);
+            }
+
+            None
+        }
+
+        fn size_constraints(&self) -> ModalSizeConstraints {
+            ModalSizeConstraints::new()
+                .min_width(10)
+                .max_width(10)
+                .min_height(3)
+                .max_height(3)
+        }
+
+        fn backdrop_config(&self) -> BackdropConfig {
+            BackdropConfig::default()
+        }
+
+        fn close_on_backdrop(&self) -> bool {
+            false
+        }
+    }
+
+    impl StackModal for CloseOnInnerHitModal {
+        fn render_content(&self, area: Rect, frame: &mut Frame) {
+            if !area.is_empty() {
+                frame.register_hit(area, HitId::new(4242), HitRegion::Custom(99), 0);
+            }
+        }
+
+        fn handle_event(
+            &mut self,
+            _event: &Event,
+            hit: Option<(HitId, HitRegion, HitData)>,
+            _hit_id: HitId,
+        ) -> Option<ModalResultData> {
+            if let Some((id, region, _)) = hit
+                && id == HitId::new(4242)
+                && region == HitRegion::Custom(99)
             {
                 return Some(ModalResultData::Dismissed);
             }
@@ -1357,6 +1412,35 @@ mod tests {
     }
 
     #[test]
+    fn custom_modal_receives_inner_widget_hit() {
+        let mut stack = ModalStack::new();
+        let top_id = stack.push(Box::new(CloseOnInnerHitModal));
+        let top_hit_id = stack.modals.last().unwrap().hit_id;
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::with_hit_grid(20, 10, &mut pool);
+        let screen = Rect::new(0, 0, 20, 10);
+        stack.render(&mut frame, screen);
+
+        let hit = frame.hit_test(10, 4);
+        assert_eq!(hit, Some((HitId::new(4242), HitRegion::Custom(99), 0)));
+        assert_ne!(hit.unwrap().0, top_hit_id);
+
+        let click = Event::Mouse(ftui_core::event::MouseEvent::new(
+            ftui_core::event::MouseEventKind::Down(ftui_core::event::MouseButton::Left),
+            10,
+            4,
+        ));
+
+        let result = stack.handle_event(&click, hit);
+        assert!(result.is_some());
+        let result = result.unwrap();
+        assert_eq!(result.id, top_id);
+        assert!(matches!(result.data, Some(ModalResultData::Dismissed)));
+        assert!(stack.is_empty());
+    }
+
+    #[test]
     fn zero_sized_modal_still_registers_backdrop_hit() {
         let mut stack = ModalStack::new();
         stack.push(Box::new(
@@ -1589,6 +1673,38 @@ mod tests {
             // Focus should be restored to trigger element
             assert!(!integrator.is_focus_trapped());
             assert_eq!(integrator.focus().current(), Some(100));
+        }
+    }
+
+    #[test]
+    fn focus_integration_pop_skips_closed_modal_focus_ids_when_background_focus_disappears() {
+        use crate::focus::{FocusManager, FocusNode};
+        use ftui_core::geometry::Rect;
+
+        let mut stack = ModalStack::new();
+        let mut focus = FocusManager::new();
+
+        focus
+            .graph_mut()
+            .insert(FocusNode::new(1, Rect::new(0, 0, 10, 1)));
+        focus
+            .graph_mut()
+            .insert(FocusNode::new(50, Rect::new(0, 1, 10, 1)));
+        focus
+            .graph_mut()
+            .insert(FocusNode::new(100, Rect::new(0, 10, 10, 1)));
+        focus.focus(100);
+
+        {
+            let mut integrator = ModalFocusIntegration::new(&mut stack, &mut focus);
+            let modal = WidgetModalEntry::new(StubWidget).with_focusable_ids(vec![1]);
+            integrator.push_with_focus(Box::new(modal));
+            let _ = integrator.focus_mut().graph_mut().remove(100);
+
+            let result = integrator.pop_with_focus();
+            assert!(result.is_some());
+            assert_eq!(integrator.focus().current(), Some(50));
+            assert!(!integrator.is_focus_trapped());
         }
     }
 
