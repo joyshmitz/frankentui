@@ -150,7 +150,7 @@ impl FocusManager {
         if !self.can_focus(id) || !self.allowed_by_trap(id) {
             return None;
         }
-        let prev = self.current;
+        let prev = self.active_focus_target();
         if prev == Some(id) {
             return prev;
         }
@@ -229,7 +229,7 @@ impl FocusManager {
             NavDirection::Next => self.focus_next(),
             NavDirection::Prev => self.focus_prev(),
             _ => {
-                let Some(current) = self.current else {
+                let Some(current) = self.active_focus_target() else {
                     return false;
                 };
                 // Explicit edges take precedence; fall back to spatial navigation.
@@ -278,11 +278,15 @@ impl FocusManager {
 
     /// Go back to previous focus.
     pub fn focus_back(&mut self) -> bool {
+        let active_focus = self.active_focus_target();
         while let Some(id) = self.history.pop() {
-            if self.current == Some(id) {
+            if active_focus == Some(id) {
                 continue;
             }
             if self.can_focus(id) && self.allowed_by_trap(id) {
+                if !self.host_focused {
+                    return self.set_pending_focus_target(id);
+                }
                 // Set focus directly without pushing current to history
                 // (going back shouldn't create a forward entry).
                 let prev = self.current;
@@ -495,24 +499,8 @@ impl FocusManager {
     }
 
     #[must_use]
-    pub(crate) fn focus_target_on_host_gain(&self) -> Option<FocusId> {
-        self.deferred_focus_target()
-            .or_else(|| self.graph.tab_order().first().copied())
-    }
-
-    #[must_use]
     pub(crate) fn deferred_focus_target(&self) -> Option<FocusId> {
-        if let Some(current) = self.current
-            && self.can_focus(current)
-            && self.allowed_by_trap(current)
-        {
-            return Some(current);
-        }
-
-        if let Some(id) = self.pending_focus_on_host_gain
-            && self.can_focus(id)
-            && self.allowed_by_trap(id)
-        {
+        if let Some(id) = self.active_focus_target() {
             return Some(id);
         }
 
@@ -589,11 +577,18 @@ impl FocusManager {
     }
 
     fn set_focus(&mut self, id: FocusId) -> bool {
-        self.set_focus_internal(id, true)
+        self.set_focus_target(id, true)
     }
 
     fn set_focus_without_history(&mut self, id: FocusId) -> bool {
-        self.set_focus_internal(id, false)
+        self.set_focus_target(id, false)
+    }
+
+    fn set_focus_target(&mut self, id: FocusId, record_history: bool) -> bool {
+        if !self.host_focused {
+            return self.set_pending_focus_target(id);
+        }
+        self.set_focus_internal(id, record_history)
     }
 
     fn set_focus_internal(&mut self, id: FocusId, record_history: bool) -> bool {
@@ -634,6 +629,37 @@ impl FocusManager {
 
     fn can_focus(&self, id: FocusId) -> bool {
         self.graph.get(id).map(|n| n.is_focusable).unwrap_or(false)
+    }
+
+    fn active_focus_target(&self) -> Option<FocusId> {
+        if let Some(current) = self.current
+            && self.can_focus(current)
+            && self.allowed_by_trap(current)
+        {
+            return Some(current);
+        }
+
+        if self.host_focused {
+            return None;
+        }
+
+        self.pending_focus_on_host_gain
+            .filter(|id| self.can_focus(*id) && self.allowed_by_trap(*id))
+    }
+
+    fn set_pending_focus_target(&mut self, id: FocusId) -> bool {
+        if !self.can_focus(id) || !self.allowed_by_trap(id) {
+            return false;
+        }
+
+        let prev = self.active_focus_target();
+        self.current = None;
+        if prev == Some(id) {
+            return false;
+        }
+
+        self.pending_focus_on_host_gain = Some(id);
+        true
     }
 
     fn active_trap_group(&self) -> Option<u32> {
@@ -744,7 +770,7 @@ impl FocusManager {
             .and_then(|id| self.groups.get(&id).map(|g| g.wrap))
             .unwrap_or(true);
 
-        let next = match self.current {
+        let next = match self.active_focus_target() {
             None => fallback,
             Some(current) => {
                 let pos = order.iter().position(|id| *id == current);
@@ -998,6 +1024,53 @@ mod tests {
 
         assert!(fm.apply_host_focus(true));
         assert_eq!(fm.current(), Some(2));
+    }
+
+    #[test]
+    fn focus_while_host_blurred_updates_deferred_target_without_restoring_current() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+        fm.graph_mut().insert(node(3, 2));
+        fm.focus(1);
+        let _ = fm.take_focus_event();
+
+        assert!(fm.apply_host_focus(false));
+        assert_eq!(fm.current(), None);
+        assert_eq!(fm.focus(3), Some(1));
+        assert_eq!(fm.current(), None);
+        assert_eq!(fm.take_focus_event(), Some(FocusEvent::FocusLost { id: 1 }));
+
+        assert!(fm.apply_host_focus(true));
+        assert_eq!(fm.current(), Some(3));
+        assert_eq!(
+            fm.take_focus_event(),
+            Some(FocusEvent::FocusGained { id: 3 })
+        );
+    }
+
+    #[test]
+    fn focus_next_while_host_blurred_advances_deferred_target() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+        fm.graph_mut().insert(node(3, 2));
+        fm.focus(1);
+        assert_eq!(fm.focus(2), Some(1));
+        let _ = fm.take_focus_event();
+
+        assert!(fm.apply_host_focus(false));
+        assert_eq!(fm.current(), None);
+        assert!(fm.focus_next());
+        assert_eq!(fm.current(), None);
+        assert_eq!(fm.take_focus_event(), Some(FocusEvent::FocusLost { id: 2 }));
+
+        assert!(fm.apply_host_focus(true));
+        assert_eq!(fm.current(), Some(3));
+        assert_eq!(
+            fm.take_focus_event(),
+            Some(FocusEvent::FocusGained { id: 3 })
+        );
     }
 
     #[test]
