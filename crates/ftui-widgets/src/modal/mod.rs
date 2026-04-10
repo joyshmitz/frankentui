@@ -24,8 +24,9 @@
 //! - **Focus restore**: Previous focus is restored when modal closes
 //! - **Escape to close**: Already built into modal handling
 //!
-//! Use [`FocusAwareModalStack`] for automatic focus management, or integrate
-//! manually using [`ModalStack::push_with_focus`] with your own `FocusManager`.
+//! Use [`FocusAwareModalStack`] as the canonical focus-aware modal API. For
+//! lower-level orchestration, pair [`ModalStack::push_with_focus`] with your own
+//! `FocusManager`.
 //!
 //! # Example
 //!
@@ -65,6 +66,5 @@ pub use dialog::{
 };
 pub use focus_integration::FocusAwareModalStack;
 pub use stack::{
-    ModalFocusId, ModalFocusIntegration, ModalId, ModalResult, ModalResultData, ModalStack,
-    StackModal, WidgetModalEntry,
+    ModalFocusId, ModalId, ModalResult, ModalResultData, ModalStack, StackModal, WidgetModalEntry,
 };

@@ -437,6 +437,12 @@ impl FocusManager {
             .unwrap_or_default()
     }
 
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn base_trap_return_focus(&self) -> Option<Option<FocusId>> {
+        self.trap_stack.first().map(|trap| trap.return_focus)
+    }
+
     pub(crate) fn focus_without_history(&mut self, id: FocusId) -> bool {
         self.set_focus_without_history(id)
     }
@@ -460,6 +466,16 @@ impl FocusManager {
         }
 
         let _ = self.blur();
+    }
+
+    pub(crate) fn restore_focus_after_invalid_current(&mut self) {
+        if let Some(group_id) = self.active_trap_group()
+            && self.focus_first_in_group_without_history(group_id)
+        {
+            return;
+        }
+
+        let _ = self.focus_first_without_history();
     }
 
     fn set_focus(&mut self, id: FocusId) -> bool {

@@ -468,13 +468,12 @@ fn modal_focus_trap_restores_previous_focus() {
     let mut modals = FocusAwareModalStack::new();
 
     // Seed focus graph and set initial focus.
-    for id in [1_u64, 2, 3] {
-        modals
-            .focus_manager_mut()
-            .graph_mut()
-            .insert(FocusNode::new(id, Rect::new(0, 0, 1, 1)));
-    }
-    modals.focus_manager_mut().focus(3);
+    modals.with_focus_graph_mut(|graph| {
+        for id in [1_u64, 2, 3] {
+            graph.insert(FocusNode::new(id, Rect::new(0, 0, 1, 1)));
+        }
+    });
+    modals.focus(3);
     assert_eq!(modals.focus_manager().current(), Some(3));
 
     // Push a modal with focus trap; should move focus to first item.
@@ -492,6 +491,44 @@ fn modal_focus_trap_restores_previous_focus() {
         Some(ModalResultData::Dismissed)
     ));
     assert_eq!(modals.focus_manager().current(), Some(3));
+}
+
+#[test]
+fn modal_focus_trap_non_lifo_close_restores_background_focus_e2e() {
+    log_jsonl(
+        "env",
+        &[(
+            "test",
+            "modal_focus_trap_non_lifo_close_restores_background_focus_e2e",
+        )],
+    );
+    let mut modals = FocusAwareModalStack::new();
+
+    modals.with_focus_graph_mut(|graph| {
+        for id in [1_u64, 2, 3] {
+            graph.insert(FocusNode::new(id, Rect::new(0, 0, 1, 1)));
+        }
+    });
+    modals.focus(3);
+
+    let lower_id = modals.push_with_trap(
+        Box::new(WidgetModalEntry::new(sample_content()).with_focusable_ids(vec![1])),
+        vec![1],
+    );
+    modals.push_with_trap(
+        Box::new(WidgetModalEntry::new(sample_content()).with_focusable_ids(vec![2])),
+        vec![2],
+    );
+
+    let removed = modals.pop_id(lower_id);
+    assert_eq!(removed.map(|result| result.id), Some(lower_id));
+    assert_eq!(modals.focus_manager().current(), Some(2));
+    assert!(modals.is_focus_trapped());
+
+    let result = modals.handle_event(&press(KeyCode::Escape), None);
+    assert!(result.is_some());
+    assert_eq!(modals.focus_manager().current(), Some(3));
+    assert!(!modals.is_focus_trapped());
 }
 
 #[test]

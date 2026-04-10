@@ -916,18 +916,9 @@ impl StatefulWidget for Help {
         let mut cache_buffer = std::mem::take(&mut cache.buffer);
         cache_buffer.degradation = frame.buffer.degradation;
         {
-            let mut cache_frame = Frame {
-                buffer: cache_buffer,
-                pool: frame.pool,
-                links: None,
-                hit_grid: None,
-                widget_budget: frame.widget_budget.clone(),
-                widget_signals: Vec::new(),
-                cursor_position: None,
-                cursor_visible: true,
-                degradation: frame.buffer.degradation,
-                arena: None,
-            };
+            let mut cache_frame = Frame::from_buffer(cache_buffer, frame.pool);
+            cache_frame.widget_budget = frame.widget_budget.clone();
+            cache_frame.set_degradation(frame.buffer.degradation);
 
             for idx in &state.dirty_indices {
                 if let Some(entry_idx) = state.enabled_indices.get(*idx)
@@ -1017,18 +1008,9 @@ fn rebuild_cache(
     let mut buffer = Buffer::new(area.width, area.height);
     buffer.degradation = frame.buffer.degradation;
     {
-        let mut cache_frame = Frame {
-            buffer,
-            pool: frame.pool,
-            links: None,
-            hit_grid: None,
-            widget_budget: frame.widget_budget.clone(),
-            widget_signals: Vec::new(),
-            cursor_position: None,
-            cursor_visible: true,
-            degradation: frame.buffer.degradation,
-            arena: None,
-        };
+        let mut cache_frame = Frame::from_buffer(buffer, frame.pool);
+        cache_frame.widget_budget = frame.widget_budget.clone();
+        cache_frame.set_degradation(frame.buffer.degradation);
         help.render_cached(layout_area, &mut cache_frame, &layout);
         buffer = cache_frame.buffer;
     }

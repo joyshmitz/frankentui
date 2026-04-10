@@ -62,6 +62,12 @@ impl HitId {
 /// Opaque user data for hit callbacks.
 pub type HitData = u64;
 
+/// Optional ownership tag attached to a hit region.
+///
+/// Higher-level systems can use this to disambiguate layered hit regions
+/// without overloading `HitId` or `HitData`.
+pub type HitOwner = u64;
+
 /// Regions within a widget for mouse interaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum HitRegion {
@@ -84,6 +90,32 @@ pub enum HitRegion {
     Custom(u8),
 }
 
+/// Full hit-test metadata, including optional ownership provenance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HitTestResult {
+    pub id: HitId,
+    pub region: HitRegion,
+    pub data: HitData,
+    pub owner: Option<HitOwner>,
+}
+
+impl HitTestResult {
+    #[inline]
+    pub const fn new(id: HitId, region: HitRegion, data: HitData, owner: Option<HitOwner>) -> Self {
+        Self {
+            id,
+            region,
+            data,
+            owner,
+        }
+    }
+
+    #[inline]
+    pub const fn into_tuple(self) -> (HitId, HitRegion, HitData) {
+        (self.id, self.region, self.data)
+    }
+}
+
 /// A single hit cell in the grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct HitCell {
@@ -93,6 +125,8 @@ pub struct HitCell {
     pub region: HitRegion,
     /// Extra data attached to this hit cell.
     pub data: HitData,
+    /// Optional owner tag for higher-level hit routing.
+    pub owner: Option<HitOwner>,
 }
 
 impl HitCell {
@@ -103,6 +137,23 @@ impl HitCell {
             widget_id: Some(widget_id),
             region,
             data,
+            owner: None,
+        }
+    }
+
+    /// Create a populated hit cell with explicit owner provenance.
+    #[inline]
+    pub const fn new_with_owner(
+        widget_id: HitId,
+        region: HitRegion,
+        data: HitData,
+        owner: Option<HitOwner>,
+    ) -> Self {
+        Self {
+            widget_id: Some(widget_id),
+            region,
+            data,
+            owner,
         }
     }
 
@@ -175,6 +226,18 @@ impl HitGrid {
     ///
     /// All cells within the rectangle will map to this hit cell.
     pub fn register(&mut self, rect: Rect, widget_id: HitId, region: HitRegion, data: HitData) {
+        self.register_with_owner(rect, widget_id, region, data, None);
+    }
+
+    /// Register a clickable region with the given hit metadata and owner.
+    pub fn register_with_owner(
+        &mut self,
+        rect: Rect,
+        widget_id: HitId,
+        region: HitRegion,
+        data: HitData,
+        owner: Option<HitOwner>,
+    ) {
         // Use usize to avoid overflow for large coordinates
         let x_end = (rect.x as usize + rect.width as usize).min(self.width as usize);
         let y_end = (rect.y as usize + rect.height as usize).min(self.height as usize);
@@ -184,7 +247,7 @@ impl HitGrid {
             return;
         }
 
-        let hit_cell = HitCell::new(widget_id, region, data);
+        let hit_cell = HitCell::new_with_owner(widget_id, region, data, owner);
 
         for y in rect.y as usize..y_end {
             let row_start = y * self.width as usize;
@@ -201,8 +264,16 @@ impl HitGrid {
     /// Returns the hit tuple if a region is registered at (x, y).
     #[must_use]
     pub fn hit_test(&self, x: u16, y: u16) -> Option<(HitId, HitRegion, HitData)> {
-        self.get(x, y)
-            .and_then(|cell| cell.widget_id.map(|id| (id, cell.region, cell.data)))
+        self.hit_test_detailed(x, y).map(HitTestResult::into_tuple)
+    }
+
+    /// Hit test at the given position, preserving owner provenance.
+    #[must_use]
+    pub fn hit_test_detailed(&self, x: u16, y: u16) -> Option<HitTestResult> {
+        self.get(x, y).and_then(|cell| {
+            cell.widget_id
+                .map(|id| HitTestResult::new(id, cell.region, cell.data, cell.owner))
+        })
     }
 
     /// Return all hits within the given rectangle.
@@ -366,6 +437,9 @@ pub struct Frame<'a> {
     /// When `Some`, widgets can register clickable regions.
     pub hit_grid: Option<HitGrid>,
 
+    /// Optional ownership stack applied to registered hit regions.
+    hit_owner_stack: Vec<HitOwner>,
+
     /// Widget render budget policy for this frame.
     pub widget_budget: WidgetBudget,
 
@@ -406,6 +480,7 @@ impl<'a> Frame<'a> {
             pool,
             links: None,
             hit_grid: None,
+            hit_owner_stack: Vec::new(),
             widget_budget: WidgetBudget::default(),
             widget_signals: Vec::new(),
             cursor_position: None,
@@ -424,6 +499,7 @@ impl<'a> Frame<'a> {
             pool,
             links: None,
             hit_grid: None,
+            hit_owner_stack: Vec::new(),
             widget_budget: WidgetBudget::default(),
             widget_signals: Vec::new(),
             cursor_position: None,
@@ -448,6 +524,7 @@ impl<'a> Frame<'a> {
             pool,
             links: Some(links),
             hit_grid: None,
+            hit_owner_stack: Vec::new(),
             widget_budget: WidgetBudget::default(),
             widget_signals: Vec::new(),
             cursor_position: None,
@@ -466,6 +543,7 @@ impl<'a> Frame<'a> {
             pool,
             links: None,
             hit_grid: Some(HitGrid::new(width, height)),
+            hit_owner_stack: Vec::new(),
             widget_budget: WidgetBudget::default(),
             widget_signals: Vec::new(),
             cursor_position: None,
@@ -630,15 +708,27 @@ impl<'a> Frame<'a> {
         region: HitRegion,
         data: HitData,
     ) -> bool {
+        let owner = self.current_hit_owner();
         if let Some(ref mut grid) = self.hit_grid {
             // Clip against current scissor
             let clipped = rect.intersection(&self.buffer.current_scissor());
             if !clipped.is_empty() {
-                grid.register(clipped, id, region, data);
+                grid.register_with_owner(clipped, id, region, data, owner);
             }
             true
         } else {
             false
+        }
+    }
+
+    /// Temporarily attach ownership provenance to hit regions registered in `f`.
+    pub fn with_hit_owner<R>(&mut self, owner: HitOwner, f: impl FnOnce(&mut Self) -> R) -> R {
+        self.hit_owner_stack.push(owner);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)));
+        self.hit_owner_stack.pop();
+        match result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
         }
     }
 
@@ -648,9 +738,22 @@ impl<'a> Frame<'a> {
         self.hit_grid.as_ref().and_then(|grid| grid.hit_test(x, y))
     }
 
+    /// Hit test at the given position, preserving owner provenance.
+    #[must_use]
+    pub fn hit_test_detailed(&self, x: u16, y: u16) -> Option<HitTestResult> {
+        self.hit_grid
+            .as_ref()
+            .and_then(|grid| grid.hit_test_detailed(x, y))
+    }
+
     /// Register a hit region with default metadata (Content, data=0).
     pub fn register_hit_region(&mut self, rect: Rect, id: HitId) -> bool {
         self.register_hit(rect, id, HitRegion::Content, 0)
+    }
+
+    #[inline]
+    fn current_hit_owner(&self) -> Option<HitOwner> {
+        self.hit_owner_stack.last().copied()
     }
 }
 
@@ -1851,5 +1954,61 @@ mod tests {
             grid.hit_test(1, 1),
             Some((HitId::new(2), HitRegion::Button, 20))
         );
+    }
+
+    #[test]
+    fn frame_hit_test_detailed_preserves_owner() {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::with_hit_grid(4, 4, &mut pool);
+
+        frame.with_hit_owner(77, |frame| {
+            frame.register_hit(Rect::new(1, 1, 2, 2), HitId::new(5), HitRegion::Button, 9);
+        });
+
+        assert_eq!(
+            frame.hit_test_detailed(1, 1),
+            Some(HitTestResult::new(
+                HitId::new(5),
+                HitRegion::Button,
+                9,
+                Some(77),
+            ))
+        );
+        assert_eq!(
+            frame.hit_test(1, 1),
+            Some((HitId::new(5), HitRegion::Button, 9))
+        );
+    }
+
+    #[test]
+    fn frame_hit_owner_scope_restores_previous_owner() {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::with_hit_grid(4, 4, &mut pool);
+
+        frame.with_hit_owner(10, |frame| {
+            frame.register_hit(Rect::new(0, 0, 1, 1), HitId::new(1), HitRegion::Content, 1);
+            frame.with_hit_owner(20, |frame| {
+                frame.register_hit(Rect::new(1, 0, 1, 1), HitId::new(2), HitRegion::Content, 2);
+            });
+            frame.register_hit(Rect::new(2, 0, 1, 1), HitId::new(3), HitRegion::Content, 3);
+        });
+
+        assert_eq!(frame.hit_test_detailed(0, 0).unwrap().owner, Some(10));
+        assert_eq!(frame.hit_test_detailed(1, 0).unwrap().owner, Some(20));
+        assert_eq!(frame.hit_test_detailed(2, 0).unwrap().owner, Some(10));
+    }
+
+    #[test]
+    fn frame_hit_owner_scope_restores_after_panic() {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::with_hit_grid(4, 4, &mut pool);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            frame.with_hit_owner(55, |_frame| panic!("boom"));
+        }));
+        assert!(result.is_err());
+
+        frame.register_hit(Rect::new(0, 0, 1, 1), HitId::new(9), HitRegion::Content, 0);
+        assert_eq!(frame.hit_test_detailed(0, 0).unwrap().owner, None);
     }
 }

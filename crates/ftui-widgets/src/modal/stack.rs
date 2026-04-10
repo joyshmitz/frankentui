@@ -40,12 +40,15 @@
 
 use ftui_core::event::Event;
 use ftui_core::geometry::Rect;
-use ftui_render::frame::{Frame, HitData, HitId, HitRegion};
+use ftui_render::frame::{Frame, HitData, HitId, HitRegion, HitTestResult};
 use ftui_style::Style;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::modal::{BackdropConfig, MODAL_HIT_BACKDROP, MODAL_HIT_CONTENT, ModalSizeConstraints};
 use crate::set_style_area;
+
+#[cfg(test)]
+use super::focus_integration::{ModalFocusCoordinator, next_focus_group_id};
 
 #[cfg(feature = "tracing")]
 use web_time::Instant;
@@ -431,26 +434,29 @@ impl ModalStack {
     /// Returns `Some(ModalResult)` if the top modal closed, otherwise `None`.
     /// If the result contains a `focus_group_id`, the caller should call
     /// `FocusManager::pop_trap()` to restore focus.
+    ///
+    /// For mouse interactions, pass the provenance-aware result from
+    /// [`Frame::hit_test_detailed`]. Plain `(HitId, HitRegion, HitData)` tuples
+    /// do not carry enough ownership information for layered modal routing.
     pub fn handle_event(
         &mut self,
         event: &Event,
-        hit: Option<(HitId, HitRegion, HitData)>,
+        hit: Option<HitTestResult>,
     ) -> Option<ModalResult> {
         let top_index = self.modals.len().checked_sub(1)?;
+        let top_owner = self.modals[top_index].id.id();
         let hit_id = self.modals[top_index].hit_id;
-        let filtered_hit = hit.filter(|(id, _, _)| {
-            *id == hit_id
-                || self.modals[..top_index]
-                    .iter()
-                    .all(|modal| modal.hit_id != *id)
-        });
+        let filtered_hit = hit.filter(|hit| hit.owner == Some(top_owner));
         let top = &mut self.modals[top_index];
         let id = top.id;
         let focus_group_id = top.focus_group_id;
         #[cfg(feature = "tracing")]
         let modal_type = top.modal.modal_type();
 
-        if let Some(data) = top.modal.handle_event(event, filtered_hit, hit_id) {
+        if let Some(data) =
+            top.modal
+                .handle_event(event, filtered_hit.map(HitTestResult::into_tuple), hit_id)
+        {
             // Modal wants to close
             self.modals.pop();
             let result = ModalResult {
@@ -518,35 +524,37 @@ impl ModalStack {
                 set_style_area(&mut frame.buffer, screen, Style::new().bg(bg_color));
             }
 
-            // Register backdrop hits even when the modal content clamps to zero.
-            // A zero-sized modal can still present a visible overlay and should
-            // still receive backdrop clicks.
-            if !screen.is_empty() {
-                frame.register_hit(screen, modal.hit_id, MODAL_HIT_BACKDROP, 0);
-            }
+            frame.with_hit_owner(modal.id.id(), |frame| {
+                // Register backdrop hits even when the modal content clamps to zero.
+                // A zero-sized modal can still present a visible overlay and should
+                // still receive backdrop clicks.
+                if !screen.is_empty() {
+                    frame.register_hit(screen, modal.hit_id, MODAL_HIT_BACKDROP, 0);
+                }
 
-            // Calculate modal content area
-            let constraints = modal.modal.size_constraints();
-            let available = ftui_core::geometry::Size::new(screen.width, screen.height);
-            let size = constraints.clamp(available);
+                // Calculate modal content area
+                let constraints = modal.modal.size_constraints();
+                let available = ftui_core::geometry::Size::new(screen.width, screen.height);
+                let size = constraints.clamp(available);
 
-            if size.width == 0 || size.height == 0 {
-                continue;
-            }
+                if size.width == 0 || size.height == 0 {
+                    return;
+                }
 
-            // Center the modal
-            let x = screen.x + (screen.width.saturating_sub(size.width)) / 2;
-            let y = screen.y + (screen.height.saturating_sub(size.height)) / 2;
-            let content_area = Rect::new(x, y, size.width, size.height);
+                // Center the modal
+                let x = screen.x + (screen.width.saturating_sub(size.width)) / 2;
+                let y = screen.y + (screen.height.saturating_sub(size.height)) / 2;
+                let content_area = Rect::new(x, y, size.width, size.height);
 
-            // Register hit regions for backdrop and content so that
-            // close_on_backdrop and custom mouse dispatch can distinguish clicks.
-            if !content_area.is_empty() {
-                frame.register_hit(content_area, modal.hit_id, MODAL_HIT_CONTENT, 0);
-            }
+                // Register hit regions for backdrop and content so that
+                // close_on_backdrop and custom mouse dispatch can distinguish clicks.
+                if !content_area.is_empty() {
+                    frame.register_hit(content_area, modal.hit_id, MODAL_HIT_CONTENT, 0);
+                }
 
-            // Render modal content
-            modal.modal.render_content(content_area, frame);
+                // Render modal content
+                modal.modal.render_content(content_area, frame);
+            });
 
             #[cfg(feature = "tracing")]
             {
@@ -729,35 +737,24 @@ impl<W: crate::Widget + Send> StackModal for WidgetModalEntry<W> {
 /// // Pop modal and restore focus
 /// integrator.pop_with_focus();
 /// ```
+#[cfg(test)]
 #[allow(dead_code)]
 pub struct ModalFocusIntegration<'a> {
     stack: &'a mut ModalStack,
     focus: &'a mut crate::focus::FocusManager,
-    next_group_id: u32,
+    base_focus: Option<Option<crate::focus::FocusId>>,
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 impl<'a> ModalFocusIntegration<'a> {
-    fn allocate_group_id(&mut self) -> u32 {
-        while self.focus.has_group(self.next_group_id) {
-            self.next_group_id = self.next_group_id.checked_add(1).unwrap_or(1000);
-        }
-        let group_id = self.next_group_id;
-        self.next_group_id = self.next_group_id.checked_add(1).unwrap_or(1000);
-        group_id
-    }
-
     /// Create a new integration helper.
     pub fn new(stack: &'a mut ModalStack, focus: &'a mut crate::focus::FocusManager) -> Self {
-        let next_group_id = stack
-            .focus_group_ids_in_order()
-            .into_iter()
-            .max()
-            .and_then(|id| id.checked_add(1))
-            .unwrap_or(1000);
+        let base_focus = focus.base_trap_return_focus();
         Self {
             stack,
             focus,
-            next_group_id,
+            base_focus,
         }
     }
 
@@ -772,32 +769,8 @@ impl<'a> ModalFocusIntegration<'a> {
     pub fn push_with_focus(&mut self, modal: Box<dyn StackModal>) -> ModalId {
         let focusable_ids = modal.focusable_ids();
         let is_aria_modal = modal.aria_modal();
-
-        let focus_group_id = if is_aria_modal {
-            if let Some(ids) = focusable_ids {
-                let group_id = self.allocate_group_id();
-
-                // Convert ModalFocusId (u64) to FocusId (u64) for the focus manager
-                let focus_ids: Vec<crate::focus::FocusId> = ids.into_iter().collect();
-
-                // Create focus group and trap.
-                // If the group is empty, push_trap refuses so we don't
-                // record a focus_group_id (avoids pop mismatch).
-                self.focus.create_group(group_id, focus_ids);
-                if self.focus.push_trap(group_id) {
-                    Some(group_id)
-                } else {
-                    self.focus.remove_group(group_id);
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        self.stack.push_with_focus(modal, focus_group_id)
+        ModalFocusCoordinator::new(self.stack, self.focus, &mut self.base_focus)
+            .push_modal_with_trap(modal, focusable_ids, is_aria_modal, next_focus_group_id)
     }
 
     /// Pop the top modal with focus restoration.
@@ -807,15 +780,17 @@ impl<'a> ModalFocusIntegration<'a> {
     ///
     /// Returns the modal result.
     pub fn pop_with_focus(&mut self) -> Option<ModalResult> {
-        let result = self.stack.pop();
+        ModalFocusCoordinator::new(self.stack, self.focus, &mut self.base_focus).pop_modal()
+    }
 
-        if let Some(ref res) = result
-            && let Some(group_id) = res.focus_group_id
-        {
-            self.close_focus_group(group_id);
-        }
+    /// Pop a specific modal with focus restoration/rebuild.
+    pub fn pop_id_with_focus(&mut self, id: ModalId) -> Option<ModalResult> {
+        ModalFocusCoordinator::new(self.stack, self.focus, &mut self.base_focus).pop_modal_by_id(id)
+    }
 
-        result
+    /// Pop all modals with focus restoration/rebuild.
+    pub fn pop_all_with_focus(&mut self) -> Vec<ModalResult> {
+        ModalFocusCoordinator::new(self.stack, self.focus, &mut self.base_focus).pop_all_modals()
     }
 
     /// Handle an event with automatic focus trap popping.
@@ -824,20 +799,10 @@ impl<'a> ModalFocusIntegration<'a> {
     pub fn handle_event(
         &mut self,
         event: &Event,
-        hit: Option<(HitId, HitRegion, HitData)>,
+        hit: Option<HitTestResult>,
     ) -> Option<ModalResult> {
-        if let Event::Focus(focused) = event {
-            self.focus.apply_host_focus(*focused);
-        }
-        let result = self.stack.handle_event(event, hit);
-
-        if let Some(ref res) = result
-            && let Some(group_id) = res.focus_group_id
-        {
-            self.close_focus_group(group_id);
-        }
-
-        result
+        ModalFocusCoordinator::new(self.stack, self.focus, &mut self.base_focus)
+            .handle_modal_event(event, hit)
     }
 
     /// Check if focus is currently trapped in a modal.
@@ -851,6 +816,9 @@ impl<'a> ModalFocusIntegration<'a> {
     }
 
     /// Get a mutable reference to the underlying modal stack.
+    ///
+    /// **Warning**: Direct manipulation may desync focus state. Call
+    /// `resync_focus_state()` after mutating the stack directly.
     pub fn stack_mut(&mut self) -> &mut ModalStack {
         self.stack
     }
@@ -861,16 +829,17 @@ impl<'a> ModalFocusIntegration<'a> {
     }
 
     /// Get a mutable reference to the underlying focus manager.
+    ///
+    /// **Warning**: Direct manipulation may desync modal focus restoration.
+    /// Call `resync_focus_state()` after mutating traps, groups, or graph state directly.
     pub fn focus_mut(&mut self) -> &mut crate::focus::FocusManager {
         self.focus
     }
 
-    fn close_focus_group(&mut self, group_id: u32) {
-        let closing_members = self.focus.group_members(group_id);
-        self.focus.pop_trap();
-        self.focus.remove_group(group_id);
-        self.focus
-            .repair_focus_after_excluding_ids(&closing_members);
+    /// Rebuild modal focus state after direct mutation via `stack_mut()` or `focus_mut()`.
+    pub fn resync_focus_state(&mut self) {
+        ModalFocusCoordinator::new(self.stack, self.focus, &mut self.base_focus)
+            .rebuild_focus_traps();
     }
 }
 
@@ -906,6 +875,9 @@ mod tests {
 
     #[derive(Debug, Default)]
     struct CloseOnInnerHitModal;
+
+    #[derive(Debug, Default)]
+    struct CloseOnCollidingInnerHitModal;
 
     impl StackModal for CloseOnAnyHitModal {
         fn render_content(&self, _area: Rect, _frame: &mut Frame) {}
@@ -992,6 +964,46 @@ mod tests {
             if let Some((id, region, _)) = hit
                 && id == HitId::new(4242)
                 && region == HitRegion::Custom(99)
+            {
+                return Some(ModalResultData::Dismissed);
+            }
+
+            None
+        }
+
+        fn size_constraints(&self) -> ModalSizeConstraints {
+            ModalSizeConstraints::new()
+                .min_width(10)
+                .max_width(10)
+                .min_height(3)
+                .max_height(3)
+        }
+
+        fn backdrop_config(&self) -> BackdropConfig {
+            BackdropConfig::default()
+        }
+
+        fn close_on_backdrop(&self) -> bool {
+            false
+        }
+    }
+
+    impl StackModal for CloseOnCollidingInnerHitModal {
+        fn render_content(&self, area: Rect, frame: &mut Frame) {
+            if !area.is_empty() {
+                frame.register_hit(area, HitId::new(1000), HitRegion::Custom(100), 0);
+            }
+        }
+
+        fn handle_event(
+            &mut self,
+            _event: &Event,
+            hit: Option<(HitId, HitRegion, HitData)>,
+            _hit_id: HitId,
+        ) -> Option<ModalResultData> {
+            if let Some((id, region, _)) = hit
+                && id == HitId::new(1000)
+                && region == HitRegion::Custom(100)
             {
                 return Some(ModalResultData::Dismissed);
             }
@@ -1364,7 +1376,12 @@ mod tests {
             0,
             0,
         ));
-        let hit = Some((HitId::new(1000), MODAL_HIT_BACKDROP, 0));
+        let hit = Some(HitTestResult::new(
+            HitId::new(1000),
+            MODAL_HIT_BACKDROP,
+            0,
+            Some(top_id.id()),
+        ));
 
         let result = stack.handle_event(&click, hit);
         assert!(result.is_some());
@@ -1384,7 +1401,12 @@ mod tests {
             5,
             5,
         ));
-        let hit = Some((HitId::new(1000), MODAL_HIT_CONTENT, 0));
+        let hit = Some(HitTestResult::new(
+            HitId::new(1000),
+            MODAL_HIT_CONTENT,
+            0,
+            Some(stack.top_id().unwrap().id()),
+        ));
 
         let result = stack.handle_event(&click, hit);
         assert!(result.is_none());
@@ -1401,7 +1423,12 @@ mod tests {
             0,
             0,
         ));
-        let hit = Some((HitId::new(1000), MODAL_HIT_BACKDROP, 0));
+        let hit = Some(HitTestResult::new(
+            HitId::new(1000),
+            MODAL_HIT_BACKDROP,
+            0,
+            Some(top_id.id()),
+        ));
 
         let result = stack.handle_event(&click, hit);
         assert!(result.is_some());
@@ -1422,9 +1449,17 @@ mod tests {
         let screen = Rect::new(0, 0, 20, 10);
         stack.render(&mut frame, screen);
 
-        let hit = frame.hit_test(10, 4);
-        assert_eq!(hit, Some((HitId::new(4242), HitRegion::Custom(99), 0)));
-        assert_ne!(hit.unwrap().0, top_hit_id);
+        let hit = frame.hit_test_detailed(10, 4);
+        assert_eq!(
+            hit,
+            Some(HitTestResult::new(
+                HitId::new(4242),
+                HitRegion::Custom(99),
+                0,
+                Some(top_id.id()),
+            ))
+        );
+        assert_ne!(hit.unwrap().id, top_hit_id);
 
         let click = Event::Mouse(ftui_core::event::MouseEvent::new(
             ftui_core::event::MouseEventKind::Down(ftui_core::event::MouseButton::Left),
@@ -1438,6 +1473,44 @@ mod tests {
         assert_eq!(result.id, top_id);
         assert!(matches!(result.data, Some(ModalResultData::Dismissed)));
         assert!(stack.is_empty());
+    }
+
+    #[test]
+    fn custom_modal_receives_inner_widget_hit_even_when_hit_id_collides_with_lower_modal() {
+        let mut stack = ModalStack::new();
+        let _lower_id = stack.push(Box::new(WidgetModalEntry::new(StubWidget)));
+        let top_id = stack.push(Box::new(CloseOnCollidingInnerHitModal));
+        let top_hit_id = stack.modals.last().unwrap().hit_id;
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::with_hit_grid(20, 10, &mut pool);
+        let screen = Rect::new(0, 0, 20, 10);
+        stack.render(&mut frame, screen);
+
+        let hit = frame.hit_test_detailed(10, 4);
+        assert_eq!(
+            hit,
+            Some(HitTestResult::new(
+                HitId::new(1000),
+                HitRegion::Custom(100),
+                0,
+                Some(top_id.id()),
+            ))
+        );
+        assert_ne!(hit.unwrap().id, top_hit_id);
+
+        let click = Event::Mouse(ftui_core::event::MouseEvent::new(
+            ftui_core::event::MouseEventKind::Down(ftui_core::event::MouseButton::Left),
+            10,
+            4,
+        ));
+
+        let result = stack.handle_event(&click, hit);
+        assert!(result.is_some());
+        let result = result.unwrap();
+        assert_eq!(result.id, top_id);
+        assert!(matches!(result.data, Some(ModalResultData::Dismissed)));
+        assert_eq!(stack.depth(), 1);
     }
 
     #[test]
@@ -1455,7 +1528,15 @@ mod tests {
 
         stack.render(&mut frame, screen);
 
-        assert_eq!(frame.hit_test(0, 0), Some((hit_id, MODAL_HIT_BACKDROP, 0)));
+        assert_eq!(
+            frame.hit_test_detailed(0, 0),
+            Some(HitTestResult::new(
+                hit_id,
+                MODAL_HIT_BACKDROP,
+                0,
+                Some(stack.top_id().unwrap().id()),
+            ))
+        );
     }
 
     #[test]
@@ -1469,7 +1550,12 @@ mod tests {
             0,
             0,
         ));
-        let lower_backdrop_hit = Some((HitId::new(1000), MODAL_HIT_BACKDROP, 0));
+        let lower_backdrop_hit = Some(HitTestResult::new(
+            HitId::new(1000),
+            MODAL_HIT_BACKDROP,
+            0,
+            Some(_lower_id.id()),
+        ));
 
         let result = stack.handle_event(&click, lower_backdrop_hit);
         assert!(result.is_none());
@@ -1671,6 +1757,121 @@ mod tests {
             assert!(result.is_some());
 
             // Focus should be restored to trigger element
+            assert!(!integrator.is_focus_trapped());
+            assert_eq!(integrator.focus().current(), Some(100));
+        }
+    }
+
+    #[test]
+    fn focus_integration_pop_id_with_focus_preserves_top_trap_and_restores_base_after_last_pop() {
+        use crate::focus::{FocusManager, FocusNode};
+        use ftui_core::geometry::Rect;
+
+        let mut stack = ModalStack::new();
+        let mut focus = FocusManager::new();
+
+        focus
+            .graph_mut()
+            .insert(FocusNode::new(1, Rect::new(0, 0, 10, 1)));
+        focus
+            .graph_mut()
+            .insert(FocusNode::new(2, Rect::new(0, 1, 10, 1)));
+        focus
+            .graph_mut()
+            .insert(FocusNode::new(100, Rect::new(0, 10, 10, 1)));
+        focus.focus(100);
+
+        {
+            let mut integrator = ModalFocusIntegration::new(&mut stack, &mut focus);
+            let lower = WidgetModalEntry::new(StubWidget).with_focusable_ids(vec![1]);
+            let lower_id = integrator.push_with_focus(Box::new(lower));
+            let top = WidgetModalEntry::new(StubWidget).with_focusable_ids(vec![2]);
+            integrator.push_with_focus(Box::new(top));
+
+            let removed = integrator.pop_id_with_focus(lower_id);
+            assert!(removed.is_some());
+            assert!(integrator.is_focus_trapped());
+            assert_eq!(integrator.focus().current(), Some(2));
+
+            let final_result = integrator.pop_with_focus();
+            assert!(final_result.is_some());
+            assert!(!integrator.is_focus_trapped());
+            assert_eq!(integrator.focus().current(), Some(100));
+        }
+    }
+
+    #[test]
+    fn focus_integration_pop_id_with_focus_preserves_unfocused_base_across_helper_instances() {
+        use crate::focus::{FocusManager, FocusNode};
+        use ftui_core::geometry::Rect;
+
+        let mut stack = ModalStack::new();
+        let mut focus = FocusManager::new();
+
+        focus
+            .graph_mut()
+            .insert(FocusNode::new(1, Rect::new(0, 0, 10, 1)));
+        focus
+            .graph_mut()
+            .insert(FocusNode::new(2, Rect::new(0, 1, 10, 1)));
+
+        let lower_id;
+        let upper_id;
+        {
+            let mut integrator = ModalFocusIntegration::new(&mut stack, &mut focus);
+            let lower = WidgetModalEntry::new(StubWidget).with_focusable_ids(vec![1]);
+            let upper = WidgetModalEntry::new(StubWidget).with_focusable_ids(vec![2]);
+            lower_id = integrator.push_with_focus(Box::new(lower));
+            upper_id = integrator.push_with_focus(Box::new(upper));
+            assert_eq!(integrator.focus().current(), Some(2));
+        }
+
+        {
+            let mut integrator = ModalFocusIntegration::new(&mut stack, &mut focus);
+            let removed = integrator.pop_id_with_focus(lower_id);
+            assert_eq!(removed.map(|result| result.id), Some(lower_id));
+            assert_eq!(integrator.focus().current(), Some(2));
+            assert!(integrator.is_focus_trapped());
+
+            let closed = integrator.pop_with_focus();
+            assert_eq!(closed.map(|result| result.id), Some(upper_id));
+        }
+
+        assert_eq!(focus.current(), None);
+        assert!(!focus.is_trapped());
+    }
+
+    #[test]
+    fn focus_integration_resync_focus_state_recovers_after_manual_stack_mutation() {
+        use crate::focus::{FocusManager, FocusNode};
+        use ftui_core::geometry::Rect;
+
+        let mut stack = ModalStack::new();
+        let mut focus = FocusManager::new();
+
+        focus
+            .graph_mut()
+            .insert(FocusNode::new(1, Rect::new(0, 0, 10, 1)));
+        focus
+            .graph_mut()
+            .insert(FocusNode::new(2, Rect::new(0, 1, 10, 1)));
+        focus
+            .graph_mut()
+            .insert(FocusNode::new(100, Rect::new(0, 10, 10, 1)));
+        focus.focus(100);
+
+        {
+            let mut integrator = ModalFocusIntegration::new(&mut stack, &mut focus);
+            let modal = WidgetModalEntry::new(StubWidget).with_focusable_ids(vec![1, 2]);
+            integrator.push_with_focus(Box::new(modal));
+            assert!(integrator.is_focus_trapped());
+            assert_eq!(integrator.focus().current(), Some(1));
+
+            let result = integrator.stack_mut().pop();
+            assert!(result.is_some());
+            assert!(integrator.is_focus_trapped());
+
+            integrator.resync_focus_state();
             assert!(!integrator.is_focus_trapped());
             assert_eq!(integrator.focus().current(), Some(100));
         }
