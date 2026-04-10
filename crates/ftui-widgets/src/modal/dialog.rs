@@ -24,12 +24,16 @@ use ftui_core::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ftui_core::geometry::Rect;
+use ftui_render::cell::Cell;
 use ftui_render::frame::{Frame, HitData, HitId, HitRegion};
 use ftui_style::{Style, StyleFlags};
 use ftui_text::display_width;
+use unicode_segmentation::UnicodeSegmentation;
 
 /// Hit region for dialog buttons.
 pub const DIALOG_HIT_BUTTON: HitRegion = HitRegion::Button;
+/// Hit region for prompt input.
+pub const DIALOG_HIT_INPUT: HitRegion = HitRegion::Custom(1);
 
 /// Result from a dialog interaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -378,12 +382,22 @@ impl Dialog {
                 kind: MouseEventKind::Down(MouseButton::Left),
                 ..
             }) => {
-                if let (Some((id, region, data)), Some(expected)) = (hit, self.hit_id)
+                state.pressed_button = None;
+                if self.config.kind == DialogKind::Prompt
+                    && let (Some((id, region, _)), Some(expected)) = (hit, self.hit_id)
+                    && id == expected
+                    && region == DIALOG_HIT_INPUT
+                {
+                    state.input_focused = true;
+                    state.focused_button = None;
+                    state.pressed_button = None;
+                } else if let (Some((id, region, data)), Some(expected)) = (hit, self.hit_id)
                     && id == expected
                     && region == DIALOG_HIT_BUTTON
                     && let Ok(idx) = usize::try_from(data)
                     && idx < self.buttons.len()
                 {
+                    state.input_focused = false;
                     state.focused_button = Some(idx);
                     state.pressed_button = Some(idx);
                 }
@@ -402,9 +416,16 @@ impl Dialog {
                     && let Ok(idx) = usize::try_from(data)
                     && idx == pressed
                 {
+                    state.input_focused = false;
                     state.focused_button = Some(idx);
                     return self.activate_button(state);
                 }
+            }
+
+            Event::Paste(paste)
+                if self.config.kind == DialogKind::Prompt && state.input_focused =>
+            {
+                self.handle_input_paste(state, &paste.text);
             }
 
             // For prompt dialogs, handle text input
@@ -423,6 +444,7 @@ impl Dialog {
     fn cycle_focus(&self, state: &mut DialogState, reverse: bool) {
         let has_input = self.config.kind == DialogKind::Prompt;
         let button_count = self.buttons.len();
+        state.pressed_button = None;
 
         if has_input {
             // Cycle: input -> button 0 -> button 1 -> ... -> input
@@ -447,18 +469,26 @@ impl Dialog {
                 } else {
                     state.focused_button = Some(idx + 1);
                 }
+            } else {
+                state.focused_button = if reverse {
+                    Some(button_count.saturating_sub(1))
+                } else {
+                    Some(0)
+                };
             }
         } else {
             // Just cycle buttons
-            let current = state.focused_button.unwrap_or(0);
             state.focused_button = if reverse {
-                Some(if current == 0 {
-                    button_count - 1
-                } else {
-                    current - 1
+                Some(match state.focused_button {
+                    Some(0) => button_count - 1,
+                    Some(current) => current - 1,
+                    None => button_count - 1,
                 })
             } else {
-                Some((current + 1) % button_count)
+                Some(match state.focused_button {
+                    Some(current) => (current + 1) % button_count,
+                    None => 0,
+                })
             };
         }
     }
@@ -468,11 +498,18 @@ impl Dialog {
         if count == 0 {
             return;
         }
-        let current = state.focused_button.unwrap_or(0);
+        state.pressed_button = None;
         state.focused_button = if forward {
-            Some((current + 1) % count)
+            Some(match state.focused_button {
+                Some(current) => (current + 1) % count,
+                None => 0,
+            })
         } else {
-            Some(if current == 0 { count - 1 } else { current - 1 })
+            Some(match state.focused_button {
+                Some(0) => count - 1,
+                Some(current) => current - 1,
+                None => count - 1,
+            })
         };
     }
 
@@ -509,7 +546,11 @@ impl Dialog {
                 state.input_value.push(c);
             }
             KeyCode::Backspace => {
-                state.input_value.pop();
+                if let Some((grapheme_start, _)) =
+                    state.input_value.grapheme_indices(true).next_back()
+                {
+                    state.input_value.truncate(grapheme_start);
+                }
             }
             KeyCode::Delete => {
                 state.input_value.clear();
@@ -518,15 +559,27 @@ impl Dialog {
         }
     }
 
+    fn handle_input_paste(&self, state: &mut DialogState, text: &str) {
+        let sanitized: String = text
+            .chars()
+            .map(|c| match c {
+                '\n' | '\r' | '\t' => ' ',
+                other => other,
+            })
+            .filter(|c| !c.is_control())
+            .collect();
+
+        if !sanitized.is_empty() {
+            state.input_value.push_str(&sanitized);
+        }
+    }
+
     /// Calculate content height.
     fn content_height(&self) -> u16 {
         let mut height: u16 = 2; // Top and bottom border
 
-        // Title row
-        if !self.title.is_empty() {
-            height += 1;
-        }
-
+        // The title is rendered into the top border, so it does not consume an
+        // extra interior row.
         // Message row(s) - simplified: 1 row
         if !self.message.is_empty() {
             height += 1;
@@ -563,6 +616,18 @@ impl Dialog {
         let inner = block.inner(area);
         if inner.is_empty() {
             return;
+        }
+
+        // Dialog content owns the inner pane. Clear it before redraw while preserving the
+        // backdrop-tinted background already applied by `Modal`.
+        for y in inner.y..inner.bottom() {
+            for x in inner.x..inner.right() {
+                if let Some(cell) = frame.buffer.get_mut(x, y) {
+                    let bg = cell.bg;
+                    *cell = Cell::from_char(' ');
+                    cell.bg = bg;
+                }
+            }
         }
 
         let mut y = inner.y;
@@ -615,6 +680,12 @@ impl Dialog {
         let input_area = Rect::new(x + 1, y, width.saturating_sub(2), 1);
         let input_style = self.config.input_style;
         set_style_area(&mut frame.buffer, input_area, input_style);
+
+        if let Some(hit_id) = self.hit_id
+            && !input_area.is_empty()
+        {
+            frame.register_hit(input_area, hit_id, DIALOG_HIT_INPUT, 0);
+        }
 
         // Draw input value or placeholder
         let display_text = if state.input_value.is_empty() {
@@ -810,6 +881,20 @@ mod tests {
     use super::*;
     use ftui_render::grapheme_pool::GraphemePool;
 
+    fn row_text(frame: &Frame, y: u16) -> String {
+        (0..frame.buffer.width())
+            .map(|x| {
+                frame
+                    .buffer
+                    .get(x, y)
+                    .unwrap()
+                    .content
+                    .as_char()
+                    .unwrap_or(' ')
+            })
+            .collect()
+    }
+
     #[test]
     fn alert_dialog_single_button() {
         let dialog = Dialog::alert("Title", "Message");
@@ -909,6 +994,92 @@ mod tests {
     }
 
     #[test]
+    fn prompt_mouse_down_on_button_transfers_focus_from_input() {
+        let dialog = Dialog::prompt("Test", "Msg").hit_id(HitId::new(1));
+        let mut state = DialogState::new();
+        assert!(state.input_focused);
+        assert_eq!(state.focused_button, None);
+
+        let down = Event::Mouse(MouseEvent::new(
+            MouseEventKind::Down(MouseButton::Left),
+            0,
+            0,
+        ));
+        let hit = Some((HitId::new(1), HitRegion::Button, 1u64));
+        let result = dialog.handle_event(&down, &mut state, hit);
+
+        assert_eq!(result, None);
+        assert!(!state.input_focused);
+        assert_eq!(state.focused_button, Some(1));
+        assert_eq!(state.pressed_button, Some(1));
+    }
+
+    #[test]
+    fn prompt_mouse_button_focus_allows_arrow_navigation_after_missed_click() {
+        let dialog = Dialog::prompt("Test", "Msg").hit_id(HitId::new(1));
+        let mut state = DialogState::new();
+
+        let down = Event::Mouse(MouseEvent::new(
+            MouseEventKind::Down(MouseButton::Left),
+            0,
+            0,
+        ));
+        let hit = Some((HitId::new(1), HitRegion::Button, 0u64));
+        dialog.handle_event(&down, &mut state, hit);
+
+        let up_outside = Event::Mouse(MouseEvent::new(MouseEventKind::Up(MouseButton::Left), 0, 0));
+        dialog.handle_event(&up_outside, &mut state, None);
+        assert!(!state.input_focused);
+        assert_eq!(state.focused_button, Some(0));
+
+        let right = Event::Key(KeyEvent {
+            code: KeyCode::Right,
+            modifiers: Modifiers::empty(),
+            kind: KeyEventKind::Press,
+        });
+        dialog.handle_event(&right, &mut state, None);
+        assert_eq!(state.focused_button, Some(1));
+    }
+
+    #[test]
+    fn prompt_mouse_down_on_input_restores_input_focus() {
+        let dialog = Dialog::prompt("Test", "Msg").hit_id(HitId::new(1));
+        let mut state = DialogState::new();
+        state.input_focused = false;
+        state.focused_button = Some(1);
+        state.pressed_button = Some(1);
+
+        let down = Event::Mouse(MouseEvent::new(
+            MouseEventKind::Down(MouseButton::Left),
+            0,
+            0,
+        ));
+        let hit = Some((HitId::new(1), DIALOG_HIT_INPUT, 0u64));
+        let result = dialog.handle_event(&down, &mut state, hit);
+
+        assert_eq!(result, None);
+        assert!(state.input_focused);
+        assert_eq!(state.focused_button, None);
+        assert_eq!(state.pressed_button, None);
+    }
+
+    #[test]
+    fn render_prompt_registers_input_hit_region() {
+        let dialog = Dialog::prompt("Prompt", "Enter:").hit_id(HitId::new(7));
+        let mut state = DialogState::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::with_hit_grid(40, 10, &mut pool);
+
+        dialog.render(Rect::new(0, 0, 40, 10), &mut frame, &mut state);
+
+        let found = (0..frame.buffer.height()).any(|y| {
+            (0..frame.buffer.width())
+                .any(|x| frame.hit_test(x, y) == Some((HitId::new(7), DIALOG_HIT_INPUT, 0)))
+        });
+        assert!(found);
+    }
+
+    #[test]
     fn dialog_mouse_up_outside_does_not_activate() {
         let dialog = Dialog::confirm("Test", "Msg").hit_id(HitId::new(1));
         let mut state = DialogState::new();
@@ -948,6 +1119,71 @@ mod tests {
 
         dialog.handle_event(&tab, &mut state, None);
         assert_eq!(state.focused_button, Some(0)); // Wraps around
+    }
+
+    #[test]
+    fn fresh_non_prompt_tab_starts_on_primary_button() {
+        let dialog = Dialog::confirm("Test", "Msg");
+        let mut state = DialogState::new();
+        assert_eq!(state.focused_button, None);
+        assert!(state.input_focused);
+
+        let tab = Event::Key(KeyEvent {
+            code: KeyCode::Tab,
+            modifiers: Modifiers::empty(),
+            kind: KeyEventKind::Press,
+        });
+
+        dialog.handle_event(&tab, &mut state, None);
+        assert!(!state.input_focused);
+        assert_eq!(state.focused_button, Some(0));
+    }
+
+    #[test]
+    fn fresh_non_prompt_right_arrow_starts_on_primary_button() {
+        let dialog = Dialog::confirm("Test", "Msg");
+        let mut state = DialogState::new();
+        assert_eq!(state.focused_button, None);
+        assert!(state.input_focused);
+
+        let right = Event::Key(KeyEvent {
+            code: KeyCode::Right,
+            modifiers: Modifiers::empty(),
+            kind: KeyEventKind::Press,
+        });
+
+        dialog.handle_event(&right, &mut state, None);
+        assert!(!state.input_focused);
+        assert_eq!(state.focused_button, Some(0));
+    }
+
+    #[test]
+    fn tab_navigation_cancels_pressed_button() {
+        let dialog = Dialog::confirm("Test", "Msg").hit_id(HitId::new(1));
+        let mut state = DialogState::new();
+
+        let down = Event::Mouse(MouseEvent::new(
+            MouseEventKind::Down(MouseButton::Left),
+            0,
+            0,
+        ));
+        let hit0 = Some((HitId::new(1), HitRegion::Button, 0u64));
+        dialog.handle_event(&down, &mut state, hit0);
+        assert_eq!(state.pressed_button, Some(0));
+
+        let tab = Event::Key(KeyEvent {
+            code: KeyCode::Tab,
+            modifiers: Modifiers::empty(),
+            kind: KeyEventKind::Press,
+        });
+        dialog.handle_event(&tab, &mut state, None);
+        assert_eq!(state.focused_button, Some(1));
+        assert_eq!(state.pressed_button, None);
+
+        let up = Event::Mouse(MouseEvent::new(MouseEventKind::Up(MouseButton::Left), 0, 0));
+        let result = dialog.handle_event(&up, &mut state, hit0);
+        assert_eq!(result, None);
+        assert!(state.is_open());
     }
 
     #[test]
@@ -1000,6 +1236,64 @@ mod tests {
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(80, 24, &mut pool);
         dialog.render(Rect::new(0, 0, 80, 24), &mut frame, &mut state);
+    }
+
+    #[test]
+    fn render_content_shorter_message_and_buttons_clear_stale_inner_rows() {
+        let dialog_long = Dialog::custom("Title", "LLLLLLLLLLLLLLLLLLLL")
+            .custom_button("Alpha", "alpha")
+            .custom_button("Beta", "beta")
+            .custom_button("Gamma", "gamma")
+            .build();
+        let dialog_short = Dialog::custom("Title", "S").ok_button().build();
+        let state = DialogState::new();
+        let area = Rect::new(10, 5, 40, 8);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+
+        dialog_long.render_content(area, &mut frame, &state);
+        dialog_short.render_content(area, &mut frame, &state);
+
+        let inner = Block::default()
+            .borders(Borders::ALL)
+            .title("Title")
+            .title_alignment(Alignment::Center)
+            .inner(area);
+        let message_row = row_text(&frame, inner.y);
+        let button_row = row_text(&frame, inner.y + 2);
+
+        assert!(message_row.contains('S'));
+        assert!(!message_row.contains('L'));
+        assert!(button_row.contains("[ OK ]"));
+        assert!(!button_row.contains("Alpha"));
+        assert!(!button_row.contains("Beta"));
+        assert!(!button_row.contains("Gamma"));
+    }
+
+    #[test]
+    fn render_prompt_shorter_input_clears_stale_suffix() {
+        let dialog = Dialog::prompt("Prompt", "Enter:");
+        let area = Rect::new(10, 5, 40, 8);
+        let mut long_state = DialogState::new();
+        long_state.input_value = "LongInputValue".to_string();
+        let mut short_state = DialogState::new();
+        short_state.input_value = "Hi".to_string();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+
+        dialog.render_content(area, &mut frame, &long_state);
+        dialog.render_content(area, &mut frame, &short_state);
+
+        let inner = Block::default()
+            .borders(Borders::ALL)
+            .title("Prompt")
+            .title_alignment(Alignment::Center)
+            .inner(area);
+        let input_row = row_text(&frame, inner.y + 2);
+
+        assert!(input_row.contains("Hi"));
+        assert!(!input_row.contains("LongInputValue"));
+        assert!(!input_row.contains("ngInputValue"));
     }
 
     #[test]
@@ -1161,6 +1455,24 @@ mod tests {
     }
 
     #[test]
+    fn prompt_tab_recovers_when_button_focus_is_missing() {
+        let dialog = Dialog::prompt("Test", "Enter:");
+        let mut state = DialogState::new();
+        state.input_focused = false;
+        state.focused_button = None;
+
+        let tab = Event::Key(KeyEvent {
+            code: KeyCode::Tab,
+            modifiers: Modifiers::empty(),
+            kind: KeyEventKind::Press,
+        });
+
+        dialog.handle_event(&tab, &mut state, None);
+        assert!(!state.input_focused);
+        assert_eq!(state.focused_button, Some(0));
+    }
+
+    #[test]
     fn edge_arrow_key_navigation() {
         let dialog = Dialog::confirm("Test", "Msg");
         let mut state = DialogState::new();
@@ -1216,6 +1528,36 @@ mod tests {
     }
 
     #[test]
+    fn prompt_arrow_navigation_cancels_pressed_button() {
+        let dialog = Dialog::prompt("Test", "Enter:").hit_id(HitId::new(1));
+        let mut state = DialogState::new();
+
+        let down = Event::Mouse(MouseEvent::new(
+            MouseEventKind::Down(MouseButton::Left),
+            0,
+            0,
+        ));
+        let hit0 = Some((HitId::new(1), HitRegion::Button, 0u64));
+        dialog.handle_event(&down, &mut state, hit0);
+        assert_eq!(state.focused_button, Some(0));
+        assert_eq!(state.pressed_button, Some(0));
+
+        let right = Event::Key(KeyEvent {
+            code: KeyCode::Right,
+            modifiers: Modifiers::empty(),
+            kind: KeyEventKind::Press,
+        });
+        dialog.handle_event(&right, &mut state, None);
+        assert_eq!(state.focused_button, Some(1));
+        assert_eq!(state.pressed_button, None);
+
+        let up = Event::Mouse(MouseEvent::new(MouseEventKind::Up(MouseButton::Left), 0, 0));
+        let result = dialog.handle_event(&up, &mut state, hit0);
+        assert_eq!(result, None);
+        assert!(state.is_open());
+    }
+
+    #[test]
     fn edge_input_backspace_on_empty() {
         let dialog = Dialog::prompt("Test", "Enter:");
         let mut state = DialogState::new();
@@ -1228,6 +1570,22 @@ mod tests {
         });
 
         // Backspace on empty input should not panic
+        dialog.handle_event(&backspace, &mut state, None);
+        assert!(state.input_value.is_empty());
+    }
+
+    #[test]
+    fn edge_input_backspace_removes_whole_grapheme_cluster() {
+        let dialog = Dialog::prompt("Test", "Enter:");
+        let mut state = DialogState::new();
+        state.input_value = "e\u{301}".to_string();
+
+        let backspace = Event::Key(KeyEvent {
+            code: KeyCode::Backspace,
+            modifiers: Modifiers::empty(),
+            kind: KeyEventKind::Press,
+        });
+
         dialog.handle_event(&backspace, &mut state, None);
         assert!(state.input_value.is_empty());
     }
@@ -1262,6 +1620,33 @@ mod tests {
             dialog.handle_event(&event, &mut state, None);
         }
         assert_eq!(state.input_value, "hello");
+    }
+
+    #[test]
+    fn edge_prompt_paste_appends_sanitized_single_line_text() {
+        let dialog = Dialog::prompt("Test", "Enter:");
+        let mut state = DialogState::new();
+        state.input_value = "hello".to_string();
+
+        let paste = Event::Paste(ftui_core::event::PasteEvent::bracketed(
+            " world\nnext\tline\u{0007}",
+        ));
+
+        dialog.handle_event(&paste, &mut state, None);
+        assert_eq!(state.input_value, "hello world next line");
+    }
+
+    #[test]
+    fn edge_prompt_paste_ignored_when_input_not_focused() {
+        let dialog = Dialog::prompt("Test", "Enter:");
+        let mut state = DialogState::new();
+        state.input_focused = false;
+        state.focused_button = Some(0);
+
+        let paste = Event::Paste(ftui_core::event::PasteEvent::bracketed("ignored"));
+
+        dialog.handle_event(&paste, &mut state, None);
+        assert!(state.input_value.is_empty());
     }
 
     #[test]
@@ -1356,16 +1741,16 @@ mod tests {
     fn edge_content_height_alert() {
         let dialog = Dialog::alert("Title", "Message");
         let h = dialog.content_height();
-        // 2 (borders) + 1 (title) + 1 (message) + 1 (spacing) + 1 (buttons) = 6
-        assert_eq!(h, 6);
+        // 2 (borders) + 1 (message) + 1 (spacing) + 1 (buttons) = 5
+        assert_eq!(h, 5);
     }
 
     #[test]
     fn edge_content_height_prompt() {
         let dialog = Dialog::prompt("Title", "Message");
         let h = dialog.content_height();
-        // 2 (borders) + 1 (title) + 1 (message) + 1 (spacing) + 1 (input) + 1 (input spacing) + 1 (buttons) = 8
-        assert_eq!(h, 8);
+        // 2 (borders) + 1 (message) + 1 (spacing) + 1 (input) + 1 (input spacing) + 1 (buttons) = 7
+        assert_eq!(h, 7);
     }
 
     #[test]
@@ -1418,6 +1803,54 @@ mod tests {
         dialog.handle_event(&down, &mut state, hit);
         assert_eq!(state.pressed_button, None);
         assert_eq!(state.focused_button, None);
+    }
+
+    #[test]
+    fn mouse_down_outside_cancels_existing_pressed_button() {
+        let dialog = Dialog::confirm("Test", "Msg").hit_id(HitId::new(1));
+        let mut state = DialogState::new();
+
+        let down = Event::Mouse(MouseEvent::new(
+            MouseEventKind::Down(MouseButton::Left),
+            0,
+            0,
+        ));
+        let hit0 = Some((HitId::new(1), HitRegion::Button, 0u64));
+        dialog.handle_event(&down, &mut state, hit0);
+        assert_eq!(state.pressed_button, Some(0));
+
+        dialog.handle_event(&down, &mut state, None);
+        assert_eq!(state.pressed_button, None);
+
+        let up = Event::Mouse(MouseEvent::new(MouseEventKind::Up(MouseButton::Left), 0, 0));
+        let result = dialog.handle_event(&up, &mut state, hit0);
+        assert_eq!(result, None);
+        assert!(state.is_open());
+    }
+
+    #[test]
+    fn mouse_down_mismatched_hit_id_cancels_existing_pressed_button() {
+        let dialog = Dialog::confirm("Test", "Msg").hit_id(HitId::new(1));
+        let mut state = DialogState::new();
+
+        let down = Event::Mouse(MouseEvent::new(
+            MouseEventKind::Down(MouseButton::Left),
+            0,
+            0,
+        ));
+        let hit0 = Some((HitId::new(1), HitRegion::Button, 0u64));
+        dialog.handle_event(&down, &mut state, hit0);
+        assert_eq!(state.pressed_button, Some(0));
+
+        let wrong_hit = Some((HitId::new(99), HitRegion::Button, 1u64));
+        dialog.handle_event(&down, &mut state, wrong_hit);
+        assert_eq!(state.pressed_button, None);
+        assert_eq!(state.focused_button, Some(0));
+
+        let up = Event::Mouse(MouseEvent::new(MouseEventKind::Up(MouseButton::Left), 0, 0));
+        let result = dialog.handle_event(&up, &mut state, hit0);
+        assert_eq!(result, None);
+        assert!(state.is_open());
     }
 
     #[test]

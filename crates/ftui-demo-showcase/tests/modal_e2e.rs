@@ -27,7 +27,7 @@ use ftui_core::geometry::Rect;
 use ftui_harness::assert_snapshot;
 use ftui_harness::golden::compute_buffer_checksum;
 use ftui_render::cell::PackedRgba;
-use ftui_render::frame::{Frame, HitId};
+use ftui_render::frame::{Frame, HitData, HitId, HitRegion};
 use ftui_render::grapheme_pool::GraphemePool;
 use ftui_widgets::block::Block;
 use ftui_widgets::borders::{BorderType, Borders};
@@ -283,6 +283,7 @@ fn dialog_confirm_cancel_via_right_enter() {
 
     state.input_focused = false;
     dialog.handle_event(&press(KeyCode::Right), &mut state, None);
+    dialog.handle_event(&press(KeyCode::Right), &mut state, None);
     let result = dialog.handle_event(&press(KeyCode::Enter), &mut state, None);
     assert_eq!(result, Some(DialogResult::Cancel));
     assert!(!state.is_open());
@@ -335,7 +336,7 @@ fn modal_stack_lifo_escape_closes_top() {
     let id1 = stack.push(Box::new(WidgetModalEntry::new(sample_content())));
     let id2 = stack.push(Box::new(WidgetModalEntry::new(sample_content())));
 
-    let result = stack.handle_event(&press(KeyCode::Escape));
+    let result = stack.handle_event(&press(KeyCode::Escape), None);
     assert!(result.is_some());
     assert_eq!(result.unwrap().id, id2);
     assert!(stack.contains(id1));
@@ -415,7 +416,12 @@ impl StackModal for CountingModal {
         }
     }
 
-    fn handle_event(&mut self, _event: &Event, _hit_id: HitId) -> Option<ModalResultData> {
+    fn handle_event(
+        &mut self,
+        _event: &Event,
+        _hit: Option<(HitId, HitRegion, HitData)>,
+        _hit_id: HitId,
+    ) -> Option<ModalResultData> {
         if let Ok(mut hits) = self.hits.lock() {
             hits.push(self.name);
         }
@@ -448,7 +454,7 @@ fn modal_stack_input_isolated_to_top() {
         BackdropConfig::new(PackedRgba::rgb(0, 0, 48), 0.6),
     )));
 
-    let _ = stack.handle_event(&press(KeyCode::Enter));
+    let _ = stack.handle_event(&press(KeyCode::Enter), None);
     let recorded = hits.lock().unwrap().clone();
     assert_eq!(recorded, vec!["top"]);
 }
@@ -479,7 +485,7 @@ fn modal_focus_trap_restores_previous_focus() {
     assert_eq!(modals.focus_manager().current(), Some(1));
 
     // Close modal and ensure focus restores to prior target.
-    let result = modals.handle_event(&press(KeyCode::Escape));
+    let result = modals.handle_event(&press(KeyCode::Escape), None);
     assert!(result.is_some());
     assert!(matches!(
         result.unwrap().data,
