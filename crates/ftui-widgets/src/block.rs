@@ -194,10 +194,18 @@ impl<'a> Block<'a> {
             buf.set_fast(area.x, area.y, self.border_cell(set.top_left, style));
         }
         if self.borders.contains(Borders::RIGHT | Borders::TOP) {
-            buf.set_fast(area.right() - 1, area.y, self.border_cell(set.top_right, style));
+            buf.set_fast(
+                area.right() - 1,
+                area.y,
+                self.border_cell(set.top_right, style),
+            );
         }
         if self.borders.contains(Borders::LEFT | Borders::BOTTOM) {
-            buf.set_fast(area.x, area.bottom() - 1, self.border_cell(set.bottom_left, style));
+            buf.set_fast(
+                area.x,
+                area.bottom() - 1,
+                self.border_cell(set.bottom_left, style),
+            );
         }
         if self.borders.contains(Borders::RIGHT | Borders::BOTTOM) {
             buf.set_fast(
@@ -243,10 +251,18 @@ impl<'a> Block<'a> {
             buf.set_fast(area.x, area.y, self.border_cell(set.top_left, style));
         }
         if self.borders.contains(Borders::RIGHT | Borders::TOP) {
-            buf.set_fast(area.right() - 1, area.y, self.border_cell(set.top_right, style));
+            buf.set_fast(
+                area.right() - 1,
+                area.y,
+                self.border_cell(set.top_right, style),
+            );
         }
         if self.borders.contains(Borders::LEFT | Borders::BOTTOM) {
-            buf.set_fast(area.x, area.bottom() - 1, self.border_cell(set.bottom_left, style));
+            buf.set_fast(
+                area.x,
+                area.bottom() - 1,
+                self.border_cell(set.bottom_left, style),
+            );
         }
         if self.borders.contains(Borders::RIGHT | Borders::BOTTOM) {
             buf.set_fast(

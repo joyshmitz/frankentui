@@ -196,10 +196,18 @@ impl<'a, W> Panel<'a, W> {
             buf.set_fast(area.x, area.y, self.border_cell(set.top_left, style));
         }
         if self.borders.contains(Borders::RIGHT | Borders::TOP) {
-            buf.set_fast(area.right() - 1, area.y, self.border_cell(set.top_right, style));
+            buf.set_fast(
+                area.right() - 1,
+                area.y,
+                self.border_cell(set.top_right, style),
+            );
         }
         if self.borders.contains(Borders::LEFT | Borders::BOTTOM) {
-            buf.set_fast(area.x, area.bottom() - 1, self.border_cell(set.bottom_left, style));
+            buf.set_fast(
+                area.x,
+                area.bottom() - 1,
+                self.border_cell(set.bottom_left, style),
+            );
         }
         if self.borders.contains(Borders::RIGHT | Borders::BOTTOM) {
             buf.set_fast(
@@ -275,10 +283,9 @@ impl<'a, W> Panel<'a, W> {
 
         let max_x = area.right().saturating_sub(1);
         if clear_existing_style && text_width > 0 {
-            frame.buffer.fill(
-                Rect::new(x, area.y, text_width as u16, 1),
-                Cell::default(),
-            );
+            frame
+                .buffer
+                .fill(Rect::new(x, area.y, text_width as u16, 1), Cell::default());
         }
         draw_text_span(frame, x, area.y, text.as_ref(), style, max_x);
     }
@@ -315,7 +322,9 @@ impl<'a, W> Panel<'a, W> {
         let y = area.bottom().saturating_sub(1);
         let max_x = area.right().saturating_sub(1);
         if clear_existing_style && text_width > 0 {
-            frame.buffer.fill(Rect::new(x, y, text_width as u16, 1), Cell::default());
+            frame
+                .buffer
+                .fill(Rect::new(x, y, text_width as u16, 1), Cell::default());
         }
         draw_text_span(frame, x, y, text.as_ref(), style, max_x);
     }

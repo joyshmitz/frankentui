@@ -325,11 +325,17 @@ impl<'a> DriftVisualization<'a> {
         width: u16,
         frame: &mut Frame,
     ) -> u16 {
+        let deg = frame.buffer.degradation;
+        let apply_styling = deg.apply_styling();
         let max_x = x + width;
 
         // Row 1: Domain label + current confidence badge
         let label = domain.as_str();
-        let label_style = Style::new().fg(LABEL_FG);
+        let label_style = if apply_styling {
+            Style::new().fg(LABEL_FG)
+        } else {
+            Style::default()
+        };
         let mut cx = draw_text_span(frame, x, y, label, label_style, max_x);
 
         // Current confidence badge
@@ -338,11 +344,19 @@ impl<'a> DriftVisualization<'a> {
         {
             let conf_pct = format!(" {:.0}%", ds.confidence * 100.0);
             let conf_color = self.confidence_color(ds.confidence);
-            let conf_style = Style::new().fg(conf_color).bold();
+            let conf_style = if apply_styling {
+                Style::new().fg(conf_color).bold()
+            } else {
+                Style::default()
+            };
             cx = draw_text_span(frame, cx + 1, y, &conf_pct, conf_style, max_x);
 
             if ds.in_fallback {
-                let fb_style = Style::new().fg(FALLBACK_FG).bg(FALLBACK_BG).bold();
+                let fb_style = if apply_styling {
+                    Style::new().fg(FALLBACK_FG).bg(FALLBACK_BG).bold()
+                } else {
+                    Style::default()
+                };
                 cx = draw_text_span(frame, cx + 1, y, " FALLBACK ", fb_style, max_x);
             }
             let _ = cx;
@@ -369,7 +383,9 @@ impl<'a> DriftVisualization<'a> {
                     let marker_x = x + (trigger_idx - visible_start) as u16;
                     if marker_x < max_x {
                         let mut cell = Cell::from_char('|');
-                        apply_style(&mut cell, Style::new().fg(FALLBACK_FG).bold());
+                        if apply_styling {
+                            apply_style(&mut cell, Style::new().fg(FALLBACK_FG).bold());
+                        }
                         frame.buffer.set_fast(marker_x, y + 1, cell);
                     }
                 }
@@ -383,6 +399,7 @@ impl<'a> DriftVisualization<'a> {
         let Some(latest) = self.timeline.latest() else {
             return;
         };
+        let apply_styling = frame.buffer.degradation.apply_styling();
 
         // Find any domain in fallback
         let fallback_domain = latest.domains.iter().find(|d| d.in_fallback);
@@ -393,11 +410,19 @@ impl<'a> DriftVisualization<'a> {
                 ds.domain.as_str(),
                 ds.regime_label,
             );
-            let style = Style::new().fg(REGIME_FG).bg(FALLBACK_BG).bold();
+            let style = if apply_styling {
+                Style::new().fg(REGIME_FG).bg(FALLBACK_BG).bold()
+            } else {
+                Style::default()
+            };
             draw_text_span(frame, x, y, &banner, style, max_x);
         } else {
             // Normal operation
-            let style = Style::new().fg(DIM_FG);
+            let style = if apply_styling {
+                Style::new().fg(DIM_FG)
+            } else {
+                Style::default()
+            };
             draw_text_span(frame, x, y, "All domains: Bayesian (normal)", style, max_x);
         }
     }
@@ -426,7 +451,12 @@ impl Widget for DriftVisualization<'_> {
             } else {
                 BorderSet::ASCII
             };
-            render_border(area, frame, set, Style::new().fg(LABEL_FG));
+            let border_style = if deg.apply_styling() {
+                Style::new().fg(LABEL_FG)
+            } else {
+                Style::default()
+            };
+            render_border(area, frame, set, border_style);
         }
 
         // Inner area
@@ -441,7 +471,11 @@ impl Widget for DriftVisualization<'_> {
         }
 
         // Title row
-        let title_style = Style::new().fg(LABEL_FG).bold();
+        let title_style = if deg.apply_styling() {
+            Style::new().fg(LABEL_FG).bold()
+        } else {
+            Style::default()
+        };
         draw_text_span(frame, inner_x, y, "Drift Monitor", title_style, inner_max_x);
         y += 1;
 
@@ -523,6 +557,8 @@ fn render_border(area: Rect, frame: &mut Frame, set: BorderSet, style: Style) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_render::budget::DegradationLevel;
+    use ftui_render::cell::Cell;
     use ftui_render::grapheme_pool::GraphemePool;
 
     fn make_snapshot(frame_id: u64, confidence: f64, in_fallback: bool) -> DriftSnapshot {
@@ -686,6 +722,37 @@ mod tests {
             }
         }
         assert!(found_title, "should render title row");
+    }
+
+    #[test]
+    fn render_no_styling_drops_border_and_label_styles() {
+        let tl = make_drift_timeline();
+        let viz = DriftVisualization::new(&tl);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 20, &mut pool);
+        frame.buffer.degradation = DegradationLevel::NoStyling;
+
+        viz.render(Rect::new(0, 0, 80, 20), &mut frame);
+
+        let border = frame.buffer.get(0, 0).unwrap();
+        let border_default = Cell::from_char(border.content.as_char().unwrap());
+        assert_eq!(border.fg, border_default.fg);
+        assert_eq!(border.bg, border_default.bg);
+        assert_eq!(border.attrs, border_default.attrs);
+
+        let title = frame.buffer.get(1, 1).unwrap();
+        let title_default = Cell::from_char('D');
+        assert_eq!(title.content.as_char(), Some('D'));
+        assert_eq!(title.fg, title_default.fg);
+        assert_eq!(title.bg, title_default.bg);
+        assert_eq!(title.attrs, title_default.attrs);
+
+        let label = frame.buffer.get(1, 2).unwrap();
+        let label_default = Cell::from_char('d');
+        assert_eq!(label.content.as_char(), Some('d'));
+        assert_eq!(label.fg, label_default.fg);
+        assert_eq!(label.bg, label_default.bg);
+        assert_eq!(label.attrs, label_default.attrs);
     }
 
     #[test]

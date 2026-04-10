@@ -176,7 +176,18 @@ impl<'a> DecisionCard<'a> {
     }
 
     fn render_signal_row(&self, x: u16, y: u16, max_x: u16, frame: &mut Frame) {
+        let deg = frame.buffer.degradation;
         let (badge_style, _) = Self::signal_style(self.disclosure.signal);
+        let badge_style = if deg.apply_styling() {
+            badge_style
+        } else {
+            Style::default()
+        };
+        let title_style = if deg.apply_styling() {
+            self.title_style
+        } else {
+            Style::default()
+        };
         let label = self.disclosure.signal.label();
 
         // Render badge: " OK " / " WARN " / " ALERT "
@@ -189,7 +200,7 @@ impl<'a> DecisionCard<'a> {
             cx + 1,
             y,
             &self.disclosure.action_label,
-            self.title_style,
+            title_style,
             max_x,
         );
         let _ = cx;
@@ -197,7 +208,11 @@ impl<'a> DecisionCard<'a> {
 
     fn render_explanation(&self, x: u16, y: u16, max_x: u16, frame: &mut Frame) {
         if let Some(ref explanation) = self.disclosure.explanation {
-            let style = Style::new().fg(DIM_FG);
+            let style = if frame.buffer.degradation.apply_styling() {
+                Style::new().fg(DIM_FG)
+            } else {
+                Style::default()
+            };
             draw_text_span(frame, x, y, explanation, style, max_x);
         }
     }
@@ -208,7 +223,12 @@ impl<'a> DecisionCard<'a> {
             _ => return y,
         };
 
-        let header_style = Style::new().fg(DETAIL_FG).bold();
+        let apply_styling = frame.buffer.degradation.apply_styling();
+        let header_style = if apply_styling {
+            Style::new().fg(DETAIL_FG).bold()
+        } else {
+            Style::default()
+        };
         draw_text_span(frame, x, y, "Evidence:", header_style, max_x);
         y += 1;
 
@@ -217,6 +237,11 @@ impl<'a> DecisionCard<'a> {
                 EvidenceDirection::Supporting => ('+', Style::new().fg(EVIDENCE_SUPPORTING_FG)),
                 EvidenceDirection::Opposing => ('-', Style::new().fg(EVIDENCE_OPPOSING_FG)),
                 EvidenceDirection::Neutral => ('~', Style::new().fg(EVIDENCE_NEUTRAL_FG)),
+            };
+            let dir_style = if apply_styling {
+                dir_style
+            } else {
+                Style::default()
             };
             let line = format!("  {dir_char} {}: BF={:.2}", term.label, term.bayes_factor);
             draw_text_span(frame, x, y, &line, dir_style, max_x);
@@ -231,12 +256,26 @@ impl<'a> DecisionCard<'a> {
             None => return,
         };
 
-        let style = Style::new().fg(DETAIL_FG);
+        let deg = frame.buffer.degradation;
+        let style = if deg.apply_styling() {
+            Style::new().fg(DETAIL_FG)
+        } else {
+            Style::default()
+        };
 
         // Horizontal rule
-        let rule_style = Style::new().fg(DIM_FG);
+        let rule_style = if deg.apply_styling() {
+            Style::new().fg(DIM_FG)
+        } else {
+            Style::default()
+        };
         let rule_len = (max_x.saturating_sub(x)) as usize;
-        let rule: String = "─".repeat(rule_len);
+        let rule_ch = if deg.use_unicode_borders() {
+            '─'
+        } else {
+            '-'
+        };
+        let rule: String = std::iter::repeat_n(rule_ch, rule_len).collect();
         draw_text_span(frame, x, y, &rule, rule_style, max_x);
 
         // Stats line
@@ -270,6 +309,11 @@ impl Widget for DecisionCard<'_> {
 
         // Determine border color from signal
         let (_, border_style) = Self::signal_style(self.disclosure.signal);
+        let border_style = if deg.apply_styling() {
+            border_style
+        } else {
+            Style::default()
+        };
 
         // Draw borders
         if deg.render_decorative() {
@@ -317,6 +361,8 @@ impl Widget for DecisionCard<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_render::budget::DegradationLevel;
+    use ftui_render::cell::PackedRgba;
     use ftui_render::grapheme_pool::GraphemePool;
     use ftui_runtime::transparency::{BayesianDetails, DisclosureEvidence, EvidenceDirection};
     use ftui_runtime::unified_evidence::DecisionDomain;
@@ -532,5 +578,56 @@ mod tests {
         let disc = make_disclosure(DisclosureLevel::TrafficLight);
         let card = DecisionCard::new(&disc);
         assert!(!card.is_essential());
+    }
+
+    #[test]
+    fn render_no_styling_drops_configured_and_signal_styles() {
+        let disclosure = make_disclosure(DisclosureLevel::EvidenceTerms);
+        let card = DecisionCard::new(&disclosure)
+            .style(Style::new().bg(PackedRgba::rgb(10, 20, 30)))
+            .title_style(Style::new().fg(PackedRgba::rgb(200, 0, 0)).bold());
+        let area = Rect::new(0, 0, 40, card.min_height());
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(40, area.height, &mut pool);
+        frame.buffer.degradation = DegradationLevel::NoStyling;
+
+        card.render(area, &mut frame);
+
+        let border = frame.buffer.get(0, 0).unwrap();
+        let border_default = Cell::from_char(border.content.as_char().unwrap());
+        assert_eq!(border.fg, border_default.fg);
+        assert_eq!(border.bg, border_default.bg);
+        assert_eq!(border.attrs, border_default.attrs);
+
+        let badge = frame.buffer.get(1, 1).unwrap();
+        let badge_default = Cell::from_char(' ');
+        assert_eq!(badge.content.as_char(), Some(' '));
+        assert_eq!(badge.fg, badge_default.fg);
+        assert_eq!(badge.bg, badge_default.bg);
+        assert_eq!(badge.attrs, badge_default.attrs);
+
+        let action = frame.buffer.get(6, 1).unwrap();
+        let action_default = Cell::from_char(action.content.as_char().unwrap());
+        assert_eq!(action.fg, action_default.fg);
+        assert_eq!(action.bg, action_default.bg);
+        assert_eq!(action.attrs, action_default.attrs);
+    }
+
+    #[test]
+    fn render_simple_borders_use_ascii_separator_rule() {
+        let disclosure = make_disclosure(DisclosureLevel::FullBayesian);
+        let card = DecisionCard::new(&disclosure);
+        let area = Rect::new(0, 0, 60, card.min_height());
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(60, area.height, &mut pool);
+        frame.buffer.degradation = DegradationLevel::SimpleBorders;
+
+        card.render(area, &mut frame);
+
+        let rule_y = area.y + area.height - 3;
+        assert_eq!(
+            frame.buffer.get(1, rule_y).unwrap().content.as_char(),
+            Some('-')
+        );
     }
 }
