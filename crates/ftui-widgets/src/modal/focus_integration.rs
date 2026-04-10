@@ -174,7 +174,11 @@ impl<'a> ModalFocusCoordinator<'a> {
     ) -> Option<ModalResult> {
         if let Event::Focus(focused) = event {
             if *focused && self.stack.is_empty() && self.base_focus.is_some() {
+                let deferred_focus = self.focus_manager.deferred_focus_target();
                 self.focus_manager.set_host_focused(true);
+                if let Some(id) = deferred_focus {
+                    *self.base_focus = Some(Some(id));
+                }
                 self.rebuild_focus_traps();
             } else {
                 self.focus_manager.apply_host_focus(*focused);
@@ -1302,6 +1306,36 @@ mod tests {
             Some(crate::focus::FocusEvent::FocusGained { id: 5 })
         );
         assert_eq!(modals.focus_manager().focus_change_count(), before + 1);
+    }
+
+    #[test]
+    fn blurred_background_focus_change_after_last_modal_pop_overrides_stale_base_focus() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(1));
+            graph.insert(make_focus_node(2));
+            graph.insert(make_focus_node(3));
+        });
+        modals.focus(1);
+        let _ = modals.focus_manager_mut().take_focus_event();
+
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2]);
+        let _ = modals.focus_manager_mut().take_focus_event();
+        let _ = modals.handle_event(&Event::Focus(false), None);
+        let _ = modals.focus_manager_mut().take_focus_event();
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), None);
+
+        assert_eq!(modals.focus(3), Some(1));
+        assert_eq!(modals.focus_manager().current(), None);
+
+        let _ = modals.handle_event(&Event::Focus(true), None);
+        assert_eq!(modals.focus_manager().current(), Some(3));
+        assert_eq!(
+            modals.focus_manager_mut().take_focus_event(),
+            Some(crate::focus::FocusEvent::FocusGained { id: 3 })
+        );
     }
 
     #[test]
