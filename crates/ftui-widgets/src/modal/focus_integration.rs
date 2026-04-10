@@ -1351,6 +1351,31 @@ mod tests {
     }
 
     #[test]
+    fn nested_push_while_host_blurred_restores_underlying_modal_selection_on_close() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            for id in 1..=4 {
+                graph.insert(make_focus_node(id));
+            }
+        });
+        modals.focus(1);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2, 3]);
+        modals.focus(3);
+        let _ = modals.handle_event(&Event::Focus(false), None);
+        assert_eq!(modals.focus_manager().current(), None);
+
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![4]);
+        assert_eq!(modals.focus_manager().current(), None);
+
+        let _ = modals.handle_event(&Event::Focus(true), None);
+        assert_eq!(modals.focus_manager().current(), Some(4));
+
+        let result = modals.pop();
+        assert!(result.is_some());
+        assert_eq!(modals.focus_manager().current(), Some(3));
+    }
+
+    #[test]
     fn pop_id_non_top_while_host_blurred_keeps_focus_cleared_until_focus_gain() {
         let mut modals = FocusAwareModalStack::new();
         for id in 1..=4 {

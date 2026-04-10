@@ -885,6 +885,30 @@ mod tests {
     }
 
     #[test]
+    fn apply_host_focus_gain_restores_previously_selected_trapped_focus() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+        fm.graph_mut().insert(node(3, 2));
+        fm.create_group(42, vec![2, 3]);
+        assert!(fm.push_trap(42));
+        assert_eq!(fm.current(), Some(2));
+        assert_eq!(fm.focus(3), Some(2));
+        let _ = fm.take_focus_event();
+
+        assert!(fm.apply_host_focus(false));
+        assert_eq!(fm.current(), None);
+        let _ = fm.take_focus_event();
+
+        assert!(fm.apply_host_focus(true));
+        assert_eq!(fm.current(), Some(3));
+        assert_eq!(
+            fm.take_focus_event(),
+            Some(FocusEvent::FocusGained { id: 3 })
+        );
+    }
+
+    #[test]
     fn push_trap_does_not_autofocus_while_host_blurred() {
         let mut fm = FocusManager::new();
         fm.graph_mut().insert(node(1, 0));
