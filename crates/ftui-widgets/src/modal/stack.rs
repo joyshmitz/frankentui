@@ -44,6 +44,7 @@ use ftui_render::frame::{Frame, HitData, HitId, HitRegion, HitTestResult};
 use ftui_style::Style;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::focus::FocusId;
 use crate::modal::{BackdropConfig, MODAL_HIT_BACKDROP, MODAL_HIT_CONTENT, ModalSizeConstraints};
 use crate::set_style_area;
 
@@ -99,6 +100,12 @@ pub enum ModalResultData {
     Confirmed,
     /// Dialog returned a custom value.
     Custom(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FocusTrapSpec {
+    pub group_id: u32,
+    pub return_focus: Option<FocusId>,
 }
 
 /// A FocusId alias for modal focus management.
@@ -212,6 +219,8 @@ struct ActiveModal {
     hit_id: HitId,
     /// Focus group ID for focus trap integration.
     focus_group_id: Option<u32>,
+    /// Focus target that should be restored when this modal closes.
+    focus_return_focus: Option<FocusId>,
 }
 
 /// Stack of active modals with z-ordering and input routing.
@@ -286,6 +295,7 @@ impl ModalStack {
             modal,
             hit_id,
             focus_group_id,
+            focus_return_focus: None,
         });
 
         #[cfg(feature = "tracing")]
@@ -353,6 +363,14 @@ impl ModalStack {
         let modal = self.modals.remove(idx);
         #[cfg(feature = "tracing")]
         let modal_type = modal.modal.modal_type();
+
+        if modal.focus_group_id.is_some()
+            && let Some(upper_modal) = self.modals[idx..]
+                .iter_mut()
+                .find(|candidate| candidate.focus_group_id.is_some())
+        {
+            upper_modal.focus_return_focus = modal.focus_return_focus;
+        }
 
         let result = ModalResult {
             id: modal.id,
@@ -425,6 +443,33 @@ impl ModalStack {
             .iter()
             .filter_map(|m| m.focus_group_id)
             .collect()
+    }
+
+    pub(super) fn focus_trap_specs_in_order(&self) -> Vec<FocusTrapSpec> {
+        self.modals
+            .iter()
+            .filter_map(|modal| {
+                modal.focus_group_id.map(|group_id| FocusTrapSpec {
+                    group_id,
+                    return_focus: modal.focus_return_focus,
+                })
+            })
+            .collect()
+    }
+
+    pub(super) fn set_focus_return_focus(
+        &mut self,
+        modal_id: ModalId,
+        return_focus: Option<FocusId>,
+    ) -> bool {
+        let Some(modal) = self.modals.iter_mut().find(|modal| modal.id == modal_id) else {
+            return false;
+        };
+        if modal.focus_group_id.is_none() {
+            return false;
+        }
+        modal.focus_return_focus = return_focus;
+        true
     }
 
     // --- Event Handling ---

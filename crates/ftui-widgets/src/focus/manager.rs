@@ -70,10 +70,11 @@ pub struct FocusTrap {
 ///
 /// Tracks focus state, navigation history, focus traps (for modals),
 /// and focus indicator styling. Emits [`FocusEvent`]s on focus changes.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct FocusManager {
     graph: FocusGraph,
     current: Option<FocusId>,
+    host_focused: bool,
     history: Vec<FocusId>,
     trap_stack: Vec<FocusTrap>,
     groups: AHashMap<u32, FocusGroup>,
@@ -81,6 +82,22 @@ pub struct FocusManager {
     indicator: FocusIndicator,
     /// Running count of focus changes for metrics.
     focus_change_count: u64,
+}
+
+impl Default for FocusManager {
+    fn default() -> Self {
+        Self {
+            graph: FocusGraph::default(),
+            current: None,
+            host_focused: true,
+            history: Vec::new(),
+            trap_stack: Vec::new(),
+            groups: AHashMap::new(),
+            last_event: None,
+            indicator: FocusIndicator::default(),
+            focus_change_count: 0,
+        }
+    }
 }
 
 impl FocusManager {
@@ -106,6 +123,15 @@ impl FocusManager {
     #[must_use]
     pub fn current(&self) -> Option<FocusId> {
         self.current
+    }
+
+    #[must_use]
+    pub(crate) fn host_focused(&self) -> bool {
+        self.host_focused
+    }
+
+    pub(crate) fn set_host_focused(&mut self, focused: bool) {
+        self.host_focused = focused;
     }
 
     /// Check if a widget is focused.
@@ -148,6 +174,7 @@ impl FocusManager {
     ///
     /// Returns `true` when focus state changed.
     pub fn apply_host_focus(&mut self, focused: bool) -> bool {
+        self.host_focused = focused;
         if !focused {
             return self.blur().is_some();
         }
@@ -264,30 +291,13 @@ impl FocusManager {
     /// where `allowed_by_trap` would deny focus to every widget because the
     /// group is empty/missing.
     pub fn push_trap(&mut self, group_id: u32) -> bool {
-        // Guard: the group must exist and contain at least one currently
-        // focusable member. Raw member IDs alone are insufficient because the
-        // focus graph can change after the group was created.
-        let group_ok = self.group_has_focusable_member(group_id);
-
-        if !group_ok {
+        if !self.push_trap_with_return_focus(group_id, self.current) {
             #[cfg(feature = "tracing")]
             tracing::warn!(group_id, "focus.trap_push rejected: group missing or empty");
             return false;
         }
 
-        let return_focus = self.current;
-        #[cfg(feature = "tracing")]
-        tracing::debug!(
-            group_id,
-            return_focus = ?return_focus,
-            "focus.trap_push"
-        );
-        self.trap_stack.push(FocusTrap {
-            group_id,
-            return_focus,
-        });
-
-        if !self.is_current_focusable_in_group(group_id) {
+        if self.host_focused && !self.is_current_focusable_in_group(group_id) {
             self.focus_first_in_group_without_history(group_id);
         }
         true
@@ -305,6 +315,14 @@ impl FocusManager {
             return_focus = ?trap.return_focus,
             "focus.trap_pop"
         );
+
+        if !self.host_focused {
+            return if had_current {
+                self.blur().is_some()
+            } else {
+                false
+            };
+        }
 
         if let Some(id) = trap.return_focus
             && self.can_focus(id)
@@ -451,7 +469,36 @@ impl FocusManager {
         self.focus_first_without_history()
     }
 
+    pub(crate) fn push_trap_with_return_focus(
+        &mut self,
+        group_id: u32,
+        return_focus: Option<FocusId>,
+    ) -> bool {
+        if !self.group_has_focusable_member(group_id) {
+            return false;
+        }
+
+        #[cfg(feature = "tracing")]
+        tracing::debug!(
+            group_id,
+            return_focus = ?return_focus,
+            "focus.trap_push"
+        );
+        self.trap_stack.push(FocusTrap {
+            group_id,
+            return_focus,
+        });
+        true
+    }
+
     pub(crate) fn repair_focus_after_excluding_ids(&mut self, excluded: &[FocusId]) {
+        if !self.host_focused {
+            if self.current.is_some_and(|id| excluded.contains(&id)) {
+                let _ = self.blur();
+            }
+            return;
+        }
+
         if self.is_trapped() || !self.current.is_some_and(|id| excluded.contains(&id)) {
             return;
         }
@@ -469,6 +516,10 @@ impl FocusManager {
     }
 
     pub(crate) fn restore_focus_after_invalid_current(&mut self) {
+        if !self.host_focused {
+            return;
+        }
+
         if let Some(group_id) = self.active_trap_group()
             && self.focus_first_in_group_without_history(group_id)
         {
@@ -551,6 +602,13 @@ impl FocusManager {
     }
 
     fn repair_focus_after_group_change(&mut self) {
+        if !self.host_focused {
+            if self.current.is_some() {
+                let _ = self.blur();
+            }
+            return;
+        }
+
         match self.active_trap_group() {
             Some(group_id) => {
                 let current_allowed = self
@@ -577,9 +635,9 @@ impl FocusManager {
         self.can_focus(current)
             && self
                 .groups
-            .get(&group_id)
-            .map(|g| g.contains(current))
-            .unwrap_or(false)
+                .get(&group_id)
+                .map(|g| g.contains(current))
+                .unwrap_or(false)
     }
 
     fn active_tab_order(&self) -> Vec<FocusId> {
@@ -618,11 +676,9 @@ impl FocusManager {
         if order.is_empty() {
             return false;
         }
-        let fallback = if forward {
-            order[0]
-        } else {
-            *order.last().expect("non-empty tab order")
-        };
+        let first = order[0];
+        let last = order[order.len() - 1];
+        let fallback = if forward { first } else { last };
 
         let wrap = self
             .active_trap_group()
@@ -648,7 +704,7 @@ impl FocusManager {
                         if idx > 0 {
                             order[idx - 1]
                         } else if wrap {
-                            *order.last().unwrap()
+                            last
                         } else {
                             return false;
                         }
@@ -823,6 +879,22 @@ mod tests {
         let _ = fm.take_focus_event();
         fm.blur();
         let _ = fm.take_focus_event();
+
+        assert!(fm.apply_host_focus(true));
+        assert_eq!(fm.current(), Some(2));
+    }
+
+    #[test]
+    fn push_trap_does_not_autofocus_while_host_blurred() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+        fm.focus(1);
+        assert!(fm.apply_host_focus(false));
+
+        fm.create_group(42, vec![2]);
+        assert!(fm.push_trap(42));
+        assert_eq!(fm.current(), None);
 
         assert!(fm.apply_host_focus(true));
         assert_eq!(fm.current(), Some(2));
@@ -1004,6 +1076,7 @@ mod tests {
         let b = FocusManager::default();
         assert_eq!(a.current(), b.current());
         assert_eq!(a.is_trapped(), b.is_trapped());
+        assert_eq!(a.host_focused(), b.host_focused());
     }
 
     // --- is_focused ---
