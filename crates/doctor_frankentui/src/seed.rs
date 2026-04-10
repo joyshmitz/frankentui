@@ -137,12 +137,6 @@ impl Deadline {
         }
     }
 
-    /// Attach a cancellation token for structured cancellation support.
-    fn with_cancellation(mut self, token: CancellationToken) -> Self {
-        self.cancel_token = Some(token);
-        self
-    }
-
     fn elapsed(&self) -> Duration {
         self.started_at.elapsed()
     }
@@ -160,11 +154,6 @@ impl Deadline {
         self.cancel_token
             .as_ref()
             .is_some_and(CancellationToken::is_cancelled)
-    }
-
-    /// Check if either timeout expired or cancellation was requested.
-    fn is_done(&self) -> bool {
-        self.is_expired() || self.is_cancelled()
     }
 
     /// Sleep for at most `poll_interval`, returning early if cancelled.
@@ -589,7 +578,7 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
         config.timeout_seconds
     ));
     ui.info(&format!("waiting for MCP server at {}", client.endpoint));
-    wait_for_server(&mut client, deadline)?;
+    wait_for_server(&mut client, &deadline)?;
     ui.info("seeding demo data");
 
     let project_key = config.project_key.clone();
@@ -600,7 +589,7 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
         &mut client,
         "ensure_project",
         json!({ "human_key": project_key }),
-        deadline,
+        &deadline,
     )?;
     run_seed_stage(
         &mut client,
@@ -612,7 +601,7 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
             "name": agent_a,
             "task_description": "demo sender",
         }),
-        deadline,
+        &deadline,
     )?;
     run_seed_stage(
         &mut client,
@@ -624,7 +613,7 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
             "name": agent_b,
             "task_description": "demo receiver",
         }),
-        deadline,
+        &deadline,
     )?;
 
     for i in 1..=config.messages {
@@ -634,7 +623,7 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
             (&config.agent_b, &config.agent_a)
         };
 
-        log_message_stage_started(&client, deadline, i, from_agent, to_agent);
+        log_message_stage_started(&client, &deadline, i, from_agent, to_agent);
         client
             .call_tool(
                 "send_message",
@@ -645,12 +634,12 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
                     "subject": format!("Inspector demo message {i}"),
                     "body_md": format!("Seeded by doctor_frankentui run. Iteration {i}."),
                 }),
-                deadline,
+                &deadline,
             )
             .inspect_err(|error| {
-                log_message_stage_failed(&client, deadline, i, from_agent, to_agent, error)
+                log_message_stage_failed(&client, &deadline, i, from_agent, to_agent, error)
             })?;
-        log_message_stage_completed(&client, deadline, i, from_agent, to_agent);
+        log_message_stage_completed(&client, &deadline, i, from_agent, to_agent);
         let _ = client.log_line(&format!(
             "event=seed_message_sent iteration={i} from_agent={from_agent} to_agent={to_agent}"
         ));
@@ -664,7 +653,7 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
             "agent_name": config.agent_b,
             "limit": 20,
         }),
-        deadline,
+        &deadline,
     )?;
 
     run_seed_stage(
@@ -675,10 +664,10 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
             "query": "Inspector",
             "limit": 20,
         }),
-        deadline,
+        &deadline,
     )?;
 
-    log_stage_started(&client, "file_reservation_paths", deadline);
+    log_stage_started(&client, "file_reservation_paths", &deadline);
     if let Err(error) = client.call_tool(
         "file_reservation_paths",
         json!({
@@ -689,16 +678,16 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
             "exclusive": false,
             "reason": "doctor-frankentui-demo",
         }),
-        deadline,
+        &deadline,
     ) {
         let _ = client.log_line(&format!(
             "event=seed_reservation_warning agent_name={} reason={error}",
             config.agent_a
         ));
-        log_stage_failed(&client, "file_reservation_paths", deadline, &error);
+        log_stage_failed(&client, "file_reservation_paths", &deadline, &error);
         ui.warning(&format!("file_reservation_paths failed: {error}"));
     } else {
-        log_stage_completed(&client, "file_reservation_paths", deadline);
+        log_stage_completed(&client, "file_reservation_paths", &deadline);
     }
 
     let _ = client.log_line(&format!(
@@ -786,7 +775,7 @@ mod tests {
             .call_tool_once(
                 "health_check",
                 json!({}),
-                Deadline::after(Duration::from_secs(1)),
+                &Deadline::after(Duration::from_secs(1)),
             )
             .expect_err("invalid URL should surface HTTP error");
         assert!(matches!(error, DoctorError::Http(_)));
@@ -828,7 +817,7 @@ mod tests {
         };
 
         let mut client = RpcClient::new(&config).expect("rpc client");
-        let error = wait_for_server(&mut client, Deadline::after(Duration::from_secs(1)))
+        let error = wait_for_server(&mut client, &Deadline::after(Duration::from_secs(1)))
             .expect_err("server should time out");
         assert!(error.to_string().contains("Timed out waiting for server"));
     }
