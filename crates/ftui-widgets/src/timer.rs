@@ -21,7 +21,7 @@
 //! assert_eq!(state.remaining(), Duration::from_secs(59));
 //! ```
 
-use crate::{StatefulWidget, Widget, draw_text_span};
+use crate::{StatefulWidget, Widget, clear_text_row, draw_text_span};
 use ftui_core::geometry::Rect;
 use ftui_render::frame::Frame;
 use ftui_style::Style;
@@ -186,6 +186,8 @@ impl StatefulWidget for Timer<'_> {
             Style::default()
         };
 
+        clear_text_row(frame, area, style);
+
         let formatted = crate::stopwatch::format_duration(state.remaining, self.format);
         let mut x = area.x;
 
@@ -215,6 +217,7 @@ impl Widget for Timer<'_> {
 mod tests {
     use super::*;
     use ftui_render::buffer::Buffer;
+    use ftui_render::cell::Cell;
     use ftui_render::grapheme_pool::GraphemePool;
     use std::time::Duration;
 
@@ -394,6 +397,20 @@ mod tests {
         Widget::render(&widget, area, &mut frame);
         assert_eq!(cell_char(&frame.buffer, 0, 0), Some('0'));
         assert_eq!(cell_char(&frame.buffer, 1, 0), Some('s'));
+    }
+
+    #[test]
+    fn render_clears_stale_suffix_cells() {
+        let widget = Timer::new().format(TimerFormat::Seconds);
+        let area = Rect::new(0, 0, 6, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(6, 1, &mut pool);
+        frame.buffer.set_fast(4, 0, Cell::from_char('X'));
+        let mut state = TimerState::new(Duration::from_secs(90));
+
+        StatefulWidget::render(&widget, area, &mut frame, &mut state);
+
+        assert_eq!(cell_char(&frame.buffer, 4, 0), Some(' '));
     }
 
     #[test]

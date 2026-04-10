@@ -533,7 +533,10 @@ fn wait_for_server(client: &mut RpcClient, deadline: &Deadline) -> Result<()> {
         }
 
         // Use cancellation-aware sleep instead of thread::sleep
-        if deadline.cancellation_aware_sleep(SERVER_READY_POLL_INTERVAL).is_none() {
+        if deadline
+            .cancellation_aware_sleep(SERVER_READY_POLL_INTERVAL)
+            .is_none()
+        {
             // Sleep returned early due to cancellation or expiry
             if deadline.is_cancelled() {
                 let _ = client.log_line(&format!(

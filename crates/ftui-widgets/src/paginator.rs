@@ -2,7 +2,7 @@
 
 //! Paginator widget.
 
-use crate::{Widget, draw_text_span};
+use crate::{Widget, clear_text_row, draw_text_span};
 use ftui_core::geometry::Rect;
 use ftui_render::frame::Frame;
 use ftui_style::Style;
@@ -192,6 +192,8 @@ impl Widget for Paginator<'_> {
             Style::default()
         };
 
+        clear_text_row(frame, area, style);
+
         let text = self.format_for_width(area.width as usize);
         if text.is_empty() {
             return;
@@ -208,6 +210,7 @@ impl Widget for Paginator<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_render::cell::Cell;
     use ftui_render::grapheme_pool::GraphemePool;
 
     #[test]
@@ -423,7 +426,20 @@ mod tests {
                 text.push(ch);
             }
         }
-        assert_eq!(text, "..*..", "got: {text}");
+        assert!(text.starts_with("..*.."), "got: {text}");
+    }
+
+    #[test]
+    fn render_clears_stale_suffix_cells() {
+        let area = Rect::new(0, 0, 10, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 1, &mut pool);
+        frame.buffer.set_fast(5, 0, Cell::from_char('X'));
+        let pager = Paginator::with_pages(2, 5).mode(PaginatorMode::Compact);
+
+        pager.render(area, &mut frame);
+
+        assert_eq!(frame.buffer.get(5, 0).unwrap().content.as_char(), Some(' '));
     }
 
     #[test]
