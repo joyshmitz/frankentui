@@ -17,6 +17,7 @@
 
 use crate::{Widget, draw_text_span};
 use ftui_core::geometry::Rect;
+use ftui_core::terminal_capabilities::TerminalCapabilities;
 use ftui_render::frame::Frame;
 use ftui_style::Style;
 use ftui_text::wrap::display_width;
@@ -111,16 +112,34 @@ impl Widget for Emoji {
         }
 
         let deg = frame.buffer.degradation;
-        let max_x = area.right();
-
-        // Use emoji directly if styling is available, otherwise try fallback
-        if deg.apply_styling() {
-            draw_text_span(frame, area.x, area.y, &self.text, self.style, max_x);
-        } else if let Some(fb) = &self.fallback {
-            draw_text_span(frame, area.x, area.y, fb, self.fallback_style, max_x);
-        } else {
-            draw_text_span(frame, area.x, area.y, &self.text, Style::default(), max_x);
+        if !deg.render_content() {
+            return;
         }
+
+        let max_x = area.right();
+        let use_fallback =
+            self.fallback.is_some() && !TerminalCapabilities::with_overrides().unicode_emoji;
+
+        let (text, style) = if use_fallback {
+            let Some(text) = self.fallback.as_deref() else {
+                return;
+            };
+            let style = if deg.apply_styling() {
+                self.fallback_style
+            } else {
+                Style::default()
+            };
+            (text, style)
+        } else {
+            let style = if deg.apply_styling() {
+                self.style
+            } else {
+                Style::default()
+            };
+            (self.text.as_str(), style)
+        };
+
+        draw_text_span(frame, area.x, area.y, text, style, max_x);
     }
 
     fn is_essential(&self) -> bool {
@@ -131,6 +150,9 @@ impl Widget for Emoji {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_core::capability_override::{CapabilityOverride, with_capability_override};
+    use ftui_render::budget::DegradationLevel;
+    use ftui_render::cell::PackedRgba;
     use ftui_render::frame::Frame;
     use ftui_render::grapheme_pool::GraphemePool;
 
@@ -224,5 +246,57 @@ mod tests {
     fn should_not_use_fallback_without_setting() {
         let e = Emoji::new("🎉");
         assert!(!e.should_use_fallback(false));
+    }
+
+    #[test]
+    fn render_uses_fallback_when_unicode_emoji_disabled() {
+        with_capability_override(CapabilityOverride::new().unicode_emoji(Some(false)), || {
+            let e = Emoji::new("🦀").with_fallback("[crab]");
+            let mut pool = GraphemePool::new();
+            let mut frame = Frame::new(10, 1, &mut pool);
+            e.render(Rect::new(0, 0, 10, 1), &mut frame);
+
+            let cell = frame.buffer.get(0, 0).unwrap();
+            assert_eq!(cell.content.as_char(), Some('['));
+        });
+    }
+
+    #[test]
+    fn render_no_styling_keeps_emoji_when_supported() {
+        with_capability_override(CapabilityOverride::new().unicode_emoji(Some(true)), || {
+            let e = Emoji::new("🦀")
+                .with_fallback("[crab]")
+                .with_style(Style::new().fg(PackedRgba::rgb(1, 2, 3)));
+            let mut pool = GraphemePool::new();
+            let mut frame = Frame::new(10, 1, &mut pool);
+            frame.buffer.degradation = DegradationLevel::NoStyling;
+            e.render(Rect::new(0, 0, 10, 1), &mut frame);
+
+            let cell = frame.buffer.get(0, 0).unwrap();
+            let rendered_emoji = if let Some(ch) = cell.content.as_char() {
+                ch == '🦀'
+            } else if let Some(id) = cell.content.grapheme_id() {
+                frame.pool.get(id) == Some("🦀")
+            } else {
+                false
+            };
+            assert!(rendered_emoji, "expected emoji cell to contain 🦀");
+            assert_eq!(cell.fg, PackedRgba::WHITE);
+        });
+    }
+
+    #[test]
+    fn render_skeleton_is_noop() {
+        let e = Emoji::new("🦀").with_fallback("[crab]");
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 1, &mut pool);
+        let mut expected_pool = GraphemePool::new();
+        let expected = Frame::new(10, 1, &mut expected_pool);
+        frame.buffer.degradation = DegradationLevel::Skeleton;
+        e.render(Rect::new(0, 0, 10, 1), &mut frame);
+
+        for x in 0..10 {
+            assert_eq!(frame.buffer.get(x, 0), expected.buffer.get(x, 0));
+        }
     }
 }
