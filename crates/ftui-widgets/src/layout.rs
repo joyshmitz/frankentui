@@ -157,7 +157,22 @@ impl<'a> Layout<'a> {
 
 impl Widget for Layout<'_> {
     fn render(&self, area: Rect, frame: &mut Frame) {
-        if area.is_empty() || self.children.is_empty() {
+        if area.is_empty() {
+            return;
+        }
+
+        // Layout owns the full grid rect. Clear stale child glyphs before
+        // rendering the current child set while preserving parent-applied
+        // styling already present in the buffer.
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                if let Some(cell) = frame.buffer.get_mut(x, y) {
+                    cell.content = ftui_render::cell::CellContent::EMPTY;
+                }
+            }
+        }
+
+        if self.children.is_empty() {
             return;
         }
 
@@ -747,6 +762,46 @@ mod tests {
         layout.render(Rect::new(0, 0, 3, 1), &mut frame);
 
         assert_eq!(buf_to_lines(&frame.buffer), vec!["CCC"]);
+    }
+
+    #[test]
+    fn render_fewer_children_clears_removed_region() {
+        let full = Layout::new()
+            .rows([Constraint::Fixed(1)])
+            .columns([Constraint::Fixed(4), Constraint::Fixed(4)])
+            .cell(Fill('A'), 0, 0)
+            .cell(Fill('B'), 0, 1);
+        let partial = Layout::new()
+            .rows([Constraint::Fixed(1)])
+            .columns([Constraint::Fixed(4), Constraint::Fixed(4)])
+            .cell(Fill('A'), 0, 0);
+
+        let area = Rect::new(0, 0, 8, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(8, 1, &mut pool);
+
+        full.render(area, &mut frame);
+        partial.render(area, &mut frame);
+
+        assert_eq!(buf_to_lines(&frame.buffer), vec!["AAAA    "]);
+    }
+
+    #[test]
+    fn empty_layout_clears_previous_content() {
+        let filled = Layout::new()
+            .rows([Constraint::Fixed(1)])
+            .columns([Constraint::Fixed(4)])
+            .cell(Fill('X'), 0, 0);
+        let empty = Layout::new();
+
+        let area = Rect::new(0, 0, 4, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(4, 1, &mut pool);
+
+        filled.render(area, &mut frame);
+        empty.render(area, &mut frame);
+
+        assert_eq!(buf_to_lines(&frame.buffer), vec!["    "]);
     }
 
     // ─── End edge-case tests (bd-x93m1) ──────────────────────────────

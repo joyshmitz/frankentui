@@ -3,7 +3,7 @@
 //! Spinner widget.
 
 use crate::block::Block;
-use crate::{StatefulWidget, Widget, set_style_area};
+use crate::{StatefulWidget, Widget, clear_text_area};
 use ftui_core::geometry::Rect;
 use ftui_render::frame::Frame;
 use ftui_style::Style;
@@ -118,16 +118,26 @@ impl<'a> StatefulWidget for Spinner<'a> {
 
         // Skeleton+: skip entirely (spinner is decorative)
         if !deg.render_content() {
+            clear_text_area(frame, area, Style::default());
             return;
         }
 
         // EssentialOnly: spinner is decorative, only show label text
         if !deg.render_decorative() {
+            clear_text_area(frame, area, Style::default());
             if let Some(label) = self.label {
                 crate::draw_text_span(frame, area.x, area.y, label, Style::default(), area.right());
             }
             return;
         }
+
+        let style = if deg.apply_styling() {
+            self.style
+        } else {
+            Style::default()
+        };
+
+        clear_text_area(frame, area, style);
 
         let spinner_area = match &self.block {
             Some(b) => {
@@ -139,16 +149,6 @@ impl<'a> StatefulWidget for Spinner<'a> {
 
         if spinner_area.is_empty() {
             return;
-        }
-
-        let style = if deg.apply_styling() {
-            self.style
-        } else {
-            Style::default()
-        };
-
-        if deg.apply_styling() {
-            set_style_area(&mut frame.buffer, spinner_area, self.style);
         }
 
         let mut x = spinner_area.left();
@@ -211,6 +211,16 @@ mod tests {
 
     fn cell_char(buf: &Buffer, x: u16, y: u16) -> Option<char> {
         buf.get(x, y).and_then(|c| c.content.as_char())
+    }
+
+    fn raw_row_text(buf: &Buffer, y: u16, width: u16) -> String {
+        (0..width)
+            .map(|x| {
+                buf.get(x, y)
+                    .and_then(|c| c.content.as_char())
+                    .unwrap_or(' ')
+            })
+            .collect()
     }
 
     // --- SpinnerState tests ---
@@ -406,12 +416,13 @@ mod tests {
         let area = Rect::new(0, 0, 10, 1);
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(10, 1, &mut pool);
-        frame.buffer.degradation = DegradationLevel::Skeleton;
         let mut state = SpinnerState::default();
         StatefulWidget::render(&spinner, area, &mut frame, &mut state);
 
-        // Nothing rendered at Skeleton
-        assert!(frame.buffer.get(0, 0).unwrap().is_empty());
+        frame.buffer.degradation = DegradationLevel::Skeleton;
+        StatefulWidget::render(&spinner, area, &mut frame, &mut state);
+
+        assert_eq!(raw_row_text(&frame.buffer, 0, 10), "          ");
     }
 
     #[test]
@@ -493,5 +504,47 @@ mod tests {
 
         assert_eq!(cell_char(&frame.buffer, 0, 0), Some('L'));
         assert_eq!(cell_char(&frame.buffer, 1, 0), Some('o'));
+    }
+
+    #[test]
+    fn render_shorter_label_clears_stale_suffix() {
+        let frames: &[&str] = &["*"];
+        let area = Rect::new(0, 0, 10, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 1, &mut pool);
+        let mut state = SpinnerState::default();
+
+        StatefulWidget::render(
+            &Spinner::new().frames(frames).label("Loading"),
+            area,
+            &mut frame,
+            &mut state,
+        );
+        StatefulWidget::render(
+            &Spinner::new().frames(frames).label("Go"),
+            area,
+            &mut frame,
+            &mut state,
+        );
+
+        assert_eq!(raw_row_text(&frame.buffer, 0, 10), "* Go      ");
+    }
+
+    #[test]
+    fn degradation_essential_only_clears_previous_spinner_frame() {
+        use ftui_render::budget::DegradationLevel;
+
+        let frames: &[&str] = &["*"];
+        let spinner = Spinner::new().frames(frames).label("Go");
+        let area = Rect::new(0, 0, 10, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 1, &mut pool);
+        let mut state = SpinnerState::default();
+
+        StatefulWidget::render(&spinner, area, &mut frame, &mut state);
+        frame.buffer.degradation = DegradationLevel::EssentialOnly;
+        StatefulWidget::render(&spinner, area, &mut frame, &mut state);
+
+        assert_eq!(raw_row_text(&frame.buffer, 0, 10), "Go        ");
     }
 }

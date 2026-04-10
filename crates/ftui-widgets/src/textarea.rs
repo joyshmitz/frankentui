@@ -21,7 +21,7 @@ use ftui_text::wrap::display_width;
 use ftui_text::{CursorNavigator, CursorPosition};
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::{StatefulWidget, Widget, apply_style, draw_text_span};
+use crate::{StatefulWidget, Widget, apply_style, clear_text_area, draw_text_span};
 
 /// Multi-line text editor widget.
 #[derive(Debug, Clone)]
@@ -1242,9 +1242,12 @@ impl Widget for TextArea {
         self.last_viewport_height.set(area.height as usize);
 
         let deg = frame.buffer.degradation;
-        if deg.apply_styling() {
-            crate::set_style_area(&mut frame.buffer, area, self.style);
-        }
+        let base_style = if deg.apply_styling() {
+            self.style
+        } else {
+            Style::default()
+        };
+        clear_text_area(frame, area, base_style);
 
         let gutter_w = self.gutter_width();
         let text_area_x = area.x.saturating_add(gutter_w);
@@ -1376,7 +1379,7 @@ impl Widget for TextArea {
                         let px = text_area_x + visual_x as u16;
 
                         // Determine style (selection highlight)
-                        let mut g_style = self.style;
+                        let mut g_style = base_style;
                         if let Some((sel_start, sel_end)) = sel_range
                             && grapheme_byte_offset >= sel_start
                             && grapheme_byte_offset < sel_end
@@ -1459,7 +1462,7 @@ impl Widget for TextArea {
                 let g_byte_len = g.len();
 
                 // Determine style (selection highlight)
-                let mut g_style = self.style;
+                let mut g_style = base_style;
                 if let Some((sel_start, sel_end)) = sel_range
                     && grapheme_byte_offset >= sel_start
                     && grapheme_byte_offset < sel_end
@@ -1545,6 +1548,18 @@ impl StatefulWidget for TextArea {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn raw_row_text(frame: &Frame, y: u16, width: u16) -> String {
+        (0..width)
+            .map(|x| {
+                frame
+                    .buffer
+                    .get(x, y)
+                    .and_then(|cell| cell.content.as_char())
+                    .unwrap_or(' ')
+            })
+            .collect()
+    }
 
     #[test]
     fn new_textarea_is_empty() {
@@ -1926,6 +1941,26 @@ mod tests {
         Widget::render(&ta, area, &mut frame);
         let cell = frame.buffer.get(0, 0).unwrap();
         assert_eq!(cell.content.as_char(), Some('a'));
+    }
+
+    #[test]
+    fn render_shorter_text_clears_stale_suffix_and_extra_lines() {
+        use ftui_render::grapheme_pool::GraphemePool;
+
+        let area = Rect::new(0, 0, 8, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(8, 3, &mut pool);
+
+        Widget::render(
+            &TextArea::new().with_text("abcdef\nghijkl"),
+            area,
+            &mut frame,
+        );
+        Widget::render(&TextArea::new().with_text("hi"), area, &mut frame);
+
+        assert_eq!(raw_row_text(&frame, 0, 8), "hi      ");
+        assert_eq!(raw_row_text(&frame, 1, 8), "        ");
+        assert_eq!(raw_row_text(&frame, 2, 8), "        ");
     }
 
     #[test]

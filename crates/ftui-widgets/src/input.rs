@@ -13,8 +13,8 @@ use ftui_style::Style;
 use ftui_text::grapheme_width;
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::Widget;
 use crate::undo_support::{TextEditOperation, TextInputUndoExt, UndoSupport, UndoWidgetId};
+use crate::{Widget, clear_text_area};
 
 /// A single-line text input widget.
 #[derive(Debug, Clone, Default)]
@@ -944,9 +944,12 @@ impl Widget for TextInput {
         // TextInput is essential — always render content, but skip styling
         // at NoStyling+. At Skeleton, still render the raw text value.
         // We explicitly DO NOT check deg.render_content() here because this widget is essential.
-        if deg.apply_styling() {
-            crate::set_style_area(&mut frame.buffer, area, self.style);
-        }
+        let base_style = if deg.apply_styling() {
+            self.style
+        } else {
+            Style::default()
+        };
+        clear_text_area(frame, area, base_style);
 
         // Use arena allocation when available to avoid per-frame heap churn.
         let arena = frame.arena;
@@ -1026,8 +1029,13 @@ impl Widget for TextInput {
                 if gi == self.cursor
                     && let Some(ime) = &self.ime_composition
                 {
+                    let ime_style = if deg.apply_styling() {
+                        self.style
+                    } else {
+                        Style::default()
+                    };
                     for ig in ime.graphemes(true) {
-                        display_spans.push((ig, self.style, true));
+                        display_spans.push((ig, ime_style, true));
                     }
                 }
 
@@ -1043,8 +1051,13 @@ impl Widget for TextInput {
             if self.cursor == graphemes.len()
                 && let Some(ime) = &self.ime_composition
             {
+                let ime_style = if deg.apply_styling() {
+                    self.style
+                } else {
+                    Style::default()
+                };
                 for ig in ime.graphemes(true) {
-                    display_spans.push((ig, self.style, true));
+                    display_spans.push((ig, ime_style, true));
                 }
             }
 
@@ -1324,6 +1337,18 @@ mod tests {
             .get(x, y)
             .copied()
             .unwrap_or_else(|| panic!("test cell should exist at ({x},{y})"))
+    }
+
+    fn raw_row_text(frame: &Frame, y: u16, width: u16) -> String {
+        (0..width)
+            .map(|x| {
+                frame
+                    .buffer
+                    .get(x, y)
+                    .and_then(|cell| cell.content.as_char())
+                    .unwrap_or(' ')
+            })
+            .collect()
     }
 
     #[cfg(feature = "tracing")]
@@ -1916,6 +1941,24 @@ mod tests {
         if width > 1 {
             assert!(cell_at(&frame, 1, 0).is_continuation());
         }
+    }
+
+    #[test]
+    fn test_render_shorter_value_clears_stale_suffix_and_owned_rows() {
+        use ftui_render::frame::Frame;
+        use ftui_render::grapheme_pool::GraphemePool;
+
+        let area = Rect::new(0, 0, 8, 2);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(8, 2, &mut pool);
+
+        TextInput::new()
+            .with_value("abcdef")
+            .render(area, &mut frame);
+        TextInput::new().with_value("xy").render(area, &mut frame);
+
+        assert_eq!(raw_row_text(&frame, 0, 8), "xy      ");
+        assert_eq!(raw_row_text(&frame, 1, 8), "        ");
     }
 
     #[test]

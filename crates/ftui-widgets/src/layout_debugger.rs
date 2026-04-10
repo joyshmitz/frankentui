@@ -182,6 +182,12 @@ impl LayoutDebugger {
 
     /// Render a simple tree view of layout records into the buffer.
     pub fn render_debug(&self, area: Rect, buf: &mut Buffer) {
+        if area.is_empty() {
+            return;
+        }
+
+        buf.fill(area, Cell::from_char(' '));
+
         if !self.enabled {
             return;
         }
@@ -608,9 +614,11 @@ mod tests {
     fn render_debug_disabled_noop() {
         let dbg = LayoutDebugger::new(); // disabled
         let mut buf = Buffer::new(30, 4);
-        let blank_cell = *buf.get(0, 0).unwrap();
+        let sentinel = Cell::from_char('X').with_fg(PackedRgba::rgb(1, 2, 3));
+        buf.fill(Rect::new(0, 0, 30, 4), sentinel);
         dbg.render_debug(Rect::new(0, 0, 30, 4), &mut buf);
-        assert_eq!(*buf.get(0, 0).unwrap(), blank_cell);
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some(' '));
+        assert_eq!(buf.get(29, 3).unwrap().content.as_char(), Some(' '));
     }
 
     #[test]
@@ -645,5 +653,47 @@ mod tests {
         let cell = buf.get(0, 0).unwrap();
         // Should be yellow-ish (240, 200, 80)
         assert_eq!(cell.fg, PackedRgba::rgb(240, 200, 80));
+    }
+
+    #[test]
+    fn render_debug_shorter_second_render_clears_stale_suffix_and_rows() {
+        let mut dbg = LayoutDebugger::new();
+        dbg.set_enabled(true);
+        let area = Rect::new(0, 0, 40, 4);
+        let mut buf = Buffer::new(40, 4);
+
+        dbg.record(
+            LayoutRecord::new(
+                "LongWidgetName",
+                Rect::new(0, 0, 20, 10),
+                Rect::new(0, 0, 18, 8),
+                LayoutConstraints::new(5, 25, 3, 12),
+            )
+            .with_child(LayoutRecord::new(
+                "Child",
+                Rect::new(0, 0, 10, 4),
+                Rect::new(0, 0, 10, 4),
+                LayoutConstraints::unconstrained(),
+            )),
+        );
+        dbg.render_debug(area, &mut buf);
+
+        dbg.clear();
+        dbg.record(LayoutRecord::new(
+            "Short",
+            Rect::new(0, 0, 8, 3),
+            Rect::new(0, 0, 8, 3),
+            LayoutConstraints::unconstrained(),
+        ));
+        dbg.render_debug(area, &mut buf);
+
+        let row0: String = (0..area.width)
+            .map(|x| buf.get(x, 0).unwrap().content.as_char().unwrap_or(' '))
+            .collect();
+        let row1: String = (0..area.width)
+            .map(|x| buf.get(x, 1).unwrap().content.as_char().unwrap_or(' '))
+            .collect();
+        assert!(row0.starts_with("Short req=8x3 got=8x3"));
+        assert_eq!(row1, " ".repeat(area.width as usize));
     }
 }

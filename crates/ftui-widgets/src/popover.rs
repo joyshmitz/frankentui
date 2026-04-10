@@ -192,6 +192,9 @@ impl Popover {
             } else {
                 area
             };
+            if !inner.is_empty() {
+                buf.fill(inner, ftui_render::cell::Cell::from_char(' '));
+            }
             render_content(inner, frame);
         } else {
             render_content(area, frame);
@@ -313,7 +316,7 @@ impl Popover {
                 let bottom = viewport.y.saturating_add(viewport.height);
                 let space_below = bottom.saturating_sub(y_start);
                 let max_h = self.max_height.unwrap_or(space_below).min(space_below);
-                let total_h = max_h.min(space_below);
+                let total_h = max_h.saturating_add(border_overhead).min(space_below);
                 (y_start, total_h)
             }
             Placement::Left | Placement::Right => {
@@ -381,6 +384,8 @@ fn draw_border(buf: &mut ftui_render::buffer::Buffer, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_render::frame::Frame;
+    use ftui_render::grapheme_pool::GraphemePool;
 
     fn viewport() -> Rect {
         Rect::new(0, 0, 80, 24)
@@ -487,6 +492,7 @@ mod tests {
         let area = popover.compute_area(viewport()).unwrap();
         // Total area includes border overhead
         assert_eq!(area.width, 22); // 20 content + 2 border
+        assert_eq!(area.height, 7); // 5 content + 2 border
     }
 
     #[test]
@@ -574,5 +580,83 @@ mod tests {
     fn popover_debug_impl() {
         let popover = Popover::new(Rect::new(0, 0, 10, 1), Placement::Below);
         let _ = format!("{popover:?}");
+    }
+
+    #[test]
+    fn bordered_render_clears_stale_inner_content() {
+        let popover = Popover::new(Rect::new(2, 1, 5, 1), Placement::Below)
+            .width(5)
+            .max_height(1)
+            .with_border(true);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 10, &mut pool);
+        let viewport = Rect::new(0, 0, 20, 10);
+
+        popover.render_with(viewport, &mut frame, |inner, frame| {
+            for (i, ch) in "ABCDE".chars().enumerate() {
+                frame.buffer.set(
+                    inner.x + i as u16,
+                    inner.y,
+                    ftui_render::cell::Cell::from_char(ch),
+                );
+            }
+        });
+        popover.render_with(viewport, &mut frame, |inner, frame| {
+            for (i, ch) in "XY".chars().enumerate() {
+                frame.buffer.set(
+                    inner.x + i as u16,
+                    inner.y,
+                    ftui_render::cell::Cell::from_char(ch),
+                );
+            }
+        });
+
+        let area = popover.compute_area(viewport).unwrap();
+        let inner_y = area.y + 1;
+        assert_eq!(
+            frame
+                .buffer
+                .get(area.x + 1, inner_y)
+                .unwrap()
+                .content
+                .as_char(),
+            Some('X')
+        );
+        assert_eq!(
+            frame
+                .buffer
+                .get(area.x + 2, inner_y)
+                .unwrap()
+                .content
+                .as_char(),
+            Some('Y')
+        );
+        assert_eq!(
+            frame
+                .buffer
+                .get(area.x + 3, inner_y)
+                .unwrap()
+                .content
+                .as_char(),
+            Some(' ')
+        );
+        assert_eq!(
+            frame
+                .buffer
+                .get(area.x + 4, inner_y)
+                .unwrap()
+                .content
+                .as_char(),
+            Some(' ')
+        );
+        assert_eq!(
+            frame
+                .buffer
+                .get(area.x + 5, inner_y)
+                .unwrap()
+                .content
+                .as_char(),
+            Some(' ')
+        );
     }
 }

@@ -15,6 +15,7 @@
 
 use crate::{Widget, draw_text_span};
 use ftui_core::geometry::Rect;
+use ftui_render::cell::Cell;
 use ftui_render::frame::Frame;
 use ftui_style::Style;
 use std::fmt::Debug;
@@ -73,6 +74,7 @@ impl<T: Debug + ?Sized> Widget for Pretty<'_, T> {
 
         let deg = frame.buffer.degradation;
         if !deg.render_content() {
+            frame.buffer.fill(area, Cell::default());
             return;
         }
 
@@ -84,6 +86,7 @@ impl<T: Debug + ?Sized> Widget for Pretty<'_, T> {
 
         let text = self.formatted_text();
         let max_x = area.right();
+        frame.buffer.fill(area, Cell::default());
 
         for (row_idx, line) in text.lines().enumerate() {
             if row_idx >= area.height as usize {
@@ -208,8 +211,10 @@ mod tests {
 
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(20, 1, &mut pool);
-        frame.buffer.degradation = DegradationLevel::Skeleton;
         let area = Rect::new(0, 0, 20, 1);
+        widget.render(area, &mut frame);
+
+        frame.buffer.degradation = DegradationLevel::Skeleton;
         widget.render(area, &mut frame);
 
         let cell = frame.buffer.get(0, 0).unwrap();
@@ -236,6 +241,42 @@ mod tests {
         let mut frame = Frame::new(40, 3, &mut pool);
         let area = Rect::new(0, 0, 40, 3);
         widget.render(area, &mut frame); // Only 3 lines, no panic
+    }
+
+    #[test]
+    fn render_shorter_line_clears_stale_suffix() {
+        let long_value = vec![1000];
+        let short_value = vec![1];
+        let long = Pretty::new(&long_value).with_compact(true);
+        let short = Pretty::new(&short_value).with_compact(true);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 2, &mut pool);
+        let area = Rect::new(0, 0, 20, 2);
+
+        long.render(area, &mut frame);
+        short.render(area, &mut frame);
+
+        assert_eq!(frame.buffer.get(0, 0).unwrap().content.as_char(), Some('['));
+        assert_eq!(frame.buffer.get(1, 0).unwrap().content.as_char(), Some('1'));
+        assert_eq!(frame.buffer.get(2, 0).unwrap().content.as_char(), Some(']'));
+        assert!(frame.buffer.get(3, 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn render_fewer_lines_clears_stale_rows() {
+        let long_value = vec![1, 2, 3];
+        let long = Pretty::new(&long_value);
+        let short = Pretty::new(&42);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 6, &mut pool);
+        let area = Rect::new(0, 0, 20, 6);
+
+        long.render(area, &mut frame);
+        short.render(area, &mut frame);
+
+        for x in 0..20u16 {
+            assert!(frame.buffer.get(x, 1).unwrap().is_empty());
+        }
     }
 
     #[test]

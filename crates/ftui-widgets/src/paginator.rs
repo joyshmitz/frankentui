@@ -182,9 +182,8 @@ impl Widget for Paginator<'_> {
         }
 
         let deg = frame.buffer.degradation;
-        if !deg.render_content() {
-            return;
-        }
+        // Paginator state is essential navigation context, so it still renders
+        // plain text in Skeleton mode instead of disappearing entirely.
 
         let style = if deg.apply_styling() {
             self.style
@@ -210,6 +209,7 @@ impl Widget for Paginator<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_render::budget::DegradationLevel;
     use ftui_render::cell::Cell;
     use ftui_render::grapheme_pool::GraphemePool;
 
@@ -453,5 +453,45 @@ mod tests {
         let pager = Paginator::new();
         assert_eq!(pager.active_symbol, "*");
         assert_eq!(pager.inactive_symbol, ".");
+    }
+
+    #[test]
+    fn skeleton_renders_paginator_as_essential_text() {
+        let area = Rect::new(0, 0, 12, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(12, 1, &mut pool);
+        frame.buffer.degradation = DegradationLevel::Skeleton;
+        let pager = Paginator::with_pages(2, 5).mode(PaginatorMode::Compact);
+
+        pager.render(area, &mut frame);
+
+        let mut text = String::new();
+        for x in 0..12u16 {
+            if let Some(cell) = frame.buffer.get(x, 0)
+                && let Some(ch) = cell.content.as_char()
+            {
+                text.push(ch);
+            }
+        }
+        assert!(text.starts_with("2/5"), "got: {text}");
+    }
+
+    #[test]
+    fn skeleton_shorter_paginator_clears_stale_suffix() {
+        let area = Rect::new(0, 0, 10, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 1, &mut pool);
+        let long = Paginator::with_pages(3, 9).mode(PaginatorMode::Page);
+        let short = Paginator::new().mode(PaginatorMode::Compact);
+
+        long.render(area, &mut frame);
+        frame.buffer.degradation = DegradationLevel::Skeleton;
+        short.render(area, &mut frame);
+
+        assert_eq!(frame.buffer.get(0, 0).unwrap().content.as_char(), Some('0'));
+        assert_eq!(frame.buffer.get(1, 0).unwrap().content.as_char(), Some('/'));
+        assert_eq!(frame.buffer.get(2, 0).unwrap().content.as_char(), Some('0'));
+        assert_eq!(frame.buffer.get(3, 0).unwrap().content.as_char(), Some(' '));
+        assert_eq!(frame.buffer.get(4, 0).unwrap().content.as_char(), Some(' '));
     }
 }

@@ -620,17 +620,20 @@ pub(crate) fn set_style_area(buf: &mut Buffer, area: Rect, style: Style) {
     }
 }
 
-/// Clear a single text row with styled spaces before rendering new content.
-pub(crate) fn clear_text_row(frame: &mut Frame, area: Rect, style: Style) {
+/// Clear a text area with styled spaces before rendering new content.
+pub(crate) fn clear_text_area(frame: &mut Frame, area: Rect, style: Style) {
     if area.width == 0 || area.height == 0 {
         return;
     }
 
     let mut cell = Cell::from_char(' ');
     apply_style(&mut cell, style);
-    frame
-        .buffer
-        .fill(Rect::new(area.x, area.y, area.width, 1), cell);
+    frame.buffer.fill(area, cell);
+}
+
+/// Clear a single text row with styled spaces before rendering new content.
+pub(crate) fn clear_text_row(frame: &mut Frame, area: Rect, style: Style) {
+    clear_text_area(frame, Rect::new(area.x, area.y, area.width, 1), style);
 }
 
 /// Build a text cell that inherits existing visual styling from the buffer.

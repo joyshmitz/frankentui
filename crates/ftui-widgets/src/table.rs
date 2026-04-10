@@ -2,7 +2,8 @@ use crate::block::Block;
 use crate::mouse::MouseResult;
 use crate::undo_support::{TableUndoExt, UndoSupport, UndoWidgetId};
 use crate::{
-    MeasurableWidget, SizeConstraints, StatefulWidget, Widget, apply_style, set_style_area,
+    MeasurableWidget, SizeConstraints, StatefulWidget, Widget, apply_style, clear_text_area,
+    set_style_area,
 };
 use ftui_core::event::{MouseButton, MouseEvent, MouseEventKind};
 use ftui_core::geometry::{Rect, Size};
@@ -700,11 +701,14 @@ impl<'a> StatefulWidget for Table<'a> {
         // This is critical for rows with height > 1 that are partially visible at the bottom.
         frame.buffer.push_scissor(table_area);
 
-        // Apply base style to the entire table area (clears gaps/empty space)
-        if apply_styling {
-            let fill_style = self.style.merge(&theme.row);
-            set_style_area(&mut frame.buffer, table_area, fill_style);
-        }
+        // Clear the full owned viewport up front so empty tables, shorter rows,
+        // and shorter headers cannot leak prior buffer content.
+        let fill_style = if apply_styling {
+            self.style.merge(&theme.row)
+        } else {
+            Style::default()
+        };
+        clear_text_area(frame, table_area, fill_style);
 
         let header_height = self
             .header
@@ -901,19 +905,18 @@ impl<'a> StatefulWidget for Table<'a> {
                 Style::default()
             };
 
-            if apply_styling {
-                set_style_area(&mut frame.buffer, row_area, header_style);
-                if let Some((resolver, phase)) = effects {
-                    for (col_idx, rect) in column_rects.iter().enumerate() {
-                        let cell_area = Rect::new(rect.x, y, rect.width, header.height);
-                        let scope = TableEffectScope {
-                            section: TableSection::Header,
-                            row: None,
-                            column: Some(col_idx),
-                        };
-                        let style = resolver.resolve(header_style, scope, phase);
-                        set_style_area(&mut frame.buffer, cell_area, style);
-                    }
+            clear_text_area(frame, row_area, header_style);
+
+            if apply_styling && let Some((resolver, phase)) = effects {
+                for (col_idx, rect) in column_rects.iter().enumerate() {
+                    let cell_area = Rect::new(rect.x, y, rect.width, header.height);
+                    let scope = TableEffectScope {
+                        section: TableSection::Header,
+                        row: None,
+                        column: Some(col_idx),
+                    };
+                    let style = resolver.resolve(header_style, scope, phase);
+                    set_style_area(&mut frame.buffer, cell_area, style);
                 }
             }
 
@@ -1011,27 +1014,24 @@ impl<'a> StatefulWidget for Table<'a> {
                 Style::default()
             };
 
-            if apply_styling {
-                if let Some((resolver, phase)) = effects {
-                    if has_column_effects {
-                        set_style_area(&mut frame.buffer, row_area, row_style);
-                        for (col_idx, rect) in column_rects.iter().enumerate() {
-                            let cell_area = Rect::new(rect.x, y, rect.width, row.height);
-                            let scope = TableEffectScope {
-                                section: TableSection::Body,
-                                row: Some(i),
-                                column: Some(col_idx),
-                            };
-                            let style = resolver.resolve(row_style, scope, phase);
-                            set_style_area(&mut frame.buffer, cell_area, style);
-                        }
-                    } else {
-                        let scope = TableEffectScope::row(TableSection::Body, i);
+            clear_text_area(frame, row_area, row_style);
+
+            if apply_styling && let Some((resolver, phase)) = effects {
+                if has_column_effects {
+                    for (col_idx, rect) in column_rects.iter().enumerate() {
+                        let cell_area = Rect::new(rect.x, y, rect.width, row.height);
+                        let scope = TableEffectScope {
+                            section: TableSection::Body,
+                            row: Some(i),
+                            column: Some(col_idx),
+                        };
                         let style = resolver.resolve(row_style, scope, phase);
-                        set_style_area(&mut frame.buffer, row_area, style);
+                        set_style_area(&mut frame.buffer, cell_area, style);
                     }
                 } else {
-                    set_style_area(&mut frame.buffer, row_area, row_style);
+                    let scope = TableEffectScope::row(TableSection::Body, i);
+                    let style = resolver.resolve(row_style, scope, phase);
+                    set_style_area(&mut frame.buffer, row_area, style);
                 }
             }
 
@@ -1340,6 +1340,19 @@ mod tests {
         actual.trim().to_string()
     }
 
+    fn raw_row_text(buf: &Buffer, y: u16) -> String {
+        let width = buf.width();
+        let mut actual = String::new();
+        for x in 0..width {
+            let ch = buf
+                .get(x, y)
+                .and_then(|cell| cell.content.as_char())
+                .unwrap_or(' ');
+            actual.push(ch);
+        }
+        actual
+    }
+
     #[cfg(feature = "tracing")]
     #[derive(Debug, Default)]
     struct TableTraceState {
@@ -1534,6 +1547,21 @@ mod tests {
     }
 
     #[test]
+    fn render_empty_rows_clears_stale_viewport() {
+        let table = Table::new(Vec::<Row>::new(), [Constraint::Fixed(5)]);
+        let area = Rect::new(0, 0, 10, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 3, &mut pool);
+        frame.buffer.fill(area, Cell::from_char('X'));
+
+        Widget::render(&table, area, &mut frame);
+
+        assert_eq!(raw_row_text(&frame.buffer, 0), "          ");
+        assert_eq!(raw_row_text(&frame.buffer, 1), "          ");
+        assert_eq!(raw_row_text(&frame.buffer, 2), "          ");
+    }
+
+    #[test]
     fn render_single_row_single_column() {
         let table = Table::new([Row::new(["Hello"])], [Constraint::Fixed(10)]);
         let area = Rect::new(0, 0, 10, 3);
@@ -1544,6 +1572,21 @@ mod tests {
         assert_eq!(cell_char(&frame.buffer, 0, 0), Some('H'));
         assert_eq!(cell_char(&frame.buffer, 1, 0), Some('e'));
         assert_eq!(cell_char(&frame.buffer, 4, 0), Some('o'));
+    }
+
+    #[test]
+    fn render_shorter_cell_clears_stale_suffix() {
+        let area = Rect::new(0, 0, 10, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 1, &mut pool);
+
+        let long = Table::new([Row::new(["Hello"])], [Constraint::Fixed(10)]);
+        Widget::render(&long, area, &mut frame);
+
+        let short = Table::new([Row::new(["Hi"])], [Constraint::Fixed(10)]);
+        Widget::render(&short, area, &mut frame);
+
+        assert_eq!(raw_row_text(&frame.buffer, 0), "Hi        ");
     }
 
     #[test]
@@ -1581,6 +1624,23 @@ mod tests {
         assert_eq!(cell_char(&frame.buffer, 0, 0), Some('N'));
         // Data on row 1
         assert_eq!(cell_char(&frame.buffer, 0, 1), Some('f'));
+    }
+
+    #[test]
+    fn render_shorter_header_clears_stale_suffix() {
+        let area = Rect::new(0, 0, 10, 2);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 2, &mut pool);
+
+        let long =
+            Table::new([Row::new(["row"])], [Constraint::Fixed(10)]).header(Row::new(["Header"]));
+        Widget::render(&long, area, &mut frame);
+
+        let short =
+            Table::new([Row::new(["row"])], [Constraint::Fixed(10)]).header(Row::new(["H"]));
+        Widget::render(&short, area, &mut frame);
+
+        assert_eq!(raw_row_text(&frame.buffer, 0), "H         ");
     }
 
     #[test]

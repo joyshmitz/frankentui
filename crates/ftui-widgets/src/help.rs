@@ -16,7 +16,7 @@
 //! assert_eq!(help.entries().len(), 3);
 //! ```
 
-use crate::{StatefulWidget, Widget, draw_text_span};
+use crate::{StatefulWidget, Widget, clear_text_area, draw_text_span};
 use ftui_core::geometry::Rect;
 use ftui_render::budget::DegradationLevel;
 use ftui_render::buffer::Buffer;
@@ -816,6 +816,12 @@ impl Help {
 
 impl Widget for Help {
     fn render(&self, area: Rect, frame: &mut Frame) {
+        if area.is_empty() || area.width == 0 || area.height == 0 {
+            return;
+        }
+
+        clear_text_area(frame, area, Style::default());
+
         match self.mode {
             HelpMode::Short => self.render_short(area, frame),
             HelpMode::Full => self.render_full(area, frame),
@@ -1409,8 +1415,14 @@ impl KeybindingHints {
 
 impl Widget for KeybindingHints {
     fn render(&self, area: Rect, frame: &mut Frame) {
+        if area.is_empty() || area.width == 0 || area.height == 0 {
+            return;
+        }
+
+        clear_text_area(frame, area, Style::default());
+
         let entries = self.visible_entries();
-        if entries.is_empty() || area.is_empty() {
+        if entries.is_empty() {
             return;
         }
 
@@ -1590,6 +1602,36 @@ mod tests {
     }
 
     #[test]
+    fn render_short_shrinking_clears_stale_suffix() {
+        let long = Help::new().entry("^x", "explode").entry("^s", "save");
+        let short = Help::new().entry("q", "quit");
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(24, 1, &mut pool);
+        let area = Rect::new(0, 0, 24, 1);
+
+        Widget::render(&long, area, &mut frame);
+        Widget::render(&short, area, &mut frame);
+
+        assert_eq!(row_text(&frame.buffer, 0, 24), "q quit                  ");
+    }
+
+    #[test]
+    fn render_short_empty_entries_clear_stale_row() {
+        let populated = Help::new().entry("q", "quit").entry("^s", "save");
+        let empty = Help::new();
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 1, &mut pool);
+        let area = Rect::new(0, 0, 20, 1);
+
+        Widget::render(&populated, area, &mut frame);
+        Widget::render(&empty, area, &mut frame);
+
+        assert_eq!(row_text(&frame.buffer, 0, 20), " ".repeat(20));
+    }
+
+    #[test]
     fn render_full_basic() {
         let help = Help::new()
             .with_mode(HelpMode::Full)
@@ -1609,6 +1651,25 @@ mod tests {
         assert!(
             cell_row2.content.as_char() == Some('^') || cell_row2.content.as_char() == Some(' ')
         );
+    }
+
+    #[test]
+    fn render_full_to_short_clears_stale_lower_rows() {
+        let full = Help::new()
+            .with_mode(HelpMode::Full)
+            .entry("a", "alpha")
+            .entry("b", "beta");
+        let short = Help::new().entry("q", "quit");
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 2, &mut pool);
+        let area = Rect::new(0, 0, 20, 2);
+
+        Widget::render(&full, area, &mut frame);
+        Widget::render(&short, area, &mut frame);
+
+        assert_eq!(row_text(&frame.buffer, 0, 20), "q quit              ");
+        assert_eq!(row_text(&frame.buffer, 1, 20), " ".repeat(20));
     }
 
     #[test]
@@ -2136,6 +2197,46 @@ mod tests {
         let area = Rect::new(0, 0, 20, 1);
         // Should not panic
         Widget::render(&hints, area, &mut frame);
+        assert_eq!(row_text(&frame.buffer, 0, 20), " ".repeat(20));
+    }
+
+    #[test]
+    fn keybinding_hints_empty_clears_stale_row() {
+        let populated = KeybindingHints::new()
+            .global_entry("q", "quit")
+            .global_entry("^s", "save");
+        let empty = KeybindingHints::new();
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 1, &mut pool);
+        let area = Rect::new(0, 0, 20, 1);
+
+        Widget::render(&populated, area, &mut frame);
+        Widget::render(&empty, area, &mut frame);
+
+        assert_eq!(row_text(&frame.buffer, 0, 20), " ".repeat(20));
+    }
+
+    #[test]
+    fn keybinding_hints_full_to_short_clears_stale_lower_rows() {
+        let full = KeybindingHints::new()
+            .with_mode(HelpMode::Full)
+            .with_show_categories(true)
+            .global_entry("q", "quit")
+            .global_entry("^s", "save");
+        let short = KeybindingHints::new().global_entry("x", "exit");
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(24, 4, &mut pool);
+        let area = Rect::new(0, 0, 24, 4);
+
+        Widget::render(&full, area, &mut frame);
+        Widget::render(&short, area, &mut frame);
+
+        assert_eq!(row_text(&frame.buffer, 0, 24), "x exit                  ");
+        assert_eq!(row_text(&frame.buffer, 1, 24), " ".repeat(24));
+        assert_eq!(row_text(&frame.buffer, 2, 24), " ".repeat(24));
+        assert_eq!(row_text(&frame.buffer, 3, 24), " ".repeat(24));
     }
 
     #[test]

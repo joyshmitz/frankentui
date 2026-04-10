@@ -267,11 +267,6 @@ impl Widget for StatusLine<'_> {
 
         let deg = frame.buffer.degradation;
 
-        // StatusLine is essential (user needs to see status)
-        if !deg.render_content() {
-            return;
-        }
-
         let style = if deg.apply_styling() {
             self.style
         } else {
@@ -337,6 +332,7 @@ impl Widget for StatusLine<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_render::budget::DegradationLevel;
     use ftui_render::buffer::Buffer;
     use ftui_render::cell::PackedRgba;
     use ftui_render::grapheme_pool::GraphemePool;
@@ -636,5 +632,37 @@ mod tests {
         // Should render what fits without panicking
         let s = row_string(&frame.buffer, 0, 10);
         assert!(!s.is_empty(), "Got empty string");
+    }
+
+    #[test]
+    fn status_line_renders_under_skeleton_as_essential_text() {
+        let status = StatusLine::new()
+            .left(StatusItem::text("READY"))
+            .right(StatusItem::text("Ln 1"));
+        let area = Rect::new(0, 0, 16, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(16, 1, &mut pool);
+        frame.buffer.degradation = DegradationLevel::Skeleton;
+
+        status.render(area, &mut frame);
+
+        let row = row_full(&frame.buffer, 0, 16);
+        assert!(row.contains("READY"), "Got: '{row}'");
+        assert!(row.contains("Ln 1"), "Got: '{row}'");
+    }
+
+    #[test]
+    fn skeleton_empty_status_line_clears_stale_row() {
+        let populated = StatusLine::new().left(StatusItem::text("BUSY"));
+        let empty = StatusLine::new();
+        let area = Rect::new(0, 0, 12, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(12, 1, &mut pool);
+
+        populated.render(area, &mut frame);
+        frame.buffer.degradation = DegradationLevel::Skeleton;
+        empty.render(area, &mut frame);
+
+        assert_eq!(row_full(&frame.buffer, 0, 12), " ".repeat(12));
     }
 }

@@ -170,9 +170,8 @@ impl StatefulWidget for Timer<'_> {
         }
 
         let deg = frame.buffer.degradation;
-        if !deg.render_content() {
-            return;
-        }
+        // Timers are essential operational state, so they still render plain
+        // text in Skeleton mode instead of leaving stale or missing content.
 
         let style = if deg.apply_styling() {
             if state.finished() {
@@ -422,7 +421,7 @@ mod tests {
     // --- Degradation tests ---
 
     #[test]
-    fn degradation_skeleton_skips() {
+    fn degradation_skeleton_renders_essential_text() {
         use ftui_render::budget::DegradationLevel;
 
         let widget = Timer::new();
@@ -432,7 +431,28 @@ mod tests {
         frame.buffer.degradation = DegradationLevel::Skeleton;
         let mut state = TimerState::new(Duration::from_secs(60));
         StatefulWidget::render(&widget, area, &mut frame, &mut state);
-        assert!(frame.buffer.get(0, 0).unwrap().is_empty());
+        assert_eq!(cell_char(&frame.buffer, 0, 0), Some('1'));
+        assert_eq!(cell_char(&frame.buffer, 1, 0), Some('m'));
+    }
+
+    #[test]
+    fn skeleton_empty_timer_clears_stale_row() {
+        use ftui_render::budget::DegradationLevel;
+
+        let widget = Timer::new().format(TimerFormat::Seconds);
+        let area = Rect::new(0, 0, 6, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(6, 1, &mut pool);
+        let mut populated = TimerState::new(Duration::from_secs(90));
+        let mut empty = TimerState::new(Duration::ZERO);
+
+        StatefulWidget::render(&widget, area, &mut frame, &mut populated);
+        frame.buffer.degradation = DegradationLevel::Skeleton;
+        StatefulWidget::render(&widget, area, &mut frame, &mut empty);
+
+        assert_eq!(cell_char(&frame.buffer, 0, 0), Some('0'));
+        assert_eq!(cell_char(&frame.buffer, 1, 0), Some('s'));
+        assert_eq!(cell_char(&frame.buffer, 2, 0), Some(' '));
     }
 
     // --- Countdown progression test ---

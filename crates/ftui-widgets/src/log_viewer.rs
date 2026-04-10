@@ -44,7 +44,7 @@ use ftui_text::{
 };
 
 use crate::virtualized::Virtualized;
-use crate::{StatefulWidget, draw_text_span, draw_text_span_with_link};
+use crate::{StatefulWidget, clear_text_area, draw_text_span, draw_text_span_with_link};
 
 type Text = FtuiText<'static>;
 
@@ -1014,6 +1014,8 @@ impl StatefulWidget for LogViewer {
             return;
         }
 
+        clear_text_area(frame, area, self.style);
+
         // Keep Virtualized's visible_count in sync even in filtered mode.
         let _ = self.virt.visible_range(area.height);
 
@@ -1421,6 +1423,27 @@ mod tests {
     }
 
     #[test]
+    fn test_render_empty_clears_stale_content() {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 3, &mut pool);
+        let mut log = LogViewer::new(100);
+        let mut state = LogViewerState::default();
+        let area = Rect::new(0, 0, 20, 3);
+
+        log.push("first line");
+        log.push("second line");
+        log.render(area, &mut frame, &mut state);
+
+        log.clear();
+        log.render(area, &mut frame, &mut state);
+
+        assert_eq!(state.last_visible_lines, 0);
+        assert_eq!(line_text(&frame, 0, 20), " ".repeat(20));
+        assert_eq!(line_text(&frame, 1, 20), " ".repeat(20));
+        assert_eq!(line_text(&frame, 2, 20), " ".repeat(20));
+    }
+
+    #[test]
     fn test_render_some_lines() {
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(80, 10, &mut pool);
@@ -1462,6 +1485,27 @@ mod tests {
         // Clear filter
         log.set_filter(None);
         assert!(log.filtered_indices.is_none());
+    }
+
+    #[test]
+    fn test_render_filter_no_matches_clears_stale_content() {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 3, &mut pool);
+        let mut log = LogViewer::new(100);
+        let mut state = LogViewerState::default();
+        let area = Rect::new(0, 0, 20, 3);
+
+        log.push("INFO: starting");
+        log.push("ERROR: something failed");
+        log.render(area, &mut frame, &mut state);
+
+        log.set_filter(Some("MISSING"));
+        log.render(area, &mut frame, &mut state);
+
+        assert_eq!(state.last_visible_lines, 0);
+        assert_eq!(line_text(&frame, 0, 20), " ".repeat(20));
+        assert_eq!(line_text(&frame, 1, 20), " ".repeat(20));
+        assert_eq!(line_text(&frame, 2, 20), " ".repeat(20));
     }
 
     #[test]

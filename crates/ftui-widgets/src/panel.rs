@@ -372,14 +372,12 @@ impl<W: Widget> Widget for Panel<'_, W> {
             Style::default()
         };
 
-        // Skeleton+: skip everything, just clear area
+        // Skeleton+: clear decorative output, but still give essential child
+        // content a chance to render into the panel body.
         if !deg.render_content() {
             frame.buffer.fill(area, Cell::default());
-            return;
-        }
-
-        // Background/style
-        if deg.apply_styling() {
+        } else if deg.apply_styling() {
+            // Background/style
             set_style_area(&mut frame.buffer, area, self.style);
         }
 
@@ -426,7 +424,12 @@ impl<W: Widget> Widget for Panel<'_, W> {
         }
 
         // Content
-        let mut content_area = self.inner(area);
+        let content_bounds = if deg.render_decorative() {
+            self.inner(area)
+        } else {
+            area
+        };
+        let mut content_area = content_bounds;
         content_area = content_area.inner(self.padding);
         if content_area.is_empty() {
             return;
@@ -882,5 +885,49 @@ mod tests {
         assert_eq!(subtitle.fg, default_cell.fg);
         assert_eq!(subtitle.bg, default_cell.bg);
         assert_eq!(subtitle.attrs, default_cell.attrs);
+    }
+
+    #[test]
+    fn skeleton_still_renders_essential_child() {
+        use ftui_render::budget::DegradationLevel;
+
+        struct EssentialMarker;
+
+        impl Widget for EssentialMarker {
+            fn render(&self, area: Rect, frame: &mut Frame) {
+                frame.buffer.set(area.x, area.y, Cell::from_char('E'));
+            }
+
+            fn is_essential(&self) -> bool {
+                true
+            }
+        }
+
+        let panel = Panel::new(EssentialMarker).borders(Borders::ALL);
+        let area = Rect::new(0, 0, 5, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(5, 3, &mut pool);
+        frame.buffer.degradation = DegradationLevel::Skeleton;
+
+        panel.render(area, &mut frame);
+
+        assert_eq!(cell_char(&frame, 0, 0), Some('E'));
+        assert!(frame.buffer.get(4, 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn essential_only_does_not_reserve_hidden_border_space() {
+        use ftui_render::budget::DegradationLevel;
+
+        let panel = Panel::new(MarkerWidget).borders(Borders::ALL);
+        let area = Rect::new(0, 0, 5, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(5, 3, &mut pool);
+        frame.buffer.degradation = DegradationLevel::EssentialOnly;
+
+        panel.render(area, &mut frame);
+
+        assert_eq!(cell_char(&frame, 0, 0), Some('X'));
+        assert!(frame.buffer.get(1, 0).unwrap().is_empty());
     }
 }

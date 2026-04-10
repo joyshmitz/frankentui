@@ -336,6 +336,7 @@ impl Widget for JsonView {
         }
 
         let deg = frame.buffer.degradation;
+        frame.buffer.fill(area, ftui_render::cell::Cell::default());
         if !deg.render_content() {
             return;
         }
@@ -762,14 +763,40 @@ mod tests {
         let view = JsonView::new(r#"{"key": "value"}"#);
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(40, 10, &mut pool);
-        let mut expected_pool = GraphemePool::new();
-        let expected = Frame::new(40, 10, &mut expected_pool);
+        let area = Rect::new(0, 0, 40, 10);
+        view.render(area, &mut frame);
         frame.buffer.degradation = DegradationLevel::Skeleton;
-        view.render(Rect::new(0, 0, 40, 10), &mut frame);
+        view.render(area, &mut frame);
 
         for y in 0..10 {
             for x in 0..40 {
-                assert_eq!(frame.buffer.get(x, y), expected.buffer.get(x, y));
+                assert_eq!(
+                    frame.buffer.get(x, y),
+                    Some(&ftui_render::cell::Cell::default())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn render_shorter_json_clears_stale_suffix_and_rows() {
+        let long = JsonView::new(r#"{"alpha": 1000, "beta": 2000}"#);
+        let short = JsonView::new(r#"{"a": 1}"#);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(40, 10, &mut pool);
+        let area = Rect::new(0, 0, 40, 10);
+
+        long.render(area, &mut frame);
+        short.render(area, &mut frame);
+
+        for y in 0..10u16 {
+            for x in 0..40u16 {
+                if y >= 3 {
+                    assert_eq!(
+                        frame.buffer.get(x, y),
+                        Some(&ftui_render::cell::Cell::default())
+                    );
+                }
             }
         }
     }

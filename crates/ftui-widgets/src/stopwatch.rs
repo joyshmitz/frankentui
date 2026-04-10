@@ -162,9 +162,8 @@ impl StatefulWidget for Stopwatch<'_> {
         }
 
         let deg = frame.buffer.degradation;
-        if !deg.render_content() {
-            return;
-        }
+        // Stopwatch output is essential user-facing state, so it still renders
+        // plain text in Skeleton mode instead of disappearing.
 
         let style = if deg.apply_styling() {
             if state.running {
@@ -568,7 +567,7 @@ mod tests {
     // --- Degradation tests ---
 
     #[test]
-    fn degradation_skeleton_skips() {
+    fn degradation_skeleton_renders_essential_text() {
         use ftui_render::budget::DegradationLevel;
 
         let widget = Stopwatch::new();
@@ -581,7 +580,31 @@ mod tests {
             running: false,
         };
         StatefulWidget::render(&widget, area, &mut frame, &mut state);
-        assert!(frame.buffer.get(0, 0).unwrap().is_empty());
+        assert_eq!(cell_char(&frame.buffer, 0, 0), Some('4'));
+        assert_eq!(cell_char(&frame.buffer, 1, 0), Some('5'));
+    }
+
+    #[test]
+    fn skeleton_zero_stopwatch_clears_stale_row() {
+        use ftui_render::budget::DegradationLevel;
+
+        let widget = Stopwatch::new().format(StopwatchFormat::Seconds);
+        let area = Rect::new(0, 0, 6, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(6, 1, &mut pool);
+        let mut populated = StopwatchState {
+            elapsed: Duration::from_secs(90),
+            running: false,
+        };
+        let mut empty = StopwatchState::default();
+
+        StatefulWidget::render(&widget, area, &mut frame, &mut populated);
+        frame.buffer.degradation = DegradationLevel::Skeleton;
+        StatefulWidget::render(&widget, area, &mut frame, &mut empty);
+
+        assert_eq!(cell_char(&frame.buffer, 0, 0), Some('0'));
+        assert_eq!(cell_char(&frame.buffer, 1, 0), Some('s'));
+        assert_eq!(cell_char(&frame.buffer, 2, 0), Some(' '));
     }
 
     #[test]

@@ -534,6 +534,7 @@ impl CommandPalette {
         self.push_title_cache(&item.title);
         self.actions.push(item);
         self.generation = self.generation.wrapping_add(1);
+        self.refresh_filtered_after_action_change();
         self
     }
 
@@ -542,6 +543,7 @@ impl CommandPalette {
         self.push_title_cache(&action.title);
         self.actions.push(action);
         self.generation = self.generation.wrapping_add(1);
+        self.refresh_filtered_after_action_change();
         self
     }
 
@@ -566,6 +568,16 @@ impl CommandPalette {
     /// Number of registered actions.
     pub fn action_count(&self) -> usize {
         self.actions.len()
+    }
+
+    fn refresh_filtered_after_action_change(&mut self) {
+        if self.visible
+            || !self.query.is_empty()
+            || !self.filtered.is_empty()
+            || self.match_filter != MatchFilter::All
+        {
+            self.update_filtered(false);
+        }
     }
 
     // --- Visibility ---
@@ -881,8 +893,10 @@ impl CommandPalette {
         // Clamp selection.
         if !self.filtered.is_empty() {
             self.selected = self.selected.min(self.filtered.len() - 1);
+            self.adjust_scroll();
         } else {
             self.selected = 0;
+            self.scroll_offset = 0;
         }
 
         #[cfg(feature = "tracing")]
@@ -1671,6 +1685,44 @@ mod widget_tests {
 
         palette.register_action(item);
         assert_eq!(palette.action_count(), 1);
+    }
+
+    #[test]
+    fn register_refreshes_visible_filtered_results() {
+        let mut palette = CommandPalette::new();
+        palette.register("Alpha", None, &[]);
+        palette.open();
+        palette.set_query("Beta");
+        assert!(palette.selected_action().is_none());
+
+        palette.register("Beta", None, &[]);
+
+        assert_eq!(palette.result_count(), 1);
+        assert_eq!(
+            palette
+                .selected_action()
+                .map(|action| action.title.as_str()),
+            Some("Beta")
+        );
+    }
+
+    #[test]
+    fn register_action_refreshes_visible_filtered_results() {
+        let mut palette = CommandPalette::new();
+        palette.register("Alpha", None, &[]);
+        palette.open();
+        palette.set_query("Beta");
+        assert!(palette.selected_action().is_none());
+
+        palette.register_action(ActionItem::new("beta", "Beta"));
+
+        assert_eq!(palette.result_count(), 1);
+        assert_eq!(
+            palette
+                .selected_action()
+                .map(|action| action.title.as_str()),
+            Some("Beta")
+        );
     }
 
     #[test]
@@ -2807,6 +2859,38 @@ mod widget_tests {
         });
         let _ = palette.handle_event(&home);
         assert_eq!(palette.selected_index(), 0);
+    }
+
+    #[test]
+    fn update_filtered_clamps_scroll_offset_after_results_shrink() {
+        let mut palette = CommandPalette::new().with_max_visible(3);
+        for i in 0..10 {
+            palette.register(format!("Action {i}"), None, &[]);
+        }
+        palette.open();
+
+        let end = Event::Key(KeyEvent {
+            code: KeyCode::End,
+            modifiers: Modifiers::empty(),
+            kind: KeyEventKind::Press,
+        });
+        let _ = palette.handle_event(&end);
+        assert!(palette.scroll_offset > 0);
+
+        palette.actions.truncate(1);
+        palette.rebuild_title_cache();
+        palette.generation = palette.generation.wrapping_add(1);
+        palette.update_filtered(false);
+
+        assert_eq!(palette.result_count(), 1);
+        assert_eq!(palette.selected, 0);
+        assert_eq!(palette.scroll_offset, 0);
+        assert_eq!(
+            palette
+                .selected_action()
+                .map(|action| action.title.as_str()),
+            Some("Action 0")
+        );
     }
 
     #[test]

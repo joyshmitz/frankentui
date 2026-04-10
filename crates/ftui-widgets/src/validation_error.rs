@@ -47,7 +47,7 @@ use ftui_render::frame::Frame;
 use ftui_style::Style;
 use ftui_text::{display_width, grapheme_width};
 
-use crate::{StatefulWidget, Widget, draw_text_span};
+use crate::{StatefulWidget, Widget, clear_text_row, draw_text_span};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -336,11 +336,14 @@ impl StatefulWidget for ValidationErrorDisplay {
             return;
         }
 
+        let row_area = Rect::new(area.x, area.y, area.width, 1);
+
         // Update animation
         state.tick(self.animation_duration);
 
         // Skip rendering if fully invisible
         if state.opacity <= 0.0 && !state.visible {
+            clear_text_row(frame, row_area, Style::default());
             return;
         }
 
@@ -367,6 +370,8 @@ impl StatefulWidget for ValidationErrorDisplay {
         } else {
             Style::default()
         };
+
+        clear_text_row(frame, row_area, Style::default());
 
         // Draw icon
         let y = area.y;
@@ -678,8 +683,29 @@ mod tests {
         let mut state = ValidationErrorState::default(); // Not visible
         StatefulWidget::render(&error, area, &mut frame, &mut state);
 
-        // Nothing should be drawn
-        assert!(frame.buffer.get(0, 0).unwrap().is_empty());
+        // Hidden state should leave a cleared row behind.
+        assert_eq!(frame.buffer.get(0, 0).unwrap().content.as_char(), Some(' '));
+    }
+
+    #[test]
+    fn render_hidden_state_clears_stale_row() {
+        let error = ValidationErrorDisplay::new("Error").with_icon("!");
+        let area = Rect::new(0, 0, 20, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 1, &mut pool);
+        let mut visible = ValidationErrorState {
+            visible: true,
+            opacity: 1.0,
+            ..Default::default()
+        };
+        let mut hidden = ValidationErrorState::default();
+
+        StatefulWidget::render(&error, area, &mut frame, &mut visible);
+        StatefulWidget::render(&error, area, &mut frame, &mut hidden);
+
+        for x in 0..20u16 {
+            assert_eq!(frame.buffer.get(x, 0).unwrap().content.as_char(), Some(' '));
+        }
     }
 
     #[test]
@@ -709,8 +735,27 @@ mod tests {
         Widget::render(&error, area, &mut frame);
 
         assert_eq!(frame.buffer.get(0, 0).unwrap().content.as_char(), Some('X'));
-        // Position 1+ should be empty (no message)
-        assert!(frame.buffer.get(1, 0).unwrap().is_empty());
+        // Position 1+ should be cleared (no message)
+        assert_eq!(frame.buffer.get(1, 0).unwrap().content.as_char(), Some(' '));
+    }
+
+    #[test]
+    fn render_shorter_message_clears_stale_suffix() {
+        let long = ValidationErrorDisplay::new("Long validation error").with_icon("!");
+        let short = ValidationErrorDisplay::new("No").with_icon("!");
+        let area = Rect::new(0, 0, 20, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 1, &mut pool);
+
+        Widget::render(&long, area, &mut frame);
+        Widget::render(&short, area, &mut frame);
+
+        assert_eq!(frame.buffer.get(0, 0).unwrap().content.as_char(), Some('!'));
+        assert_eq!(frame.buffer.get(1, 0).unwrap().content.as_char(), Some(' '));
+        assert_eq!(frame.buffer.get(2, 0).unwrap().content.as_char(), Some('N'));
+        assert_eq!(frame.buffer.get(3, 0).unwrap().content.as_char(), Some('o'));
+        assert_eq!(frame.buffer.get(4, 0).unwrap().content.as_char(), Some(' '));
+        assert_eq!(frame.buffer.get(5, 0).unwrap().content.as_char(), Some(' '));
     }
 
     #[test]

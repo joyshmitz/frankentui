@@ -21,7 +21,7 @@
 
 use web_time::{Duration, Instant};
 
-use crate::{Widget, set_style_area};
+use crate::{Widget, clear_text_area};
 use ftui_core::geometry::Rect;
 use ftui_render::cell::Cell;
 use ftui_render::frame::Frame;
@@ -577,6 +577,9 @@ pub struct ToastConfig {
     pub position: ToastPosition,
     /// Auto-dismiss duration. `None` means persistent until dismissed.
     pub duration: Option<Duration>,
+    /// Whether the duration/persistence policy was explicitly configured by
+    /// the caller instead of inherited from a queue-level default.
+    pub duration_explicit: bool,
     /// Visual style variant.
     pub style_variant: ToastStyle,
     /// Maximum width in columns.
@@ -594,6 +597,7 @@ impl Default for ToastConfig {
         Self {
             position: ToastPosition::default(),
             duration: Some(Duration::from_secs(5)),
+            duration_explicit: false,
             style_variant: ToastStyle::default(),
             max_width: 50,
             margin: 1,
@@ -873,6 +877,7 @@ impl Toast {
     #[must_use]
     pub fn duration(mut self, duration: Duration) -> Self {
         self.config.duration = Some(duration);
+        self.config.duration_explicit = true;
         self
     }
 
@@ -880,6 +885,7 @@ impl Toast {
     #[must_use]
     pub fn persistent(mut self) -> Self {
         self.config.duration = None;
+        self.config.duration_explicit = true;
         self
     }
 
@@ -1275,12 +1281,7 @@ impl Widget for Toast {
         )
         .entered();
 
-        if area.is_empty() || !self.is_visible() {
-            return;
-        }
-
-        let deg = frame.buffer.degradation;
-        if !deg.render_content() {
+        if area.is_empty() {
             return;
         }
 
@@ -1295,10 +1296,22 @@ impl Widget for Toast {
 
         let render_area = Rect::new(area.x, area.y, width, height);
 
-        // Apply base style to the entire area
-        if deg.apply_styling() {
-            set_style_area(&mut frame.buffer, render_area, self.style);
+        if !self.is_visible() {
+            clear_text_area(frame, render_area, Style::default());
+            return;
         }
+
+        let deg = frame.buffer.degradation;
+        if !deg.render_content() {
+            return;
+        }
+
+        let base_style = if deg.apply_styling() {
+            self.style
+        } else {
+            Style::default()
+        };
+        clear_text_area(frame, render_area, base_style);
 
         // Draw border
         let use_unicode = deg.use_unicode_borders();
@@ -1508,6 +1521,18 @@ mod tests {
             .expect("test cell should exist")
     }
 
+    fn line_text(frame: &Frame, y: u16, width: u16) -> String {
+        (0..width)
+            .map(|x| {
+                frame
+                    .buffer
+                    .get(x, y)
+                    .and_then(|cell| cell.content.as_char())
+                    .unwrap_or(' ')
+            })
+            .collect()
+    }
+
     fn focused_action_id(toast: &Toast) -> &str {
         toast
             .focused_action()
@@ -1526,6 +1551,7 @@ mod tests {
         assert_eq!(toast.content.message, "Hello");
         assert!(toast.content.icon.is_none());
         assert!(toast.content.title.is_none());
+        assert!(!toast.config.duration_explicit);
         assert!(toast.is_visible());
     }
 
@@ -1543,6 +1569,7 @@ mod tests {
         assert_eq!(toast.content.title, Some("Success".to_string()));
         assert_eq!(toast.config.position, ToastPosition::BottomRight);
         assert_eq!(toast.config.duration, Some(Duration::from_secs(10)));
+        assert!(toast.config.duration_explicit);
         assert_eq!(toast.config.max_width, 60);
     }
 
@@ -1550,6 +1577,7 @@ mod tests {
     fn test_toast_persistent() {
         let toast = Toast::new("Persistent").persistent();
         assert!(toast.config.duration.is_none());
+        assert!(toast.config.duration_explicit);
         assert!(!toast.is_expired());
     }
 
@@ -1723,20 +1751,23 @@ mod tests {
     }
 
     #[test]
-    fn test_toast_not_visible_when_dismissed() {
+    fn test_toast_not_visible_when_dismissed_clears_previous_render_area() {
         let mut toast = Toast::new("Test").no_animation();
-        toast.dismiss();
         let area = Rect::new(0, 0, 20, 5);
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(20, 5, &mut pool);
+        let (toast_width, toast_height) = toast.calculate_dimensions();
 
-        // Save original state
-        let original = cell_at(&frame, 0, 0).content.as_char();
+        toast.render(area, &mut frame);
+        toast.dismiss();
 
         toast.render(area, &mut frame);
 
-        // Buffer should be unchanged (dismissed toast doesn't render)
-        assert_eq!(cell_at(&frame, 0, 0).content.as_char(), original);
+        for y in 0..toast_height.min(area.height) {
+            for x in 0..toast_width.min(area.width) {
+                assert_eq!(cell_at(&frame, x, y).content.as_char(), Some(' '));
+            }
+        }
     }
 
     #[test]
@@ -1775,6 +1806,47 @@ mod tests {
                 assert_eq!(frame.buffer.get(x, y), expected.buffer.get(x, y));
             }
         }
+    }
+
+    #[test]
+    fn test_toast_render_shorter_message_clears_stale_suffix() {
+        let area = Rect::new(0, 0, 20, 5);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 5, &mut pool);
+
+        Toast::new("Long message text")
+            .max_width(18)
+            .no_animation()
+            .render(area, &mut frame);
+        Toast::new("Hi")
+            .max_width(18)
+            .no_animation()
+            .render(area, &mut frame);
+
+        assert_eq!(line_text(&frame, 1, 6), "│Hi  │");
+    }
+
+    #[test]
+    fn test_toast_no_styling_shorter_title_and_message_clear_stale_text() {
+        let area = Rect::new(0, 0, 18, 6);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(18, 6, &mut pool);
+
+        Toast::new("Long body")
+            .title("LongTitle")
+            .max_width(16)
+            .no_animation()
+            .render(area, &mut frame);
+
+        frame.buffer.degradation = DegradationLevel::NoStyling;
+        Toast::new("Ok")
+            .title("Hi")
+            .max_width(16)
+            .no_animation()
+            .render(area, &mut frame);
+
+        assert_eq!(line_text(&frame, 1, 6), "|Hi  |");
+        assert_eq!(line_text(&frame, 2, 6), "|Ok  |");
     }
 
     #[test]
@@ -2906,6 +2978,7 @@ mod tests {
         let config = ToastConfig::default();
         assert_eq!(config.position, ToastPosition::TopRight);
         assert_eq!(config.duration, Some(Duration::from_secs(5)));
+        assert!(!config.duration_explicit);
         assert_eq!(config.style_variant, ToastStyle::Info);
         assert_eq!(config.max_width, 50);
         assert_eq!(config.margin, 1);

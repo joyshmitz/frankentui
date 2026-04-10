@@ -6,7 +6,7 @@
 //! closable tabs, and tab reordering helpers.
 
 use crate::mouse::MouseResult;
-use crate::{StatefulWidget, Widget, draw_text_span, set_style_area};
+use crate::{StatefulWidget, Widget, clear_text_row, draw_text_span};
 use ftui_core::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ftui_core::geometry::Rect;
 use ftui_render::frame::{Frame, HitId, HitRegion};
@@ -406,7 +406,17 @@ impl StatefulWidget for Tabs<'_> {
         if area.is_empty() || area.height == 0 {
             return;
         }
-        if self.tabs.is_empty() {
+
+        let deg = frame.buffer.degradation;
+        let base_style = if deg.apply_styling() {
+            self.style
+        } else {
+            Style::default()
+        };
+
+        clear_text_row(frame, area, base_style);
+
+        if !deg.render_content() || self.tabs.is_empty() {
             return;
         }
 
@@ -428,12 +438,6 @@ impl StatefulWidget for Tabs<'_> {
         #[cfg(feature = "tracing")]
         let _render_guard = render_span.enter();
 
-        set_style_area(
-            &mut frame.buffer,
-            Rect::new(area.x, area.y, area.width, 1),
-            self.style,
-        );
-
         let mut left = area.x;
         let mut right = area.right();
         if overflow_left {
@@ -442,7 +446,7 @@ impl StatefulWidget for Tabs<'_> {
                 area.x,
                 area.y,
                 self.overflow_left_marker,
-                self.style,
+                base_style,
                 area.right(),
             );
             left = left.saturating_add(display_width(self.overflow_left_marker) as u16);
@@ -454,7 +458,7 @@ impl StatefulWidget for Tabs<'_> {
                 right,
                 area.y,
                 self.overflow_right_marker,
-                self.style,
+                base_style,
                 area.right(),
             );
         }
@@ -465,16 +469,19 @@ impl StatefulWidget for Tabs<'_> {
                 break;
             }
             if idx > start && !self.separator.is_empty() {
-                x = draw_text_span(frame, x, area.y, self.separator, self.style, right);
+                x = draw_text_span(frame, x, area.y, self.separator, base_style, right);
                 if x >= right {
                     break;
                 }
             }
             let tab = &self.tabs[idx];
             let label = self.tab_label(tab, idx == state.active);
-            let mut tab_style = self.style.merge(&tab.style);
-            if idx == state.active {
-                tab_style = self.active_style.merge(&tab_style);
+            let mut tab_style = base_style;
+            if deg.apply_styling() {
+                tab_style = self.style.merge(&tab.style);
+                if idx == state.active {
+                    tab_style = self.active_style.merge(&tab_style);
+                }
             }
             let before = x;
             x = draw_text_span(frame, x, area.y, &label, tab_style, right);
@@ -537,6 +544,7 @@ impl ftui_a11y::Accessible for Tabs<'_> {
 mod tests {
     use super::*;
     use ftui_core::event::{KeyCode, KeyEvent};
+    use ftui_render::budget::DegradationLevel;
     use ftui_render::grapheme_pool::GraphemePool;
     #[cfg(feature = "tracing")]
     use std::sync::{Arc, Mutex};
@@ -1020,6 +1028,65 @@ mod tests {
         StatefulWidget::render(&tabs, Rect::new(0, 0, 20, 1), &mut frame, &mut state);
         let row = row_text(&frame, 0);
         assert!(row.contains("[Solo]"));
+    }
+
+    #[test]
+    fn tabs_render_empty_clears_stale_row() {
+        let populated = Tabs::new(vec![Tab::new("LongTab"), Tab::new("Other")]);
+        let empty = Tabs::new(Vec::<Tab>::new());
+        let mut state = TabsState::default();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 1, &mut pool);
+
+        StatefulWidget::render(&populated, Rect::new(0, 0, 20, 1), &mut frame, &mut state);
+        assert_ne!(row_text(&frame, 0), " ".repeat(20));
+
+        StatefulWidget::render(&empty, Rect::new(0, 0, 20, 1), &mut frame, &mut state);
+        assert_eq!(row_text(&frame, 0), " ".repeat(20));
+    }
+
+    #[test]
+    fn tabs_render_shorter_titles_clear_stale_suffix() {
+        let long = Tabs::new(vec![Tab::new("LongTitle"), Tab::new("Second")]);
+        let short = Tabs::new(vec![Tab::new("A"), Tab::new("B")]);
+        let mut state = TabsState::default();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 1, &mut pool);
+
+        StatefulWidget::render(&long, Rect::new(0, 0, 20, 1), &mut frame, &mut state);
+        StatefulWidget::render(&short, Rect::new(0, 0, 20, 1), &mut frame, &mut state);
+
+        assert_eq!(row_text(&frame, 0), "[A]  B              ");
+    }
+
+    #[test]
+    fn tabs_no_styling_drops_configured_styles() {
+        let tabs = Tabs::new(vec![Tab::new("One").style(Style::new().italic())])
+            .style(Style::new().bold())
+            .active_style(Style::new().underline());
+        let plain_tabs = Tabs::new(vec![Tab::new("One")]);
+        let mut state = TabsState::default();
+        let mut plain_state = TabsState::default();
+        let mut pool = GraphemePool::new();
+        let mut plain_pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 1, &mut pool);
+        let mut plain_frame = Frame::new(10, 1, &mut plain_pool);
+        frame.buffer.degradation = DegradationLevel::NoStyling;
+        plain_frame.buffer.degradation = DegradationLevel::NoStyling;
+
+        StatefulWidget::render(&tabs, Rect::new(0, 0, 10, 1), &mut frame, &mut state);
+        StatefulWidget::render(
+            &plain_tabs,
+            Rect::new(0, 0, 10, 1),
+            &mut plain_frame,
+            &mut plain_state,
+        );
+
+        for x in 0..10 {
+            let cell = frame.buffer.get(x, 0).expect("styled tab cell");
+            let plain = plain_frame.buffer.get(x, 0).expect("plain tab cell");
+            assert_eq!(cell, plain);
+        }
     }
 
     #[test]

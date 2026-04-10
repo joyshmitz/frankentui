@@ -152,6 +152,7 @@ impl FocusManager {
             return self.blur().is_some();
         }
 
+        let had_current = self.current.is_some();
         if let Some(current) = self.current
             && self.can_focus(current)
             && self.allowed_by_trap(current)
@@ -159,11 +160,21 @@ impl FocusManager {
             return false;
         }
 
-        if let Some(group_id) = self.active_trap_group() {
-            return self.focus_first_in_group(group_id);
+        if let Some(group_id) = self.active_trap_group()
+            && self.focus_first_in_group_without_history(group_id)
+        {
+            return true;
         }
 
-        self.focus_first()
+        if self.focus_first_without_history() {
+            return true;
+        }
+
+        if had_current {
+            return self.blur().is_some();
+        }
+
+        false
     }
 
     /// Move focus in direction.
@@ -222,6 +233,9 @@ impl FocusManager {
     /// Go back to previous focus.
     pub fn focus_back(&mut self) -> bool {
         while let Some(id) = self.history.pop() {
+            if self.current == Some(id) {
+                continue;
+            }
             if self.can_focus(id) && self.allowed_by_trap(id) {
                 // Set focus directly without pushing current to history
                 // (going back shouldn't create a forward entry).
@@ -231,6 +245,7 @@ impl FocusManager {
                     Some(from) => FocusEvent::FocusMoved { from, to: id },
                     None => FocusEvent::FocusGained { id },
                 });
+                self.focus_change_count += 1;
                 return true;
             }
         }
@@ -249,11 +264,10 @@ impl FocusManager {
     /// where `allowed_by_trap` would deny focus to every widget because the
     /// group is empty/missing.
     pub fn push_trap(&mut self, group_id: u32) -> bool {
-        // Guard: the group must exist and contain at least one focusable member.
-        let group_ok = self
-            .groups
-            .get(&group_id)
-            .is_some_and(|g| !g.members.is_empty());
+        // Guard: the group must exist and contain at least one currently
+        // focusable member. Raw member IDs alone are insufficient because the
+        // focus graph can change after the group was created.
+        let group_ok = self.group_has_focusable_member(group_id);
 
         if !group_ok {
             #[cfg(feature = "tracing")]
@@ -274,7 +288,7 @@ impl FocusManager {
         });
 
         if !self.is_current_in_group(group_id) {
-            self.focus_first_in_group(group_id);
+            self.focus_first_in_group_without_history(group_id);
         }
         true
     }
@@ -284,6 +298,7 @@ impl FocusManager {
         let Some(trap) = self.trap_stack.pop() else {
             return false;
         };
+        let had_current = self.current.is_some();
         #[cfg(feature = "tracing")]
         tracing::debug!(
             group_id = trap.group_id,
@@ -295,26 +310,48 @@ impl FocusManager {
             && self.can_focus(id)
             && self.allowed_by_trap(id)
         {
-            return self.set_focus(id);
+            return self.set_focus_without_history(id);
         }
 
         if let Some(active) = self.active_trap_group() {
-            return self.focus_first_in_group(active);
+            return self.focus_first_in_group_without_history(active);
         }
 
-        self.focus_first()
+        if trap.return_focus.is_none() {
+            return if had_current {
+                self.blur().is_some()
+            } else {
+                false
+            };
+        }
+
+        if self.focus_first_without_history() {
+            return true;
+        }
+
+        if had_current && self.current.is_some_and(|id| !self.can_focus(id)) {
+            return self.blur().is_some();
+        }
+
+        false
     }
 
     /// Check if focus is currently trapped.
     #[must_use]
     pub fn is_trapped(&self) -> bool {
-        !self.trap_stack.is_empty()
+        self.active_trap_group().is_some()
+    }
+
+    /// Remove all active focus traps without changing focus groups.
+    pub fn clear_traps(&mut self) {
+        self.trap_stack.clear();
     }
 
     /// Create focus group.
     pub fn create_group(&mut self, id: u32, members: Vec<FocusId>) {
         let members = self.filter_focusable(members);
         self.groups.insert(id, FocusGroup::new(id, members));
+        self.repair_focus_after_group_change();
     }
 
     /// Add widget to group.
@@ -329,6 +366,7 @@ impl FocusManager {
         if !group.contains(widget_id) {
             group.members.push(widget_id);
         }
+        self.repair_focus_after_group_change();
     }
 
     /// Remove widget from group.
@@ -337,6 +375,16 @@ impl FocusManager {
             return;
         };
         group.members.retain(|id| *id != widget_id);
+        self.repair_focus_after_group_change();
+    }
+
+    /// Remove an entire focus group.
+    pub fn remove_group(&mut self, group_id: u32) {
+        if self.groups.remove(&group_id).is_none() {
+            return;
+        }
+        self.trap_stack.retain(|trap| trap.group_id != group_id);
+        self.repair_focus_after_group_change();
     }
 
     /// Get the last focus event.
@@ -370,7 +418,34 @@ impl FocusManager {
         self.focus_change_count
     }
 
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn group_count(&self) -> usize {
+        self.groups.len()
+    }
+
+    #[must_use]
+    pub(crate) fn has_group(&self, group_id: u32) -> bool {
+        self.groups.contains_key(&group_id)
+    }
+
+    pub(crate) fn focus_without_history(&mut self, id: FocusId) -> bool {
+        self.set_focus_without_history(id)
+    }
+
+    pub(crate) fn focus_first_without_history_for_restore(&mut self) -> bool {
+        self.focus_first_without_history()
+    }
+
     fn set_focus(&mut self, id: FocusId) -> bool {
+        self.set_focus_internal(id, true)
+    }
+
+    fn set_focus_without_history(&mut self, id: FocusId) -> bool {
+        self.set_focus_internal(id, false)
+    }
+
+    fn set_focus_internal(&mut self, id: FocusId, record_history: bool) -> bool {
         if !self.can_focus(id) || !self.allowed_by_trap(id) {
             return false;
         }
@@ -380,7 +455,7 @@ impl FocusManager {
 
         let prev = self.current;
         if let Some(prev_id) = prev {
-            if Some(prev_id) != self.history.last().copied() {
+            if record_history && Some(prev_id) != self.history.last().copied() {
                 self.history.push(prev_id);
             }
             let event = FocusEvent::FocusMoved {
@@ -411,7 +486,11 @@ impl FocusManager {
     }
 
     fn active_trap_group(&self) -> Option<u32> {
-        self.trap_stack.last().map(|t| t.group_id)
+        self.trap_stack
+            .iter()
+            .rev()
+            .find(|trap| self.group_has_focusable_member(trap.group_id))
+            .map(|trap| trap.group_id)
     }
 
     fn allowed_by_trap(&self, id: FocusId) -> bool {
@@ -422,6 +501,30 @@ impl FocusManager {
             .get(&group_id)
             .map(|g| g.contains(id))
             .unwrap_or(false)
+    }
+
+    fn group_has_focusable_member(&self, group_id: u32) -> bool {
+        self.groups
+            .get(&group_id)
+            .is_some_and(|group| group.members.iter().any(|id| self.can_focus(*id)))
+    }
+
+    fn repair_focus_after_group_change(&mut self) {
+        match self.active_trap_group() {
+            Some(group_id) => {
+                let current_allowed = self
+                    .current
+                    .is_some_and(|id| self.can_focus(id) && self.allowed_by_trap(id));
+                if !current_allowed {
+                    let _ = self.focus_first_in_group_without_history(group_id);
+                }
+            }
+            None => {
+                if self.current.is_some_and(|id| !self.can_focus(id)) {
+                    let _ = self.focus_first_without_history();
+                }
+            }
+        }
     }
 
     fn is_current_in_group(&self, group_id: u32) -> bool {
@@ -449,12 +552,20 @@ impl FocusManager {
         order.into_iter().filter(|id| group.contains(*id)).collect()
     }
 
-    fn focus_first_in_group(&mut self, group_id: u32) -> bool {
+    fn focus_first_in_group_without_history(&mut self, group_id: u32) -> bool {
         let order = self.group_tab_order(group_id);
         let Some(first) = order.first().copied() else {
             return false;
         };
-        self.set_focus(first)
+        self.set_focus_without_history(first)
+    }
+
+    fn focus_first_without_history(&mut self) -> bool {
+        let order = self.active_tab_order();
+        let Some(first) = order.first().copied() else {
+            return false;
+        };
+        self.set_focus_without_history(first)
     }
 
     fn move_in_tab_order(&mut self, forward: bool) -> bool {
@@ -462,6 +573,11 @@ impl FocusManager {
         if order.is_empty() {
             return false;
         }
+        let fallback = if forward {
+            order[0]
+        } else {
+            *order.last().expect("non-empty tab order")
+        };
 
         let wrap = self
             .active_trap_group()
@@ -469,11 +585,11 @@ impl FocusManager {
             .unwrap_or(true);
 
         let next = match self.current {
-            None => order[0],
+            None => fallback,
             Some(current) => {
                 let pos = order.iter().position(|id| *id == current);
                 match pos {
-                    None => order[0],
+                    None => fallback,
                     Some(idx) if forward => {
                         if idx + 1 < order.len() {
                             order[idx + 1]
@@ -559,6 +675,30 @@ mod tests {
     }
 
     #[test]
+    fn focus_back_skips_current_id_in_history() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+
+        fm.focus(1);
+        fm.focus(2);
+        assert_eq!(fm.current(), Some(2));
+
+        assert_eq!(fm.blur(), Some(2));
+        assert_eq!(fm.current(), None);
+
+        fm.focus(1);
+        assert_eq!(fm.current(), Some(1));
+        let _ = fm.take_focus_event();
+        let before = fm.focus_change_count();
+
+        assert!(!fm.focus_back());
+        assert_eq!(fm.current(), Some(1));
+        assert!(fm.take_focus_event().is_none());
+        assert_eq!(fm.focus_change_count(), before);
+    }
+
+    #[test]
     fn focus_next_prev() {
         let mut fm = FocusManager::new();
         fm.graph_mut().insert(node(1, 0));
@@ -612,6 +752,19 @@ mod tests {
         assert!(!fm.apply_host_focus(true));
         assert_eq!(fm.current(), Some(2));
         assert!(fm.take_focus_event().is_none());
+    }
+
+    #[test]
+    fn apply_host_focus_gain_clears_invalid_current_when_restore_fails() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.focus(1);
+        let _ = fm.take_focus_event();
+        let _ = fm.graph_mut().remove(1);
+
+        assert!(fm.apply_host_focus(true));
+        assert_eq!(fm.current(), None);
+        assert_eq!(fm.take_focus_event(), Some(FocusEvent::FocusLost { id: 1 }));
     }
 
     #[test]
@@ -933,6 +1086,30 @@ mod tests {
     }
 
     #[test]
+    fn focus_prev_with_no_current_selects_last() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+
+        assert!(fm.focus_prev());
+        assert_eq!(fm.current(), Some(2));
+    }
+
+    #[test]
+    fn focus_prev_with_stale_current_selects_last() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+        fm.graph_mut().insert(node(3, 2));
+
+        fm.focus(2);
+        let _ = fm.graph_mut().remove(2);
+
+        assert!(fm.focus_prev());
+        assert_eq!(fm.current(), Some(3));
+    }
+
+    #[test]
     fn focus_next_on_empty_returns_false() {
         let mut fm = FocusManager::new();
         assert!(!fm.focus_next());
@@ -1034,9 +1211,132 @@ mod tests {
     }
 
     #[test]
+    fn removing_focused_member_from_active_trap_refocuses_remaining_member() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+        fm.graph_mut().insert(node(3, 2));
+        fm.create_group(1, vec![1, 2]);
+
+        fm.focus(2);
+        assert!(fm.push_trap(1));
+        assert_eq!(fm.current(), Some(2));
+
+        fm.remove_from_group(1, 2);
+        assert_eq!(fm.current(), Some(1));
+        assert!(fm.is_trapped());
+        assert!(fm.focus(3).is_none());
+        assert_eq!(fm.current(), Some(1));
+    }
+
+    #[test]
+    fn removing_last_member_from_active_trap_allows_focus_escape() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+        fm.create_group(1, vec![1]);
+
+        fm.focus(1);
+        assert!(fm.push_trap(1));
+        assert!(fm.is_trapped());
+
+        fm.remove_from_group(1, 1);
+        assert!(!fm.is_trapped());
+        assert_eq!(fm.current(), Some(1));
+        assert_eq!(fm.focus(2), Some(1));
+        assert_eq!(fm.current(), Some(2));
+    }
+
+    #[test]
+    fn removing_active_inner_trap_member_falls_back_to_outer_trap() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+        fm.graph_mut().insert(node(3, 2));
+        fm.create_group(10, vec![1, 2]);
+        fm.create_group(20, vec![3]);
+
+        fm.focus(1);
+        assert!(fm.push_trap(10));
+        assert!(fm.push_trap(20));
+        assert_eq!(fm.current(), Some(3));
+
+        fm.remove_from_group(20, 3);
+        assert!(fm.is_trapped());
+        assert_eq!(fm.current(), Some(1));
+        assert!(fm.focus(3).is_none());
+        assert_eq!(fm.focus(2), Some(1));
+        assert_eq!(fm.current(), Some(2));
+    }
+
+    #[test]
+    fn adding_member_to_invalidated_trap_restores_confinement() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+        fm.create_group(1, vec![1]);
+
+        fm.focus(1);
+        assert!(fm.push_trap(1));
+
+        fm.remove_from_group(1, 1);
+        assert!(!fm.is_trapped());
+
+        fm.add_to_group(1, 2);
+        assert!(fm.is_trapped());
+        assert_eq!(fm.current(), Some(2));
+        assert!(fm.focus(1).is_none());
+    }
+
+    #[test]
     fn remove_from_nonexistent_group_is_noop() {
         let mut fm = FocusManager::new();
         fm.remove_from_group(999, 1); // should not panic
+    }
+
+    #[test]
+    fn remove_group_deletes_group() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.create_group(42, vec![1]);
+
+        fm.remove_group(42);
+        assert!(!fm.groups.contains_key(&42));
+    }
+
+    #[test]
+    fn remove_group_from_active_inner_trap_falls_back_to_outer_trap() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+        fm.graph_mut().insert(node(3, 2));
+        fm.create_group(10, vec![1, 2]);
+        fm.create_group(20, vec![3]);
+
+        fm.focus(1);
+        assert!(fm.push_trap(10));
+        assert!(fm.push_trap(20));
+        assert_eq!(fm.current(), Some(3));
+
+        fm.remove_group(20);
+        assert!(fm.is_trapped());
+        assert_eq!(fm.current(), Some(1));
+        assert!(fm.focus(3).is_none());
+    }
+
+    #[test]
+    fn remove_group_clears_stale_trap_entries() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.create_group(10, vec![1]);
+
+        fm.focus(1);
+        assert!(fm.push_trap(10));
+        assert!(fm.is_trapped());
+
+        fm.remove_group(10);
+        assert!(!fm.is_trapped());
+        assert!(!fm.pop_trap());
     }
 
     // --- FocusGroup ---
@@ -1089,6 +1389,43 @@ mod tests {
         // Pop outer trap
         fm.pop_trap();
         assert!(!fm.is_trapped());
+    }
+
+    #[test]
+    fn trap_push_pop_does_not_pollute_focus_history() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+        fm.graph_mut().insert(node(3, 2));
+        fm.create_group(10, vec![2]);
+
+        fm.focus(1);
+        fm.focus(3);
+        assert_eq!(fm.current(), Some(3));
+
+        assert!(fm.push_trap(10));
+        assert_eq!(fm.current(), Some(2));
+
+        assert!(fm.pop_trap());
+        assert_eq!(fm.current(), Some(3));
+
+        assert!(fm.focus_back());
+        assert_eq!(fm.current(), Some(1));
+        assert!(!fm.focus_back());
+    }
+
+    #[test]
+    fn pop_trap_restores_none_when_modal_opened_without_focus() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.create_group(10, vec![1]);
+
+        assert!(fm.push_trap(10));
+        assert_eq!(fm.current(), Some(1));
+
+        assert!(fm.pop_trap());
+        assert_eq!(fm.current(), None);
+        assert_eq!(fm.take_focus_event(), Some(FocusEvent::FocusLost { id: 1 }));
     }
 
     #[test]
@@ -1215,5 +1552,20 @@ mod tests {
         // Focusing the same widget is a no-op
         fm.focus(1);
         assert_eq!(fm.focus_change_count(), 1);
+    }
+
+    #[test]
+    fn focus_back_increments_focus_change_count() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+
+        fm.focus(1);
+        fm.focus(2);
+        assert_eq!(fm.focus_change_count(), 2);
+
+        assert!(fm.focus_back());
+        assert_eq!(fm.current(), Some(1));
+        assert_eq!(fm.focus_change_count(), 3);
     }
 }

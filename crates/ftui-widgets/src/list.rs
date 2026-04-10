@@ -9,7 +9,10 @@ use crate::measurable::{MeasurableWidget, SizeConstraints};
 use crate::mouse::MouseResult;
 use crate::stateful::{StateKey, Stateful};
 use crate::undo_support::{ListUndoExt, UndoSupport, UndoWidgetId};
-use crate::{StatefulWidget, Widget, draw_text_span, draw_text_span_with_link, set_style_area};
+use crate::{
+    StatefulWidget, Widget, clear_text_area, clear_text_row, draw_text_span,
+    draw_text_span_with_link,
+};
 use ftui_core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, MouseEvent, MouseEventKind};
 use ftui_core::geometry::{Rect, Size};
 use ftui_render::frame::{Frame, HitId, HitRegion};
@@ -770,8 +773,9 @@ impl<'a> StatefulWidget for List<'a> {
         let mut rendered_visible_items = 0usize;
 
         if !list_area.is_empty() {
-            // Apply base style
-            set_style_area(&mut frame.buffer, list_area, self.style);
+            // Clear the owned list area so shorter rows and empty states do not
+            // leak stale content from prior renders.
+            clear_text_area(frame, list_area, self.style);
 
             if self.items.is_empty() {
                 state.selected = None;
@@ -866,7 +870,7 @@ impl<'a> StatefulWidget for List<'a> {
 
                         // Apply item background style to the whole row
                         let row_area = Rect::new(list_area.x, y, list_area.width, 1);
-                        set_style_area(&mut frame.buffer, row_area, item_style);
+                        clear_text_row(frame, row_area, item_style);
 
                         // Determine symbol
                         let symbol = if is_selected {
@@ -1173,6 +1177,7 @@ impl ListState {
 mod tests {
     use super::*;
     use ftui_core::event::{KeyCode, KeyEvent};
+    use ftui_render::cell::Cell;
     use ftui_render::grapheme_pool::GraphemePool;
     #[cfg(feature = "tracing")]
     use std::sync::{Arc, Mutex};
@@ -1195,6 +1200,20 @@ mod tests {
             actual.push(ch);
         }
         actual.trim().to_string()
+    }
+
+    fn raw_row_text(frame: &Frame, y: u16) -> String {
+        let width = frame.buffer.width();
+        let mut actual = String::new();
+        for x in 0..width {
+            let ch = frame
+                .buffer
+                .get(x, y)
+                .and_then(|cell| cell.content.as_char())
+                .unwrap_or(' ');
+            actual.push(ch);
+        }
+        actual
     }
 
     #[cfg(feature = "tracing")]
@@ -2048,6 +2067,55 @@ mod tests {
         StatefulWidget::render(&list, Rect::new(0, 0, 14, 3), &mut frame, &mut state);
 
         assert_eq!(row_text(&frame, 0), "No matches");
+    }
+
+    #[test]
+    fn list_render_shorter_item_clears_stale_row_suffix() {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(12, 2, &mut pool);
+        let mut state = ListState::default();
+        let area = Rect::new(0, 0, 12, 2);
+
+        let long = List::new(vec![ListItem::new("alphabet")]);
+        StatefulWidget::render(&long, area, &mut frame, &mut state);
+
+        let short = List::new(vec![ListItem::new("a")]);
+        StatefulWidget::render(&short, area, &mut frame, &mut state);
+
+        assert_eq!(raw_row_text(&frame, 0), "a           ");
+    }
+
+    #[test]
+    fn list_render_empty_state_clears_stale_rows_and_tail() {
+        let list = List::new(Vec::<ListItem>::new());
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(12, 3, &mut pool);
+        let area = Rect::new(0, 0, 12, 3);
+        frame.buffer.fill(area, Cell::from_char('X'));
+
+        Widget::render(&list, area, &mut frame);
+
+        assert_eq!(raw_row_text(&frame, 0), "No items    ");
+        assert_eq!(raw_row_text(&frame, 1), "            ");
+        assert_eq!(raw_row_text(&frame, 2), "            ");
+    }
+
+    #[test]
+    fn list_render_no_matches_clears_stale_rows_and_tail() {
+        let list = List::new(vec![ListItem::new("alpha"), ListItem::new("beta")]);
+        let mut state = ListState::default();
+        state.set_filter_query("zzz");
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(12, 3, &mut pool);
+        let area = Rect::new(0, 0, 12, 3);
+        frame.buffer.fill(area, Cell::from_char('X'));
+
+        StatefulWidget::render(&list, area, &mut frame, &mut state);
+
+        assert_eq!(raw_row_text(&frame, 0), "No matches  ");
+        assert_eq!(raw_row_text(&frame, 1), "            ");
+        assert_eq!(raw_row_text(&frame, 2), "            ");
     }
 
     #[test]

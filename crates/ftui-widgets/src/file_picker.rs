@@ -15,7 +15,7 @@
 //! The widget uses [`StatefulWidget`] so the application owns the state
 //! and can read the selected path.
 
-use crate::{StatefulWidget, draw_text_span};
+use crate::{StatefulWidget, clear_text_area, clear_text_row, draw_text_span};
 use ftui_core::geometry::Rect;
 use ftui_render::frame::Frame;
 use ftui_style::Style;
@@ -366,13 +366,42 @@ impl StatefulWidget for FilePicker {
             return;
         }
 
+        let deg = frame.buffer.degradation;
+        if !deg.render_content() {
+            return;
+        }
+
+        clear_text_area(frame, area, Style::default());
+
+        let header_style = if deg.apply_styling() {
+            self.header_style
+        } else {
+            Style::default()
+        };
+        let dir_style = if deg.apply_styling() {
+            self.dir_style
+        } else {
+            Style::default()
+        };
+        let file_style = if deg.apply_styling() {
+            self.file_style
+        } else {
+            Style::default()
+        };
+        let cursor_style = if deg.apply_styling() {
+            self.cursor_style
+        } else {
+            Style::default()
+        };
+
         let mut y = area.y;
         let max_y = area.bottom();
 
         // Header: current directory path
         if self.show_header && y < max_y {
+            clear_text_row(frame, Rect::new(area.x, y, area.width, 1), header_style);
             let header = state.current_dir.to_string_lossy();
-            draw_text_span(frame, area.x, y, &header, self.header_style, area.right());
+            draw_text_span(frame, area.x, y, &header, header_style, area.right());
             y += 1;
         }
 
@@ -384,12 +413,13 @@ impl StatefulWidget for FilePicker {
         state.adjust_scroll(visible_rows);
 
         if state.entries.is_empty() {
+            clear_text_row(frame, Rect::new(area.x, y, area.width, 1), file_style);
             draw_text_span(
                 frame,
                 area.x,
                 y,
                 "(empty directory)",
-                self.file_style,
+                file_style,
                 area.right(),
             );
             return;
@@ -410,22 +440,20 @@ impl StatefulWidget for FilePicker {
                 self.file_prefix
             };
 
-            let base_style = if entry.is_dir {
-                self.dir_style
-            } else {
-                self.file_style
-            };
+            let base_style = if entry.is_dir { dir_style } else { file_style };
 
             let style = if is_cursor {
-                self.cursor_style.merge(&base_style)
+                cursor_style.merge(&base_style)
             } else {
                 base_style
             };
 
+            clear_text_row(frame, Rect::new(area.x, y, area.width, 1), style);
+
             // Draw cursor indicator
             let mut x = area.x;
             if is_cursor {
-                draw_text_span(frame, x, y, "> ", self.cursor_style, area.right());
+                draw_text_span(frame, x, y, "> ", cursor_style, area.right());
                 x = x.saturating_add(2);
             } else {
                 x = x.saturating_add(2);
@@ -1017,5 +1045,30 @@ mod tests {
         assert!(lines[1].trim().is_empty());
         // Row 2 should have content starting at x=5.
         assert!(lines[2].len() >= 7);
+    }
+
+    #[test]
+    fn render_shorter_header_and_fewer_entries_clear_stale_content() {
+        let picker = FilePicker::new().show_header(true);
+        let mut state = FilePickerState::new(PathBuf::from("/tmp/very/long/path"), make_entries());
+
+        let area = Rect::new(0, 0, 24, 4);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(24, 4, &mut pool);
+
+        picker.render(area, &mut frame, &mut state);
+
+        state.current_dir = PathBuf::from("/x");
+        state.entries = vec![DirEntry::file("a", "/x/a")];
+        state.cursor = 0;
+        state.offset = 0;
+
+        picker.render(area, &mut frame, &mut state);
+        let lines = buf_to_lines(&frame.buffer);
+
+        assert_eq!(lines[0], format!("{:<24}", "/x"));
+        assert!(lines[1].starts_with(">   a"));
+        assert_eq!(lines[2], " ".repeat(24));
+        assert_eq!(lines[3], " ".repeat(24));
     }
 }

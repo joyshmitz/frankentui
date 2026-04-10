@@ -3,7 +3,9 @@
 //! Progress bar widget.
 
 use crate::block::Block;
-use crate::{MeasurableWidget, SizeConstraints, Widget, apply_style, set_style_area};
+use crate::{
+    MeasurableWidget, SizeConstraints, Widget, apply_style, clear_text_area, clear_text_row,
+};
 use ftui_core::geometry::{Rect, Size};
 use ftui_render::cell::{Cell, PackedRgba};
 use ftui_render::frame::Frame;
@@ -89,10 +91,19 @@ impl<'a> Widget for ProgressBar<'a> {
 
         // EssentialOnly: just show percentage text, no bar
         if !deg.render_decorative() {
+            clear_text_area(frame, area, Style::default());
             let pct = format!("{}%", (self.ratio * 100.0) as u8);
             crate::draw_text_span(frame, area.x, area.y, &pct, Style::default(), area.right());
             return;
         }
+
+        let base_style = if deg.apply_styling() {
+            self.style
+        } else {
+            Style::default()
+        };
+
+        clear_text_area(frame, area, base_style);
 
         let bar_area = match &self.block {
             Some(b) => {
@@ -104,10 +115,6 @@ impl<'a> Widget for ProgressBar<'a> {
 
         if bar_area.is_empty() {
             return;
-        }
-
-        if deg.apply_styling() {
-            set_style_area(&mut frame.buffer, bar_area, self.style);
         }
 
         let max_width = bar_area.width as f64;
@@ -448,6 +455,13 @@ impl Widget for MiniBar {
             return;
         }
 
+        let base_style = if deg.apply_styling() {
+            self.style
+        } else {
+            Style::default()
+        };
+        clear_text_row(frame, area, base_style);
+
         let value = self.normalized_value();
 
         if !deg.render_decorative() {
@@ -579,6 +593,18 @@ mod tests {
         let cell = frame.buffer.get(x, y).copied();
         assert!(cell.is_some(), "test cell should exist at ({x},{y})");
         cell.unwrap()
+    }
+
+    fn raw_row_text(frame: &Frame, y: u16, width: u16) -> String {
+        (0..width)
+            .map(|x| {
+                frame
+                    .buffer
+                    .get(x, y)
+                    .and_then(|cell| cell.content.as_char())
+                    .unwrap_or(' ')
+            })
+            .collect()
     }
 
     // --- Builder tests ---
@@ -814,6 +840,37 @@ mod tests {
                 "cell at x={x} should have gauge bg at Full"
             );
         }
+    }
+
+    #[test]
+    fn render_no_styling_ratio_shrink_clears_stale_fill() {
+        use ftui_render::budget::DegradationLevel;
+
+        let area = Rect::new(0, 0, 10, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 1, &mut pool);
+        frame.buffer.degradation = DegradationLevel::NoStyling;
+
+        Widget::render(&ProgressBar::new().ratio(0.8), area, &mut frame);
+        Widget::render(&ProgressBar::new().ratio(0.2), area, &mut frame);
+
+        assert_eq!(raw_row_text(&frame, 0, 10), "##        ");
+    }
+
+    #[test]
+    fn degradation_essential_only_clears_previous_bar_content() {
+        use ftui_render::budget::DegradationLevel;
+
+        let pb = ProgressBar::new().ratio(0.5);
+        let area = Rect::new(0, 0, 10, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 1, &mut pool);
+
+        Widget::render(&pb, area, &mut frame);
+        frame.buffer.degradation = DegradationLevel::EssentialOnly;
+        Widget::render(&pb, area, &mut frame);
+
+        assert_eq!(raw_row_text(&frame, 0, 10), "50%       ");
     }
 
     // --- MiniBar tests ---
@@ -1209,13 +1266,29 @@ mod tests {
         frame.buffer.degradation = DegradationLevel::EssentialOnly;
         Widget::render(&bar, Rect::new(0, 0, 7, 1), &mut frame);
 
-        assert_eq!(cell_at(&frame, 0, 0).content.as_char(), None);
-        assert_eq!(cell_at(&frame, 1, 0).content.as_char(), None);
-        assert_eq!(cell_at(&frame, 2, 0).content.as_char(), None);
+        assert_eq!(cell_at(&frame, 0, 0).content.as_char(), Some(' '));
+        assert_eq!(cell_at(&frame, 1, 0).content.as_char(), Some(' '));
+        assert_eq!(cell_at(&frame, 2, 0).content.as_char(), Some(' '));
         assert_eq!(cell_at(&frame, 3, 0).content.as_char(), Some(' '));
         assert_eq!(cell_at(&frame, 4, 0).content.as_char(), Some('5'));
         assert_eq!(cell_at(&frame, 5, 0).content.as_char(), Some('0'));
         assert_eq!(cell_at(&frame, 6, 0).content.as_char(), Some('%'));
+    }
+
+    #[test]
+    fn minibar_essential_only_clears_previous_bar_content() {
+        use ftui_render::budget::DegradationLevel;
+
+        let bar = MiniBar::new(0.5, 10).show_percent(true);
+        let area = Rect::new(0, 0, 7, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(7, 1, &mut pool);
+
+        Widget::render(&bar, area, &mut frame);
+        frame.buffer.degradation = DegradationLevel::EssentialOnly;
+        Widget::render(&bar, area, &mut frame);
+
+        assert_eq!(raw_row_text(&frame, 0, 7), "    50%");
     }
 
     #[test]

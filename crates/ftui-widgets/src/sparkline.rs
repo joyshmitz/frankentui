@@ -16,7 +16,7 @@
 //! sparkline.render(area, frame);
 //! ```
 
-use crate::{MeasurableWidget, SizeConstraints, Widget};
+use crate::{MeasurableWidget, SizeConstraints, Widget, clear_text_row};
 use ftui_core::geometry::{Rect, Size};
 use ftui_render::cell::{Cell, PackedRgba};
 use ftui_render::frame::Frame;
@@ -213,7 +213,7 @@ impl Widget for Sparkline<'_> {
         )
         .entered();
 
-        if area.is_empty() || self.data.is_empty() {
+        if area.is_empty() {
             return;
         }
 
@@ -221,6 +221,17 @@ impl Widget for Sparkline<'_> {
 
         // Skeleton+: skip entirely
         if !deg.render_content() {
+            return;
+        }
+
+        let base_style = if deg.apply_styling() {
+            self.style
+        } else {
+            Style::default()
+        };
+        clear_text_row(frame, area, base_style);
+
+        if self.data.is_empty() {
             return;
         }
 
@@ -514,6 +525,51 @@ mod tests {
         assert!(cell.content.as_char().is_some());
         // fg should NOT be green since styling is disabled
         assert_ne!(cell.fg, PackedRgba::GREEN);
+    }
+
+    #[test]
+    fn render_shorter_data_clears_stale_suffix() {
+        let long = Sparkline::new(&[0.0, 0.5, 1.0, 0.75]).bounds(0.0, 1.0);
+        let short = Sparkline::new(&[1.0]);
+        let area = Rect::new(0, 0, 4, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(4, 1, &mut pool);
+
+        Widget::render(&long, area, &mut frame);
+        Widget::render(&short, area, &mut frame);
+
+        let row: String = (0..4)
+            .map(|x| {
+                frame
+                    .buffer
+                    .get(x, 0)
+                    .and_then(|cell| cell.content.as_char())
+                    .unwrap_or(' ')
+            })
+            .collect();
+        assert_eq!(row, "▄   ");
+    }
+
+    #[test]
+    fn render_empty_data_clears_stale_sparkline() {
+        let long = Sparkline::new(&[0.0, 0.5, 1.0]).bounds(0.0, 1.0);
+        let empty = Sparkline::new(&[]);
+        let area = Rect::new(0, 0, 3, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(3, 1, &mut pool);
+
+        Widget::render(&long, area, &mut frame);
+        Widget::render(&empty, area, &mut frame);
+
+        for x in 0..3 {
+            assert_eq!(
+                frame
+                    .buffer
+                    .get(x, 0)
+                    .and_then(|cell| cell.content.as_char()),
+                Some(' ')
+            );
+        }
     }
 
     // --- Color interpolation tests ---

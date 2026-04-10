@@ -36,7 +36,7 @@ use std::ops::Range;
 use std::time::Duration;
 
 use crate::scrollbar::{Scrollbar, ScrollbarOrientation, ScrollbarState};
-use crate::{StatefulWidget, set_style_area};
+use crate::{StatefulWidget, clear_text_area};
 use ftui_core::geometry::Rect;
 use ftui_render::cell::Cell;
 use ftui_render::frame::Frame;
@@ -1258,8 +1258,9 @@ impl<T: RenderItem> StatefulWidget for VirtualizedList<'_, T> {
             return;
         }
 
-        // Apply base style
-        set_style_area(&mut frame.buffer, area, self.style);
+        // Clear the full owned viewport so empty renders and shorter rows do
+        // not leak prior buffer content.
+        clear_text_area(frame, area, self.style);
 
         let total_items = self.items.len();
         if total_items == 0 {
@@ -1381,10 +1382,12 @@ impl<T: RenderItem> StatefulWidget for VirtualizedList<'_, T> {
 
             let is_selected = state.selected == Some(idx);
 
-            // Apply highlight style to selected row
-            if is_selected {
-                set_style_area(&mut frame.buffer, row_area, self.highlight_style);
-            }
+            let row_style = if is_selected {
+                self.highlight_style.merge(&self.style)
+            } else {
+                self.style
+            };
+            clear_text_area(frame, row_area, row_style);
 
             // Render the item
             self.items[idx].render(row_area, frame, is_selected, skip_rows);
@@ -1455,6 +1458,20 @@ impl RenderItem for &str {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    fn raw_row_text(frame: &Frame, y: u16) -> String {
+        let width = frame.buffer.width();
+        let mut actual = String::new();
+        for x in 0..width {
+            let ch = frame
+                .buffer
+                .get(x, y)
+                .and_then(|cell| cell.content.as_char())
+                .unwrap_or(' ');
+            actual.push(ch);
+        }
+        actual
+    }
 
     #[test]
     fn test_new_virtualized() {
@@ -2075,6 +2092,46 @@ mod tests {
         frame.buffer.clear();
         list.render(area, &mut frame, &mut state);
         assert_eq!(frame.buffer.get(0, 0).unwrap().content.as_char(), Some('4'));
+    }
+
+    #[test]
+    fn render_empty_virtualized_list_clears_stale_viewport() {
+        use ftui_render::grapheme_pool::GraphemePool;
+
+        let items: Vec<String> = Vec::new();
+        let list = VirtualizedList::new(&items).show_scrollbar(false);
+        let mut state = VirtualizedListState::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(6, 3, &mut pool);
+        let area = Rect::new(0, 0, 6, 3);
+        frame.buffer.fill(area, Cell::from_char('X'));
+
+        list.render(area, &mut frame, &mut state);
+
+        assert_eq!(raw_row_text(&frame, 0), "      ");
+        assert_eq!(raw_row_text(&frame, 1), "      ");
+        assert_eq!(raw_row_text(&frame, 2), "      ");
+    }
+
+    #[test]
+    fn render_shorter_virtualized_row_clears_stale_suffix() {
+        use ftui_render::grapheme_pool::GraphemePool;
+
+        let long_items = vec!["Hello".to_string()];
+        let short_items = vec!["Hi".to_string()];
+        let area = Rect::new(0, 0, 6, 1);
+        let mut state = VirtualizedListState::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(6, 1, &mut pool);
+
+        VirtualizedList::new(&long_items)
+            .show_scrollbar(false)
+            .render(area, &mut frame, &mut state);
+        VirtualizedList::new(&short_items)
+            .show_scrollbar(false)
+            .render(area, &mut frame, &mut state);
+
+        assert_eq!(raw_row_text(&frame, 0), "Hi    ");
     }
 
     #[test]

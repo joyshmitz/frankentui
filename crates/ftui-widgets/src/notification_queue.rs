@@ -285,8 +285,7 @@ impl NotificationQueue {
     /// rejected due to deduplication or queue overflow.
     pub fn push(&mut self, toast: Toast, priority: NotificationPriority) -> bool {
         self.stats.total_pushed += 1;
-
-        let queued = QueuedNotification::new(toast, priority);
+        let queued = QueuedNotification::new(self.apply_default_duration(toast), priority);
 
         // Check deduplication
         if !self.dedup_check(queued.content_hash) {
@@ -339,7 +338,9 @@ impl NotificationQueue {
     /// Dismiss a specific notification by ID.
     pub fn dismiss(&mut self, id: ToastId) {
         // Check visible toasts
-        if let Some(idx) = self.visible.iter().position(|t| t.id == id) {
+        if let Some(idx) = self.visible.iter().position(|t| t.id == id)
+            && !self.visible[idx].state.dismissed
+        {
             self.visible[idx].dismiss();
             self.stats.user_dismissed += 1;
         }
@@ -353,10 +354,14 @@ impl NotificationQueue {
 
     /// Dismiss all notifications.
     pub fn dismiss_all(&mut self) {
+        let mut dismissed_visible = 0u64;
         for toast in &mut self.visible {
-            toast.dismiss();
+            if !toast.state.dismissed {
+                toast.dismiss();
+                dismissed_visible += 1;
+            }
         }
-        self.stats.user_dismissed += self.queue.len() as u64;
+        self.stats.user_dismissed += dismissed_visible + self.queue.len() as u64;
         self.queue.clear();
     }
 
@@ -519,6 +524,14 @@ impl NotificationQueue {
             .min_by_key(|(_, q)| q.priority)
             .map(|(i, _)| i)
     }
+
+    fn apply_default_duration(&self, mut toast: Toast) -> Toast {
+        if !toast.config.duration_explicit {
+            toast.config.duration = Some(self.config.default_duration);
+            toast.config.duration_explicit = true;
+        }
+        toast
+    }
 }
 
 impl Default for NotificationQueue {
@@ -532,11 +545,16 @@ mod tests {
     use super::*;
     use ftui_render::frame::Frame;
     use ftui_render::grapheme_pool::GraphemePool;
+    use web_time::Duration;
 
     fn make_toast(msg: &str) -> Toast {
         Toast::with_id(ToastId::new(0), msg)
             .persistent()
             .no_animation() // Use persistent and no_animation for testing
+    }
+
+    fn make_ephemeral_toast(msg: &str) -> Toast {
+        Toast::new(msg).no_animation()
     }
 
     #[test]
@@ -698,6 +716,7 @@ mod tests {
         queue.tick(Duration::from_millis(16));
 
         assert!(queue.is_empty());
+        assert_eq!(queue.stats().user_dismissed, 2);
     }
 
     #[test]
@@ -878,14 +897,89 @@ mod tests {
         assert_eq!(queue.pending_count(), 1);
 
         queue.dismiss_all();
-        // dismiss_all: marks visible toasts dismissed, clears queue,
-        // increments user_dismissed by queue.len() (1 for B)
-        assert_eq!(queue.stats().user_dismissed, 1);
+        // dismiss_all counts both the visible and pending toast.
+        assert_eq!(queue.stats().user_dismissed, 2);
         assert_eq!(queue.pending_count(), 0);
 
         // Next tick removes the dismissed visible toast
         queue.tick(Duration::from_millis(16));
         assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn dismiss_does_not_double_count_already_dismissed_visible_toast() {
+        let mut queue = NotificationQueue::with_defaults();
+        queue.push(make_toast("A"), NotificationPriority::Normal);
+        queue.tick(Duration::from_millis(16));
+
+        let id = queue.visible()[0].id;
+        queue.dismiss(id);
+        queue.dismiss(id);
+
+        assert_eq!(queue.stats().user_dismissed, 1);
+    }
+
+    #[test]
+    fn queue_applies_config_default_duration_to_default_toasts() {
+        let config = QueueConfig::default().default_duration(Duration::from_secs(12));
+        let mut queue = NotificationQueue::new(config);
+
+        queue.push(make_ephemeral_toast("A"), NotificationPriority::Normal);
+        queue.tick(Duration::from_millis(16));
+
+        assert_eq!(
+            queue.visible()[0].config.duration,
+            Some(Duration::from_secs(12))
+        );
+    }
+
+    #[test]
+    fn queue_preserves_persistent_toasts_when_applying_default_duration() {
+        let config = QueueConfig::default().default_duration(Duration::from_secs(12));
+        let mut queue = NotificationQueue::new(config);
+
+        queue.push(make_toast("A"), NotificationPriority::Normal);
+        queue.tick(Duration::from_millis(16));
+
+        assert_eq!(queue.visible()[0].config.duration, None);
+    }
+
+    #[test]
+    fn queue_preserves_explicit_custom_duration() {
+        let config = QueueConfig::default().default_duration(Duration::from_secs(12));
+        let mut queue = NotificationQueue::new(config);
+
+        queue.push(
+            Toast::new("A")
+                .duration(Duration::from_secs(2))
+                .no_animation(),
+            NotificationPriority::Normal,
+        );
+        queue.tick(Duration::from_millis(16));
+
+        assert_eq!(
+            queue.visible()[0].config.duration,
+            Some(Duration::from_secs(2))
+        );
+    }
+
+    #[test]
+    fn queue_preserves_explicit_duration_even_when_equal_to_toast_default() {
+        let config = QueueConfig::default().default_duration(Duration::from_secs(12));
+        let mut queue = NotificationQueue::new(config);
+
+        queue.push(
+            Toast::new("A")
+                .duration(Duration::from_secs(5))
+                .no_animation(),
+            NotificationPriority::Normal,
+        );
+        queue.tick(Duration::from_millis(16));
+
+        assert_eq!(
+            queue.visible()[0].config.duration,
+            Some(Duration::from_secs(5))
+        );
     }
 
     #[test]

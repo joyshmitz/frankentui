@@ -92,6 +92,17 @@ impl<W: Widget> Widget for Padding<W> {
             return;
         }
 
+        // Padding owns the full wrapper rect. Clear stale child glyphs before
+        // rendering the current inner area while preserving any parent-applied
+        // styling already present in the buffer.
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                if let Some(cell) = frame.buffer.get_mut(x, y) {
+                    cell.content = ftui_render::cell::CellContent::EMPTY;
+                }
+            }
+        }
+
         let inner = self.inner_area(area);
         if inner.is_empty() {
             return;
@@ -123,6 +134,14 @@ impl<W: StatefulWidget> StatefulWidget for Padding<W> {
 
         if area.is_empty() {
             return;
+        }
+
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                if let Some(cell) = frame.buffer.get_mut(x, y) {
+                    cell.content = ftui_render::cell::CellContent::EMPTY;
+                }
+            }
         }
 
         let inner = self.inner_area(area);
@@ -292,6 +311,41 @@ mod tests {
     }
 
     #[test]
+    fn smaller_inner_area_clears_old_content() {
+        let area = Rect::from_size(5, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(5, 3, &mut pool);
+
+        Padding::new(Fill('X'), Sides::all(0)).render(area, &mut frame);
+        Padding::new(Fill('O'), Sides::all(1)).render(area, &mut frame);
+
+        assert_eq!(
+            buf_to_lines(&frame.buffer),
+            vec![
+                "     ".to_string(),
+                " OOO ".to_string(),
+                "     ".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_inner_area_clears_previous_content() {
+        let area = Rect::from_size(5, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(5, 3, &mut pool);
+
+        Padding::new(Fill('X'), Sides::all(0)).render(area, &mut frame);
+        Padding::new(Fill('O'), Sides::all(10)).render(area, &mut frame);
+
+        for y in 0..area.height {
+            for x in 0..area.width {
+                assert!(frame.buffer.get(x, y).unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
     fn asymmetric_padding_top_left() {
         let pad = Padding::new(Fill('A'), Sides::new(2, 0, 0, 1));
         let area = Rect::from_size(5, 5);
@@ -391,6 +445,51 @@ mod tests {
         assert_eq!(lines[0], "     ");
         assert_eq!(lines[1], " SSS ");
         assert_eq!(lines[2], " SSS ");
+    }
+
+    #[test]
+    fn stateful_smaller_inner_area_clears_old_content() {
+        #[derive(Debug, Clone, Copy)]
+        struct StateFill(char);
+
+        impl StatefulWidget for StateFill {
+            type State = ();
+
+            fn render(&self, area: Rect, frame: &mut Frame, _state: &mut Self::State) {
+                for y in area.y..area.bottom() {
+                    for x in area.x..area.right() {
+                        frame.buffer.set(x, y, Cell::from_char(self.0));
+                    }
+                }
+            }
+        }
+
+        let area = Rect::from_size(5, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(5, 3, &mut pool);
+        let mut state = ();
+
+        StatefulWidget::render(
+            &Padding::new(StateFill('X'), Sides::all(0)),
+            area,
+            &mut frame,
+            &mut state,
+        );
+        StatefulWidget::render(
+            &Padding::new(StateFill('O'), Sides::all(1)),
+            area,
+            &mut frame,
+            &mut state,
+        );
+
+        assert_eq!(
+            buf_to_lines(&frame.buffer),
+            vec![
+                "     ".to_string(),
+                " OOO ".to_string(),
+                "     ".to_string()
+            ]
+        );
     }
 
     #[test]

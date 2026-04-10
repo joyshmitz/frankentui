@@ -21,7 +21,7 @@
 use crate::mouse::MouseResult;
 use crate::stateful::Stateful;
 use crate::undo_support::{TreeUndoExt, UndoSupport, UndoWidgetId};
-use crate::{Widget, draw_text_span};
+use crate::{Widget, clear_text_area, draw_text_span};
 use ftui_core::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ftui_core::geometry::Rect;
 use ftui_render::frame::{Frame, HitId, HitRegion};
@@ -209,6 +209,13 @@ impl TreeNode {
     fn materialize_lazy_children(&mut self) {
         if let Some(mut lazy) = self.lazy_children.take() {
             self.children.append(&mut lazy);
+        }
+    }
+
+    fn materialize_all_lazy_children(&mut self) {
+        self.materialize_lazy_children();
+        for child in &mut self.children {
+            child.materialize_all_lazy_children();
         }
     }
 
@@ -587,7 +594,13 @@ fn filter_node(node: &TreeNode, query_lower: &str) -> Option<TreeNode> {
     }
 
     let mut filtered = node.clone();
-    if !label_matches {
+    if label_matches {
+        // Search-mode render walks `children`, not `lazy_children`. When a node
+        // itself matches, render the same full subtree that path bookkeeping already
+        // exposes by eagerly materializing lazy descendants in the filtered clone.
+        filtered.materialize_all_lazy_children();
+        filtered.expanded = true;
+    } else {
         // Materialize filtered lazy matches into `children` so render/flatten traversal,
         // which walks `children`, includes lazy descendants that matched the query.
         filtered.children = filtered_children;
@@ -641,7 +654,7 @@ fn filter_node_paths(
                 children.push((lazy_offset + idx, create_unfiltered_path_node(child)));
             }
         }
-        return Some((node.expanded, children));
+        return Some((true, children));
     }
 
     let mut filtered_children = Vec::new();
@@ -707,6 +720,12 @@ impl Widget for Tree {
         let _render_guard = render_span.enter();
 
         let deg = frame.buffer.degradation;
+        let base_style = if deg.apply_styling() {
+            self.label_style
+        } else {
+            Style::default()
+        };
+        clear_text_area(frame, area, base_style);
         let mut current_row = 0;
         let mut is_last = Vec::with_capacity(8);
 
@@ -1199,6 +1218,18 @@ mod tests {
     #[cfg(feature = "tracing")]
     use tracing_subscriber::layer::{Context, SubscriberExt};
 
+    fn line_text(frame: &Frame, y: u16, width: u16) -> String {
+        (0..width)
+            .map(|x| {
+                frame
+                    .buffer
+                    .get(x, y)
+                    .and_then(|cell| cell.content.as_char())
+                    .unwrap_or(' ')
+            })
+            .collect()
+    }
+
     fn simple_tree() -> TreeNode {
         TreeNode::new("root")
             .child(
@@ -1513,11 +1544,42 @@ mod tests {
     }
 
     #[test]
+    fn tree_search_query_on_matching_parent_includes_immediate_lazy_children() {
+        let tree = Tree::new(TreeNode::new("root").child(
+            TreeNode::new("alpha").with_lazy_children(vec![
+                TreeNode::new("lazy-child")
+                    .with_lazy_children(vec![TreeNode::new("deep-grandchild")]),
+            ]),
+        ))
+        .with_search_query("alpha");
+
+        let flat = tree.flatten();
+        assert_eq!(flat.len(), 3);
+        assert_eq!(flat[0].label, "root");
+        assert_eq!(flat[1].label, "alpha");
+        assert_eq!(flat[2].label, "lazy-child");
+    }
+
+    #[test]
     fn tree_render_zero_area() {
         let tree = Tree::new(simple_tree());
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(40, 10, &mut pool);
         tree.render(Rect::new(0, 0, 0, 0), &mut frame); // No panic
+    }
+
+    #[test]
+    fn tree_render_shorter_label_clears_stale_suffix() {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 3, &mut pool);
+        let area = Rect::new(0, 0, 20, 3);
+
+        Tree::new(TreeNode::new("root-with-long-tail")).render(area, &mut frame);
+        Tree::new(TreeNode::new("r")).render(area, &mut frame);
+
+        assert_eq!(line_text(&frame, 0, 20), "r                   ");
+        assert_eq!(line_text(&frame, 1, 20), "                    ");
+        assert_eq!(line_text(&frame, 2, 20), "                    ");
     }
 
     #[test]
@@ -2223,6 +2285,33 @@ mod tests {
         // When nothing matches (including root), filter_node returns None,
         // so flatten should return an empty tree.
         assert_eq!(flat.len(), 0);
+    }
+
+    #[test]
+    fn tree_search_no_match_clears_stale_rows() {
+        let base_tree = Tree::new(
+            TreeNode::new("root")
+                .child(TreeNode::new("Alpha"))
+                .child(TreeNode::new("Beta")),
+        );
+        let filtered_tree = Tree::new(
+            TreeNode::new("root")
+                .child(TreeNode::new("Alpha"))
+                .child(TreeNode::new("Beta")),
+        )
+        .with_search_query("zzz-no-match");
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 4, &mut pool);
+        let area = Rect::new(0, 0, 20, 4);
+
+        base_tree.render(area, &mut frame);
+        filtered_tree.render(area, &mut frame);
+
+        assert_eq!(line_text(&frame, 0, 20), "                    ");
+        assert_eq!(line_text(&frame, 1, 20), "                    ");
+        assert_eq!(line_text(&frame, 2, 20), "                    ");
+        assert_eq!(line_text(&frame, 3, 20), "                    ");
     }
 
     #[test]

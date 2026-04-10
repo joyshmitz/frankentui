@@ -15,7 +15,7 @@
 //! assert_eq!(with_fallback.fallback(), Some("[crab]"));
 //! ```
 
-use crate::{Widget, draw_text_span};
+use crate::{Widget, clear_text_row, draw_text_span};
 use ftui_core::geometry::Rect;
 use ftui_core::terminal_capabilities::TerminalCapabilities;
 use ftui_render::frame::Frame;
@@ -107,7 +107,7 @@ impl Emoji {
 
 impl Widget for Emoji {
     fn render(&self, area: Rect, frame: &mut Frame) {
-        if area.width == 0 || area.height == 0 || self.text.is_empty() {
+        if area.width == 0 || area.height == 0 {
             return;
         }
 
@@ -119,6 +119,11 @@ impl Widget for Emoji {
         let max_x = area.right();
         let use_fallback =
             self.fallback.is_some() && !TerminalCapabilities::with_overrides().unicode_emoji;
+
+        if self.text.is_empty() {
+            clear_text_row(frame, area, Style::default());
+            return;
+        }
 
         let (text, style) = if use_fallback {
             let Some(text) = self.fallback.as_deref() else {
@@ -139,6 +144,7 @@ impl Widget for Emoji {
             (self.text.as_str(), style)
         };
 
+        clear_text_row(frame, area, style);
         draw_text_span(frame, area.x, area.y, text, style, max_x);
     }
 
@@ -297,6 +303,34 @@ mod tests {
 
         for x in 0..10 {
             assert_eq!(frame.buffer.get(x, 0), expected.buffer.get(x, 0));
+        }
+    }
+
+    #[test]
+    fn render_shorter_text_clears_stale_suffix() {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(6, 1, &mut pool);
+        let area = Rect::new(0, 0, 6, 1);
+
+        Emoji::new("OK").render(area, &mut frame);
+        Emoji::new("A").render(area, &mut frame);
+
+        assert_eq!(frame.buffer.get(0, 0).unwrap().content.as_char(), Some('A'));
+        assert_eq!(frame.buffer.get(1, 0).unwrap().content.as_char(), Some(' '));
+        assert_eq!(frame.buffer.get(2, 0).unwrap().content.as_char(), Some(' '));
+    }
+
+    #[test]
+    fn render_empty_text_clears_stale_row() {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(6, 1, &mut pool);
+        let area = Rect::new(0, 0, 6, 1);
+
+        Emoji::new("OK").render(area, &mut frame);
+        Emoji::new("").render(area, &mut frame);
+
+        for x in 0..6u16 {
+            assert_eq!(frame.buffer.get(x, 0).unwrap().content.as_char(), Some(' '));
         }
     }
 }

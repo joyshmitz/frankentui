@@ -2,10 +2,10 @@
 
 //! VOI debug overlay widget (Galaxy-Brain).
 
-use crate::Widget;
 use crate::block::{Alignment, Block};
 use crate::borders::{BorderType, Borders};
 use crate::paragraph::Paragraph;
+use crate::{Widget, clear_text_area};
 use ftui_core::geometry::Rect;
 use ftui_render::cell::{Cell, PackedRgba};
 use ftui_render::frame::Frame;
@@ -235,12 +235,18 @@ impl VoiDebugOverlay {
 
 impl Widget for VoiDebugOverlay {
     fn render(&self, area: Rect, frame: &mut Frame) {
-        if area.is_empty() || area.width < 20 || area.height < 6 {
+        if area.is_empty() {
+            return;
+        }
+
+        if area.width < 20 || area.height < 6 {
+            clear_text_area(frame, area, Style::default());
             return;
         }
 
         let deg = frame.buffer.degradation;
         if !deg.render_content() {
+            clear_text_area(frame, area, Style::default());
             return;
         }
 
@@ -425,19 +431,17 @@ mod tests {
     }
 
     #[test]
-    fn render_small_area_noop() {
+    fn render_small_area_clears_previous_content() {
         let overlay = VoiDebugOverlay::new(sample_data());
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(10, 4, &mut pool);
-        let before = frame.buffer.get(0, 0).copied();
+        let sentinel = Cell::from_char('X').with_bg(PackedRgba::rgb(1, 2, 3));
+        frame.buffer.fill(Rect::new(0, 0, 10, 4), sentinel);
 
         overlay.render(Rect::new(0, 0, 10, 4), &mut frame);
 
-        let after = frame.buffer.get(0, 0).copied();
-        assert_eq!(
-            before, after,
-            "small-area render should be no-op: before={before:?} after={after:?}"
-        );
+        assert_eq!(frame.buffer.get(0, 0).unwrap().content.as_char(), Some(' '));
+        assert_eq!(frame.buffer.get(9, 3).unwrap().content.as_char(), Some(' '));
     }
 
     #[test]
@@ -462,21 +466,26 @@ mod tests {
     }
 
     #[test]
-    fn render_skeleton_is_noop() {
+    fn render_skeleton_clears_previous_overlay() {
         let overlay = VoiDebugOverlay::new(sample_data());
 
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(80, 32, &mut pool);
-        let sentinel = Cell::from_char('X').with_bg(PackedRgba::rgb(1, 2, 3));
-        frame.buffer.set_fast(0, 0, sentinel);
-        frame.buffer.set_fast(10, 10, sentinel);
+        overlay.render(Rect::new(0, 0, 80, 32), &mut frame);
         frame.buffer.degradation = DegradationLevel::Skeleton;
         let area = Rect::new(0, 0, 80, 32);
 
         overlay.render(area, &mut frame);
 
-        assert_eq!(frame.buffer.get(0, 0).copied(), Some(sentinel));
-        assert_eq!(frame.buffer.get(10, 10).copied(), Some(sentinel));
+        let default_cell = Cell::default();
+        let corner = frame.buffer.get(0, 0).unwrap();
+        let inner = frame.buffer.get(10, 10).unwrap();
+        assert_eq!(corner.content.as_char(), Some(' '));
+        assert_eq!(corner.fg, default_cell.fg);
+        assert_eq!(corner.bg, default_cell.bg);
+        assert_eq!(inner.content.as_char(), Some(' '));
+        assert_eq!(inner.fg, default_cell.fg);
+        assert_eq!(inner.bg, default_cell.bg);
     }
 
     // --- Style defaults ---

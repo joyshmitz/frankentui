@@ -17,7 +17,7 @@
 //!     .with_title("History");
 //! ```
 
-use crate::{Widget, draw_text_span};
+use crate::{Widget, clear_text_area, draw_text_span};
 use ftui_core::geometry::Rect;
 use ftui_render::frame::Frame;
 use ftui_style::Style;
@@ -352,6 +352,7 @@ impl Widget for HistoryPanel {
     fn render(&self, area: Rect, frame: &mut Frame) {
         let deg = frame.buffer.degradation;
         if !deg.render_content() {
+            clear_text_area(frame, area, Style::default());
             return;
         }
 
@@ -515,17 +516,38 @@ mod tests {
         let panel = HistoryPanel::new().with_undo_items(&["Insert text"]);
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(30, 10, &mut pool);
-        frame.buffer.degradation = DegradationLevel::Skeleton;
         let area = Rect::new(0, 0, 30, 10);
+        panel.render(area, &mut frame);
 
+        frame.buffer.degradation = DegradationLevel::Skeleton;
         panel.render(area, &mut frame);
 
         let cell = frame.buffer.get(0, 0).unwrap();
-        let default_cell = ftui_render::cell::Cell::default();
-        assert_eq!(cell.content, default_cell.content);
+        assert_eq!(cell.content.as_char(), Some(' '));
+        let default_cell = ftui_render::cell::Cell::from_char(' ');
         assert_eq!(cell.fg, default_cell.fg);
         assert_eq!(cell.bg, default_cell.bg);
         assert_eq!(cell.attrs, default_cell.attrs);
+    }
+
+    #[test]
+    fn render_shorter_history_clears_stale_rows() {
+        let long = HistoryPanel::new()
+            .with_undo_items(&["Insert text", "Delete line", "Paste block"])
+            .with_redo_items(&["Redo thing"]);
+        let short = HistoryPanel::new().with_undo_items(&["Insert"]);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(30, 10, &mut pool);
+        let area = Rect::new(0, 0, 30, 10);
+
+        long.render(area, &mut frame);
+        short.render(area, &mut frame);
+
+        for y in 6..10u16 {
+            for x in 0..30u16 {
+                assert_eq!(frame.buffer.get(x, y).unwrap().content.as_char(), Some(' '));
+            }
+        }
     }
 
     #[test]

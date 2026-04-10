@@ -15,7 +15,7 @@
 
 use crate::borders::{BorderSet, BorderType};
 use crate::sparkline::Sparkline;
-use crate::{Widget, apply_style, draw_text_span, set_style_area};
+use crate::{Widget, apply_style, clear_text_area, draw_text_span};
 use ftui_core::geometry::Rect;
 use ftui_render::cell::{Cell, PackedRgba};
 use ftui_render::frame::Frame;
@@ -436,19 +436,27 @@ impl<'a> DriftVisualization<'a> {
 
 impl Widget for DriftVisualization<'_> {
     fn render(&self, area: Rect, frame: &mut Frame) {
+        if area.is_empty() {
+            return;
+        }
+
         if area.width < 6 || area.height < 4 {
+            clear_text_area(frame, area, Style::default());
             return;
         }
 
         let deg = frame.buffer.degradation;
         if !deg.render_content() {
+            clear_text_area(frame, area, Style::default());
             return;
         }
 
-        // Apply base style
-        if deg.apply_styling() {
-            set_style_area(&mut frame.buffer, area, self.style);
-        }
+        let base_style = if deg.apply_styling() {
+            self.style
+        } else {
+            Style::default()
+        };
+        clear_text_area(frame, area, base_style);
 
         // Draw border
         if deg.render_decorative() {
@@ -1001,5 +1009,45 @@ mod tests {
             frame.buffer.get(14, 2).unwrap().content.as_char(),
             Some(' ')
         );
+    }
+
+    #[test]
+    fn render_skeleton_clears_previous_visualization() {
+        let tl = make_drift_timeline();
+        let viz = DriftVisualization::new(&tl).show_regime_banner(false);
+        let area = Rect::new(0, 0, 80, 10);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 10, &mut pool);
+
+        viz.render(area, &mut frame);
+        frame.buffer.degradation = DegradationLevel::Skeleton;
+        viz.render(area, &mut frame);
+
+        for y in 0..area.height {
+            for x in 0..area.width {
+                assert_eq!(frame.buffer.get(x, y).unwrap().content.as_char(), Some(' '));
+            }
+        }
+    }
+
+    #[test]
+    fn render_with_fewer_domains_clears_stale_rows() {
+        let tl = make_drift_timeline();
+        let full = DriftVisualization::new(&tl).show_regime_banner(false);
+        let filtered = DriftVisualization::new(&tl)
+            .domains(vec![DecisionDomain::DiffStrategy])
+            .show_regime_banner(false);
+        let area = Rect::new(0, 0, 80, 10);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 10, &mut pool);
+
+        full.render(area, &mut frame);
+        filtered.render(area, &mut frame);
+
+        for y in 4..6u16 {
+            for x in 1..area.width.saturating_sub(1) {
+                assert_eq!(frame.buffer.get(x, y).unwrap().content.as_char(), Some(' '));
+            }
+        }
     }
 }

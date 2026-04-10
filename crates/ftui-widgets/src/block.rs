@@ -337,8 +337,10 @@ impl Widget for Block<'_> {
             return;
         }
 
-        // EssentialOnly: skip borders entirely, only apply bg style if styling enabled
+        // EssentialOnly: block chrome is purely decorative, so clear the owned
+        // area instead of leaving stale borders/title content behind.
         if !deg.render_decorative() {
+            frame.buffer.fill(area, Cell::default());
             if deg.apply_styling() {
                 set_style_area(&mut frame.buffer, area, self.style);
             }
@@ -947,19 +949,30 @@ mod tests {
     }
 
     #[test]
-    fn degradation_essential_only_skips_borders() {
+    fn degradation_essential_only_clears_stale_borders_and_title() {
         use ftui_render::budget::DegradationLevel;
 
-        let block = Block::bordered().border_type(BorderType::Square);
-        let area = Rect::new(0, 0, 4, 3);
+        let block = Block::bordered()
+            .border_type(BorderType::Square)
+            .title("Hi");
+        let area = Rect::new(0, 0, 6, 3);
         let mut pool = GraphemePool::new();
-        let mut frame = Frame::new(4, 3, &mut pool);
+        let mut frame = Frame::new(6, 3, &mut pool);
+        block.render(area, &mut frame);
+
         frame.set_degradation(DegradationLevel::EssentialOnly);
-        frame.buffer.set(0, 0, Cell::from_char('X'));
         block.render(area, &mut frame);
 
         let buf = &frame.buffer;
-        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('X'));
+        for y in 0..area.height {
+            for x in 0..area.width {
+                assert!(
+                    buf.get(x, y).unwrap().is_empty(),
+                    "expected cleared cell at ({x}, {y}), got {:?}",
+                    buf.get(x, y).unwrap()
+                );
+            }
+        }
     }
 
     #[test]

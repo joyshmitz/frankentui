@@ -126,11 +126,22 @@ impl Widget for Columns<'_> {
         )
         .entered();
 
-        if area.is_empty() || self.columns.is_empty() {
+        if area.is_empty() {
             return;
         }
 
-        if !frame.buffer.degradation.render_content() {
+        // Columns owns the full layout rect. Clear stale child glyphs before
+        // rendering the current column set while preserving any parent-applied
+        // styling already present in the buffer.
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                if let Some(cell) = frame.buffer.get_mut(x, y) {
+                    cell.content = ftui_render::cell::CellContent::EMPTY;
+                }
+            }
+        }
+
+        if self.columns.is_empty() {
             return;
         }
 
@@ -161,6 +172,8 @@ impl Widget for Columns<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_render::budget::DegradationLevel;
+    use ftui_render::cell::Cell;
     use ftui_render::grapheme_pool::GraphemePool;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -421,5 +434,74 @@ mod tests {
                 b.x
             );
         }
+    }
+
+    #[test]
+    fn skeleton_still_renders_essential_child() {
+        struct Essential;
+
+        impl Widget for Essential {
+            fn render(&self, area: Rect, frame: &mut Frame) {
+                frame.buffer.set(area.x, area.y, Cell::from_char('E'));
+            }
+
+            fn is_essential(&self) -> bool {
+                true
+            }
+        }
+
+        let columns = Columns::new().add(Essential);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(4, 1, &mut pool);
+        frame.buffer.degradation = DegradationLevel::Skeleton;
+
+        columns.render(Rect::new(0, 0, 4, 1), &mut frame);
+
+        assert_eq!(
+            frame
+                .buffer
+                .get(0, 0)
+                .and_then(|cell| cell.content.as_char()),
+            Some('E')
+        );
+    }
+
+    #[derive(Debug)]
+    struct Marker(char);
+
+    impl Widget for Marker {
+        fn render(&self, area: Rect, frame: &mut Frame) {
+            frame.buffer.set(area.x, area.y, Cell::from_char(self.0));
+        }
+    }
+
+    #[test]
+    fn render_fewer_columns_clears_removed_column_output() {
+        let two = Columns::new().add(Marker('A')).add(Marker('B'));
+        let one = Columns::new().add(Marker('A'));
+        let area = Rect::new(0, 0, 8, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(8, 1, &mut pool);
+
+        two.render(area, &mut frame);
+        one.render(area, &mut frame);
+
+        assert_eq!(frame.buffer.get(0, 0).unwrap().content.as_char(), Some('A'));
+        assert!(frame.buffer.get(4, 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn empty_columns_clears_previous_content() {
+        let filled = Columns::new().add(Marker('A'));
+        let empty = Columns::new();
+        let area = Rect::new(0, 0, 4, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(4, 1, &mut pool);
+
+        filled.render(area, &mut frame);
+        empty.render(area, &mut frame);
+
+        assert!(frame.buffer.get(0, 0).unwrap().is_empty());
+        assert!(frame.buffer.get(3, 0).unwrap().is_empty());
     }
 }

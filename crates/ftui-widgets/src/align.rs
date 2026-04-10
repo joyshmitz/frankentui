@@ -132,6 +132,17 @@ impl<W: Widget> Widget for Align<W> {
             return;
         }
 
+        // Align owns the full wrapper rect. Clear stale child glyphs before
+        // rendering the current aligned child while preserving any existing
+        // parent-applied styling already present in the buffer.
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                if let Some(cell) = frame.buffer.get_mut(x, y) {
+                    cell.content = ftui_render::cell::CellContent::EMPTY;
+                }
+            }
+        }
+
         let child_area = self.aligned_area(area);
         if child_area.is_empty() {
             return;
@@ -151,6 +162,15 @@ impl<W: StatefulWidget> StatefulWidget for Align<W> {
     fn render(&self, area: Rect, frame: &mut Frame, state: &mut Self::State) {
         if area.is_empty() {
             return;
+        }
+
+        // Align owns the full wrapper rect for stateful children too.
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                if let Some(cell) = frame.buffer.get_mut(x, y) {
+                    cell.content = ftui_render::cell::CellContent::EMPTY;
+                }
+            }
         }
 
         let child_area = self.aligned_area(area);
@@ -347,6 +367,38 @@ mod tests {
     }
 
     #[test]
+    fn smaller_second_render_clears_old_child_region() {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(5, 1, &mut pool);
+        let area = Rect::new(0, 0, 5, 1);
+
+        Align::new(Fill('X')).render(area, &mut frame);
+        Align::new(Fill('O'))
+            .horizontal(Alignment::Center)
+            .child_width(1)
+            .render(area, &mut frame);
+
+        assert_eq!(buf_to_lines(&frame.buffer), vec!["  O  "]);
+    }
+
+    #[test]
+    fn zero_size_child_clears_previous_content() {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(5, 1, &mut pool);
+        let area = Rect::new(0, 0, 5, 1);
+
+        Align::new(Fill('X')).render(area, &mut frame);
+        Align::new(Fill('O'))
+            .child_width(0)
+            .child_height(0)
+            .render(area, &mut frame);
+
+        for x in 0..5u16 {
+            assert!(frame.buffer.get(x, 0).unwrap().is_empty());
+        }
+    }
+
+    #[test]
     fn area_with_offset() {
         let align = Align::new(Fill('X'))
             .horizontal(Alignment::Center)
@@ -426,6 +478,41 @@ mod tests {
         let rendered_area = *state.borrow();
         assert_eq!(rendered_area.x, 2);
         assert_eq!(rendered_area.width, 2);
+    }
+
+    #[test]
+    fn stateful_smaller_second_render_clears_old_child_region() {
+        #[derive(Debug, Clone, Copy)]
+        struct StatefulFill(char);
+
+        impl StatefulWidget for StatefulFill {
+            type State = ();
+
+            fn render(&self, area: Rect, frame: &mut Frame, _state: &mut Self::State) {
+                for y in area.y..area.bottom() {
+                    for x in area.x..area.right() {
+                        frame.buffer.set(x, y, Cell::from_char(self.0));
+                    }
+                }
+            }
+        }
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(5, 1, &mut pool);
+        let area = Rect::new(0, 0, 5, 1);
+        let mut state = ();
+
+        StatefulWidget::render(&Align::new(StatefulFill('X')), area, &mut frame, &mut state);
+        StatefulWidget::render(
+            &Align::new(StatefulFill('O'))
+                .horizontal(Alignment::Center)
+                .child_width(1),
+            area,
+            &mut frame,
+            &mut state,
+        );
+
+        assert_eq!(buf_to_lines(&frame.buffer), vec!["  O  "]);
     }
 
     // ─── Edge-case tests (bd-2gp78) ────────────────────────────────────

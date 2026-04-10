@@ -10,7 +10,7 @@
 //! - Deterministic output (stable padding + truncation)
 //! - Tiny-area safe (0 width/height is a no-op)
 
-use crate::{Widget, apply_style, draw_text_span};
+use crate::{Widget, apply_style, clear_text_row, draw_text_span};
 use ftui_core::geometry::Rect;
 use ftui_render::cell::Cell;
 use ftui_render::frame::Frame;
@@ -105,6 +105,8 @@ impl Widget for Badge<'_> {
         let y = area.y;
         let max_x = area.right();
         let mut x = area.x;
+
+        clear_text_row(frame, area, style);
 
         x = Self::render_spaces(frame, x, y, self.pad_left, style, max_x);
         x = draw_text_span(frame, x, y, self.label, style, max_x);
@@ -239,6 +241,28 @@ mod tests {
         for x in 0..10 {
             assert_eq!(frame.buffer.get(x, 0), expected.buffer.get(x, 0));
         }
+    }
+
+    #[test]
+    fn render_shorter_label_clears_stale_suffix() {
+        let long = Badge::new("LONG");
+        let short = Badge::new("OK");
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(8, 1, &mut pool);
+        long.render(Rect::new(0, 0, 8, 1), &mut frame);
+        short.render(Rect::new(0, 0, 8, 1), &mut frame);
+
+        let row: String = (0..8)
+            .map(|x| {
+                frame
+                    .buffer
+                    .get(x, 0)
+                    .and_then(|cell| cell.content.as_char())
+                    .unwrap_or(' ')
+            })
+            .collect();
+        assert_eq!(row, " OK     ");
     }
 
     #[test]

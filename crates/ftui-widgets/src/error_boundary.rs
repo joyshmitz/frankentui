@@ -235,6 +235,9 @@ fn render_error_fallback(frame: &mut Frame, area: Rect, error: &CapturedError) {
     let error_style = Style::new().fg(error_fg).bg(error_bg);
     let border_style = Style::new().fg(error_fg);
 
+    // The fallback owns the full area. Clear any stale glyphs first so the
+    // error panel fully replaces prior widget content on re-render.
+    clear_area(frame, area);
     set_style_area(&mut frame.buffer, area, Style::new().bg(error_bg));
 
     if area.width < 3 || area.height < 1 {
@@ -747,6 +750,33 @@ mod tests {
     }
 
     #[test]
+    fn failed_state_rerender_clears_stale_content() {
+        let boundary = ErrorBoundary::new(GoodWidget, "good");
+        let mut state = ErrorBoundaryState::Failed(CapturedError {
+            message: "err".to_string(),
+            widget_name: "other",
+            area: Rect::new(0, 0, 30, 5),
+            timestamp: Instant::now(),
+        });
+
+        let area = Rect::new(0, 0, 30, 5);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(30, 5, &mut pool);
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                frame.buffer.set(x, y, Cell::from_char('X'));
+            }
+        }
+
+        boundary.render(area, &mut frame, &mut state);
+
+        assert_eq!(
+            frame.buffer.get(20, 1).unwrap().content.as_char(),
+            Some(' ')
+        );
+    }
+
+    #[test]
     fn fallback_widget_renders_standalone() {
         let fallback = FallbackWidget::from_message("render failed", "my_widget");
         let area = Rect::new(0, 0, 30, 5);
@@ -756,6 +786,26 @@ mod tests {
 
         // Should show error border
         assert_eq!(frame.buffer.get(0, 0).unwrap().content.as_char(), Some('┌'));
+    }
+
+    #[test]
+    fn fallback_widget_clears_stale_content() {
+        let fallback = FallbackWidget::from_message("err", "w");
+        let area = Rect::new(0, 0, 30, 5);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(30, 5, &mut pool);
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                frame.buffer.set(x, y, Cell::from_char('X'));
+            }
+        }
+
+        fallback.render(area, &mut frame);
+
+        assert_eq!(
+            frame.buffer.get(20, 1).unwrap().content.as_char(),
+            Some(' ')
+        );
     }
 
     #[test]

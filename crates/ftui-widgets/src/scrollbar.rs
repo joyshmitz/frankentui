@@ -5,7 +5,7 @@
 //! A widget to display a scrollbar.
 
 use crate::mouse::MouseResult;
-use crate::{StatefulWidget, Widget, draw_text_span};
+use crate::{StatefulWidget, Widget, clear_text_area, draw_text_span};
 use ftui_core::event::{MouseButton, MouseEvent, MouseEventKind};
 use ftui_core::geometry::Rect;
 use ftui_render::frame::{Frame, HitId, HitRegion};
@@ -364,10 +364,14 @@ impl<'a> StatefulWidget for Scrollbar<'a> {
 
         // Scrollbar is decorative — skip at EssentialOnly+
         if !frame.buffer.degradation.render_decorative() {
+            state.track_layout = None;
+            clear_text_area(frame, area, Style::default());
             return;
         }
 
         if area.is_empty() || state.content_length == 0 {
+            state.track_layout = None;
+            clear_text_area(frame, area, Style::default());
             return;
         }
 
@@ -378,6 +382,7 @@ impl<'a> StatefulWidget for Scrollbar<'a> {
 
         let length = if is_vertical { area.height } else { area.width } as usize;
         if length == 0 {
+            state.track_layout = None;
             return;
         }
 
@@ -576,9 +581,16 @@ mod tests {
         let area = Rect::new(0, 0, 1, 10);
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(1, 10, &mut pool);
-        let mut state = ScrollbarState::new(0, 0, 10);
+        let mut state = ScrollbarState::new(100, 0, 10);
         StatefulWidget::render(&sb, area, &mut frame, &mut state);
-        // Should not render anything when content_length is 0
+
+        state.content_length = 0;
+        StatefulWidget::render(&sb, area, &mut frame, &mut state);
+
+        for y in 0..10u16 {
+            assert_eq!(frame.buffer.get(0, y).unwrap().content.as_char(), Some(' '));
+        }
+        assert!(state.track_layout.is_none());
     }
 
     #[test]
@@ -769,15 +781,15 @@ mod tests {
         let mut frame = Frame::new(1, 10, &mut pool);
         frame.buffer.degradation = DegradationLevel::EssentialOnly;
         let mut state = ScrollbarState::new(100, 0, 10);
+        frame.buffer.degradation = DegradationLevel::Full;
+        StatefulWidget::render(&sb, area, &mut frame, &mut state);
+        frame.buffer.degradation = DegradationLevel::EssentialOnly;
         StatefulWidget::render(&sb, area, &mut frame, &mut state);
 
-        // Scrollbar is decorative, should be skipped at EssentialOnly
         for y in 0..10u16 {
-            assert!(
-                frame.buffer.get(0, y).unwrap().is_empty(),
-                "cell at y={y} should be empty at EssentialOnly"
-            );
+            assert_eq!(frame.buffer.get(0, y).unwrap().content.as_char(), Some(' '));
         }
+        assert!(state.track_layout.is_none());
     }
 
     #[test]
@@ -790,14 +802,15 @@ mod tests {
         let mut frame = Frame::new(1, 10, &mut pool);
         frame.buffer.degradation = DegradationLevel::Skeleton;
         let mut state = ScrollbarState::new(100, 0, 10);
+        frame.buffer.degradation = DegradationLevel::Full;
+        StatefulWidget::render(&sb, area, &mut frame, &mut state);
+        frame.buffer.degradation = DegradationLevel::Skeleton;
         StatefulWidget::render(&sb, area, &mut frame, &mut state);
 
         for y in 0..10u16 {
-            assert!(
-                frame.buffer.get(0, y).unwrap().is_empty(),
-                "cell at y={y} should be empty at Skeleton"
-            );
+            assert_eq!(frame.buffer.get(0, y).unwrap().content.as_char(), Some(' '));
         }
+        assert!(state.track_layout.is_none());
     }
 
     #[test]

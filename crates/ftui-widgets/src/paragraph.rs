@@ -2,7 +2,7 @@
 
 use crate::block::{Alignment, Block};
 use crate::measurable::{MeasurableWidget, SizeConstraints};
-use crate::{Widget, draw_text_span_scrolled, draw_text_span_with_link, set_style_area};
+use crate::{Widget, clear_text_area, draw_text_span_scrolled, draw_text_span_with_link};
 use ahash::AHashMap;
 use ftui_core::geometry::{Rect, Size};
 use ftui_render::frame::Frame;
@@ -287,8 +287,9 @@ impl Widget for Paragraph<'_> {
 
         let deg = frame.buffer.degradation;
 
-        // Skeleton+: nothing to render
+        // Skeleton+: clear the owned area so previously rendered content does not linger.
         if !deg.render_content() {
+            clear_text_area(frame, area, Style::default());
             return;
         }
 
@@ -301,15 +302,11 @@ impl Widget for Paragraph<'_> {
             Style::default()
         };
         if self.block.is_none() && self.text.is_empty() {
-            let mut cell = ftui_render::cell::Cell::from_char(' ');
-            crate::apply_style(&mut cell, style);
-            frame.buffer.fill(area, cell);
+            clear_text_area(frame, area, style);
             return;
         }
 
-        if deg.apply_styling() {
-            set_style_area(&mut frame.buffer, area, self.style);
-        }
+        clear_text_area(frame, area, style);
 
         let text_area = match self.block {
             Some(ref b) => {
@@ -614,6 +611,20 @@ mod tests {
     use super::*;
     use ftui_render::grapheme_pool::GraphemePool;
 
+    fn raw_row_text(frame: &Frame, y: u16) -> String {
+        let width = frame.buffer.width();
+        let mut actual = String::new();
+        for x in 0..width {
+            let ch = frame
+                .buffer
+                .get(x, y)
+                .and_then(|cell| cell.content.as_char())
+                .unwrap_or(' ');
+            actual.push(ch);
+        }
+        actual
+    }
+
     #[test]
     fn render_simple_text() {
         let para = Paragraph::new(Text::raw("Hello"));
@@ -773,8 +784,21 @@ mod tests {
         let mut frame = Frame::new(5, 2, &mut pool);
         para.render(area, &mut frame);
 
-        // All lines skipped, buffer should remain empty
-        assert!(frame.buffer.get(0, 0).unwrap().is_empty());
+        // All lines skipped, but the paragraph still owns and clears its area.
+        assert_eq!(frame.buffer.get(0, 0).unwrap().content.as_char(), Some(' '));
+    }
+
+    #[test]
+    fn render_shorter_text_clears_stale_suffix_and_extra_lines() {
+        let area = Rect::new(0, 0, 8, 2);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(8, 2, &mut pool);
+
+        Paragraph::new(Text::raw("Hello\nWorld")).render(area, &mut frame);
+        Paragraph::new(Text::raw("Hi")).render(area, &mut frame);
+
+        assert_eq!(raw_row_text(&frame, 0), "Hi      ");
+        assert_eq!(raw_row_text(&frame, 1), "        ");
     }
 
     #[test]
@@ -881,11 +905,12 @@ mod tests {
         let area = Rect::new(0, 0, 10, 1);
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(10, 1, &mut pool);
+        Paragraph::new(Text::raw("Stale")).render(area, &mut frame);
         frame.set_degradation(DegradationLevel::Skeleton);
         para.render(area, &mut frame);
 
-        // No text should be rendered at Skeleton level
-        assert!(frame.buffer.get(0, 0).unwrap().is_empty());
+        // Skeleton clears previously rendered content instead of leaving it behind.
+        assert_eq!(raw_row_text(&frame, 0), "          ");
     }
 
     #[test]

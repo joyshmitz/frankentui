@@ -8,7 +8,7 @@
 use crate::block::Alignment;
 use crate::borders::BorderType;
 use crate::measurable::{MeasurableWidget, SizeConstraints};
-use crate::{Widget, apply_style, draw_text_span};
+use crate::{Widget, apply_style, clear_text_row, draw_text_span};
 use ftui_core::geometry::{Rect, Size};
 use ftui_render::buffer::Buffer;
 use ftui_render::cell::Cell;
@@ -144,6 +144,11 @@ impl Widget for Rule<'_> {
 
         // Rule is decorative — skip at EssentialOnly+
         if !frame.buffer.degradation.render_decorative() {
+            clear_text_row(
+                frame,
+                Rect::new(area.x, area.y, area.width, 1),
+                Style::default(),
+            );
             return;
         }
 
@@ -589,15 +594,12 @@ mod tests {
         let area = Rect::new(0, 0, 10, 1);
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(10, 1, &mut pool);
+        rule.render(area, &mut frame);
         frame.buffer.degradation = DegradationLevel::EssentialOnly;
         rule.render(area, &mut frame);
 
-        // Rule is decorative, skipped at EssentialOnly
         for x in 0..10u16 {
-            assert!(
-                frame.buffer.get(x, 0).unwrap().is_empty(),
-                "cell at x={x} should be empty at EssentialOnly"
-            );
+            assert_eq!(frame.buffer.get(x, 0).unwrap().content.as_char(), Some(' '));
         }
     }
 
@@ -609,14 +611,12 @@ mod tests {
         let area = Rect::new(0, 0, 10, 1);
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(10, 1, &mut pool);
+        rule.render(area, &mut frame);
         frame.buffer.degradation = DegradationLevel::Skeleton;
         rule.render(area, &mut frame);
 
         for x in 0..10u16 {
-            assert!(
-                frame.buffer.get(x, 0).unwrap().is_empty(),
-                "cell at x={x} should be empty at Skeleton"
-            );
+            assert_eq!(frame.buffer.get(x, 0).unwrap().content.as_char(), Some(' '));
         }
     }
 
