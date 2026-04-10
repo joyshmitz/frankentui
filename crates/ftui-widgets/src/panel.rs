@@ -148,9 +148,9 @@ impl<'a, W> Panel<'a, W> {
         inner
     }
 
-    fn border_cell(&self, c: char) -> Cell {
+    fn border_cell(&self, c: char, style: Style) -> Cell {
         let mut cell = Cell::from_char(c);
-        apply_style(&mut cell, self.border_style);
+        apply_style(&mut cell, style);
         cell
     }
 
@@ -162,7 +162,7 @@ impl<'a, W> Panel<'a, W> {
         self.border_type.to_border_set()
     }
 
-    fn render_borders(&self, area: Rect, buf: &mut Buffer, set: BorderSet) {
+    fn render_borders(&self, area: Rect, buf: &mut Buffer, set: BorderSet, style: Style) {
         if area.is_empty() {
             return;
         }
@@ -170,42 +170,42 @@ impl<'a, W> Panel<'a, W> {
         // Edges
         if self.borders.contains(Borders::LEFT) {
             for y in area.y..area.bottom() {
-                buf.set_fast(area.x, y, self.border_cell(set.vertical));
+                buf.set_fast(area.x, y, self.border_cell(set.vertical, style));
             }
         }
         if self.borders.contains(Borders::RIGHT) {
             let x = area.right() - 1;
             for y in area.y..area.bottom() {
-                buf.set_fast(x, y, self.border_cell(set.vertical));
+                buf.set_fast(x, y, self.border_cell(set.vertical, style));
             }
         }
         if self.borders.contains(Borders::TOP) {
             for x in area.x..area.right() {
-                buf.set_fast(x, area.y, self.border_cell(set.horizontal));
+                buf.set_fast(x, area.y, self.border_cell(set.horizontal, style));
             }
         }
         if self.borders.contains(Borders::BOTTOM) {
             let y = area.bottom().saturating_sub(1);
             for x in area.x..area.right() {
-                buf.set_fast(x, y, self.border_cell(set.horizontal));
+                buf.set_fast(x, y, self.border_cell(set.horizontal, style));
             }
         }
 
         // Corners (drawn after edges)
         if self.borders.contains(Borders::LEFT | Borders::TOP) {
-            buf.set_fast(area.x, area.y, self.border_cell(set.top_left));
+            buf.set_fast(area.x, area.y, self.border_cell(set.top_left, style));
         }
         if self.borders.contains(Borders::RIGHT | Borders::TOP) {
-            buf.set_fast(area.right() - 1, area.y, self.border_cell(set.top_right));
+            buf.set_fast(area.right() - 1, area.y, self.border_cell(set.top_right, style));
         }
         if self.borders.contains(Borders::LEFT | Borders::BOTTOM) {
-            buf.set_fast(area.x, area.bottom() - 1, self.border_cell(set.bottom_left));
+            buf.set_fast(area.x, area.bottom() - 1, self.border_cell(set.bottom_left, style));
         }
         if self.borders.contains(Borders::RIGHT | Borders::BOTTOM) {
             buf.set_fast(
                 area.right() - 1,
                 area.bottom() - 1,
-                self.border_cell(set.bottom_right),
+                self.border_cell(set.bottom_right, style),
             );
         }
     }
@@ -251,6 +251,7 @@ impl<'a, W> Panel<'a, W> {
         text: &str,
         alignment: Alignment,
         style: Style,
+        clear_existing_style: bool,
     ) {
         if area.width < 2 {
             return;
@@ -273,6 +274,12 @@ impl<'a, W> Panel<'a, W> {
         };
 
         let max_x = area.right().saturating_sub(1);
+        if clear_existing_style && text_width > 0 {
+            frame.buffer.fill(
+                Rect::new(x, area.y, text_width as u16, 1),
+                Cell::default(),
+            );
+        }
         draw_text_span(frame, x, area.y, text.as_ref(), style, max_x);
     }
 
@@ -283,6 +290,7 @@ impl<'a, W> Panel<'a, W> {
         text: &str,
         alignment: Alignment,
         style: Style,
+        clear_existing_style: bool,
     ) {
         if area.height < 1 || area.width < 2 {
             return;
@@ -306,6 +314,9 @@ impl<'a, W> Panel<'a, W> {
 
         let y = area.bottom().saturating_sub(1);
         let max_x = area.right().saturating_sub(1);
+        if clear_existing_style && text_width > 0 {
+            frame.buffer.fill(Rect::new(x, y, text_width as u16, 1), Cell::default());
+        }
         draw_text_span(frame, x, y, text.as_ref(), style, max_x);
     }
 }
@@ -345,6 +356,12 @@ impl<W: Widget> Widget for Panel<'_, W> {
         }
 
         let deg = frame.buffer.degradation;
+        let clear_existing_text_style = !deg.apply_styling();
+        let border_style = if deg.apply_styling() {
+            self.border_style
+        } else {
+            Style::default()
+        };
 
         // Skeleton+: skip everything, just clear area
         if !deg.render_content() {
@@ -360,7 +377,7 @@ impl<W: Widget> Widget for Panel<'_, W> {
         // Decorative layer: borders + title/subtitle
         if deg.render_decorative() {
             let set = self.pick_border_set(&frame.buffer);
-            self.render_borders(area, &mut frame.buffer, set);
+            self.render_borders(area, &mut frame.buffer, set, border_style);
 
             if self.borders.contains(Borders::TOP)
                 && let Some(title) = self.title
@@ -370,7 +387,14 @@ impl<W: Widget> Widget for Panel<'_, W> {
                 } else {
                     Style::default()
                 };
-                self.render_top_text(area, frame, title, self.title_alignment, title_style);
+                self.render_top_text(
+                    area,
+                    frame,
+                    title,
+                    self.title_alignment,
+                    title_style,
+                    clear_existing_text_style,
+                );
             }
 
             if self.borders.contains(Borders::BOTTOM)
@@ -387,6 +411,7 @@ impl<W: Widget> Widget for Panel<'_, W> {
                     subtitle,
                     self.subtitle_alignment,
                     subtitle_style,
+                    clear_existing_text_style,
                 );
             }
         }
@@ -781,5 +806,72 @@ mod tests {
             .subtitle_style(Style::new())
             .style(Style::new())
             .padding(Sides::all(1));
+    }
+
+    #[test]
+    fn degradation_no_styling_drops_border_style() {
+        use ftui_render::budget::DegradationLevel;
+        use ftui_render::cell::PackedRgba;
+
+        let panel = Panel::new(crate::block::Block::default())
+            .borders(Borders::ALL)
+            .border_style(Style::new().fg(PackedRgba::rgb(255, 0, 0)).bold());
+        let area = Rect::new(0, 0, 5, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(5, 3, &mut pool);
+        frame.buffer.degradation = DegradationLevel::NoStyling;
+        panel.render(area, &mut frame);
+
+        let border = frame.buffer.get(0, 0).unwrap();
+        let default_cell = Cell::from_char(border.content.as_char().unwrap());
+        assert_eq!(border.fg, default_cell.fg);
+        assert_eq!(border.bg, default_cell.bg);
+        assert_eq!(border.attrs, default_cell.attrs);
+    }
+
+    #[test]
+    fn degradation_no_styling_title_does_not_inherit_border_style() {
+        use ftui_render::budget::DegradationLevel;
+        use ftui_render::cell::PackedRgba;
+
+        let panel = Panel::new(crate::block::Block::default())
+            .borders(Borders::ALL)
+            .border_style(Style::new().fg(PackedRgba::rgb(255, 0, 0)).bold())
+            .title("Hi");
+        let area = Rect::new(0, 0, 6, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(6, 3, &mut pool);
+        frame.buffer.degradation = DegradationLevel::NoStyling;
+        panel.render(area, &mut frame);
+
+        let title = frame.buffer.get(1, 0).unwrap();
+        let default_cell = Cell::from_char('H');
+        assert_eq!(title.content.as_char(), Some('H'));
+        assert_eq!(title.fg, default_cell.fg);
+        assert_eq!(title.bg, default_cell.bg);
+        assert_eq!(title.attrs, default_cell.attrs);
+    }
+
+    #[test]
+    fn degradation_no_styling_subtitle_does_not_inherit_border_style() {
+        use ftui_render::budget::DegradationLevel;
+        use ftui_render::cell::PackedRgba;
+
+        let panel = Panel::new(crate::block::Block::default())
+            .borders(Borders::ALL)
+            .border_style(Style::new().fg(PackedRgba::rgb(255, 0, 0)).bold())
+            .subtitle("Lo");
+        let area = Rect::new(0, 0, 6, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(6, 3, &mut pool);
+        frame.buffer.degradation = DegradationLevel::NoStyling;
+        panel.render(area, &mut frame);
+
+        let subtitle = frame.buffer.get(1, 2).unwrap();
+        let default_cell = Cell::from_char('L');
+        assert_eq!(subtitle.content.as_char(), Some('L'));
+        assert_eq!(subtitle.fg, default_cell.fg);
+        assert_eq!(subtitle.bg, default_cell.bg);
+        assert_eq!(subtitle.attrs, default_cell.attrs);
     }
 }

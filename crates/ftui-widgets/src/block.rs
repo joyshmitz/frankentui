@@ -152,13 +152,13 @@ impl<'a> Block<'a> {
     }
 
     /// Create a styled border cell.
-    fn border_cell(&self, c: char) -> Cell {
+    fn border_cell(&self, c: char, style: Style) -> Cell {
         let mut cell = Cell::from_char(c);
-        apply_style(&mut cell, self.border_style);
+        apply_style(&mut cell, style);
         cell
     }
 
-    fn render_borders(&self, area: Rect, buf: &mut Buffer) {
+    fn render_borders(&self, area: Rect, buf: &mut Buffer, style: Style) {
         if area.is_empty() {
             return;
         }
@@ -168,48 +168,48 @@ impl<'a> Block<'a> {
         // Edges
         if self.borders.contains(Borders::LEFT) {
             for y in area.y..area.bottom() {
-                buf.set_fast(area.x, y, self.border_cell(set.vertical));
+                buf.set_fast(area.x, y, self.border_cell(set.vertical, style));
             }
         }
         if self.borders.contains(Borders::RIGHT) {
             let x = area.right() - 1;
             for y in area.y..area.bottom() {
-                buf.set_fast(x, y, self.border_cell(set.vertical));
+                buf.set_fast(x, y, self.border_cell(set.vertical, style));
             }
         }
         if self.borders.contains(Borders::TOP) {
             for x in area.x..area.right() {
-                buf.set_fast(x, area.y, self.border_cell(set.horizontal));
+                buf.set_fast(x, area.y, self.border_cell(set.horizontal, style));
             }
         }
         if self.borders.contains(Borders::BOTTOM) {
             let y = area.bottom() - 1;
             for x in area.x..area.right() {
-                buf.set_fast(x, y, self.border_cell(set.horizontal));
+                buf.set_fast(x, y, self.border_cell(set.horizontal, style));
             }
         }
 
         // Corners (drawn after edges to overwrite edge characters at corners)
         if self.borders.contains(Borders::LEFT | Borders::TOP) {
-            buf.set_fast(area.x, area.y, self.border_cell(set.top_left));
+            buf.set_fast(area.x, area.y, self.border_cell(set.top_left, style));
         }
         if self.borders.contains(Borders::RIGHT | Borders::TOP) {
-            buf.set_fast(area.right() - 1, area.y, self.border_cell(set.top_right));
+            buf.set_fast(area.right() - 1, area.y, self.border_cell(set.top_right, style));
         }
         if self.borders.contains(Borders::LEFT | Borders::BOTTOM) {
-            buf.set_fast(area.x, area.bottom() - 1, self.border_cell(set.bottom_left));
+            buf.set_fast(area.x, area.bottom() - 1, self.border_cell(set.bottom_left, style));
         }
         if self.borders.contains(Borders::RIGHT | Borders::BOTTOM) {
             buf.set_fast(
                 area.right() - 1,
                 area.bottom() - 1,
-                self.border_cell(set.bottom_right),
+                self.border_cell(set.bottom_right, style),
             );
         }
     }
 
     /// Render borders using ASCII characters regardless of configured border_type.
-    fn render_borders_ascii(&self, area: Rect, buf: &mut Buffer) {
+    fn render_borders_ascii(&self, area: Rect, buf: &mut Buffer, style: Style) {
         if area.is_empty() {
             return;
         }
@@ -218,41 +218,41 @@ impl<'a> Block<'a> {
 
         if self.borders.contains(Borders::LEFT) {
             for y in area.y..area.bottom() {
-                buf.set_fast(area.x, y, self.border_cell(set.vertical));
+                buf.set_fast(area.x, y, self.border_cell(set.vertical, style));
             }
         }
         if self.borders.contains(Borders::RIGHT) {
             let x = area.right() - 1;
             for y in area.y..area.bottom() {
-                buf.set_fast(x, y, self.border_cell(set.vertical));
+                buf.set_fast(x, y, self.border_cell(set.vertical, style));
             }
         }
         if self.borders.contains(Borders::TOP) {
             for x in area.x..area.right() {
-                buf.set_fast(x, area.y, self.border_cell(set.horizontal));
+                buf.set_fast(x, area.y, self.border_cell(set.horizontal, style));
             }
         }
         if self.borders.contains(Borders::BOTTOM) {
             let y = area.bottom() - 1;
             for x in area.x..area.right() {
-                buf.set_fast(x, y, self.border_cell(set.horizontal));
+                buf.set_fast(x, y, self.border_cell(set.horizontal, style));
             }
         }
 
         if self.borders.contains(Borders::LEFT | Borders::TOP) {
-            buf.set_fast(area.x, area.y, self.border_cell(set.top_left));
+            buf.set_fast(area.x, area.y, self.border_cell(set.top_left, style));
         }
         if self.borders.contains(Borders::RIGHT | Borders::TOP) {
-            buf.set_fast(area.right() - 1, area.y, self.border_cell(set.top_right));
+            buf.set_fast(area.right() - 1, area.y, self.border_cell(set.top_right, style));
         }
         if self.borders.contains(Borders::LEFT | Borders::BOTTOM) {
-            buf.set_fast(area.x, area.bottom() - 1, self.border_cell(set.bottom_left));
+            buf.set_fast(area.x, area.bottom() - 1, self.border_cell(set.bottom_left, style));
         }
         if self.borders.contains(Borders::RIGHT | Borders::BOTTOM) {
             buf.set_fast(
                 area.right() - 1,
                 area.bottom() - 1,
-                self.border_cell(set.bottom_right),
+                self.border_cell(set.bottom_right, style),
             );
         }
     }
@@ -309,6 +309,11 @@ impl Widget for Block<'_> {
         }
 
         let deg = frame.degradation;
+        let border_style = if deg.apply_styling() {
+            self.border_style
+        } else {
+            Style::default()
+        };
 
         // Skeleton+: skip everything, just clear area
         if !deg.render_content() {
@@ -331,10 +336,10 @@ impl Widget for Block<'_> {
 
         // Render borders (with possible ASCII downgrade)
         if deg.use_unicode_borders() {
-            self.render_borders(area, &mut frame.buffer);
+            self.render_borders(area, &mut frame.buffer, border_style);
         } else {
             // Force ASCII borders regardless of configured border_type
-            self.render_borders_ascii(area, &mut frame.buffer);
+            self.render_borders_ascii(area, &mut frame.buffer, border_style);
         }
 
         // Render title (skip at NoStyling to save time)
@@ -903,6 +908,26 @@ mod tests {
         plain.render(area, &mut plain_frame);
 
         assert_eq!(titled_frame.buffer.get(1, 0), plain_frame.buffer.get(1, 0));
+    }
+
+    #[test]
+    fn degradation_no_styling_drops_border_style_everywhere() {
+        use ftui_render::budget::DegradationLevel;
+
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .border_style(Style::new().fg(PackedRgba::rgb(200, 0, 0)).bold());
+        let area = Rect::new(0, 0, 5, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(5, 3, &mut pool);
+        frame.set_degradation(DegradationLevel::NoStyling);
+        block.render(area, &mut frame);
+
+        let border = frame.buffer.get(0, 0).unwrap();
+        let default_cell = Cell::from_char(border.content.as_char().unwrap());
+        assert_eq!(border.fg, default_cell.fg);
+        assert_eq!(border.bg, default_cell.bg);
+        assert_eq!(border.attrs, default_cell.attrs);
     }
 
     #[test]
