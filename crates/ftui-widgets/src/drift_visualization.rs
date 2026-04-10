@@ -997,6 +997,9 @@ mod tests {
 
         viz.render(Rect::new(0, 0, 80, 10), &mut frame);
 
-        assert_eq!(frame.buffer.get(14, 2).unwrap().content.as_char(), Some(' '));
+        assert_eq!(
+            frame.buffer.get(14, 2).unwrap().content.as_char(),
+            Some(' ')
+        );
     }
 }
