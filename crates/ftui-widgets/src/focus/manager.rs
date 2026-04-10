@@ -499,6 +499,15 @@ impl FocusManager {
     }
 
     #[must_use]
+    pub(crate) fn trap_return_focus(&self, group_id: u32) -> Option<Option<FocusId>> {
+        self.trap_stack
+            .iter()
+            .rev()
+            .find(|trap| trap.group_id == group_id)
+            .map(|trap| trap.return_focus)
+    }
+
+    #[must_use]
     pub(crate) fn deferred_focus_target(&self) -> Option<FocusId> {
         if let Some(id) = self.active_focus_target() {
             return Some(id);
@@ -514,6 +523,12 @@ impl FocusManager {
 
     pub(crate) fn focus_first_without_history_for_restore(&mut self) -> bool {
         self.focus_first_without_history()
+    }
+
+    pub(crate) fn replace_deferred_focus_target(&mut self, target: Option<FocusId>) {
+        self.current = None;
+        self.pending_focus_on_host_gain =
+            target.filter(|id| self.can_focus(*id) && self.allowed_by_trap(*id));
     }
 
     pub(crate) fn push_trap_with_return_focus(
