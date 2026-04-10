@@ -238,7 +238,16 @@ impl Widget for DebugOverlay {
         )
         .entered();
 
+        if area.is_empty() {
+            return;
+        }
+
         if !self.state.enabled() {
+            return;
+        }
+
+        let deg = frame.buffer.degradation;
+        if !deg.render_content() {
             return;
         }
 
@@ -258,7 +267,11 @@ impl Widget for DebugOverlay {
             let color =
                 self.options.palette.border_colors[idx % self.options.palette.border_colors.len()];
             if self.options.show_boundaries {
-                let border_cell = Cell::from_char('+').with_fg(color);
+                let border_cell = if deg.apply_styling() {
+                    Cell::from_char('+').with_fg(color)
+                } else {
+                    Cell::from_char('+')
+                };
                 frame
                     .buffer
                     .draw_border(rect, BorderChars::ASCII, border_cell);
@@ -267,9 +280,13 @@ impl Widget for DebugOverlay {
             if self.options.show_names {
                 let label = self.format_label(info);
                 if !label.is_empty() {
-                    let label_cell = Cell::from_char(' ')
-                        .with_fg(self.options.palette.label_fg)
-                        .with_bg(self.options.palette.label_bg);
+                    let label_cell = if deg.apply_styling() {
+                        Cell::from_char(' ')
+                            .with_fg(self.options.palette.label_fg)
+                            .with_bg(self.options.palette.label_bg)
+                    } else {
+                        Cell::from_char(' ')
+                    };
                     let label_x = rect.x.saturating_add(1);
                     let max_x = rect.right();
                     let _ = frame
@@ -290,7 +307,11 @@ impl Widget for DebugOverlay {
                         } else {
                             self.options.palette.hit_color
                         };
-                        let hit_cell = Cell::from_char('.').with_fg(color);
+                        let hit_cell = if deg.apply_styling() {
+                            Cell::from_char('.').with_fg(color)
+                        } else {
+                            Cell::from_char('.')
+                        };
                         frame.buffer.draw_rect_outline(hit_rect, hit_cell);
                     }
                 }
@@ -443,6 +464,7 @@ fn env_enabled() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_render::budget::DegradationLevel;
     use ftui_render::grapheme_pool::GraphemePool;
 
     struct StubWidget;
@@ -526,6 +548,55 @@ mod tests {
 
         let cell = frame.buffer.get(1, 0).expect("label cell exists");
         assert_eq!(cell.content.as_char(), Some('H'));
+    }
+
+    #[test]
+    fn overlay_no_styling_drops_palette_colors() {
+        let state = DebugOverlayState::new();
+        state.set_enabled(true);
+        state.record(WidgetDebugInfo::new("Hi", Rect::new(0, 0, 4, 3)));
+
+        let options = DebugOverlayOptions {
+            show_render_times: false,
+            ..Default::default()
+        };
+        let overlay = DebugOverlay::new(state).options(options);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(6, 4, &mut pool);
+        frame.buffer.degradation = DegradationLevel::NoStyling;
+
+        overlay.render(Rect::new(0, 0, 6, 4), &mut frame);
+
+        let label_cell = frame.buffer.get(1, 0).expect("label cell exists");
+        let border_cell = frame.buffer.get(0, 0).expect("border cell exists");
+        let default_label = Cell::from_char('H');
+        let default_border = Cell::from_char('+');
+
+        assert_eq!(label_cell.content.as_char(), Some('H'));
+        assert_eq!(label_cell.fg, default_label.fg);
+        assert_eq!(label_cell.bg, default_label.bg);
+        assert_eq!(border_cell.fg, default_border.fg);
+        assert_eq!(border_cell.bg, default_border.bg);
+    }
+
+    #[test]
+    fn overlay_skeleton_is_noop() {
+        let state = DebugOverlayState::new();
+        state.set_enabled(true);
+        state.record(WidgetDebugInfo::new("Hi", Rect::new(0, 0, 4, 3)));
+
+        let overlay = DebugOverlay::new(state);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(6, 4, &mut pool);
+        let sentinel = Cell::from_char('#');
+        frame.buffer.set(0, 0, sentinel);
+        frame.buffer.set(5, 3, sentinel);
+        frame.buffer.degradation = DegradationLevel::Skeleton;
+
+        overlay.render(Rect::new(0, 0, 6, 4), &mut frame);
+
+        assert_eq!(frame.buffer.get(0, 0).copied(), Some(sentinel));
+        assert_eq!(frame.buffer.get(5, 3).copied(), Some(sentinel));
     }
 
     #[test]

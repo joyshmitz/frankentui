@@ -239,7 +239,14 @@ impl Widget for VoiDebugOverlay {
             return;
         }
 
-        if let Some(bg) = self.style.background {
+        let deg = frame.buffer.degradation;
+        if !deg.render_content() {
+            return;
+        }
+
+        if deg.apply_styling()
+            && let Some(bg) = self.style.background
+        {
             let cell = Cell::default().with_bg(bg);
             frame.buffer.fill(area, cell);
         }
@@ -271,6 +278,7 @@ impl Widget for VoiDebugOverlay {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_render::budget::DegradationLevel;
     use ftui_render::grapheme_pool::GraphemePool;
 
     fn sample_posterior() -> VoiPosteriorSummary {
@@ -430,6 +438,45 @@ mod tests {
             before, after,
             "small-area render should be no-op: before={before:?} after={after:?}"
         );
+    }
+
+    #[test]
+    fn render_no_styling_drops_background_fill() {
+        let bg = PackedRgba::rgb(12, 34, 56);
+        let style = VoiOverlayStyle {
+            background: Some(bg),
+            ..VoiOverlayStyle::default()
+        };
+        let overlay = VoiDebugOverlay::new(sample_data()).with_style(style);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 32, &mut pool);
+        frame.buffer.degradation = DegradationLevel::NoStyling;
+        let area = Rect::new(0, 0, 80, 32);
+
+        overlay.render(area, &mut frame);
+
+        let bg_cell = frame.buffer.get(2, 2).unwrap();
+        let default_cell = Cell::default();
+        assert_eq!(bg_cell.bg, default_cell.bg);
+    }
+
+    #[test]
+    fn render_skeleton_is_noop() {
+        let overlay = VoiDebugOverlay::new(sample_data());
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 32, &mut pool);
+        let sentinel = Cell::from_char('X').with_bg(PackedRgba::rgb(1, 2, 3));
+        frame.buffer.set_fast(0, 0, sentinel);
+        frame.buffer.set_fast(10, 10, sentinel);
+        frame.buffer.degradation = DegradationLevel::Skeleton;
+        let area = Rect::new(0, 0, 80, 32);
+
+        overlay.render(area, &mut frame);
+
+        assert_eq!(frame.buffer.get(0, 0).copied(), Some(sentinel));
+        assert_eq!(frame.buffer.get(10, 10).copied(), Some(sentinel));
     }
 
     // --- Style defaults ---

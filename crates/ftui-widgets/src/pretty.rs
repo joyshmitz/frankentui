@@ -71,6 +71,17 @@ impl<T: Debug + ?Sized> Widget for Pretty<'_, T> {
             return;
         }
 
+        let deg = frame.buffer.degradation;
+        if !deg.render_content() {
+            return;
+        }
+
+        let style = if deg.apply_styling() {
+            self.style
+        } else {
+            Style::default()
+        };
+
         let text = self.formatted_text();
         let max_x = area.right();
 
@@ -79,7 +90,7 @@ impl<T: Debug + ?Sized> Widget for Pretty<'_, T> {
                 break;
             }
             let y = area.y.saturating_add(row_idx as u16);
-            draw_text_span(frame, area.x, y, line, self.style, max_x);
+            draw_text_span(frame, area.x, y, line, style, max_x);
         }
     }
 
@@ -91,6 +102,8 @@ impl<T: Debug + ?Sized> Widget for Pretty<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_render::budget::DegradationLevel;
+    use ftui_render::cell::PackedRgba;
     use ftui_render::frame::Frame;
     use ftui_render::grapheme_pool::GraphemePool;
 
@@ -168,6 +181,43 @@ mod tests {
         // First line starts with '['
         let cell = frame.buffer.get(0, 0).unwrap();
         assert_eq!(cell.content.as_char(), Some('['));
+    }
+
+    #[test]
+    fn render_no_styling_drops_configured_style() {
+        let widget =
+            Pretty::new(&42).with_style(Style::new().fg(PackedRgba::rgb(255, 0, 0)).bold());
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 1, &mut pool);
+        frame.buffer.degradation = DegradationLevel::NoStyling;
+        let area = Rect::new(0, 0, 20, 1);
+        widget.render(area, &mut frame);
+
+        let cell = frame.buffer.get(0, 0).unwrap();
+        let default_cell = ftui_render::cell::Cell::from_char('4');
+        assert_eq!(cell.content.as_char(), Some('4'));
+        assert_eq!(cell.fg, default_cell.fg);
+        assert_eq!(cell.bg, default_cell.bg);
+        assert_eq!(cell.attrs, default_cell.attrs);
+    }
+
+    #[test]
+    fn render_skeleton_is_noop() {
+        let widget = Pretty::new(&42);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 1, &mut pool);
+        frame.buffer.degradation = DegradationLevel::Skeleton;
+        let area = Rect::new(0, 0, 20, 1);
+        widget.render(area, &mut frame);
+
+        let cell = frame.buffer.get(0, 0).unwrap();
+        let default_cell = ftui_render::cell::Cell::default();
+        assert_eq!(cell.content, default_cell.content);
+        assert_eq!(cell.fg, default_cell.fg);
+        assert_eq!(cell.bg, default_cell.bg);
+        assert_eq!(cell.attrs, default_cell.attrs);
     }
 
     #[test]
