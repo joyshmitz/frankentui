@@ -3,6 +3,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use clap::Args;
+use ftui_runtime::cancellation::CancellationToken;
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
 
@@ -116,10 +117,15 @@ impl RetryPolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+/// Deadline tracks timeout and optional structured cancellation.
+///
+/// When a `CancellationToken` is attached, sleeps become cancellation-aware
+/// and the `is_cancelled` method can be used to check for early termination.
+#[derive(Clone)]
 struct Deadline {
     started_at: Instant,
     timeout: Duration,
+    cancel_token: Option<CancellationToken>,
 }
 
 impl Deadline {
@@ -127,22 +133,65 @@ impl Deadline {
         Self {
             started_at: Instant::now(),
             timeout,
+            cancel_token: None,
         }
     }
 
-    fn elapsed(self) -> Duration {
+    /// Attach a cancellation token for structured cancellation support.
+    fn with_cancellation(mut self, token: CancellationToken) -> Self {
+        self.cancel_token = Some(token);
+        self
+    }
+
+    fn elapsed(&self) -> Duration {
         self.started_at.elapsed()
     }
 
-    fn remaining(self) -> Duration {
+    fn remaining(&self) -> Duration {
         self.timeout.saturating_sub(self.elapsed())
     }
 
-    fn is_expired(self) -> bool {
+    fn is_expired(&self) -> bool {
         self.elapsed() >= self.timeout
     }
 
-    fn next_sleep(self, poll_interval: Duration) -> Option<Duration> {
+    /// Check if the associated cancellation token has been triggered.
+    fn is_cancelled(&self) -> bool {
+        self.cancel_token
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+    }
+
+    /// Check if either timeout expired or cancellation was requested.
+    fn is_done(&self) -> bool {
+        self.is_expired() || self.is_cancelled()
+    }
+
+    /// Sleep for at most `poll_interval`, returning early if cancelled.
+    ///
+    /// Returns `None` if deadline expired or cancelled, `Some(slept)` otherwise.
+    fn cancellation_aware_sleep(&self, poll_interval: Duration) -> Option<Duration> {
+        let remaining = self.remaining();
+        if remaining.is_zero() {
+            return None;
+        }
+        let sleep_for = remaining.min(poll_interval);
+
+        if let Some(token) = &self.cancel_token {
+            // Use token.wait_timeout which returns early on cancellation
+            let was_cancelled = token.wait_timeout(sleep_for);
+            if was_cancelled {
+                return None;
+            }
+        } else {
+            thread::sleep(sleep_for);
+        }
+
+        Some(sleep_for)
+    }
+
+    /// Legacy method for backwards compatibility - use cancellation_aware_sleep instead.
+    fn next_sleep(&self, poll_interval: Duration) -> Option<Duration> {
         let remaining = self.remaining();
         if remaining.is_zero() {
             None
@@ -156,7 +205,7 @@ fn deadline_exceeded_error(stage: &str) -> DoctorError {
     DoctorError::invalid(format!("Seed deadline exceeded during {stage}"))
 }
 
-fn log_stage_started(client: &RpcClient, stage: &str, deadline: Deadline) {
+fn log_stage_started(client: &RpcClient, stage: &str, deadline: &Deadline) {
     let _ = client.log_line(&format!(
         "event=seed_stage_started stage={stage} elapsed_ms={} remaining_ms={}",
         deadline.elapsed().as_millis(),
@@ -164,7 +213,7 @@ fn log_stage_started(client: &RpcClient, stage: &str, deadline: Deadline) {
     ));
 }
 
-fn log_stage_completed(client: &RpcClient, stage: &str, deadline: Deadline) {
+fn log_stage_completed(client: &RpcClient, stage: &str, deadline: &Deadline) {
     let _ = client.log_line(&format!(
         "event=seed_stage_completed stage={stage} elapsed_ms={} remaining_ms={}",
         deadline.elapsed().as_millis(),
@@ -172,7 +221,7 @@ fn log_stage_completed(client: &RpcClient, stage: &str, deadline: Deadline) {
     ));
 }
 
-fn log_stage_failed(client: &RpcClient, stage: &str, deadline: Deadline, error: &DoctorError) {
+fn log_stage_failed(client: &RpcClient, stage: &str, deadline: &Deadline, error: &DoctorError) {
     let _ = client.log_line(&format!(
         "event=seed_stage_failed stage={stage} elapsed_ms={} remaining_ms={} reason={error}",
         deadline.elapsed().as_millis(),
@@ -182,7 +231,7 @@ fn log_stage_failed(client: &RpcClient, stage: &str, deadline: Deadline, error: 
 
 fn log_message_stage_started(
     client: &RpcClient,
-    deadline: Deadline,
+    deadline: &Deadline,
     iteration: u32,
     from_agent: &str,
     to_agent: &str,
@@ -196,7 +245,7 @@ fn log_message_stage_started(
 
 fn log_message_stage_completed(
     client: &RpcClient,
-    deadline: Deadline,
+    deadline: &Deadline,
     iteration: u32,
     from_agent: &str,
     to_agent: &str,
@@ -210,7 +259,7 @@ fn log_message_stage_completed(
 
 fn log_message_stage_failed(
     client: &RpcClient,
-    deadline: Deadline,
+    deadline: &Deadline,
     iteration: u32,
     from_agent: &str,
     to_agent: &str,
@@ -227,7 +276,7 @@ fn run_seed_stage(
     client: &mut RpcClient,
     stage: &str,
     arguments: Value,
-    deadline: Deadline,
+    deadline: &Deadline,
 ) -> Result<Value> {
     log_stage_started(client, stage, deadline);
     match client.call_tool(stage, arguments, deadline) {
@@ -295,9 +344,20 @@ impl RpcClient {
         &mut self,
         method: &str,
         arguments: Value,
-        deadline: Deadline,
+        deadline: &Deadline,
     ) -> Result<Value> {
         self.counter = self.counter.saturating_add(1);
+
+        // Check cancellation first
+        if deadline.is_cancelled() {
+            let _ = self.log_line(&format!(
+                "event=seed_cancelled stage={method} elapsed_ms={}",
+                deadline.elapsed().as_millis()
+            ));
+            return Err(DoctorError::invalid(format!(
+                "Seed cancelled during {method}"
+            )));
+        }
 
         if deadline.is_expired() {
             let _ = self.log_line(&format!(
@@ -366,10 +426,21 @@ impl RpcClient {
         Ok(parsed)
     }
 
-    fn call_tool(&mut self, method: &str, arguments: Value, deadline: Deadline) -> Result<Value> {
+    fn call_tool(&mut self, method: &str, arguments: Value, deadline: &Deadline) -> Result<Value> {
         let policy = RetryPolicy::default();
         let mut attempt = 0_u32;
         loop {
+            // Check cancellation at loop start
+            if deadline.is_cancelled() {
+                let _ = self.log_line(&format!(
+                    "event=rpc_cancelled method={method} attempt={attempt} elapsed_ms={}",
+                    deadline.elapsed().as_millis()
+                ));
+                return Err(DoctorError::invalid(format!(
+                    "RPC cancelled during {method}"
+                )));
+            }
+
             attempt = attempt.saturating_add(1);
             match self.call_tool_once(method, arguments.clone(), deadline) {
                 Ok(value) => return Ok(value),
@@ -396,17 +467,41 @@ impl RpcClient {
                         "event=rpc_retry_scheduled method={method} attempt={attempt} backoff_ms={} reason={error}",
                         clamped_backoff.as_millis()
                     ));
-                    thread::sleep(clamped_backoff);
+
+                    // Use cancellation-aware sleep for backoff
+                    if deadline.cancellation_aware_sleep(clamped_backoff).is_none()
+                        && deadline.is_cancelled()
+                    {
+                        let _ = self.log_line(&format!(
+                            "event=rpc_cancelled method={method} attempt={attempt} elapsed_ms={}",
+                            deadline.elapsed().as_millis()
+                        ));
+                        return Err(DoctorError::invalid(format!(
+                            "RPC cancelled during {method} backoff"
+                        )));
+                    }
                 }
             }
         }
     }
 }
 
-fn wait_for_server(client: &mut RpcClient, deadline: Deadline) -> Result<()> {
+fn wait_for_server(client: &mut RpcClient, deadline: &Deadline) -> Result<()> {
     let mut attempt = 0_u32;
 
     loop {
+        // Check cancellation before each attempt
+        if deadline.is_cancelled() {
+            let _ = client.log_line(&format!(
+                "event=server_wait_cancelled attempt={attempt} elapsed_ms={}",
+                deadline.elapsed().as_millis()
+            ));
+            return Err(DoctorError::invalid(format!(
+                "Cancelled waiting for server at {}",
+                client.endpoint
+            )));
+        }
+
         attempt = attempt.saturating_add(1);
         match client.call_tool_once("health_check", json!({}), deadline) {
             Ok(response) if response.get("result").is_some() => {
@@ -437,8 +532,19 @@ fn wait_for_server(client: &mut RpcClient, deadline: Deadline) -> Result<()> {
             )));
         }
 
-        if let Some(sleep_for) = deadline.next_sleep(SERVER_READY_POLL_INTERVAL) {
-            thread::sleep(sleep_for);
+        // Use cancellation-aware sleep instead of thread::sleep
+        if deadline.cancellation_aware_sleep(SERVER_READY_POLL_INTERVAL).is_none() {
+            // Sleep returned early due to cancellation or expiry
+            if deadline.is_cancelled() {
+                let _ = client.log_line(&format!(
+                    "event=server_wait_cancelled attempt={attempt} elapsed_ms={}",
+                    deadline.elapsed().as_millis()
+                ));
+                return Err(DoctorError::invalid(format!(
+                    "Cancelled waiting for server at {}",
+                    client.endpoint
+                )));
+            }
         }
     }
 }

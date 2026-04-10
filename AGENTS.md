@@ -172,6 +172,8 @@ cargo test -p ftui-harness
 
 | Crate | Focus Areas |
 |-------|-------------|
+| `doctor_frankentui` | Verification harness, intent inference, synthesis |
+| `ftui-a11y` | Accessibility tree, roles, states, diff tracking |
 | `ftui-core` | Terminal lifecycle, event parsing, capabilities |
 | `ftui-render` | Buffer operations, diff computation, ANSI emission |
 | `ftui-style` | Style + theme system |
@@ -300,24 +302,26 @@ Provides a layered terminal UI framework with an Elm/Bubbletea-style runtime, de
 frankentui/
 ├── Cargo.toml                         # Workspace root
 ├── crates/
+│   ├── doctor_frankentui/             # Verification harness + intent inference
 │   ├── ftui/                          # Public facade + prelude
+│   ├── ftui-a11y/                     # Accessibility tree infrastructure
+│   ├── ftui-backend/                  # Backend abstraction
 │   ├── ftui-core/                     # Terminal lifecycle, events, capabilities
-│   ├── ftui-render/                   # Buffer, diff, ANSI presenter
-│   ├── ftui-style/                    # Style + theme system
-│   ├── ftui-text/                     # Spans, segments, rope editor
-│   ├── ftui-layout/                   # Flex + Grid solvers
-│   ├── ftui-runtime/                  # Elm/Bubbletea runtime
-│   ├── ftui-widgets/                  # Core widget library
+│   ├── ftui-demo-showcase/            # Reference app + snapshots (46 screens)
 │   ├── ftui-extras/                   # Feature-gated add-ons (VFX, opt-level=3)
 │   ├── ftui-harness/                  # Test utilities + snapshot framework
 │   ├── ftui-i18n/                     # Internationalization support
+│   ├── ftui-layout/                   # Flex + Grid solvers
 │   ├── ftui-pty/                      # PTY test utilities
+│   ├── ftui-render/                   # Buffer, diff, ANSI presenter
+│   ├── ftui-runtime/                  # Elm/Bubbletea runtime
+│   ├── ftui-showcase-wasm/            # WASM showcase build
 │   ├── ftui-simd/                     # SIMD acceleration
-│   ├── ftui-backend/                  # Backend abstraction
+│   ├── ftui-style/                    # Style + theme system
+│   ├── ftui-text/                     # Spans, segments, rope editor
 │   ├── ftui-tty/                      # TTY backend
 │   ├── ftui-web/                      # Web backend
-│   ├── ftui-showcase-wasm/            # WASM showcase build
-│   └── ftui-demo-showcase/            # Reference app + snapshots
+│   └── ftui-widgets/                  # Core widget library (80+ widgets)
 ├── scripts/                           # E2E test scripts + benchmarks
 ├── tests/                             # Cross-component integration tests
 └── fuzz/                              # Fuzz testing (excluded from workspace)
@@ -332,6 +336,11 @@ contains them.
 
 | Crate | Key Files | Purpose |
 |-------|-----------|---------|
+| `doctor_frankentui` | `src/doctor.rs` | Verification harness orchestration |
+| `doctor_frankentui` | `src/intent_inference.rs` | Intent inference engine |
+| `doctor_frankentui` | `src/semantic_contract.rs` | Semantic contracts and assertions |
+| `ftui-a11y` | `src/node.rs` | Accessibility node types, roles, states |
+| `ftui-a11y` | `src/tree.rs` | Accessibility tree builder + diff |
 | `ftui-core` | `src/terminal_session.rs` | RAII terminal lifecycle |
 | `ftui-render` | `src/buffer.rs` | 2D cell buffer with scissor stacks |
 | `ftui-render` | `src/cell.rs` | 16-byte cache-optimized Cell |
