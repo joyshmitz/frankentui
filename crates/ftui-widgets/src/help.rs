@@ -410,11 +410,16 @@ impl Help {
                 } else {
                     ellipsis_width
                 };
-                if ell_total <= space_left && deg.apply_styling() {
+                if ell_total <= space_left {
+                    let ellipsis_style = if deg.apply_styling() {
+                        self.separator_style
+                    } else {
+                        Style::default()
+                    };
                     if i > 0 {
-                        x = draw_text_span(frame, x, y, " ", self.separator_style, max_x);
+                        x = draw_text_span(frame, x, y, " ", ellipsis_style, max_x);
                     }
-                    draw_text_span(frame, x, y, &self.ellipsis, self.separator_style, max_x);
+                    draw_text_span(frame, x, y, &self.ellipsis, ellipsis_style, max_x);
                 }
                 break;
             }
@@ -459,6 +464,16 @@ impl Help {
 
         let max_x = area.right();
         let mut row: u16 = 0;
+        let key_style = if deg.apply_styling() {
+            self.key_style
+        } else {
+            Style::default()
+        };
+        let desc_style = if deg.apply_styling() {
+            self.desc_style
+        } else {
+            Style::default()
+        };
 
         for entry in &entries {
             if entry.key.is_empty() && entry.desc.is_empty() {
@@ -470,24 +485,14 @@ impl Help {
 
             let y = area.y.saturating_add(row);
             let mut x = area.x;
-
-            if deg.apply_styling() {
-                // Draw key, right-padded to max_key_w
-                let key_w = display_width(&entry.key);
-                x = draw_text_span(frame, x, y, &entry.key, self.key_style, max_x);
-                // Pad to alignment
-                let pad = max_key_w.saturating_sub(key_w);
-                for _ in 0..pad {
-                    x = draw_text_span(frame, x, y, " ", Style::default(), max_x);
-                }
-                // Space between key and desc
-                x = draw_text_span(frame, x, y, "  ", Style::default(), max_x);
-                // Draw description
-                draw_text_span(frame, x, y, &entry.desc, self.desc_style, max_x);
-            } else {
-                let text = format!("{:>width$}  {}", entry.key, entry.desc, width = max_key_w);
-                draw_text_span(frame, x, y, &text, Style::default(), max_x);
+            let key_w = display_width(&entry.key);
+            x = draw_text_span(frame, x, y, &entry.key, key_style, max_x);
+            let pad = max_key_w.saturating_sub(key_w);
+            for _ in 0..pad {
+                x = draw_text_span(frame, x, y, " ", Style::default(), max_x);
             }
+            x = draw_text_span(frame, x, y, "  ", Style::default(), max_x);
+            draw_text_span(frame, x, y, &entry.desc, desc_style, max_x);
 
             row += 1;
         }
@@ -1445,11 +1450,26 @@ impl Widget for KeybindingHints {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_render::buffer::Buffer;
     use ftui_render::frame::Frame;
     use ftui_render::grapheme_pool::GraphemePool;
     use proptest::prelude::*;
     use proptest::string::string_regex;
     use std::time::Instant;
+
+    fn row_text(buf: &Buffer, y: u16, width: u16) -> String {
+        (0..width)
+            .map(|x| {
+                buf.get(x, y)
+                    .and_then(|cell| cell.content.as_char())
+                    .unwrap_or(' ')
+            })
+            .collect()
+    }
+
+    fn find_char_column(buf: &Buffer, y: u16, width: u16, target: char) -> Option<usize> {
+        row_text(buf, y, width).chars().position(|ch| ch == target)
+    }
 
     #[test]
     fn new_help_is_empty() {
@@ -1530,6 +1550,29 @@ mod tests {
         // First entry should be present
         let cell = frame.buffer.get(0, 0).unwrap();
         assert_eq!(cell.content.as_char(), Some('q'));
+    }
+
+    #[test]
+    fn render_short_truncation_keeps_ellipsis_without_styling() {
+        let help = Help::new()
+            .entry("q", "quit")
+            .entry("^s", "save")
+            .entry("^x", "something very long that should not fit");
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 1, &mut pool);
+        frame.buffer.degradation = DegradationLevel::NoStyling;
+        let area = Rect::new(0, 0, 20, 1);
+        Widget::render(&help, area, &mut frame);
+
+        let saw_ellipsis = (area.x..area.right()).any(|x| {
+            frame
+                .buffer
+                .get(x, area.y)
+                .and_then(|cell| cell.content.as_char())
+                == Some('…')
+        });
+        assert!(saw_ellipsis);
     }
 
     #[test]
@@ -1647,6 +1690,59 @@ mod tests {
         // Row 1: "ctrl+s  save"
         // Check that descriptions start at the same column
         // Key col = 6, gap = 2, desc starts at col 8
+    }
+
+    #[test]
+    fn render_full_no_styling_keeps_left_aligned_key_column() {
+        let help = Help::new()
+            .with_mode(HelpMode::Full)
+            .entry("q", "quit")
+            .entry("ctrl+s", "save");
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(30, 3, &mut pool);
+        frame.buffer.degradation = DegradationLevel::NoStyling;
+        let area = Rect::new(0, 0, 30, 3);
+        Widget::render(&help, area, &mut frame);
+
+        assert_eq!(
+            frame
+                .buffer
+                .get(0, 0)
+                .and_then(|cell| cell.content.as_char()),
+            Some('q'),
+            "short key should stay left-aligned in degraded full mode"
+        );
+        assert_eq!(
+            find_char_column(&frame.buffer, 0, area.width, 'q'),
+            Some(0),
+            "short key drifted right in degraded full mode"
+        );
+        assert_eq!(
+            find_char_column(&frame.buffer, 0, area.width, 'q'),
+            find_char_column(&frame.buffer, 1, area.width, 'c')
+        );
+    }
+
+    #[test]
+    fn render_full_no_styling_uses_display_width_for_wide_keys() {
+        let help = Help::new()
+            .with_mode(HelpMode::Full)
+            .entry("🦀", "crab")
+            .entry("ctrl+s", "write");
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(30, 3, &mut pool);
+        frame.buffer.degradation = DegradationLevel::NoStyling;
+        let area = Rect::new(0, 0, 30, 3);
+        Widget::render(&help, area, &mut frame);
+
+        let crab_desc_col = find_char_column(&frame.buffer, 0, area.width, 'c');
+        let save_desc_col = find_char_column(&frame.buffer, 1, area.width, 'w');
+        assert_eq!(
+            crab_desc_col, save_desc_col,
+            "wide-key descriptions should align to the same display column in degraded full mode"
+        );
     }
 
     #[test]

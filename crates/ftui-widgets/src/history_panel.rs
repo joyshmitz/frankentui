@@ -237,13 +237,39 @@ impl HistoryPanel {
             return;
         }
 
+        let deg = frame.buffer.degradation;
+        if !deg.render_content() {
+            return;
+        }
+
+        let title_style = if deg.apply_styling() {
+            self.title_style
+        } else {
+            Style::default()
+        };
+        let undo_style = if deg.apply_styling() {
+            self.undo_style
+        } else {
+            Style::default()
+        };
+        let redo_style = if deg.apply_styling() {
+            self.redo_style
+        } else {
+            Style::default()
+        };
+        let marker_style = if deg.apply_styling() {
+            self.marker_style
+        } else {
+            Style::default()
+        };
+
         let max_x = area.right();
         let mut row: u16 = 0;
 
         // Title
         if row < area.height && !self.title.is_empty() {
             let y = area.y.saturating_add(row);
-            draw_text_span(frame, area.x, y, &self.title, self.title_style, max_x);
+            draw_text_span(frame, area.x, y, &self.title, title_style, max_x);
             row += 1;
 
             // Blank line after title
@@ -271,7 +297,7 @@ impl HistoryPanel {
             let y = area.y.saturating_add(row);
             let hidden = self.undo_items.len() - undo_to_show.len();
             let text = format!("... ({} more)", hidden);
-            draw_text_span(frame, area.x, y, &text, self.redo_style, max_x);
+            draw_text_span(frame, area.x, y, &text, redo_style, max_x);
             row += 1;
         }
 
@@ -281,9 +307,8 @@ impl HistoryPanel {
                 break;
             }
             let y = area.y.saturating_add(row);
-            let icon_end =
-                draw_text_span(frame, area.x, y, &self.undo_icon, self.undo_style, max_x);
-            draw_text_span(frame, icon_end, y, desc, self.undo_style, max_x);
+            let icon_end = draw_text_span(frame, area.x, y, &self.undo_icon, undo_style, max_x);
+            draw_text_span(frame, icon_end, y, desc, undo_style, max_x);
             row += 1;
         }
 
@@ -295,7 +320,7 @@ impl HistoryPanel {
             let available = area.width as usize;
             let pad_left = available.saturating_sub(marker_width) / 2;
             let x = area.x.saturating_add(pad_left as u16);
-            draw_text_span(frame, x, y, &self.marker_text, self.marker_style, max_x);
+            draw_text_span(frame, x, y, &self.marker_text, marker_style, max_x);
             row += 1;
         }
 
@@ -305,9 +330,8 @@ impl HistoryPanel {
                 break;
             }
             let y = area.y.saturating_add(row);
-            let icon_end =
-                draw_text_span(frame, area.x, y, &self.redo_icon, self.redo_style, max_x);
-            draw_text_span(frame, icon_end, y, desc, self.redo_style, max_x);
+            let icon_end = draw_text_span(frame, area.x, y, &self.redo_icon, redo_style, max_x);
+            draw_text_span(frame, icon_end, y, desc, redo_style, max_x);
             row += 1;
         }
 
@@ -319,16 +343,28 @@ impl HistoryPanel {
             let y = area.y.saturating_add(row);
             let hidden = self.redo_items.len() - redo_to_show.len();
             let text = format!("... ({} more)", hidden);
-            draw_text_span(frame, area.x, y, &text, self.redo_style, max_x);
+            draw_text_span(frame, area.x, y, &text, redo_style, max_x);
         }
     }
 }
 
 impl Widget for HistoryPanel {
     fn render(&self, area: Rect, frame: &mut Frame) {
+        let deg = frame.buffer.degradation;
+        if !deg.render_content() {
+            return;
+        }
+
         // Fill background area
         let mut bg_cell = ftui_render::cell::Cell::from_char(' ');
-        crate::apply_style(&mut bg_cell, self.bg_style);
+        crate::apply_style(
+            &mut bg_cell,
+            if deg.apply_styling() {
+                self.bg_style
+            } else {
+                Style::default()
+            },
+        );
         frame.buffer.fill(area, bg_cell);
 
         self.render_content(area, frame);
@@ -342,6 +378,7 @@ impl Widget for HistoryPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_render::budget::DegradationLevel;
     use ftui_render::frame::Frame;
     use ftui_render::grapheme_pool::GraphemePool;
 
@@ -440,6 +477,55 @@ mod tests {
     fn is_not_essential() {
         let panel = HistoryPanel::new();
         assert!(!panel.is_essential());
+    }
+
+    #[test]
+    fn render_no_styling_drops_configured_styles() {
+        let fg = ftui_render::cell::PackedRgba::rgb(255, 0, 0);
+        let bg = ftui_render::cell::PackedRgba::rgb(0, 40, 80);
+        let panel = HistoryPanel::new()
+            .with_undo_items(&["Insert text"])
+            .with_title_style(Style::new().fg(fg).bold())
+            .with_undo_style(Style::new().fg(fg))
+            .with_marker_style(Style::new().fg(fg).italic())
+            .with_bg_style(Style::new().bg(bg));
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(30, 10, &mut pool);
+        frame.buffer.degradation = DegradationLevel::NoStyling;
+        let area = Rect::new(0, 0, 30, 10);
+
+        panel.render(area, &mut frame);
+
+        let title_cell = frame.buffer.get(0, 0).unwrap();
+        let background_cell = frame.buffer.get(15, 5).unwrap();
+        let default_text = ftui_render::cell::Cell::from_char('H');
+        let default_bg = ftui_render::cell::Cell::from_char(' ');
+
+        assert_eq!(title_cell.content.as_char(), Some('H'));
+        assert_eq!(title_cell.fg, default_text.fg);
+        assert_eq!(title_cell.bg, default_text.bg);
+        assert_eq!(title_cell.attrs, default_text.attrs);
+        assert_eq!(background_cell.fg, default_bg.fg);
+        assert_eq!(background_cell.bg, default_bg.bg);
+        assert_eq!(background_cell.attrs, default_bg.attrs);
+    }
+
+    #[test]
+    fn render_skeleton_is_noop() {
+        let panel = HistoryPanel::new().with_undo_items(&["Insert text"]);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(30, 10, &mut pool);
+        frame.buffer.degradation = DegradationLevel::Skeleton;
+        let area = Rect::new(0, 0, 30, 10);
+
+        panel.render(area, &mut frame);
+
+        let cell = frame.buffer.get(0, 0).unwrap();
+        let default_cell = ftui_render::cell::Cell::default();
+        assert_eq!(cell.content, default_cell.content);
+        assert_eq!(cell.fg, default_cell.fg);
+        assert_eq!(cell.bg, default_cell.bg);
+        assert_eq!(cell.attrs, default_cell.attrs);
     }
 
     #[test]

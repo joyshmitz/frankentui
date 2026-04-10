@@ -202,7 +202,7 @@ impl<'a> ConstraintOverlay<'a> {
         // Add size info
         let req = &record.area_requested;
         let got = &record.area_received;
-        if req.width != got.width || req.height != got.height {
+        if self.style.show_size_diff && (req.width != got.width || req.height != got.height) {
             label.push_str(&format!(
                 " {}x{}\u{2192}{}x{}",
                 req.width, req.height, got.width, got.height
@@ -518,6 +518,27 @@ mod tests {
         assert!(label.contains("10x5"));
         assert!(label.contains('\u{2192}'));
         assert!(label.contains("8x4"));
+    }
+
+    #[test]
+    fn format_label_hides_size_diff_when_disabled() {
+        let debugger = LayoutDebugger::new();
+        let style = ConstraintOverlayStyle {
+            show_size_diff: false,
+            ..Default::default()
+        };
+        let overlay = ConstraintOverlay::new(&debugger).style(style);
+        let record = LayoutRecord::new(
+            "Box",
+            Rect::new(0, 0, 10, 5),
+            Rect::new(0, 0, 8, 4),
+            LayoutConstraints::unconstrained(),
+        );
+        let label = overlay.format_label(&record, false, false);
+
+        assert!(!label.contains('\u{2192}'));
+        assert!(label.contains("8x4"));
+        assert!(!label.contains("10x5"));
     }
 
     #[test]
