@@ -290,6 +290,7 @@ impl Dialog {
     /// Set the modal configuration.
     #[must_use]
     pub fn modal_config(mut self, config: ModalConfig) -> Self {
+        self.hit_id = config.hit_id;
         self.config.modal_config = config;
         self
     }
@@ -600,6 +601,19 @@ impl Dialog {
         height
     }
 
+    fn effective_size_constraints(&self, content_height: u16) -> ModalSizeConstraints {
+        let mut size = self.config.modal_config.size;
+        if size.min_width.is_none() && size.max_width.is_none() {
+            size.min_width = Some(30);
+            size.max_width = Some(60);
+        }
+        if size.min_height.is_none() && size.max_height.is_none() {
+            size.min_height = Some(content_height);
+            size.max_height = Some(content_height + 4);
+        }
+        size
+    }
+
     /// Render the dialog content.
     fn render_content(&self, area: Rect, frame: &mut Frame, state: &DialogState) {
         if area.is_empty() {
@@ -781,13 +795,11 @@ impl StatefulWidget for Dialog {
 
         // Calculate content area
         let content_height = self.content_height();
-        let config = self.config.modal_config.clone().size(
-            ModalSizeConstraints::new()
-                .min_width(30)
-                .max_width(60)
-                .min_height(content_height)
-                .max_height(content_height + 4),
-        );
+        let config = self
+            .config
+            .modal_config
+            .clone()
+            .size(self.effective_size_constraints(content_height));
 
         // Create a wrapper widget for the dialog content
         let content = DialogContent {
@@ -848,6 +860,7 @@ impl DialogBuilder {
 
     /// Set modal configuration.
     pub fn modal_config(mut self, config: ModalConfig) -> Self {
+        self.hit_id = config.hit_id;
         self.config.modal_config = config;
         self
     }
@@ -893,6 +906,35 @@ mod tests {
                     .unwrap_or(' ')
             })
             .collect()
+    }
+
+    fn hit_bounds(frame: &Frame, expected: (HitId, HitRegion, u64)) -> Option<Rect> {
+        let mut min_x = u16::MAX;
+        let mut min_y = u16::MAX;
+        let mut max_x = 0;
+        let mut max_y = 0;
+        let mut found = false;
+
+        for y in 0..frame.buffer.height() {
+            for x in 0..frame.buffer.width() {
+                if frame.hit_test(x, y) == Some(expected) {
+                    min_x = min_x.min(x);
+                    min_y = min_y.min(y);
+                    max_x = max_x.max(x);
+                    max_y = max_y.max(y);
+                    found = true;
+                }
+            }
+        }
+
+        found.then(|| {
+            Rect::new(
+                min_x,
+                min_y,
+                max_x.saturating_sub(min_x) + 1,
+                max_y.saturating_sub(min_y) + 1,
+            )
+        })
     }
 
     #[test]
@@ -1077,6 +1119,42 @@ mod tests {
                 .any(|x| frame.hit_test(x, y) == Some((HitId::new(7), DIALOG_HIT_INPUT, 0)))
         });
         assert!(found);
+    }
+
+    #[test]
+    fn render_prompt_registers_input_hit_region_from_modal_config_hit_id() {
+        let dialog = Dialog::prompt("Prompt", "Enter:")
+            .modal_config(ModalConfig::default().hit_id(HitId::new(7)));
+        let mut state = DialogState::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::with_hit_grid(40, 10, &mut pool);
+
+        dialog.render(Rect::new(0, 0, 40, 10), &mut frame, &mut state);
+
+        let found = (0..frame.buffer.height()).any(|y| {
+            (0..frame.buffer.width())
+                .any(|x| frame.hit_test(x, y) == Some((HitId::new(7), DIALOG_HIT_INPUT, 0)))
+        });
+        assert!(found);
+    }
+
+    #[test]
+    fn render_respects_modal_config_size_constraints() {
+        let dialog = Dialog::alert("Prompt", "Enter:").modal_config(
+            ModalConfig::default()
+                .hit_id(HitId::new(11))
+                .size(ModalSizeConstraints::new().max_width(10).max_height(5)),
+        );
+        let mut state = DialogState::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::with_hit_grid(40, 20, &mut pool);
+
+        dialog.render(Rect::new(0, 0, 40, 20), &mut frame, &mut state);
+
+        let content = hit_bounds(&frame, (HitId::new(11), crate::modal::MODAL_HIT_CONTENT, 0))
+            .expect("dialog content hit region should exist");
+        assert_eq!(content.width, 10);
+        assert_eq!(content.height, 5);
     }
 
     #[test]
@@ -1738,6 +1816,15 @@ mod tests {
     }
 
     #[test]
+    fn edge_builder_modal_config_syncs_hit_id() {
+        let dialog = Dialog::custom("T", "M")
+            .ok_button()
+            .modal_config(ModalConfig::default().hit_id(HitId::new(42)))
+            .build();
+        assert_eq!(dialog.hit_id, Some(HitId::new(42)));
+    }
+
+    #[test]
     fn edge_content_height_alert() {
         let dialog = Dialog::alert("Title", "Message");
         let h = dialog.content_height();
@@ -1969,6 +2056,13 @@ mod tests {
             dialog.config.modal_config.position,
             ModalPosition::Custom { x: 10, y: 20 }
         );
+    }
+
+    #[test]
+    fn edge_dialog_modal_config_setter_syncs_hit_id() {
+        let dialog =
+            Dialog::alert("T", "M").modal_config(ModalConfig::default().hit_id(HitId::new(9)));
+        assert_eq!(dialog.hit_id, Some(HitId::new(9)));
     }
 
     #[test]
