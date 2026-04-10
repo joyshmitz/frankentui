@@ -75,6 +75,7 @@ pub struct FocusManager {
     graph: FocusGraph,
     current: Option<FocusId>,
     host_focused: bool,
+    pending_focus_on_host_gain: Option<FocusId>,
     history: Vec<FocusId>,
     trap_stack: Vec<FocusTrap>,
     groups: AHashMap<u32, FocusGroup>,
@@ -90,6 +91,7 @@ impl Default for FocusManager {
             graph: FocusGraph::default(),
             current: None,
             host_focused: true,
+            pending_focus_on_host_gain: None,
             history: Vec::new(),
             trap_stack: Vec::new(),
             groups: AHashMap::new(),
@@ -132,6 +134,9 @@ impl FocusManager {
 
     pub(crate) fn set_host_focused(&mut self, focused: bool) {
         self.host_focused = focused;
+        if focused {
+            self.pending_focus_on_host_gain = None;
+        }
     }
 
     /// Check if a widget is focused.
@@ -169,22 +174,36 @@ impl FocusManager {
     ///
     /// Deterministic policy:
     /// - `focused = false` clears current focus.
-    /// - `focused = true` restores focus to the first allowed node when no
-    ///   valid current focus exists (respecting active traps).
+    /// - `focused = true` restores the last valid logical focus target when
+    ///   possible, otherwise falls back to the first allowed node (respecting
+    ///   active traps).
     ///
     /// Returns `true` when focus state changed.
     pub fn apply_host_focus(&mut self, focused: bool) -> bool {
-        self.host_focused = focused;
         if !focused {
+            if let Some(current) = self.current {
+                self.pending_focus_on_host_gain = Some(current);
+            }
+            self.host_focused = false;
             return self.blur().is_some();
         }
 
+        self.host_focused = true;
         let had_current = self.current.is_some();
         if let Some(current) = self.current
             && self.can_focus(current)
             && self.allowed_by_trap(current)
         {
+            self.pending_focus_on_host_gain = None;
             return false;
+        }
+
+        let pending_focus = self.pending_focus_on_host_gain.take();
+        if let Some(id) = pending_focus
+            && self.can_focus(id)
+            && self.allowed_by_trap(id)
+        {
+            return self.set_focus_without_history(id);
         }
 
         if let Some(group_id) = self.active_trap_group()
@@ -291,7 +310,12 @@ impl FocusManager {
     /// where `allowed_by_trap` would deny focus to every widget because the
     /// group is empty/missing.
     pub fn push_trap(&mut self, group_id: u32) -> bool {
-        if !self.push_trap_with_return_focus(group_id, self.current) {
+        let return_focus = if self.host_focused {
+            self.current
+        } else {
+            self.current.or(self.deferred_focus_target())
+        };
+        if !self.push_trap_with_return_focus(group_id, return_focus) {
             #[cfg(feature = "tracing")]
             tracing::warn!(group_id, "focus.trap_push rejected: group missing or empty");
             return false;
@@ -299,6 +323,8 @@ impl FocusManager {
 
         if self.host_focused && !self.is_current_focusable_in_group(group_id) {
             self.focus_first_in_group_without_history(group_id);
+        } else if !self.host_focused {
+            self.pending_focus_on_host_gain = self.group_tab_order(group_id).first().copied();
         }
         true
     }
@@ -317,6 +343,13 @@ impl FocusManager {
         );
 
         if !self.host_focused {
+            self.pending_focus_on_host_gain = trap
+                .return_focus
+                .filter(|id| self.can_focus(*id) && self.allowed_by_trap(*id))
+                .or_else(|| {
+                    self.active_trap_group()
+                        .and_then(|group_id| self.group_tab_order(group_id).first().copied())
+                });
             return if had_current {
                 self.blur().is_some()
             } else {
@@ -459,6 +492,32 @@ impl FocusManager {
     #[must_use]
     pub(crate) fn base_trap_return_focus(&self) -> Option<Option<FocusId>> {
         self.trap_stack.first().map(|trap| trap.return_focus)
+    }
+
+    #[must_use]
+    pub(crate) fn focus_target_on_host_gain(&self) -> Option<FocusId> {
+        self.deferred_focus_target()
+            .or_else(|| self.graph.tab_order().first().copied())
+    }
+
+    #[must_use]
+    pub(crate) fn deferred_focus_target(&self) -> Option<FocusId> {
+        if let Some(current) = self.current
+            && self.can_focus(current)
+            && self.allowed_by_trap(current)
+        {
+            return Some(current);
+        }
+
+        if let Some(id) = self.pending_focus_on_host_gain
+            && self.can_focus(id)
+            && self.allowed_by_trap(id)
+        {
+            return Some(id);
+        }
+
+        self.active_trap_group()
+            .and_then(|group_id| self.group_tab_order(group_id).first().copied())
     }
 
     pub(crate) fn focus_without_history(&mut self, id: FocusId) -> bool {
@@ -906,6 +965,23 @@ mod tests {
             fm.take_focus_event(),
             Some(FocusEvent::FocusGained { id: 3 })
         );
+    }
+
+    #[test]
+    fn push_trap_while_host_blurred_without_prior_focus_restores_none_on_pop() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+        assert!(!fm.apply_host_focus(false));
+
+        fm.create_group(42, vec![2]);
+        assert!(fm.push_trap(42));
+        assert!(fm.apply_host_focus(true));
+        assert_eq!(fm.current(), Some(2));
+
+        assert!(fm.pop_trap());
+        assert_eq!(fm.current(), None);
+        assert_eq!(fm.take_focus_event(), Some(FocusEvent::FocusLost { id: 2 }));
     }
 
     #[test]

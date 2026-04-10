@@ -96,7 +96,11 @@ impl<'a> ModalFocusCoordinator<'a> {
     where
         F: FnOnce(&FocusManager) -> u32,
     {
-        let base_focus = self.focus_manager.current();
+        let base_focus = if self.focus_manager.host_focused() {
+            self.focus_manager.current()
+        } else {
+            self.focus_manager.deferred_focus_target()
+        };
         let was_trapped = self.focus_manager.is_trapped();
         let focus_group_id = if trap_enabled {
             if let Some(ids) = focusable_ids {
@@ -1373,6 +1377,28 @@ mod tests {
         let result = modals.pop();
         assert!(result.is_some());
         assert_eq!(modals.focus_manager().current(), Some(3));
+    }
+
+    #[test]
+    fn first_modal_opened_while_blurred_from_unfocused_base_restores_none() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(1));
+            graph.insert(make_focus_node(2));
+        });
+        let _ = modals.handle_event(&Event::Focus(false), None);
+        assert_eq!(modals.focus_manager().current(), None);
+
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2]);
+        assert_eq!(modals.focus_manager().current(), None);
+
+        let _ = modals.handle_event(&Event::Focus(true), None);
+        assert_eq!(modals.focus_manager().current(), Some(2));
+
+        let result = modals.pop();
+        assert!(result.is_some());
+        assert_eq!(modals.focus_manager().current(), None);
+        assert!(!modals.is_focus_trapped());
     }
 
     #[test]
