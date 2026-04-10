@@ -195,9 +195,12 @@ impl<'a> DecisionCard<'a> {
         let mut cx = draw_text_span(frame, x, y, &badge_text, badge_style, max_x);
 
         // Action label after badge
+        if cx < max_x {
+            cx = draw_text_span(frame, cx, y, " ", Style::default(), max_x);
+        }
         cx = draw_text_span(
             frame,
-            cx + 1,
+            cx,
             y,
             &self.disclosure.action_label,
             title_style,
@@ -611,6 +614,20 @@ mod tests {
         assert_eq!(action.fg, action_default.fg);
         assert_eq!(action.bg, action_default.bg);
         assert_eq!(action.attrs, action_default.attrs);
+    }
+
+    #[test]
+    fn render_clears_gap_between_badge_and_action() {
+        let disclosure = make_disclosure(DisclosureLevel::TrafficLight);
+        let card = DecisionCard::new(&disclosure);
+        let area = Rect::new(0, 0, 40, 5);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(40, 5, &mut pool);
+        frame.buffer.set_fast(5, 1, Cell::from_char('X'));
+
+        card.render(area, &mut frame);
+
+        assert_eq!(frame.buffer.get(5, 1).unwrap().content.as_char(), Some(' '));
     }
 
     #[test]

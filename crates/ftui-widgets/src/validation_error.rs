@@ -377,7 +377,7 @@ impl StatefulWidget for ValidationErrorDisplay {
 
         // Draw space separator
         if x < max_x && self.show_message && !self.message.is_empty() {
-            x = x.saturating_add(1);
+            x = draw_text_span(frame, x, y, " ", Style::default(), max_x);
 
             // Draw message (truncate with ellipsis if needed)
             let remaining_width = max_x.saturating_sub(x) as usize;
@@ -436,6 +436,7 @@ impl Widget for ValidationErrorDisplay {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_render::cell::Cell;
     use ftui_render::grapheme_pool::GraphemePool;
 
     // -- Construction tests --
@@ -622,6 +623,18 @@ mod tests {
         // "!" at 0, space at 1, "Required" starts at 2
         assert_eq!(frame.buffer.get(0, 0).unwrap().content.as_char(), Some('!'));
         assert_eq!(frame.buffer.get(2, 0).unwrap().content.as_char(), Some('R'));
+    }
+
+    #[test]
+    fn render_clears_separator_cell() {
+        let error = ValidationErrorDisplay::new("Required").with_icon("!");
+        let area = Rect::new(0, 0, 20, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 1, &mut pool);
+        frame.buffer.set_fast(1, 0, Cell::from_char('X'));
+        Widget::render(&error, area, &mut frame);
+
+        assert_eq!(frame.buffer.get(1, 0).unwrap().content.as_char(), Some(' '));
     }
 
     #[test]

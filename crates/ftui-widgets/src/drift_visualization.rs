@@ -349,7 +349,10 @@ impl<'a> DriftVisualization<'a> {
             } else {
                 Style::default()
             };
-            cx = draw_text_span(frame, cx + 1, y, &conf_pct, conf_style, max_x);
+            if cx < max_x {
+                cx = draw_text_span(frame, cx, y, " ", Style::default(), max_x);
+            }
+            cx = draw_text_span(frame, cx, y, &conf_pct, conf_style, max_x);
 
             if ds.in_fallback {
                 let fb_style = if apply_styling {
@@ -357,7 +360,10 @@ impl<'a> DriftVisualization<'a> {
                 } else {
                     Style::default()
                 };
-                cx = draw_text_span(frame, cx + 1, y, " FALLBACK ", fb_style, max_x);
+                if cx < max_x {
+                    cx = draw_text_span(frame, cx, y, " ", Style::default(), max_x);
+                }
+                cx = draw_text_span(frame, cx, y, " FALLBACK ", fb_style, max_x);
             }
             let _ = cx;
         }
@@ -979,5 +985,18 @@ mod tests {
             found_fallback,
             "should show FALLBACK badge when in fallback"
         );
+    }
+
+    #[test]
+    fn render_clears_gap_before_confidence_badge() {
+        let tl = make_drift_timeline();
+        let viz = DriftVisualization::new(&tl).domains(vec![DecisionDomain::DiffStrategy]);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 10, &mut pool);
+        frame.buffer.set_fast(14, 2, Cell::from_char('X'));
+
+        viz.render(Rect::new(0, 0, 80, 10), &mut frame);
+
+        assert_eq!(frame.buffer.get(14, 2).unwrap().content.as_char(), Some(' '));
     }
 }
