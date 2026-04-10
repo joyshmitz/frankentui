@@ -1280,6 +1280,9 @@ impl Widget for Toast {
         }
 
         let deg = frame.buffer.degradation;
+        if !deg.render_content() {
+            return;
+        }
 
         // Calculate actual render area (use provided area or calculate from content)
         let (content_width, content_height) = self.calculate_dimensions();
@@ -1298,7 +1301,7 @@ impl Widget for Toast {
         }
 
         // Draw border
-        let use_unicode = deg.apply_styling();
+        let use_unicode = deg.use_unicode_borders();
         let (tl, tr, bl, br, h, v) = if use_unicode {
             (
                 '\u{250C}', '\u{2510}', '\u{2514}', '\u{2518}', '\u{2500}', '\u{2502}',
@@ -1494,6 +1497,7 @@ impl Widget for Toast {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_render::budget::DegradationLevel;
     use ftui_render::grapheme_pool::GraphemePool;
 
     fn cell_at(frame: &Frame, x: u16, y: u16) -> Cell {
@@ -1739,6 +1743,38 @@ mod tests {
     fn test_toast_is_not_essential() {
         let toast = Toast::new("Test");
         assert!(!toast.is_essential());
+    }
+
+    #[test]
+    fn test_toast_simple_borders_use_ascii() {
+        let toast = Toast::new("Hello");
+        let area = Rect::new(0, 0, 15, 5);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(15, 5, &mut pool);
+        frame.buffer.degradation = DegradationLevel::SimpleBorders;
+        toast.render(area, &mut frame);
+
+        assert_eq!(cell_at(&frame, 0, 0).content.as_char(), Some('+'));
+        assert_eq!(cell_at(&frame, 1, 0).content.as_char(), Some('-'));
+        assert_eq!(cell_at(&frame, 0, 1).content.as_char(), Some('|'));
+    }
+
+    #[test]
+    fn test_toast_skeleton_is_noop() {
+        let toast = Toast::new("Hello").style_variant(ToastStyle::Success);
+        let area = Rect::new(0, 0, 15, 5);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(15, 5, &mut pool);
+        let mut expected_pool = GraphemePool::new();
+        let expected = Frame::new(15, 5, &mut expected_pool);
+        frame.buffer.degradation = DegradationLevel::Skeleton;
+        toast.render(area, &mut frame);
+
+        for y in 0..5 {
+            for x in 0..15 {
+                assert_eq!(frame.buffer.get(x, y), expected.buffer.get(x, y));
+            }
+        }
     }
 
     #[test]

@@ -336,6 +336,9 @@ impl Widget for JsonView {
         }
 
         let deg = frame.buffer.degradation;
+        if !deg.render_content() {
+            return;
+        }
         let lines = self.formatted_lines();
         let max_x = area.right();
 
@@ -376,6 +379,8 @@ impl Widget for JsonView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_render::budget::DegradationLevel;
+    use ftui_render::cell::{CellAttrs, PackedRgba};
     use ftui_render::frame::Frame;
     use ftui_render::grapheme_pool::GraphemePool;
 
@@ -727,6 +732,46 @@ mod tests {
         // Should render first char of each line without panic
         let cell = frame.buffer.get(0, 0).unwrap();
         assert_eq!(cell.content.as_char(), Some('{'));
+    }
+
+    #[test]
+    fn render_no_styling_drops_token_styles() {
+        let key_color = PackedRgba::rgb(1, 2, 3);
+        let number_color = PackedRgba::rgb(4, 5, 6);
+        let view = JsonView::new(r#"{"key": 1}"#)
+            .with_key_style(Style::new().fg(key_color).bold())
+            .with_number_style(Style::new().fg(number_color).italic());
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(40, 10, &mut pool);
+        frame.buffer.degradation = DegradationLevel::NoStyling;
+        view.render(Rect::new(0, 0, 40, 10), &mut frame);
+
+        let key_cell = frame.buffer.get(2, 1).unwrap();
+        assert_eq!(key_cell.content.as_char(), Some('"'));
+        assert_ne!(key_cell.fg, key_color);
+        assert_eq!(key_cell.attrs, CellAttrs::NONE);
+
+        let number_cell = frame.buffer.get(9, 1).unwrap();
+        assert_eq!(number_cell.content.as_char(), Some('1'));
+        assert_ne!(number_cell.fg, number_color);
+        assert_eq!(number_cell.attrs, CellAttrs::NONE);
+    }
+
+    #[test]
+    fn render_skeleton_is_noop() {
+        let view = JsonView::new(r#"{"key": "value"}"#);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(40, 10, &mut pool);
+        let mut expected_pool = GraphemePool::new();
+        let expected = Frame::new(40, 10, &mut expected_pool);
+        frame.buffer.degradation = DegradationLevel::Skeleton;
+        view.render(Rect::new(0, 0, 40, 10), &mut frame);
+
+        for y in 0..10 {
+            for x in 0..40 {
+                assert_eq!(frame.buffer.get(x, y), expected.buffer.get(x, y));
+            }
+        }
     }
 
     #[test]

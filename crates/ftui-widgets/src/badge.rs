@@ -91,13 +91,24 @@ impl Widget for Badge<'_> {
             return;
         }
 
+        let deg = frame.buffer.degradation;
+        if !deg.render_content() {
+            return;
+        }
+
+        let style = if deg.apply_styling() {
+            self.style
+        } else {
+            Style::default()
+        };
+
         let y = area.y;
         let max_x = area.right();
         let mut x = area.x;
 
-        x = Self::render_spaces(frame, x, y, self.pad_left, self.style, max_x);
-        x = draw_text_span(frame, x, y, self.label, self.style, max_x);
-        let _ = Self::render_spaces(frame, x, y, self.pad_right, self.style, max_x);
+        x = Self::render_spaces(frame, x, y, self.pad_left, style, max_x);
+        x = draw_text_span(frame, x, y, self.label, style, max_x);
+        let _ = Self::render_spaces(frame, x, y, self.pad_right, style, max_x);
     }
 
     fn is_essential(&self) -> bool {
@@ -108,6 +119,7 @@ impl Widget for Badge<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_render::budget::DegradationLevel;
     use ftui_render::cell::PackedRgba;
     use ftui_render::grapheme_pool::GraphemePool;
 
@@ -187,6 +199,46 @@ mod tests {
     fn is_not_essential() {
         let badge = Badge::new("OK");
         assert!(!badge.is_essential());
+    }
+
+    #[test]
+    fn render_no_styling_drops_configured_style() {
+        let style = Style::new()
+            .fg(PackedRgba::rgb(1, 2, 3))
+            .bg(PackedRgba::rgb(4, 5, 6));
+        let badge = Badge::new("OK").with_style(style);
+        let expected_badge = Badge::new("OK");
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 1, &mut pool);
+        frame.buffer.degradation = DegradationLevel::NoStyling;
+        badge.render(Rect::new(0, 0, 10, 1), &mut frame);
+
+        let mut expected_pool = GraphemePool::new();
+        let mut expected = Frame::new(10, 1, &mut expected_pool);
+        expected_badge.render(Rect::new(0, 0, 10, 1), &mut expected);
+
+        assert_eq!(frame.buffer.get(1, 0), expected.buffer.get(1, 0));
+    }
+
+    #[test]
+    fn render_skeleton_is_noop() {
+        let badge = Badge::new("OK").with_style(
+            Style::new()
+                .fg(PackedRgba::rgb(1, 2, 3))
+                .bg(PackedRgba::rgb(4, 5, 6)),
+        );
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 1, &mut pool);
+        let mut expected_pool = GraphemePool::new();
+        let expected = Frame::new(10, 1, &mut expected_pool);
+        frame.buffer.degradation = DegradationLevel::Skeleton;
+        badge.render(Rect::new(0, 0, 10, 1), &mut frame);
+
+        for x in 0..10 {
+            assert_eq!(frame.buffer.get(x, 0), expected.buffer.get(x, 0));
+        }
     }
 
     #[test]

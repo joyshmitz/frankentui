@@ -8,7 +8,7 @@
 //! - A DebugOverlay widget that draws boundaries and labels.
 
 use crate::{StatefulWidget, Widget};
-use ftui_core::event::{Event, KeyCode, KeyEventKind, MouseEventKind};
+use ftui_core::event::{Event, KeyCode, KeyEventKind};
 use ftui_core::geometry::Rect;
 use ftui_render::cell::{Cell, PackedRgba};
 use ftui_render::drawing::{BorderChars, Draw};
@@ -63,12 +63,12 @@ impl DebugOverlayState {
 
     pub fn set_enabled(&self, enabled: bool) {
         let prev = self.enabled.swap(enabled, Ordering::Relaxed);
+        if prev != enabled && !enabled {
+            self.clear();
+            self.set_hover(None);
+        }
+        #[cfg(feature = "tracing")]
         if prev != enabled {
-            if !enabled {
-                self.clear();
-                self.set_hover(None);
-            }
-            #[cfg(feature = "tracing")]
             tracing::info!(enabled = enabled, "Debug overlay toggled");
         }
     }
@@ -464,6 +464,7 @@ fn env_enabled() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_core::event::MouseEventKind;
     use ftui_render::budget::DegradationLevel;
     use ftui_render::grapheme_pool::GraphemePool;
 
