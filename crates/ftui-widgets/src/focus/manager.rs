@@ -287,7 +287,7 @@ impl FocusManager {
             return_focus,
         });
 
-        if !self.is_current_in_group(group_id) {
+        if !self.is_current_focusable_in_group(group_id) {
             self.focus_first_in_group_without_history(group_id);
         }
         true
@@ -570,11 +570,13 @@ impl FocusManager {
         }
     }
 
-    fn is_current_in_group(&self, group_id: u32) -> bool {
+    fn is_current_focusable_in_group(&self, group_id: u32) -> bool {
         let Some(current) = self.current else {
             return false;
         };
-        self.groups
+        self.can_focus(current)
+            && self
+                .groups
             .get(&group_id)
             .map(|g| g.contains(current))
             .unwrap_or(false)
@@ -1516,6 +1518,20 @@ mod tests {
         assert!(!fm.is_trapped());
         // Focus should remain unchanged (no deadlock).
         assert_eq!(fm.current(), Some(1));
+    }
+
+    #[test]
+    fn push_trap_retargets_when_current_group_member_becomes_unfocusable() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+        fm.focus(1);
+        fm.create_group(10, vec![1, 2]);
+
+        fm.graph_mut().insert(node(1, 0).with_focusable(false));
+
+        assert!(fm.push_trap(10));
+        assert_eq!(fm.current(), Some(2));
     }
 
     // --- Focus events ---
