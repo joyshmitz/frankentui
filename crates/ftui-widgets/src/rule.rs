@@ -147,8 +147,19 @@ impl Widget for Rule<'_> {
             return;
         }
 
+        let deg = frame.buffer.degradation;
         let y = area.y;
         let width = area.width;
+        let rule_style = if deg.apply_styling() {
+            self.style
+        } else {
+            Style::default()
+        };
+        let title_style = if deg.apply_styling() {
+            self.title_style.unwrap_or(self.style)
+        } else {
+            Style::default()
+        };
 
         match self.title {
             None => {
@@ -171,8 +182,7 @@ impl Widget for Rule<'_> {
                         self.fill_rule_char(&mut frame.buffer, y, area.x, area.right());
                     } else {
                         // Title fits but no room for rule chars; show truncated title.
-                        let ts = self.title_style.unwrap_or(self.style);
-                        draw_text_span(frame, area.x, y, title, ts, area.right());
+                        draw_text_span(frame, area.x, y, title, title_style, area.right());
                         // Fill remaining with rule
                         let after = area.x.saturating_add(title_width);
                         self.fill_rule_char(&mut frame.buffer, y, after, area.right());
@@ -200,20 +210,19 @@ impl Widget for Rule<'_> {
                 // Draw left padding space.
                 let pad_x = title_block_x;
                 let mut cell_pad_l = Cell::from_char(' ');
-                crate::apply_style(&mut cell_pad_l, self.style);
+                crate::apply_style(&mut cell_pad_l, rule_style);
                 frame.buffer.set_fast(pad_x, y, cell_pad_l);
 
                 // Draw title text.
-                let ts = self.title_style.unwrap_or(self.style);
                 let title_x = pad_x.saturating_add(1);
                 let title_end = title_x.saturating_add(display_width);
-                draw_text_span(frame, title_x, y, title, ts, title_end);
+                draw_text_span(frame, title_x, y, title, title_style, title_end);
 
                 // Draw right padding space.
                 let right_pad_x = title_end;
                 if right_pad_x < area.right() {
                     let mut cell_pad_r = Cell::from_char(' ');
-                    crate::apply_style(&mut cell_pad_r, self.style);
+                    crate::apply_style(&mut cell_pad_r, rule_style);
                     frame.buffer.set_fast(right_pad_x, y, cell_pad_r);
                 }
 
@@ -255,6 +264,7 @@ impl MeasurableWidget for Rule<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_render::cell::PackedRgba;
     use ftui_render::grapheme_pool::GraphemePool;
 
     /// Helper: extract row content as chars from a buffer.
@@ -645,6 +655,56 @@ mod tests {
             row.iter().all(|&c| c == '─'),
             "Expected all ─, got: {row:?}"
         );
+    }
+
+    #[test]
+    fn degradation_no_styling_drops_title_and_padding_styles() {
+        use ftui_render::budget::DegradationLevel;
+
+        let rule_fg = PackedRgba::rgb(255, 0, 0);
+        let title_fg = PackedRgba::rgb(0, 255, 0);
+        let rule = Rule::new()
+            .title("Hi")
+            .style(Style::new().fg(rule_fg).bg(PackedRgba::rgb(1, 2, 3)))
+            .title_style(Style::new().fg(title_fg).bg(PackedRgba::rgb(4, 5, 6)));
+        let area = Rect::new(0, 0, 10, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 1, &mut pool);
+        frame.buffer.degradation = DegradationLevel::NoStyling;
+        rule.render(area, &mut frame);
+
+        let row = row_chars(&frame.buffer, 0, 10);
+        let title_x = row
+            .iter()
+            .position(|&c| c == 'H')
+            .expect("title should render");
+        let title_cell = frame.buffer.get(title_x as u16, 0).unwrap();
+        let left_pad = frame.buffer.get(title_x as u16 - 1, 0).unwrap();
+
+        assert_ne!(title_cell.fg, title_fg);
+        assert_ne!(left_pad.fg, rule_fg);
+        assert_ne!(left_pad.bg, PackedRgba::rgb(1, 2, 3));
+    }
+
+    #[test]
+    fn degradation_no_styling_narrow_title_branch_drops_styles() {
+        use ftui_render::budget::DegradationLevel;
+
+        let title_fg = PackedRgba::rgb(0, 255, 0);
+        let rule = Rule::new()
+            .title("X")
+            .style(Style::new().fg(PackedRgba::rgb(255, 0, 0)))
+            .title_style(Style::new().fg(title_fg).bg(PackedRgba::rgb(4, 5, 6)));
+        let area = Rect::new(0, 0, 2, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(2, 1, &mut pool);
+        frame.buffer.degradation = DegradationLevel::NoStyling;
+        rule.render(area, &mut frame);
+
+        let title_cell = frame.buffer.get(0, 0).unwrap();
+        assert_eq!(title_cell.content.as_char(), Some('X'));
+        assert_ne!(title_cell.fg, title_fg);
+        assert_ne!(title_cell.bg, PackedRgba::rgb(4, 5, 6));
     }
 
     // --- MeasurableWidget tests ---

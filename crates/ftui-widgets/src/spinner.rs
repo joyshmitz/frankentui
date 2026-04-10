@@ -61,6 +61,28 @@ impl<'a> Spinner<'a> {
         self.label = Some(label);
         self
     }
+
+    fn frame_for_render(&self, current_frame: usize, use_unicode: bool) -> Option<&'a str> {
+        if self.frames.is_empty() {
+            return None;
+        }
+
+        let frame_idx = current_frame % self.frames.len();
+        if use_unicode {
+            return Some(self.frames[frame_idx]);
+        }
+
+        let candidate = self.frames[frame_idx];
+        if candidate.is_ascii() {
+            Some(candidate)
+        } else {
+            self.frames
+                .iter()
+                .copied()
+                .find(|frame| frame.is_ascii())
+                .or(Some("*"))
+        }
+    }
 }
 
 /// Mutable state for a [`Spinner`] widget.
@@ -129,31 +151,21 @@ impl<'a> StatefulWidget for Spinner<'a> {
             set_style_area(&mut frame.buffer, spinner_area, self.style);
         }
 
-        // At NoStyling, use static ASCII frame instead of animated Unicode
-        if self.frames.is_empty() {
-            return;
-        }
-        let frame_char = if deg.use_unicode_borders() {
-            let frame_idx = state.current_frame % self.frames.len();
-            self.frames[frame_idx]
-        } else {
-            // Use first ASCII-safe frame, or fallback to "*"
-            let frame_idx = state.current_frame % self.frames.len();
-            let candidate = self.frames[frame_idx];
-            if candidate.is_ascii() { candidate } else { "*" }
-        };
-
         let mut x = spinner_area.left();
         let y = spinner_area.top();
-
-        crate::draw_text_span(frame, x, y, frame_char, style, spinner_area.right());
-
-        let w = display_width(frame_char);
-        x += w as u16;
+        if let Some(frame_char) =
+            self.frame_for_render(state.current_frame, deg.use_unicode_borders())
+        {
+            crate::draw_text_span(frame, x, y, frame_char, style, spinner_area.right());
+            let w = display_width(frame_char);
+            x += w as u16;
+        }
 
         // Render label
         if let Some(label) = self.label {
-            x += 1;
+            if x > spinner_area.left() {
+                x += 1;
+            }
             if x < spinner_area.right() {
                 crate::draw_text_span(frame, x, y, label, style, spinner_area.right());
             }
@@ -451,5 +463,35 @@ mod tests {
 
         // Should use the first DOTS frame '⠋'
         assert_eq!(cell_char(&frame.buffer, 0, 0), Some('⠋'));
+    }
+
+    #[test]
+    fn degradation_ascii_fallback_prefers_available_ascii_frame() {
+        use ftui_render::budget::DegradationLevel;
+
+        let frames: &[&str] = &["⠋", "-", "\\"];
+        let spinner = Spinner::new().frames(frames);
+        let area = Rect::new(0, 0, 5, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(5, 1, &mut pool);
+        frame.buffer.degradation = DegradationLevel::SimpleBorders;
+        let mut state = SpinnerState { current_frame: 0 };
+        StatefulWidget::render(&spinner, area, &mut frame, &mut state);
+
+        assert_eq!(cell_char(&frame.buffer, 0, 0), Some('-'));
+    }
+
+    #[test]
+    fn empty_frames_still_render_label() {
+        let frames: &[&str] = &[];
+        let spinner = Spinner::new().frames(frames).label("Loading");
+        let area = Rect::new(0, 0, 10, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 1, &mut pool);
+        let mut state = SpinnerState::default();
+        StatefulWidget::render(&spinner, area, &mut frame, &mut state);
+
+        assert_eq!(cell_char(&frame.buffer, 0, 0), Some('L'));
+        assert_eq!(cell_char(&frame.buffer, 1, 0), Some('o'));
     }
 }
