@@ -327,6 +327,13 @@ impl ModalStack {
         self.modals.last().and_then(|m| m.focus_group_id)
     }
 
+    pub(super) fn next_focus_modal_after(&self, modal_id: ModalId) -> Option<(ModalId, u32)> {
+        let idx = self.modals.iter().position(|modal| modal.id == modal_id)?;
+        self.modals[idx + 1..]
+            .iter()
+            .find_map(|modal| modal.focus_group_id.map(|group_id| (modal.id, group_id)))
+    }
+
     /// Pop the top modal from the stack.
     ///
     /// Returns the result if a modal was popped, or `None` if the stack is empty.
@@ -359,12 +366,21 @@ impl ModalStack {
     /// Note: This breaks strict LIFO ordering but is sometimes needed.
     /// If the modal had a focus group, the caller should handle focus restoration.
     pub fn pop_id(&mut self, id: ModalId) -> Option<ModalResult> {
+        self.pop_id_with_restore_retarget(id, true)
+    }
+
+    pub(super) fn pop_id_with_restore_retarget(
+        &mut self,
+        id: ModalId,
+        retarget_upper_return_focus: bool,
+    ) -> Option<ModalResult> {
         let idx = self.modals.iter().position(|m| m.id == id)?;
         let modal = self.modals.remove(idx);
         #[cfg(feature = "tracing")]
         let modal_type = modal.modal.modal_type();
 
-        if modal.focus_group_id.is_some()
+        if retarget_upper_return_focus
+            && modal.focus_group_id.is_some()
             && let Some(upper_modal) = self.modals[idx..]
                 .iter_mut()
                 .find(|candidate| candidate.focus_group_id.is_some())
@@ -445,13 +461,18 @@ impl ModalStack {
             .collect()
     }
 
-    pub(super) fn focus_trap_specs_in_order(&self) -> Vec<FocusTrapSpec> {
+    pub(super) fn focus_modal_specs_in_order(&self) -> Vec<(ModalId, FocusTrapSpec)> {
         self.modals
             .iter()
             .filter_map(|modal| {
-                modal.focus_group_id.map(|group_id| FocusTrapSpec {
-                    group_id,
-                    return_focus: modal.focus_return_focus,
+                modal.focus_group_id.map(|group_id| {
+                    (
+                        modal.id,
+                        FocusTrapSpec {
+                            group_id,
+                            return_focus: modal.focus_return_focus,
+                        },
+                    )
                 })
             })
             .collect()
@@ -883,8 +904,10 @@ impl<'a> ModalFocusIntegration<'a> {
 
     /// Rebuild modal focus state after direct mutation via `stack_mut()` or `focus_mut()`.
     pub fn resync_focus_state(&mut self) {
-        ModalFocusCoordinator::new(self.stack, self.focus, &mut self.base_focus)
-            .rebuild_focus_traps();
+        let mut coordinator =
+            ModalFocusCoordinator::new(self.stack, self.focus, &mut self.base_focus);
+        coordinator.rebuild_focus_traps();
+        coordinator.refresh_inactive_modal_return_focus_targets();
     }
 }
 
@@ -1919,6 +1942,54 @@ mod tests {
             integrator.resync_focus_state();
             assert!(!integrator.is_focus_trapped());
             assert_eq!(integrator.focus().current(), Some(100));
+        }
+    }
+
+    #[test]
+    fn focus_integration_resync_updates_inactive_modal_restore_targets_after_manual_focus_change() {
+        use crate::focus::{FocusManager, FocusNode};
+        use ftui_core::geometry::Rect;
+
+        let mut stack = ModalStack::new();
+        let mut focus = FocusManager::new();
+
+        for id in 1..=4 {
+            focus
+                .graph_mut()
+                .insert(FocusNode::new(id, Rect::new(0, 0, 10, 1)).with_tab_index(id as i32));
+        }
+
+        focus.focus(1);
+
+        let upper_id;
+        {
+            let mut integrator = ModalFocusIntegration::new(&mut stack, &mut focus);
+            let lower = WidgetModalEntry::new(StubWidget).with_focusable_ids(vec![2, 3]);
+            integrator.push_with_focus(Box::new(lower));
+            integrator.focus_mut().focus(3);
+
+            let upper = WidgetModalEntry::new(StubWidget).with_focusable_ids(vec![4]);
+            upper_id = integrator.push_with_focus(Box::new(upper));
+
+            let _ = integrator.focus_mut().graph_mut().remove(4);
+            integrator.resync_focus_state();
+            assert_eq!(integrator.focus().current(), Some(3));
+
+            integrator.focus_mut().focus(2);
+            integrator.resync_focus_state();
+            assert_eq!(integrator.focus().current(), Some(2));
+
+            integrator
+                .focus_mut()
+                .graph_mut()
+                .insert(FocusNode::new(4, Rect::new(0, 0, 10, 1)).with_tab_index(4));
+            integrator.resync_focus_state();
+            assert_eq!(integrator.focus().current(), Some(4));
+
+            let result = integrator.pop_id_with_focus(upper_id);
+            assert_eq!(result.map(|closed| closed.id), Some(upper_id));
+            assert_eq!(integrator.focus().current(), Some(2));
+            assert!(integrator.is_focus_trapped());
         }
     }
 

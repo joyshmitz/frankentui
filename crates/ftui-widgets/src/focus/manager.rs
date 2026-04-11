@@ -409,6 +409,12 @@ impl FocusManager {
         self.repair_focus_after_group_change();
     }
 
+    pub(crate) fn create_group_preserving_members(&mut self, id: u32, members: Vec<FocusId>) {
+        let members = self.dedup_members(members);
+        self.groups.insert(id, FocusGroup::new(id, members));
+        self.repair_focus_after_group_change();
+    }
+
     /// Add widget to group.
     pub fn add_to_group(&mut self, group_id: u32, widget_id: FocusId) {
         if !self.can_focus(widget_id) {
@@ -579,6 +585,15 @@ impl FocusManager {
         }
 
         let _ = self.blur();
+    }
+
+    pub(crate) fn clear_deferred_focus_if_excluded(&mut self, excluded: &[FocusId]) {
+        if self
+            .pending_focus_on_host_gain
+            .is_some_and(|id| excluded.contains(&id))
+        {
+            self.pending_focus_on_host_gain = None;
+        }
     }
 
     pub(crate) fn restore_focus_after_invalid_current(&mut self) {
@@ -820,14 +835,21 @@ impl FocusManager {
         self.set_focus(next)
     }
 
-    fn filter_focusable(&self, ids: Vec<FocusId>) -> Vec<FocusId> {
+    fn dedup_members(&self, ids: Vec<FocusId>) -> Vec<FocusId> {
         let mut out = Vec::new();
         for id in ids {
-            if self.can_focus(id) && !out.contains(&id) {
+            if !out.contains(&id) {
                 out.push(id);
             }
         }
         out
+    }
+
+    fn filter_focusable(&self, ids: Vec<FocusId>) -> Vec<FocusId> {
+        self.dedup_members(ids)
+            .into_iter()
+            .filter(|id| self.can_focus(*id))
+            .collect()
     }
 }
 

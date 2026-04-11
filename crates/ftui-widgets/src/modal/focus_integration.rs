@@ -106,13 +106,15 @@ impl<'a> ModalFocusCoordinator<'a> {
         let focus_group_id = if trap_enabled {
             if let Some(ids) = focusable_ids {
                 let group_id = allocate_group_id(self.focus_manager);
-                self.focus_manager.create_group(group_id, ids);
+                let has_declared_members = !ids.is_empty();
+                self.focus_manager
+                    .create_group_preserving_members(group_id, ids);
                 let trapped = self.focus_manager.push_trap(group_id);
-                if !trapped {
+                if !trapped && !has_declared_members {
                     self.focus_manager.remove_group(group_id);
                     None
                 } else {
-                    if !was_trapped {
+                    if !was_trapped && trapped {
                         *self.base_focus = Some(base_focus);
                     }
                     Some(group_id)
@@ -142,13 +144,54 @@ impl<'a> ModalFocusCoordinator<'a> {
             return self.pop_modal();
         }
 
-        let result = self.stack.pop_id(id)?;
+        if let Some(group_id) = self.stack.focus_group_id(id) {
+            let removed_members = self.focus_manager.group_members(group_id);
+            let removed_group_active = self.group_has_focusable_member(group_id);
+            let removed_effective_return_focus = self
+                .effective_focus_return_focuses_in_order_skipping(None)
+                .into_iter()
+                .find_map(|(candidate_group_id, return_focus)| {
+                    (candidate_group_id == group_id).then_some(return_focus)
+                });
+
+            if let Some((upper_modal_id, _)) = self.stack.next_focus_modal_after(id) {
+                let should_retarget = if removed_group_active {
+                    true
+                } else {
+                    let upper_return_focus = self
+                        .stack
+                        .focus_modal_specs_in_order()
+                        .into_iter()
+                        .find_map(|(modal_id, trap)| {
+                            (modal_id == upper_modal_id).then_some(trap.return_focus)
+                        })
+                        .flatten();
+                    !self.return_focus_remains_valid_after_removing_group(
+                        upper_modal_id,
+                        upper_return_focus,
+                        group_id,
+                        &removed_members,
+                    )
+                };
+
+                if should_retarget && let Some(return_focus) = removed_effective_return_focus {
+                    let _ = self
+                        .stack
+                        .set_focus_return_focus(upper_modal_id, return_focus);
+                }
+            }
+        }
+
+        let result = self.stack.pop_id_with_restore_retarget(id, false)?;
         if let Some(group_id) = result.focus_group_id {
             let closing_members = self.focus_manager.group_members(group_id);
             self.focus_manager.remove_group_without_repair(group_id);
+            self.focus_manager
+                .clear_deferred_focus_if_excluded(&closing_members);
             self.rebuild_focus_traps();
             self.focus_manager
                 .repair_focus_after_excluding_ids(&closing_members);
+            self.refresh_inactive_modal_return_focus_targets();
         }
         Some(result)
     }
@@ -165,9 +208,12 @@ impl<'a> ModalFocusCoordinator<'a> {
             }
         }
         if removed_group {
+            self.focus_manager
+                .clear_deferred_focus_if_excluded(&removed_members);
             self.rebuild_focus_traps();
             self.focus_manager
                 .repair_focus_after_excluding_ids(&removed_members);
+            self.refresh_inactive_modal_return_focus_targets();
         }
         results
     }
@@ -188,6 +234,9 @@ impl<'a> ModalFocusCoordinator<'a> {
             } else {
                 self.focus_manager.apply_host_focus(*focused);
             }
+            if *focused {
+                self.refresh_inactive_modal_return_focus_targets();
+            }
         }
         let result = self.stack.handle_event(event, hit)?;
         self.handle_closed_result(&result);
@@ -196,6 +245,13 @@ impl<'a> ModalFocusCoordinator<'a> {
 
     pub(super) fn rebuild_focus_traps(&mut self) {
         let (trap_specs, trailing_failed_restore) = self.collapsed_focus_trap_specs();
+        let had_active_trap_before = self.focus_manager.is_trapped();
+        let preserved_logical_target = self.focus_manager.logical_focus_target();
+        let activation_base_focus = if self.focus_manager.host_focused() {
+            self.focus_manager.current()
+        } else {
+            self.focus_manager.deferred_focus_target()
+        };
         self.focus_manager.clear_traps();
 
         if !self.focus_manager.host_focused() {
@@ -210,8 +266,18 @@ impl<'a> ModalFocusCoordinator<'a> {
                     .push_trap_with_return_focus(trap.group_id, trap.return_focus);
             }
 
+            if has_active_trap && !had_active_trap_before && self.base_focus.is_none() {
+                *self.base_focus = Some(activation_base_focus);
+            }
+
             if !has_active_trap {
-                if let Some(target) = trailing_failed_restore.or(*self.base_focus) {
+                let restore_target = (!had_active_trap_before)
+                    .then_some(preserved_logical_target)
+                    .flatten()
+                    .map(Some)
+                    .or(trailing_failed_restore)
+                    .or(*self.base_focus);
+                if let Some(target) = restore_target {
                     self.focus_manager.replace_deferred_focus_target(target);
                 }
             } else if self.focus_manager.logical_focus_target().is_none()
@@ -229,8 +295,17 @@ impl<'a> ModalFocusCoordinator<'a> {
                 .push_trap_with_return_focus(trap.group_id, trap.return_focus);
         }
 
+        if has_active_trap && !had_active_trap_before && self.base_focus.is_none() {
+            *self.base_focus = Some(activation_base_focus);
+        }
+
         if !has_active_trap {
-            let restore_target = trailing_failed_restore.or(*self.base_focus);
+            let restore_target = (!had_active_trap_before)
+                .then_some(preserved_logical_target)
+                .flatten()
+                .map(Some)
+                .or(trailing_failed_restore)
+                .or(*self.base_focus);
             match restore_target {
                 Some(Some(base_focus)) => {
                     let _ = self.focus_manager.focus_without_history(base_focus);
@@ -268,13 +343,50 @@ impl<'a> ModalFocusCoordinator<'a> {
         let _ = self.focus_manager.apply_host_focus(true);
     }
 
-    fn collapsed_focus_trap_specs(&self) -> (Vec<FocusTrapSpec>, Option<Option<FocusId>>) {
-        let mut collapsed = Vec::new();
+    fn return_focus_remains_valid_after_removing_group(
+        &self,
+        upper_modal_id: ModalId,
+        return_focus: Option<FocusId>,
+        removed_group_id: u32,
+        removed_members: &[FocusId],
+    ) -> bool {
+        let mut surviving_lower_active_group = None;
+        for (modal_id, trap) in self.stack.focus_modal_specs_in_order() {
+            if modal_id == upper_modal_id {
+                break;
+            }
+            if trap.group_id == removed_group_id {
+                continue;
+            }
+            if self.group_has_focusable_member(trap.group_id) {
+                surviving_lower_active_group = Some(trap.group_id);
+            }
+        }
+
+        if let Some(group_id) = surviving_lower_active_group {
+            return self.focus_target_in_group(return_focus, group_id);
+        }
+
+        match return_focus {
+            None => true,
+            Some(id) => self.focus_target_is_focusable(Some(id)) && !removed_members.contains(&id),
+        }
+    }
+
+    fn effective_focus_return_focuses_in_order_skipping(
+        &self,
+        skipped_modal_id: Option<ModalId>,
+    ) -> Vec<(u32, Option<FocusId>)> {
+        let mut effective = Vec::new();
         let mut lower_active_group = None;
         let mut lower_fallback_return_focus = None;
-        let mut trailing_failed_restore = None;
 
-        for trap in self.stack.focus_trap_specs_in_order() {
+        for (_, trap) in self
+            .stack
+            .focus_modal_specs_in_order()
+            .into_iter()
+            .filter(|(modal_id, _)| Some(*modal_id) != skipped_modal_id)
+        {
             let effective_return_focus = if let Some(group_id) = lower_active_group {
                 if self.focus_target_in_group(trap.return_focus, group_id) {
                     trap.return_focus
@@ -287,16 +399,30 @@ impl<'a> ModalFocusCoordinator<'a> {
                 lower_fallback_return_focus.unwrap_or(trap.return_focus)
             };
 
+            effective.push((trap.group_id, effective_return_focus));
+            lower_fallback_return_focus = Some(effective_return_focus);
             if self.group_has_focusable_member(trap.group_id) {
+                lower_active_group = Some(trap.group_id);
+            }
+        }
+
+        effective
+    }
+
+    fn collapsed_focus_trap_specs(&self) -> (Vec<FocusTrapSpec>, Option<Option<FocusId>>) {
+        let mut collapsed = Vec::new();
+        let mut trailing_failed_restore = None;
+
+        for (group_id, effective_return_focus) in
+            self.effective_focus_return_focuses_in_order_skipping(None)
+        {
+            if self.group_has_focusable_member(group_id) {
                 collapsed.push(FocusTrapSpec {
-                    group_id: trap.group_id,
+                    group_id,
                     return_focus: effective_return_focus,
                 });
-                lower_active_group = Some(trap.group_id);
-                lower_fallback_return_focus = Some(effective_return_focus);
                 trailing_failed_restore = None;
             } else {
-                lower_fallback_return_focus = Some(effective_return_focus);
                 trailing_failed_restore = Some(effective_return_focus);
             }
         }
@@ -348,6 +474,64 @@ impl<'a> ModalFocusCoordinator<'a> {
         if !self.focus_manager.is_trapped() && self.focus_manager.host_focused() {
             *self.base_focus = None;
         }
+        self.refresh_inactive_modal_return_focus_targets();
+    }
+
+    pub(super) fn refresh_inactive_modal_return_focus_targets(&mut self) {
+        let logical_target = self.focus_manager.logical_focus_target();
+        let focus_modals = self.stack.focus_modal_specs_in_order();
+
+        let topmost_active_index = focus_modals
+            .iter()
+            .rposition(|(_, trap)| self.group_has_focusable_member(trap.group_id));
+
+        let start_index = topmost_active_index.map_or(0, |index| index + 1);
+        for (modal_id, trap) in focus_modals.into_iter().skip(start_index) {
+            if self.group_has_focusable_member(trap.group_id) {
+                continue;
+            }
+            let _ = self.stack.set_focus_return_focus(modal_id, logical_target);
+        }
+
+        self.refresh_active_modal_return_focus_targets_for_invalid_lower_selections(
+            &self.stack.focus_modal_specs_in_order(),
+            topmost_active_index,
+        );
+    }
+
+    fn refresh_active_modal_return_focus_targets_for_invalid_lower_selections(
+        &mut self,
+        focus_modals: &[(ModalId, FocusTrapSpec)],
+        topmost_active_index: Option<usize>,
+    ) {
+        let Some(topmost_active_index) = topmost_active_index else {
+            return;
+        };
+
+        for upper_idx in 1..=topmost_active_index {
+            let (_, lower_trap) = focus_modals[upper_idx - 1];
+            let (upper_modal_id, upper_trap) = focus_modals[upper_idx];
+
+            if !self.group_has_focusable_member(lower_trap.group_id)
+                || self.focus_target_in_group(upper_trap.return_focus, lower_trap.group_id)
+            {
+                continue;
+            }
+
+            let replacement = self.first_focusable_in_group(lower_trap.group_id);
+            let _ = self
+                .stack
+                .set_focus_return_focus(upper_modal_id, replacement);
+        }
+    }
+
+    fn first_focusable_in_group(&self, group_id: u32) -> Option<FocusId> {
+        let members = self.focus_manager.group_members(group_id);
+        self.focus_manager
+            .graph()
+            .tab_order()
+            .into_iter()
+            .find(|id| members.contains(id))
     }
 }
 
@@ -521,6 +705,7 @@ impl FocusAwareModalStack {
             });
         if needs_post_resync_restore {
             self.focus_manager.restore_focus_after_invalid_current();
+            self.resync_inactive_modal_return_focus_targets();
         }
         match result {
             Ok(result) => result,
@@ -530,16 +715,33 @@ impl FocusAwareModalStack {
 
     /// Focus a specific target through the wrapped focus manager.
     pub fn focus(&mut self, id: FocusId) -> Option<FocusId> {
-        self.focus_manager.focus(id)
+        let previous = self.focus_manager.focus(id);
+        if previous.is_some()
+            || self.focus_manager.current() == Some(id)
+            || self.focus_manager.logical_focus_target() == Some(id)
+        {
+            self.resync_inactive_modal_return_focus_targets();
+        }
+        previous
     }
 
     fn resync_focus_state(&mut self) {
+        let mut coordinator = ModalFocusCoordinator::new(
+            &mut self.stack,
+            &mut self.focus_manager,
+            &mut self.base_focus,
+        );
+        coordinator.rebuild_focus_traps();
+        coordinator.refresh_inactive_modal_return_focus_targets();
+    }
+
+    fn resync_inactive_modal_return_focus_targets(&mut self) {
         ModalFocusCoordinator::new(
             &mut self.stack,
             &mut self.focus_manager,
             &mut self.base_focus,
         )
-        .rebuild_focus_traps();
+        .refresh_inactive_modal_return_focus_targets();
     }
 
     // --- State Queries ---
@@ -1039,6 +1241,63 @@ mod tests {
         assert!(!modals.is_focus_trapped());
         assert_eq!(modals.focus_manager().group_count(), group_count_before);
         assert_eq!(modals.focus_manager().current(), Some(1));
+    }
+
+    #[test]
+    fn late_registered_focus_ids_activate_modal_trap_and_restore_latest_background_selection() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(50));
+            graph.insert(make_focus_node(100));
+        });
+
+        modals.focus(100);
+        let modal_id = modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![1]);
+        assert!(!modals.is_focus_trapped());
+        assert_eq!(modals.focus_manager().current(), Some(100));
+
+        modals.focus(50);
+        assert_eq!(modals.focus_manager().current(), Some(50));
+
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(1));
+        });
+        assert!(modals.is_focus_trapped());
+        assert_eq!(modals.focus_manager().current(), Some(1));
+
+        assert!(modals.pop_id(modal_id).is_some());
+        assert_eq!(modals.focus_manager().current(), Some(50));
+        assert!(!modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn blurred_pop_all_after_late_trap_activation_restores_background_focus_on_gain() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(50));
+            graph.insert(make_focus_node(100));
+        });
+
+        modals.focus(100);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![1]);
+        modals.focus(50);
+
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(1));
+        });
+        assert_eq!(modals.focus_manager().current(), Some(1));
+        assert!(modals.is_focus_trapped());
+
+        let _ = modals.handle_event(&Event::Focus(false), None);
+        assert_eq!(modals.focus_manager().current(), None);
+
+        let results = modals.pop_all();
+        assert_eq!(results.len(), 1);
+        assert_eq!(modals.focus_manager().current(), None);
+        assert!(!modals.is_focus_trapped());
+
+        let _ = modals.handle_event(&Event::Focus(true), None);
+        assert_eq!(modals.focus_manager().current(), Some(50));
     }
 
     #[test]
@@ -1752,6 +2011,147 @@ mod tests {
     }
 
     #[test]
+    fn pop_id_inactive_trapped_modal_with_only_non_trapped_modals_remaining_preserves_latest_background_focus()
+     {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(1));
+            graph.insert(make_focus_node(2));
+            graph.insert(make_focus_node(9));
+        });
+
+        modals.focus(1);
+        let trapped_id =
+            modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2]);
+        modals.push(Box::new(WidgetModalEntry::new(StubWidget)));
+        assert_eq!(modals.focus_manager().current(), Some(2));
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(2);
+        });
+        assert_eq!(modals.focus_manager().current(), Some(1));
+        assert!(!modals.is_focus_trapped());
+
+        assert_eq!(modals.focus(9), Some(1));
+        assert_eq!(modals.focus_manager().current(), Some(9));
+        assert!(!modals.is_focus_trapped());
+
+        assert!(modals.pop_id(trapped_id).is_some());
+        assert_eq!(modals.focus_manager().current(), Some(9));
+        assert!(!modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn blurred_pop_id_inactive_trapped_modal_with_only_non_trapped_modals_remaining_preserves_latest_background_focus_on_focus_gain()
+     {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(1));
+            graph.insert(make_focus_node(2));
+            graph.insert(make_focus_node(9));
+        });
+
+        modals.focus(1);
+        let trapped_id =
+            modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2]);
+        modals.push(Box::new(WidgetModalEntry::new(StubWidget)));
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(2);
+        });
+        assert_eq!(modals.focus_manager().current(), Some(1));
+        assert!(!modals.is_focus_trapped());
+
+        assert_eq!(modals.focus(9), Some(1));
+        let _ = modals.handle_event(&Event::Focus(false), None);
+        assert_eq!(modals.focus_manager().current(), None);
+        assert!(!modals.is_focus_trapped());
+
+        assert!(modals.pop_id(trapped_id).is_some());
+        assert_eq!(modals.focus_manager().current(), None);
+        assert!(!modals.is_focus_trapped());
+
+        let _ = modals.handle_event(&Event::Focus(true), None);
+        assert_eq!(modals.focus_manager().current(), Some(9));
+        assert!(!modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn blurred_pop_id_inactive_trapped_modal_preserves_latest_background_focus_when_trap_went_inactive_while_blurred()
+     {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(1));
+            graph.insert(make_focus_node(2));
+            graph.insert(make_focus_node(9));
+        });
+
+        modals.focus(1);
+        let trapped_id =
+            modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2]);
+        modals.push(Box::new(WidgetModalEntry::new(StubWidget)));
+        assert_eq!(modals.focus_manager().current(), Some(2));
+
+        let _ = modals.handle_event(&Event::Focus(false), None);
+        assert_eq!(modals.focus_manager().current(), None);
+        assert!(modals.is_focus_trapped());
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(2);
+        });
+        assert_eq!(modals.focus_manager().current(), None);
+        assert!(!modals.is_focus_trapped());
+
+        assert_eq!(modals.focus(9), Some(1));
+        assert_eq!(modals.focus_manager().current(), None);
+        assert!(!modals.is_focus_trapped());
+
+        assert!(modals.pop_id(trapped_id).is_some());
+        assert_eq!(modals.focus_manager().current(), None);
+        assert!(!modals.is_focus_trapped());
+
+        let _ = modals.handle_event(&Event::Focus(true), None);
+        assert_eq!(modals.focus_manager().current(), Some(9));
+        assert!(!modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn focus_gain_refreshes_inactive_modal_restore_target_after_background_fallback() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(2));
+            graph.insert(make_focus_node(9));
+        });
+
+        let _ = modals.handle_event(&Event::Focus(false), None);
+        assert_eq!(modals.focus_manager().current(), None);
+
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2]);
+        assert_eq!(modals.focus_manager().current(), None);
+        assert!(modals.is_focus_trapped());
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(2);
+        });
+        assert_eq!(modals.focus_manager().current(), None);
+        assert!(!modals.is_focus_trapped());
+
+        let _ = modals.handle_event(&Event::Focus(true), None);
+        assert_eq!(modals.focus_manager().current(), Some(9));
+        assert!(!modals.is_focus_trapped());
+
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(2));
+        });
+        assert_eq!(modals.focus_manager().current(), Some(2));
+        assert!(modals.is_focus_trapped());
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), Some(9));
+        assert!(!modals.is_focus_trapped());
+    }
+
+    #[test]
     fn with_focus_graph_mut_blurred_empty_trap_restores_base_focus_on_focus_gain() {
         let mut modals = FocusAwareModalStack::new();
         modals.with_focus_graph_mut(|graph| {
@@ -1929,6 +2329,773 @@ mod tests {
 
         let _ = modals.handle_event(&Event::Focus(true), None);
         assert_eq!(modals.focus_manager().current(), Some(3));
+        assert!(modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn pop_id_skips_stale_retarget_from_inactive_middle_modal() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            for id in 1..=6 {
+                graph.insert(make_focus_node(id));
+            }
+        });
+
+        modals.focus(1);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2, 3]);
+        modals.focus(3);
+        let stale_middle_id =
+            modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![4]);
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(4);
+        });
+        assert_eq!(modals.focus_manager().current(), Some(3));
+        modals.focus(2);
+        assert_eq!(modals.focus_manager().current(), Some(2));
+
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![5, 6]);
+        assert_eq!(modals.focus_manager().current(), Some(5));
+
+        assert!(modals.pop_id(stale_middle_id).is_some());
+        assert_eq!(modals.focus_manager().current(), Some(5));
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), Some(2));
+        assert!(modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn blurred_pop_id_skips_stale_retarget_from_inactive_middle_modal() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            for id in 1..=6 {
+                graph.insert(make_focus_node(id));
+            }
+        });
+
+        modals.focus(1);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2, 3]);
+        modals.focus(3);
+        let stale_middle_id =
+            modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![4]);
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(4);
+        });
+        let _ = modals.handle_event(&Event::Focus(false), None);
+        assert_eq!(modals.focus_manager().current(), None);
+
+        assert_eq!(modals.focus(2), Some(3));
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![5, 6]);
+
+        assert!(modals.pop_id(stale_middle_id).is_some());
+        assert_eq!(modals.focus_manager().current(), None);
+
+        assert!(modals.pop().is_some());
+        let _ = modals.handle_event(&Event::Focus(true), None);
+        assert_eq!(modals.focus_manager().current(), Some(2));
+        assert!(modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn pop_id_inactive_lower_modal_preserves_surviving_upper_restore_to_base_focus() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            for id in [5, 10, 20, 30] {
+                graph.insert(make_focus_node(id));
+            }
+        });
+
+        modals.focus(10);
+        let lower_id = modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![20]);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![30]);
+        assert_eq!(modals.focus_manager().current(), Some(30));
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(20);
+        });
+        assert_eq!(modals.focus_manager().current(), Some(30));
+
+        assert!(modals.pop_id(lower_id).is_some());
+        assert_eq!(modals.focus_manager().current(), Some(30));
+        assert!(modals.is_focus_trapped());
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), Some(10));
+        assert!(!modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn pop_id_active_lower_modal_propagates_none_restore_target_to_surviving_upper_modal() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(1));
+            graph.insert(make_focus_node(2));
+        });
+
+        let lower_id = modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![1]);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2]);
+        assert_eq!(modals.focus_manager().current(), Some(2));
+        assert!(modals.is_focus_trapped());
+
+        assert!(modals.pop_id(lower_id).is_some());
+        assert_eq!(modals.focus_manager().current(), Some(2));
+        assert!(modals.is_focus_trapped());
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), None);
+        assert!(!modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn blurred_pop_id_inactive_lower_modal_preserves_surviving_upper_restore_to_base_focus() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            for id in [5, 10, 20, 30] {
+                graph.insert(make_focus_node(id));
+            }
+        });
+
+        modals.focus(10);
+        let lower_id = modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![20]);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![30]);
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(20);
+        });
+        assert!(modals.pop_id(lower_id).is_some());
+
+        let _ = modals.handle_event(&Event::Focus(false), None);
+        assert_eq!(modals.focus_manager().current(), None);
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), None);
+
+        let _ = modals.handle_event(&Event::Focus(true), None);
+        assert_eq!(modals.focus_manager().current(), Some(10));
+        assert!(!modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn reactivated_top_modal_restores_latest_underlying_selection() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            for id in 1..=4 {
+                graph.insert(make_focus_node(id));
+            }
+        });
+
+        modals.focus(1);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2, 3]);
+        modals.focus(3);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![4]);
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(4);
+        });
+        assert_eq!(modals.focus_manager().current(), Some(3));
+
+        modals.focus(2);
+        assert_eq!(modals.focus_manager().current(), Some(2));
+
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(4));
+        });
+        assert_eq!(modals.focus_manager().current(), Some(4));
+        assert!(modals.is_focus_trapped());
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), Some(2));
+        assert!(modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn reactivated_top_modal_tracks_graph_restored_selection_within_same_lower_group() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            for id in 1..=4 {
+                graph.insert(make_focus_node(id));
+            }
+        });
+
+        modals.focus(1);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2, 3]);
+        modals.focus(3);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![4]);
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(4);
+        });
+        assert_eq!(modals.focus_manager().current(), Some(3));
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(3);
+        });
+        assert_eq!(modals.focus_manager().current(), Some(2));
+        assert!(modals.is_focus_trapped());
+
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(4));
+        });
+        assert_eq!(modals.focus_manager().current(), Some(4));
+        assert!(modals.is_focus_trapped());
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), Some(2));
+        assert!(modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn blurred_reactivated_top_modal_tracks_graph_restored_selection_within_same_lower_group() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            for id in 1..=4 {
+                graph.insert(make_focus_node(id));
+            }
+        });
+
+        modals.focus(1);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2, 3]);
+        modals.focus(3);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![4]);
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(4);
+        });
+        let _ = modals.handle_event(&Event::Focus(false), None);
+        assert_eq!(modals.focus_manager().current(), None);
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(3);
+        });
+        assert_eq!(modals.focus_manager().current(), None);
+        assert!(modals.is_focus_trapped());
+
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(4));
+        });
+        let _ = modals.handle_event(&Event::Focus(true), None);
+        assert_eq!(modals.focus_manager().current(), Some(4));
+        assert!(modals.is_focus_trapped());
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), Some(2));
+        assert!(modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn blurred_reactivated_top_modal_restores_latest_underlying_selection() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            for id in 1..=4 {
+                graph.insert(make_focus_node(id));
+            }
+        });
+
+        modals.focus(1);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2, 3]);
+        modals.focus(3);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![4]);
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(4);
+        });
+        let _ = modals.handle_event(&Event::Focus(false), None);
+        assert_eq!(modals.focus_manager().current(), None);
+
+        assert_eq!(modals.focus(2), Some(3));
+
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(4));
+        });
+
+        let _ = modals.handle_event(&Event::Focus(true), None);
+        assert_eq!(modals.focus_manager().current(), Some(4));
+        assert!(modals.is_focus_trapped());
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), Some(2));
+        assert!(modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn reactivated_inactive_top_modal_tracks_graph_restored_underlying_selection() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            for id in 1..=7 {
+                graph.insert(make_focus_node(id));
+            }
+        });
+
+        modals.focus(1);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2, 3]);
+        modals.focus(3);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![4, 5]);
+        modals.focus(5);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![6]);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![7]);
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(7);
+        });
+        assert_eq!(modals.focus_manager().current(), Some(6));
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(6);
+        });
+        assert_eq!(modals.focus_manager().current(), Some(5));
+        assert!(modals.is_focus_trapped());
+
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(7));
+        });
+        assert_eq!(modals.focus_manager().current(), Some(7));
+        assert!(modals.is_focus_trapped());
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), Some(5));
+        assert!(modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn reactivated_inactive_modal_chain_tracks_graph_restored_underlying_selection() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            for id in 1..=5 {
+                graph.insert(make_focus_node(id));
+            }
+        });
+
+        modals.focus(1);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2, 3]);
+        modals.focus(3);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![4]);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![5]);
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(5);
+        });
+        assert_eq!(modals.focus_manager().current(), Some(4));
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(4);
+        });
+        assert_eq!(modals.focus_manager().current(), Some(3));
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(3);
+        });
+        assert_eq!(modals.focus_manager().current(), Some(2));
+        assert!(modals.is_focus_trapped());
+
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(4));
+        });
+        assert_eq!(modals.focus_manager().current(), Some(4));
+        assert!(modals.is_focus_trapped());
+
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(5));
+        });
+        assert_eq!(modals.focus_manager().current(), Some(5));
+        assert!(modals.is_focus_trapped());
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), Some(4));
+        assert!(modals.is_focus_trapped());
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), Some(2));
+        assert!(modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn reactivated_lower_modal_refreshes_still_inactive_upper_restore_target() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            for id in [1, 2, 4, 5] {
+                graph.insert(make_focus_node(id));
+            }
+        });
+
+        modals.focus(1);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2, 4]);
+        modals.focus(4);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![5]);
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(5);
+        });
+        assert_eq!(modals.focus_manager().current(), Some(4));
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(2);
+            let _ = graph.remove(4);
+        });
+        assert_eq!(modals.focus_manager().current(), Some(1));
+        assert!(!modals.is_focus_trapped());
+
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(2));
+            graph.insert(make_focus_node(4));
+        });
+        assert_eq!(modals.focus_manager().current(), Some(2));
+        assert!(modals.is_focus_trapped());
+
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(5));
+        });
+        assert_eq!(modals.focus_manager().current(), Some(5));
+        assert!(modals.is_focus_trapped());
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), Some(2));
+        assert!(modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn reactivated_inactive_upper_modal_does_not_restore_stale_lower_selection_after_top_pop() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            for id in 1..=5 {
+                graph.insert(make_focus_node(id));
+            }
+        });
+
+        modals.focus(1);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2, 3]);
+        modals.focus(3);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![4]);
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(4);
+        });
+        assert_eq!(modals.focus_manager().current(), Some(3));
+
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![5]);
+        assert_eq!(modals.focus_manager().current(), Some(5));
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(3);
+        });
+        assert_eq!(modals.focus_manager().current(), Some(5));
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), Some(2));
+        assert!(modals.is_focus_trapped());
+
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(4));
+        });
+        assert_eq!(modals.focus_manager().current(), Some(4));
+        assert!(modals.is_focus_trapped());
+
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(3));
+        });
+        assert_eq!(modals.focus_manager().current(), Some(4));
+        assert!(modals.is_focus_trapped());
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), Some(2));
+        assert!(modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn blurred_reactivated_inactive_upper_modal_does_not_restore_stale_lower_selection_after_top_pop()
+     {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            for id in 1..=5 {
+                graph.insert(make_focus_node(id));
+            }
+        });
+
+        modals.focus(1);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2, 3]);
+        modals.focus(3);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![4]);
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(4);
+        });
+        assert_eq!(modals.focus_manager().current(), Some(3));
+
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![5]);
+        assert_eq!(modals.focus_manager().current(), Some(5));
+
+        let _ = modals.handle_event(&Event::Focus(false), None);
+        assert_eq!(modals.focus_manager().current(), None);
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(3);
+        });
+        assert_eq!(modals.focus_manager().current(), None);
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), None);
+        assert!(modals.is_focus_trapped());
+
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(4));
+        });
+        let _ = modals.handle_event(&Event::Focus(true), None);
+        assert_eq!(modals.focus_manager().current(), Some(4));
+        assert!(modals.is_focus_trapped());
+
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(3));
+        });
+        assert_eq!(modals.focus_manager().current(), Some(4));
+        assert!(modals.is_focus_trapped());
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), Some(2));
+        assert!(modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn reactivated_middle_modal_before_top_close_does_not_restore_stale_lower_selection() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            for id in 1..=5 {
+                graph.insert(make_focus_node(id));
+            }
+        });
+
+        modals.focus(1);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2, 3]);
+        modals.focus(3);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![4]);
+        assert_eq!(modals.focus_manager().current(), Some(4));
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(4);
+        });
+        assert_eq!(modals.focus_manager().current(), Some(3));
+
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![5]);
+        assert_eq!(modals.focus_manager().current(), Some(5));
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(3);
+        });
+        assert_eq!(modals.focus_manager().current(), Some(5));
+
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(4));
+        });
+        assert_eq!(modals.focus_manager().current(), Some(5));
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), Some(4));
+        assert!(modals.is_focus_trapped());
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), Some(2));
+        assert!(modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn revalidated_stale_lower_target_before_top_close_does_not_win_on_middle_pop() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            for id in 1..=5 {
+                graph.insert(make_focus_node(id));
+            }
+        });
+
+        modals.focus(1);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2, 3]);
+        modals.focus(3);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![4]);
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(4);
+        });
+        assert_eq!(modals.focus_manager().current(), Some(3));
+
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![5]);
+        assert_eq!(modals.focus_manager().current(), Some(5));
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(3);
+        });
+        assert_eq!(modals.focus_manager().current(), Some(5));
+
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(4));
+        });
+        assert_eq!(modals.focus_manager().current(), Some(5));
+
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(3));
+        });
+        assert_eq!(modals.focus_manager().current(), Some(5));
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), Some(4));
+        assert!(modals.is_focus_trapped());
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), Some(2));
+        assert!(modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn blurred_revalidated_stale_lower_target_before_top_close_does_not_win_on_middle_pop() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            for id in 1..=5 {
+                graph.insert(make_focus_node(id));
+            }
+        });
+
+        modals.focus(1);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2, 3]);
+        modals.focus(3);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![4]);
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(4);
+        });
+        assert_eq!(modals.focus_manager().current(), Some(3));
+
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![5]);
+        assert_eq!(modals.focus_manager().current(), Some(5));
+
+        let _ = modals.handle_event(&Event::Focus(false), None);
+        assert_eq!(modals.focus_manager().current(), None);
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(3);
+        });
+        assert_eq!(modals.focus_manager().current(), None);
+
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(4));
+        });
+        assert_eq!(modals.focus_manager().current(), None);
+
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(3));
+        });
+        assert_eq!(modals.focus_manager().current(), None);
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), None);
+        assert!(modals.is_focus_trapped());
+
+        let _ = modals.handle_event(&Event::Focus(true), None);
+        assert_eq!(modals.focus_manager().current(), Some(4));
+        assert!(modals.is_focus_trapped());
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), Some(2));
+        assert!(modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn invalidated_lower_selection_retargets_upper_restore_using_group_tab_order() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            for id in 1..=5 {
+                graph.insert(make_focus_node(id));
+            }
+        });
+
+        modals.focus(1);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![4, 3, 2]);
+        assert_eq!(modals.focus_manager().current(), Some(2));
+        modals.focus(4);
+        assert_eq!(modals.focus_manager().current(), Some(4));
+
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![5]);
+        assert_eq!(modals.focus_manager().current(), Some(5));
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(4);
+        });
+        assert_eq!(modals.focus_manager().current(), Some(5));
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), Some(2));
+        assert!(modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn blurred_invalidated_lower_selection_retargets_upper_restore_using_group_tab_order() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            for id in 1..=5 {
+                graph.insert(make_focus_node(id));
+            }
+        });
+
+        modals.focus(1);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![4, 3, 2]);
+        assert_eq!(modals.focus_manager().current(), Some(2));
+        modals.focus(4);
+        assert_eq!(modals.focus_manager().current(), Some(4));
+
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![5]);
+        assert_eq!(modals.focus_manager().current(), Some(5));
+
+        let _ = modals.handle_event(&Event::Focus(false), None);
+        assert_eq!(modals.focus_manager().current(), None);
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(4);
+        });
+        assert_eq!(modals.focus_manager().current(), None);
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), None);
+        assert!(modals.is_focus_trapped());
+
+        let _ = modals.handle_event(&Event::Focus(true), None);
+        assert_eq!(modals.focus_manager().current(), Some(2));
+        assert!(modals.is_focus_trapped());
+    }
+
+    #[test]
+    fn blurred_reactivated_inactive_top_modal_tracks_graph_restored_underlying_selection() {
+        let mut modals = FocusAwareModalStack::new();
+        modals.with_focus_graph_mut(|graph| {
+            for id in 1..=7 {
+                graph.insert(make_focus_node(id));
+            }
+        });
+
+        modals.focus(1);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2, 3]);
+        modals.focus(3);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![4, 5]);
+        modals.focus(5);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![6]);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![7]);
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(7);
+        });
+        let _ = modals.handle_event(&Event::Focus(false), None);
+        assert_eq!(modals.focus_manager().current(), None);
+
+        modals.with_focus_graph_mut(|graph| {
+            let _ = graph.remove(6);
+        });
+        assert_eq!(modals.focus_manager().current(), None);
+
+        modals.with_focus_graph_mut(|graph| {
+            graph.insert(make_focus_node(7));
+        });
+        let _ = modals.handle_event(&Event::Focus(true), None);
+        assert_eq!(modals.focus_manager().current(), Some(7));
+        assert!(modals.is_focus_trapped());
+
+        assert!(modals.pop().is_some());
+        assert_eq!(modals.focus_manager().current(), Some(5));
         assert!(modals.is_focus_trapped());
     }
 
