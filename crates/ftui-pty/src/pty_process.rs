@@ -654,7 +654,7 @@ impl Drop for PtyProcess {
         let _ = self.child.kill();
 
         if let Some(handle) = self.reader_thread.take() {
-            let _ = handle.join();
+            detach_reader_join(handle);
         }
 
         if self.config.log_events {
@@ -664,6 +664,14 @@ impl Drop for PtyProcess {
             );
         }
     }
+}
+
+fn detach_reader_join(handle: thread::JoinHandle<()>) {
+    let _ = thread::Builder::new()
+        .name("ftui-pty-process-detached-join".to_string())
+        .spawn(move || {
+            let _ = handle.join();
+        });
 }
 
 // ── Helper Functions ──────────────────────────────────────────────────
@@ -900,8 +908,9 @@ mod tests {
 
         proc.write_all(b"echo test\n")
             .expect("write should succeed");
-        thread::sleep(Duration::from_millis(100));
-        let _ = proc.read_available();
+        let _ = proc
+            .read_until(b"test", Duration::from_secs(5))
+            .expect("should capture echoed output");
 
         assert!(!proc.output().is_empty());
 
@@ -928,5 +937,29 @@ mod tests {
         let result = PtyProcess::spawn(config);
 
         assert!(result.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn drop_does_not_block_when_background_process_keeps_pty_open() {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let (done_tx, done_rx) = mpsc::channel();
+        let drop_thread = thread::spawn(move || {
+            let proc = PtyProcess::spawn(
+                ShellConfig::with_shell(shell)
+                    .logging(false)
+                    .arg("-c")
+                    .arg("sleep 1 >/dev/null 2>&1 &"),
+            )
+            .expect("spawn should succeed");
+            drop(proc);
+            done_tx.send(()).expect("signal drop completion");
+        });
+
+        assert!(
+            done_rx.recv_timeout(Duration::from_millis(400)).is_ok(),
+            "PtyProcess drop should not wait for background descendants to close the PTY"
+        );
+        drop_thread.join().expect("drop thread join");
     }
 }

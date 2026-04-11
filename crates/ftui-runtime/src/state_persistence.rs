@@ -107,7 +107,7 @@ pub type StorageResult<T> = Result<T, StorageError>;
 ///
 /// This is the storage format used by backends. The actual state data
 /// is serialized to bytes by the caller.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredEntry {
     /// The canonical state key (widget_type::instance_id).
     pub key: String,
@@ -573,18 +573,25 @@ impl StateRegistry {
             return Ok(false);
         }
 
-        let cache = self
+        let cache_snapshot = {
+            let cache_guard = self
+                .cache
+                .read()
+                .map_err(|_| StorageError::Corruption("cache lock poisoned".into()))?;
+            cache_guard.clone()
+        };
+
+        self.backend.save_all(&cache_snapshot)?;
+
+        let cache_guard = self
             .cache
             .read()
             .map_err(|_| StorageError::Corruption("cache lock poisoned".into()))?;
-
-        self.backend.save_all(&cache)?;
-
         let mut dirty_guard = self
             .dirty
             .write()
             .map_err(|_| StorageError::Corruption("dirty lock poisoned".into()))?;
-        *dirty_guard = false;
+        *dirty_guard = *cache_guard != cache_snapshot;
 
         Ok(true)
     }
@@ -742,6 +749,78 @@ impl StateRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Mutex, Weak};
+    use std::thread;
+    use web_time::Duration;
+
+    #[derive(Default)]
+    struct ReentrantFlushBackendState {
+        registry: Mutex<Option<Weak<StateRegistry>>>,
+        injected_during_save: AtomicBool,
+        saved_entries: RwLock<HashMap<String, StoredEntry>>,
+    }
+
+    impl ReentrantFlushBackendState {
+        fn bind_registry(&self, registry: &Arc<StateRegistry>) {
+            *self.registry.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(Arc::downgrade(registry));
+        }
+
+        fn saved_entries(&self) -> HashMap<String, StoredEntry> {
+            self.saved_entries
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+        }
+    }
+
+    #[derive(Clone)]
+    struct ReentrantFlushBackend {
+        state: Arc<ReentrantFlushBackendState>,
+    }
+
+    impl StorageBackend for ReentrantFlushBackend {
+        fn name(&self) -> &str {
+            "ReentrantFlushBackend"
+        }
+
+        fn load_all(&self) -> StorageResult<HashMap<String, StoredEntry>> {
+            Ok(self.state.saved_entries())
+        }
+
+        fn save_all(&self, entries: &HashMap<String, StoredEntry>) -> StorageResult<()> {
+            *self
+                .state
+                .saved_entries
+                .write()
+                .map_err(|_| StorageError::Corruption("saved entries lock poisoned".into()))? =
+                entries.clone();
+
+            if !self.state.injected_during_save.swap(true, Ordering::SeqCst)
+                && let Some(registry) = self
+                    .state
+                    .registry
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .as_ref()
+                    .and_then(Weak::upgrade)
+            {
+                registry.set("backend::late", 2, b"late".to_vec());
+            }
+
+            Ok(())
+        }
+
+        fn clear(&self) -> StorageResult<()> {
+            self.state
+                .saved_entries
+                .write()
+                .map_err(|_| StorageError::Corruption("saved entries lock poisoned".into()))?
+                .clear();
+            Ok(())
+        }
+    }
 
     #[test]
     fn memory_storage_basic_operations() {
@@ -1107,6 +1186,57 @@ mod tests {
         let entry = registry.get("widget::foo").unwrap();
         assert_eq!(entry.version, 3);
         assert_eq!(entry.data, b"bar");
+    }
+
+    #[test]
+    fn registry_flush_drops_cache_lock_before_backend_save() {
+        let backend_state = Arc::new(ReentrantFlushBackendState::default());
+        let registry = Arc::new(StateRegistry::new(Box::new(ReentrantFlushBackend {
+            state: Arc::clone(&backend_state),
+        })));
+        backend_state.bind_registry(&registry);
+
+        registry.set("widget::foo", 1, b"bar".to_vec());
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let registry_for_thread = Arc::clone(&registry);
+        let handle = thread::spawn(move || {
+            let result = registry_for_thread.flush();
+            done_tx.send(result).expect("flush result");
+        });
+
+        done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("flush should complete without deadlocking")
+            .expect("flush succeeds");
+        handle.join().expect("flush thread");
+
+        let saved_entries = backend_state.saved_entries();
+        assert!(saved_entries.contains_key("widget::foo"));
+    }
+
+    #[test]
+    fn registry_flush_preserves_dirty_when_backend_mutates_registry() {
+        let backend_state = Arc::new(ReentrantFlushBackendState::default());
+        let registry = Arc::new(StateRegistry::new(Box::new(ReentrantFlushBackend {
+            state: Arc::clone(&backend_state),
+        })));
+        backend_state.bind_registry(&registry);
+
+        registry.set("widget::foo", 1, b"bar".to_vec());
+        assert!(registry.flush().unwrap());
+
+        let first_saved = backend_state.saved_entries();
+        assert!(first_saved.contains_key("widget::foo"));
+        assert!(!first_saved.contains_key("backend::late"));
+        assert!(registry.is_dirty());
+        assert_eq!(registry.get("backend::late").unwrap().data, b"late");
+
+        assert!(registry.flush().unwrap());
+
+        let second_saved = backend_state.saved_entries();
+        assert!(second_saved.contains_key("backend::late"));
+        assert!(!registry.is_dirty());
     }
 
     #[test]

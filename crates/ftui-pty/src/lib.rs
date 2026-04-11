@@ -634,9 +634,17 @@ impl Drop for PtySession {
         let _ = self.child.kill();
 
         if let Some(handle) = self.reader_thread.take() {
-            let _ = handle.join();
+            detach_reader_join(handle);
         }
     }
+}
+
+fn detach_reader_join(handle: thread::JoinHandle<()>) {
+    let _ = thread::Builder::new()
+        .name("ftui-pty-detached-join".to_string())
+        .spawn(move || {
+            let _ = handle.join();
+        });
 }
 
 /// Assert that terminal cleanup sequences were emitted.
@@ -1627,5 +1635,27 @@ mod tests {
         assert!(!BRACKETED_PASTE_DISABLE_SEQS.is_empty());
         assert!(!FOCUS_DISABLE_SEQS.is_empty());
         assert!(!KITTY_DISABLE_SEQS.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn drop_does_not_block_when_background_process_keeps_pty_open() {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let (done_tx, done_rx) = mpsc::channel();
+        let drop_thread = thread::spawn(move || {
+            let mut cmd = CommandBuilder::new(&shell);
+            cmd.arg("-c");
+            cmd.arg("sleep 1 >/dev/null 2>&1 &");
+            let session =
+                spawn_command(PtyConfig::default().logging(false), cmd).expect("spawn session");
+            drop(session);
+            done_tx.send(()).expect("signal drop completion");
+        });
+
+        assert!(
+            done_rx.recv_timeout(Duration::from_millis(400)).is_ok(),
+            "PtySession drop should not wait for background descendants to close the PTY"
+        );
+        drop_thread.join().expect("drop thread join");
     }
 }

@@ -42,7 +42,7 @@ use std::hash::{Hash, Hasher};
 use std::io::{BufRead, Read};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
-use web_time::Duration;
+use web_time::{Duration, Instant};
 
 /// Events emitted by a [`ProcessSubscription`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,8 +71,11 @@ pub struct ProcessSubscription<M: Send + 'static> {
     timeout: Option<Duration>,
     id: SubId,
     explicit_id: bool,
-    make_msg: Box<dyn Fn(ProcessEvent) -> M + Send + Sync>,
+    make_msg: std::sync::Arc<dyn Fn(ProcessEvent) -> M + Send + Sync>,
 }
+
+const PROCESS_READER_JOIN_TIMEOUT: Duration = Duration::from_millis(250);
+const PROCESS_READER_JOIN_POLL: Duration = Duration::from_millis(5);
 
 impl<M: Send + 'static> ProcessSubscription<M> {
     fn computed_id(
@@ -113,7 +116,7 @@ impl<M: Send + 'static> ProcessSubscription<M> {
             timeout: None,
             id,
             explicit_id: false,
-            make_msg: Box::new(make_msg),
+            make_msg: std::sync::Arc::new(make_msg),
         }
     }
 
@@ -218,7 +221,7 @@ impl<M: Send + 'static> Subscription<M> for ProcessSubscription<M> {
                     error = %e,
                     "process spawn failed"
                 );
-                let _ = sender.send((self.make_msg)(ProcessEvent::Error(format!(
+                let _ = sender.send((self.make_msg.as_ref())(ProcessEvent::Error(format!(
                     "Failed to spawn '{}': {}",
                     self.program, e
                 ))));
@@ -229,93 +232,123 @@ impl<M: Send + 'static> Subscription<M> for ProcessSubscription<M> {
         let deadline = self.timeout.map(|t| web_time::Instant::now() + t);
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
-        let make_msg_ref = &self.make_msg;
+        let make_msg_ref = std::sync::Arc::clone(&self.make_msg);
         // Use the cancellation token for cooperative stop coordination.
         let token = stop.cancellation_token().clone();
         let poll_interval = Duration::from_millis(50);
-
-        std::thread::scope(|s| {
-            let stdout_handle = stdout.map(|stdout| {
-                let sender_out = sender.clone();
-                s.spawn(move || {
-                    forward_lines(std::io::BufReader::new(stdout), sender_out, |line| {
-                        (make_msg_ref)(ProcessEvent::Stdout(line))
-                    });
-                })
-            });
-            let stderr_handle = stderr.map(|stderr| {
-                let sender_err = sender.clone();
-                s.spawn(move || {
-                    forward_lines(std::io::BufReader::new(stderr), sender_err, |line| {
-                        (make_msg_ref)(ProcessEvent::Stderr(line))
-                    });
-                })
-            });
-
-            let final_event = loop {
-                match child.try_wait() {
-                    Ok(Some(status)) => {
-                        let code = status.code().unwrap_or(-1);
-                        tracing::debug!(
-                            target: "ftui.process",
-                            sub_id,
-                            exit_code = code,
-                            elapsed_ms = spawn_start.elapsed().as_millis() as u64,
-                            "process exited"
-                        );
-                        break ProcessEvent::Exited(code);
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        tracing::warn!(
-                            target: "ftui.process",
-                            sub_id,
-                            error = %e,
-                            "process wait error"
-                        );
-                        break ProcessEvent::Error(format!("wait error: {e}"));
-                    }
-                }
-
-                if let Some(dl) = deadline
-                    && web_time::Instant::now() >= dl
-                {
-                    tracing::debug!(
-                        target: "ftui.process",
-                        sub_id,
-                        elapsed_ms = spawn_start.elapsed().as_millis() as u64,
-                        reason = "timeout",
-                        "killing process"
-                    );
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    break ProcessEvent::Killed;
-                }
-
-                if token.wait_timeout(poll_interval) {
-                    tracing::debug!(
-                        target: "ftui.process",
-                        sub_id,
-                        elapsed_ms = spawn_start.elapsed().as_millis() as u64,
-                        reason = "cancellation",
-                        "killing process"
-                    );
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    break ProcessEvent::Killed;
-                }
-            };
-
-            if let Some(handle) = stdout_handle {
-                let _ = handle.join();
-            }
-            if let Some(handle) = stderr_handle {
-                let _ = handle.join();
-            }
-
-            let _ = sender.send((make_msg_ref)(final_event));
+        let stdout_handle = stdout.map(|stdout| {
+            let sender_out = sender.clone();
+            let make_msg_out = std::sync::Arc::clone(&make_msg_ref);
+            std::thread::spawn(move || {
+                forward_lines(std::io::BufReader::new(stdout), sender_out, |line| {
+                    (make_msg_out.as_ref())(ProcessEvent::Stdout(line))
+                });
+            })
         });
+        let stderr_handle = stderr.map(|stderr| {
+            let sender_err = sender.clone();
+            let make_msg_err = std::sync::Arc::clone(&make_msg_ref);
+            std::thread::spawn(move || {
+                forward_lines(std::io::BufReader::new(stderr), sender_err, |line| {
+                    (make_msg_err.as_ref())(ProcessEvent::Stderr(line))
+                });
+            })
+        });
+
+        let final_event = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    let code = status.code().unwrap_or(-1);
+                    tracing::debug!(
+                        target: "ftui.process",
+                        sub_id,
+                        exit_code = code,
+                        elapsed_ms = spawn_start.elapsed().as_millis() as u64,
+                        "process exited"
+                    );
+                    break ProcessEvent::Exited(code);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        target: "ftui.process",
+                        sub_id,
+                        error = %e,
+                        "process wait error"
+                    );
+                    break ProcessEvent::Error(format!("wait error: {e}"));
+                }
+            }
+
+            if let Some(dl) = deadline
+                && web_time::Instant::now() >= dl
+            {
+                tracing::debug!(
+                    target: "ftui.process",
+                    sub_id,
+                    elapsed_ms = spawn_start.elapsed().as_millis() as u64,
+                    reason = "timeout",
+                    "killing process"
+                );
+                let _ = child.kill();
+                let _ = child.wait();
+                break ProcessEvent::Killed;
+            }
+
+            if token.wait_timeout(poll_interval) {
+                tracing::debug!(
+                    target: "ftui.process",
+                    sub_id,
+                    elapsed_ms = spawn_start.elapsed().as_millis() as u64,
+                    reason = "cancellation",
+                    "killing process"
+                );
+                let _ = child.kill();
+                let _ = child.wait();
+                break ProcessEvent::Killed;
+            }
+        };
+
+        if let Some(handle) = stdout_handle {
+            join_reader_thread_bounded(handle, "stdout", sub_id);
+        }
+        if let Some(handle) = stderr_handle {
+            join_reader_thread_bounded(handle, "stderr", sub_id);
+        }
+
+        let _ = sender.send((make_msg_ref.as_ref())(final_event));
     }
+}
+
+fn join_reader_thread_bounded(
+    handle: std::thread::JoinHandle<()>,
+    stream: &'static str,
+    sub_id: SubId,
+) {
+    let start = Instant::now();
+    while !handle.is_finished() {
+        if start.elapsed() >= PROCESS_READER_JOIN_TIMEOUT {
+            tracing::warn!(
+                target: "ftui.process",
+                sub_id,
+                stream,
+                timeout_ms = PROCESS_READER_JOIN_TIMEOUT.as_millis() as u64,
+                "process reader thread did not exit within timeout; detaching"
+            );
+            detach_reader_join(handle, stream);
+            return;
+        }
+        std::thread::sleep(PROCESS_READER_JOIN_POLL);
+    }
+    let _ = handle.join();
+}
+
+fn detach_reader_join(handle: std::thread::JoinHandle<()>, stream: &'static str) {
+    let _ = std::thread::Builder::new()
+        .name(format!("ftui-process-{stream}-detached-join"))
+        .spawn(move || {
+            let _ = handle.join();
+        });
 }
 
 #[cfg(test)]
@@ -812,6 +845,65 @@ mod tests {
             msgs.iter()
                 .any(|m| matches!(m, TestMsg::Proc(ProcessEvent::Killed))),
             "must emit Killed event"
+        );
+    }
+
+    #[test]
+    fn stop_signal_does_not_block_when_background_descendant_keeps_pipes_open() {
+        let sub = ProcessSubscription::new("sh", TestMsg::Proc)
+            .arg("-c")
+            .arg("sleep 60 & sleep 60");
+        let (tx, rx) = stdmpsc::channel();
+        let (signal, trigger) = StopSignal::new();
+        let start = web_time::Instant::now();
+
+        let handle = thread::spawn(move || {
+            sub.run(tx, signal);
+        });
+
+        thread::sleep(Duration::from_millis(100));
+        trigger.stop();
+        handle.join().unwrap();
+
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "stop should not block behind inherited stdout/stderr pipes"
+        );
+
+        let msgs: Vec<TestMsg> = rx.try_iter().collect();
+        assert!(
+            msgs.iter()
+                .any(|m| matches!(m, TestMsg::Proc(ProcessEvent::Killed))),
+            "expected Killed event, got: {msgs:?}"
+        );
+    }
+
+    #[test]
+    fn timeout_does_not_block_when_background_descendant_keeps_pipes_open() {
+        let sub = ProcessSubscription::new("sh", TestMsg::Proc)
+            .arg("-c")
+            .arg("sleep 60 & sleep 60")
+            .timeout(Duration::from_millis(100));
+        let (tx, rx) = stdmpsc::channel();
+        let (signal, _trigger) = StopSignal::new();
+        let start = web_time::Instant::now();
+
+        let handle = thread::spawn(move || {
+            sub.run(tx, signal);
+        });
+
+        handle.join().unwrap();
+
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "timeout should not block behind inherited stdout/stderr pipes"
+        );
+
+        let msgs: Vec<TestMsg> = rx.try_iter().collect();
+        assert!(
+            msgs.iter()
+                .any(|m| matches!(m, TestMsg::Proc(ProcessEvent::Killed))),
+            "expected Killed event, got: {msgs:?}"
         );
     }
 }

@@ -351,57 +351,61 @@ fn send_probe(query: &[u8], timeout: Duration) -> Option<Vec<u8>> {
     read_tty_response(timeout)
 }
 
+/// Poll interval for nonblocking tty probe reads.
+#[cfg(unix)]
+const TTY_READ_POLL: Duration = Duration::from_millis(1);
+
 /// Read a response from /dev/tty with a hard timeout.
 ///
-/// Uses a background thread to perform the blocking read. If the
-/// response is not received within `timeout`, returns `None`.
-///
-/// The background thread reads byte-by-byte and checks for response
-/// completeness markers (CSI terminator or OSC string terminator).
+/// Uses a nonblocking tty file descriptor and a bounded poll loop so
+/// timed-out probes do not leave behind stuck reader threads.
 #[cfg(unix)]
 fn read_tty_response(timeout: Duration) -> Option<Vec<u8>> {
-    use std::io::Read;
-    use std::sync::mpsc;
-    use std::thread;
-    use std::time::Instant;
+    use std::fs::OpenOptions;
+    use std::os::unix::fs::OpenOptionsExt;
 
-    let tty = std::fs::File::open("/dev/tty").ok()?;
-    let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(1);
+    let tty = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open("/dev/tty")
+        .ok()?;
+    read_nonblocking_probe_response(std::io::BufReader::new(tty), timeout)
+}
 
-    // Clone timeout for the thread's internal guard.
-    let thread_timeout = timeout + Duration::from_millis(200);
+#[cfg(unix)]
+fn read_nonblocking_probe_response<R: std::io::Read>(
+    mut reader: R,
+    timeout: Duration,
+) -> Option<Vec<u8>> {
+    let start = Instant::now();
+    let mut response = Vec::with_capacity(64);
+    let mut buf = [0u8; 1];
 
-    thread::Builder::new()
-        .name("ftui-caps-probe".into())
-        .spawn(move || {
-            let mut reader = std::io::BufReader::new(tty);
-            let mut response = Vec::with_capacity(64);
-            let mut buf = [0u8; 1];
-            let start = Instant::now();
-
-            while response.len() < MAX_RESPONSE_LEN {
-                match reader.read(&mut buf) {
-                    Ok(1) => {
-                        response.push(buf[0]);
-                        if is_response_complete(&response) {
-                            break;
-                        }
-                    }
-                    _ => break,
+    loop {
+        match reader.read(&mut buf) {
+            Ok(1) => {
+                response.push(buf[0]);
+                if is_response_complete(&response) {
+                    return Some(response);
                 }
-                // Belt-and-suspenders: internal timeout guard.
-                if start.elapsed() > thread_timeout {
-                    break;
+                if response.len() >= MAX_RESPONSE_LEN {
+                    return Some(response);
                 }
             }
-
-            let _ = tx.send(response);
-        })
-        .ok()?;
-
-    match rx.recv_timeout(timeout) {
-        Ok(bytes) if !bytes.is_empty() => Some(bytes),
-        _ => None,
+            Ok(0) => {
+                return (!response.is_empty()).then_some(response);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if start.elapsed() >= timeout {
+                    return None;
+                }
+                std::thread::sleep(TTY_READ_POLL);
+            }
+            Err(_) => {
+                return (!response.is_empty()).then_some(response);
+            }
+            Ok(_) => unreachable!("single-byte probe buffer read should not overfill"),
+        }
     }
 }
 
@@ -1112,6 +1116,10 @@ impl CapabilityProber {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::io::Write;
+    #[cfg(unix)]
+    use std::os::unix::net::UnixStream;
 
     // --- DA1 parsing tests ---
 
@@ -1521,6 +1529,47 @@ mod tests {
         // On non-Unix (or when /dev/tty is unavailable), result is empty.
         // We just verify it doesn't panic.
         let _ = result;
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_nonblocking_probe_response_times_out_without_leaving_thread_work() {
+        let (reader, _writer) = UnixStream::pair().expect("unix stream pair");
+        reader
+            .set_nonblocking(true)
+            .expect("reader should be nonblocking");
+
+        let start = Instant::now();
+        let result = read_nonblocking_probe_response(reader, Duration::from_millis(10));
+        let elapsed = start.elapsed();
+
+        assert_eq!(result, None);
+        assert!(
+            elapsed < Duration::from_millis(100),
+            "probe timeout should stay bounded, got {elapsed:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_nonblocking_probe_response_collects_complete_delayed_response() {
+        let (reader, mut writer) = UnixStream::pair().expect("unix stream pair");
+        reader
+            .set_nonblocking(true)
+            .expect("reader should be nonblocking");
+
+        let writer_thread = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(5));
+            writer
+                .write_all(b"\x1b[?1;2;4c")
+                .expect("writer should send probe response");
+        });
+
+        let result =
+            read_nonblocking_probe_response(reader, Duration::from_millis(100)).expect("response");
+        writer_thread.join().expect("writer thread join");
+
+        assert_eq!(result, b"\x1b[?1;2;4c");
     }
 
     // --- ProbeableCapability tests ---

@@ -39,6 +39,10 @@ const LOG_CHUNK_LIMIT: usize = 64;
 
 /// Channel capacity for the outbound message queue.
 const CHANNEL_CAPACITY: usize = 256;
+/// Timeout for render-thread shutdown joins.
+const RENDER_THREAD_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
+/// Poll interval while waiting for render-thread shutdown.
+const RENDER_THREAD_JOIN_POLL: std::time::Duration = std::time::Duration::from_millis(1);
 
 /// Pending render state: buffer, cursor position, cursor visibility.
 type PendingRender = (Buffer, Option<(u16, u16)>, bool);
@@ -110,7 +114,7 @@ impl RenderThread {
     fn shutdown_inner(&mut self) {
         request_shutdown_and_disconnect(&mut self.sender);
         if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
+            join_render_thread_bounded(handle);
         }
     }
 }
@@ -133,6 +137,26 @@ fn request_shutdown_and_disconnect(sender: &mut Option<mpsc::SyncSender<OutMsg>>
     };
 
     let _ = sender.try_send(OutMsg::Shutdown);
+}
+
+fn join_render_thread_bounded(handle: JoinHandle<()>) {
+    let start = std::time::Instant::now();
+    while !handle.is_finished() {
+        if start.elapsed() >= RENDER_THREAD_JOIN_TIMEOUT {
+            detach_render_thread_join(handle);
+            return;
+        }
+        thread::sleep(RENDER_THREAD_JOIN_POLL);
+    }
+    let _ = handle.join();
+}
+
+fn detach_render_thread_join(handle: JoinHandle<()>) {
+    let _ = thread::Builder::new()
+        .name("ftui-render-detached-join".into())
+        .spawn(move || {
+            let _ = handle.join();
+        });
 }
 
 fn render_loop<W: Write + Send>(
@@ -277,7 +301,8 @@ mod tests {
     use super::*;
     use ftui_core::terminal_capabilities::TerminalCapabilities;
     use ftui_render::cell::Cell;
-    use std::sync::{Arc, Mutex};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Condvar, Mutex, mpsc};
     use std::time::Duration;
 
     #[derive(Clone)]
@@ -667,5 +692,80 @@ mod tests {
             rx.recv().is_err(),
             "full-channel shutdown fallback should disconnect once queued work drains"
         );
+    }
+
+    #[derive(Clone)]
+    struct BlockingWriter {
+        entered_tx: Arc<Mutex<Option<mpsc::Sender<()>>>>,
+        released: Arc<(Mutex<bool>, Condvar)>,
+        sent_entered: Arc<AtomicBool>,
+    }
+
+    impl Write for BlockingWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if !self.sent_entered.swap(true, Ordering::SeqCst)
+                && let Some(tx) = self
+                    .entered_tx
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take()
+            {
+                let _ = tx.send(());
+            }
+
+            let (released_lock, released_ready) = &*self.released;
+            let mut released = released_lock
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            while !*released {
+                released = released_ready
+                    .wait(released)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+            }
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn shutdown_does_not_block_when_writer_is_stuck() {
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let released = Arc::new((Mutex::new(false), Condvar::new()));
+        let writer = BlockingWriter {
+            entered_tx: Arc::new(Mutex::new(Some(entered_tx))),
+            released: Arc::clone(&released),
+            sent_entered: Arc::new(AtomicBool::new(false)),
+        };
+        let writer = TerminalWriter::new(
+            writer,
+            ScreenMode::Inline { ui_height: 5 },
+            crate::terminal_writer::UiAnchor::Bottom,
+            TerminalCapabilities::basic(),
+        );
+        let rt = RenderThread::start(writer).unwrap();
+        rt.send(OutMsg::Log(b"blocked\n".to_vec())).unwrap();
+
+        assert!(
+            entered_rx.recv_timeout(Duration::from_secs(1)).is_ok(),
+            "render thread should enter the blocking writer"
+        );
+
+        let started = std::time::Instant::now();
+        rt.shutdown();
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "render-thread shutdown should not block on a stuck writer: {elapsed:?}"
+        );
+
+        let (released_lock, released_ready) = &*released;
+        let mut released = released_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *released = true;
+        released_ready.notify_all();
     }
 }

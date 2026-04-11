@@ -1147,9 +1147,17 @@ impl Drop for PtyBridgeSession {
     fn drop(&mut self) {
         let _ = self.child.kill();
         if let Some(handle) = self.reader_thread.take() {
-            let _ = handle.join();
+            detach_reader_join(handle);
         }
     }
+}
+
+fn detach_reader_join(handle: thread::JoinHandle<()>) {
+    let _ = thread::Builder::new()
+        .name("ftui-pty-ws-detached-join".to_string())
+        .spawn(move || {
+            let _ = handle.join();
+        });
 }
 
 fn portable_pty_error<E: std::fmt::Display>(error: E) -> io::Error {
@@ -2282,5 +2290,29 @@ mod tests {
             "expected PTY echo with flow control; last_error={last_error:?}; observed_len={}",
             observed.len()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pty_bridge_session_drop_does_not_block_when_background_process_keeps_pty_open() {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let (done_tx, done_rx) = mpsc::channel();
+        let drop_thread = thread::spawn(move || {
+            let session = PtyBridgeSession::spawn(&WsPtyBridgeConfig {
+                command: shell,
+                args: vec!["-c".to_string(), "sleep 1 >/dev/null 2>&1 &".to_string()],
+                telemetry_path: None,
+                ..WsPtyBridgeConfig::default()
+            })
+            .expect("spawn bridge PTY");
+            drop(session);
+            done_tx.send(()).expect("signal drop completion");
+        });
+
+        assert!(
+            done_rx.recv_timeout(Duration::from_millis(400)).is_ok(),
+            "PtyBridgeSession drop should not wait for background descendants to close the PTY"
+        );
+        drop_thread.join().expect("drop thread join");
     }
 }

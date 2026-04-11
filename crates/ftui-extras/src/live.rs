@@ -31,8 +31,9 @@
 
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::ThreadId;
+use std::time::{Duration, Instant};
 
 use crate::console::{Console, ConsoleSink};
 use ftui_render::sanitize::sanitize;
@@ -79,6 +80,8 @@ impl Default for LiveConfig {
 
 const AUTO_REFRESH_MIN_INTERVAL: Duration = Duration::from_millis(1);
 const AUTO_REFRESH_SLEEP_SLICE: Duration = Duration::from_millis(50);
+const AUTO_REFRESH_JOIN_TIMEOUT: Duration = Duration::from_millis(250);
+const AUTO_REFRESH_JOIN_POLL: Duration = Duration::from_millis(1);
 
 #[inline]
 fn auto_refresh_interval(rate: f64) -> Option<Duration> {
@@ -139,6 +142,8 @@ fn show_cursor(writer: &mut dyn Write) -> io::Result<()> {
 /// Thread-safe: the inner writer is protected by a Mutex.
 pub struct Live {
     writer: Mutex<Box<dyn Write + Send>>,
+    writer_owner: Mutex<Option<ThreadId>>,
+    writer_owner_ready: Condvar,
     width: usize,
     config: LiveConfig,
     /// Number of lines written in the last render (for cursor repositioning).
@@ -154,6 +159,19 @@ struct RefreshThread {
     handle: std::thread::JoinHandle<()>,
 }
 
+struct WriterAccessGuard<'a> {
+    owner: &'a Mutex<Option<ThreadId>>,
+    ready: &'a Condvar,
+}
+
+impl Drop for WriterAccessGuard<'_> {
+    fn drop(&mut self) {
+        let mut owner = self.owner.lock().unwrap_or_else(|e| e.into_inner());
+        *owner = None;
+        self.ready.notify_all();
+    }
+}
+
 impl Live {
     /// Create a new Live display.
     pub fn new(writer: Box<dyn Write + Send>, width: usize) -> Self {
@@ -164,6 +182,8 @@ impl Live {
     pub fn with_config(writer: Box<dyn Write + Send>, width: usize, config: LiveConfig) -> Self {
         Self {
             writer: Mutex::new(writer),
+            writer_owner: Mutex::new(None),
+            writer_owner_ready: Condvar::new(),
             width,
             config,
             last_height: Mutex::new(0),
@@ -180,9 +200,14 @@ impl Live {
             return Ok(()); // Already started
         }
 
-        let mut writer = self.lock_writer();
-        hide_cursor(&mut *writer)?;
-        writer.flush()
+        let result = self.with_writer(|writer| {
+            hide_cursor(writer)?;
+            writer.flush()
+        });
+        if result.is_err() {
+            self.started.store(false, Ordering::SeqCst);
+        }
+        result
     }
 
     /// Stop the live display (show cursor, optionally clean up).
@@ -196,16 +221,16 @@ impl Live {
             return Ok(()); // Already stopped
         }
 
-        let mut writer = self.lock_writer();
+        self.with_writer(|writer| {
+            if self.config.transient {
+                // Erase the live region
+                let height = *self.lock_height();
+                self.erase_region(writer, height)?;
+            }
 
-        if self.config.transient {
-            // Erase the live region
-            let height = *self.lock_height();
-            self.erase_region(&mut *writer, height)?;
-        }
-
-        show_cursor(&mut *writer)?;
-        writer.flush()
+            show_cursor(writer)?;
+            writer.flush()
+        })
     }
 
     /// Update the live display with new content.
@@ -230,42 +255,44 @@ impl Live {
         let lines = self.apply_overflow(lines);
         let new_height = lines.len();
 
-        let mut writer = self.lock_writer();
-        let last_height = {
-            let mut h = self.lock_height();
-            let old = *h;
-            *h = new_height;
-            old
-        };
+        let _ = self.with_writer(|writer| {
+            let last_height = {
+                let mut h = self.lock_height();
+                let old = *h;
+                *h = new_height;
+                old
+            };
 
-        // Move cursor back to start of live region
-        if last_height > 0 {
-            let _ = self.reposition_cursor(&mut *writer, last_height);
-        }
-
-        // Write new content
-        for (i, line) in lines.iter().enumerate() {
-            let _ = erase_line(&mut *writer);
-            let plain_text = line.plain_text();
-            let safe_text = sanitize(&plain_text);
-            let _ = write!(writer, "{safe_text}");
-            if i < lines.len() - 1 {
-                let _ = writeln!(writer);
+            // Move cursor back to start of live region
+            if last_height > 0 {
+                let _ = self.reposition_cursor(writer, last_height);
             }
-        }
 
-        // Erase any extra lines from previous render
-        if last_height > new_height {
-            for _ in 0..(last_height - new_height) {
-                let _ = writeln!(writer);
-                let _ = erase_line(&mut *writer);
+            // Write new content
+            for (i, line) in lines.iter().enumerate() {
+                let _ = erase_line(writer);
+                let plain_text = line.plain_text();
+                let safe_text = sanitize(&plain_text);
+                let _ = write!(writer, "{safe_text}");
+                if i < lines.len() - 1 {
+                    let _ = writeln!(writer);
+                }
             }
-            // Move cursor back up to end of new content
-            let extra = last_height - new_height;
-            let _ = cursor_up(&mut *writer, extra);
-        }
 
-        let _ = writer.flush();
+            // Erase any extra lines from previous render
+            if last_height > new_height {
+                for _ in 0..(last_height - new_height) {
+                    let _ = writeln!(writer);
+                    let _ = erase_line(writer);
+                }
+                // Move cursor back up to end of new content
+                let extra = last_height - new_height;
+                let _ = cursor_up(writer, extra);
+            }
+
+            let _ = writer.flush();
+            Ok(())
+        });
     }
 
     /// Refresh the display by re-rendering the last content.
@@ -277,11 +304,12 @@ impl Live {
             return Ok(());
         }
 
-        let mut writer = self.lock_writer();
-        let height = *self.lock_height();
-        self.erase_region(&mut *writer, height)?;
-        *self.lock_height() = 0;
-        writer.flush()
+        self.with_writer(|writer| {
+            let height = *self.lock_height();
+            self.erase_region(writer, height)?;
+            *self.lock_height() = 0;
+            writer.flush()
+        })
     }
 
     /// Whether the live display is currently active.
@@ -351,7 +379,7 @@ impl Live {
         };
 
         if let Some(rt) = to_join {
-            let _ = rt.handle.join();
+            join_refresh_thread_bounded(rt.handle);
         }
     }
 
@@ -359,6 +387,41 @@ impl Live {
 
     fn lock_writer(&self) -> std::sync::MutexGuard<'_, Box<dyn Write + Send>> {
         self.writer.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn enter_writer_access(&self) -> io::Result<WriterAccessGuard<'_>> {
+        let current = std::thread::current().id();
+        let mut owner = self.writer_owner.lock().unwrap_or_else(|e| e.into_inner());
+        if owner.as_ref().is_some_and(|id| *id == current) {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "reentrant live writer operation",
+            ));
+        }
+        while owner.is_some() {
+            owner = self
+                .writer_owner_ready
+                .wait(owner)
+                .unwrap_or_else(|e| e.into_inner());
+            if owner.as_ref().is_some_and(|id| *id == current) {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "reentrant live writer operation",
+                ));
+            }
+        }
+        *owner = Some(current);
+        drop(owner);
+        Ok(WriterAccessGuard {
+            owner: &self.writer_owner,
+            ready: &self.writer_owner_ready,
+        })
+    }
+
+    fn with_writer<T>(&self, f: impl FnOnce(&mut dyn Write) -> io::Result<T>) -> io::Result<T> {
+        let _access = self.enter_writer_access()?;
+        let mut writer = self.lock_writer();
+        f(&mut *writer)
     }
 
     fn lock_height(&self) -> std::sync::MutexGuard<'_, usize> {
@@ -417,6 +480,26 @@ impl Drop for Live {
     }
 }
 
+fn join_refresh_thread_bounded(handle: std::thread::JoinHandle<()>) {
+    let start = Instant::now();
+    while !handle.is_finished() {
+        if start.elapsed() >= AUTO_REFRESH_JOIN_TIMEOUT {
+            detach_refresh_thread_join(handle);
+            return;
+        }
+        std::thread::sleep(AUTO_REFRESH_JOIN_POLL);
+    }
+    let _ = handle.join();
+}
+
+fn detach_refresh_thread_join(handle: std::thread::JoinHandle<()>) {
+    let _ = std::thread::Builder::new()
+        .name("ftui-live-refresh-detached-join".into())
+        .spawn(move || {
+            let _ = handle.join();
+        });
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -427,6 +510,7 @@ mod tests {
     use ftui_text::Segment;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc;
 
     /// A test writer that captures all bytes written.
     #[derive(Clone, Default)]
@@ -454,6 +538,35 @@ mod tests {
             self.buf.lock().unwrap().extend_from_slice(buf);
             Ok(buf.len())
         }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct ReentrantLiveWriter {
+        live: std::sync::Weak<Live>,
+        fired: AtomicBool,
+    }
+
+    impl ReentrantLiveWriter {
+        fn new(live: std::sync::Weak<Live>) -> Self {
+            Self {
+                live,
+                fired: AtomicBool::new(false),
+            }
+        }
+    }
+
+    impl Write for ReentrantLiveWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if !self.fired.swap(true, Ordering::SeqCst)
+                && let Some(live) = self.live.upgrade()
+            {
+                live.clear()?;
+            }
+            Ok(buf.len())
+        }
+
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
         }
@@ -853,6 +966,18 @@ mod tests {
         assert_sync::<Live>();
     }
 
+    #[test]
+    fn reentrant_writer_callback_returns_error_instead_of_deadlocking() {
+        let live =
+            Arc::new_cyclic(|weak| Live::new(Box::new(ReentrantLiveWriter::new(weak.clone())), 80));
+
+        let err = live
+            .start()
+            .expect_err("reentrant writer callback should not deadlock");
+        assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+        assert!(!live.is_started(), "failed start should not stay active");
+    }
+
     // -- Transient vs non-transient --
 
     #[test]
@@ -1029,6 +1154,49 @@ mod tests {
 
         let refresh = live.refresh_thread.lock().unwrap();
         assert!(refresh.is_none(), "refresh thread should be stopped");
+    }
+
+    #[test]
+    fn stop_refresh_thread_does_not_block_on_stuck_callback() {
+        let w = TestWriter::new();
+        let cfg = LiveConfig {
+            refresh_per_second: 1_000.0,
+            ..Default::default()
+        };
+        let live = Live::with_config(Box::new(w), 80, cfg);
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let gate_for_callback = Arc::clone(&gate);
+
+        live.start_auto_refresh(move || {
+            let _ = entered_tx.send(());
+            let (released_lock, released_ready) = &*gate_for_callback;
+            let mut released = released_lock.lock().unwrap();
+            while !*released {
+                released = released_ready.wait(released).unwrap();
+            }
+        });
+
+        assert!(
+            entered_rx.recv_timeout(Duration::from_secs(1)).is_ok(),
+            "refresh callback should start promptly"
+        );
+
+        let started = Instant::now();
+        live.stop_refresh_thread();
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "stop_refresh_thread should not block on a stuck callback: {elapsed:?}"
+        );
+
+        let (released_lock, released_ready) = &*gate;
+        let mut released = released_lock.lock().unwrap();
+        *released = true;
+        released_ready.notify_all();
+
+        let refresh = live.refresh_thread.lock().unwrap();
+        assert!(refresh.is_none(), "refresh thread should be cleared");
     }
 
     #[test]

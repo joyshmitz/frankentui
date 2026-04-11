@@ -22,7 +22,8 @@
 //! ```
 
 use std::fmt::{self, Write as FmtWrite};
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex};
+use std::thread::ThreadId;
 
 use ftui_render::cell::PackedRgba;
 use ftui_style::Style;
@@ -176,7 +177,22 @@ fn timestamp_now() -> String {
 /// formatted record.
 pub struct TracingConsoleLayer {
     console: Mutex<Console>,
+    console_owner: Mutex<Option<ThreadId>>,
+    console_owner_ready: Condvar,
     config: TracingConfig,
+}
+
+struct ConsoleAccessGuard<'a> {
+    owner: &'a Mutex<Option<ThreadId>>,
+    ready: &'a Condvar,
+}
+
+impl Drop for ConsoleAccessGuard<'_> {
+    fn drop(&mut self) {
+        let mut owner = self.owner.lock().unwrap_or_else(|e| e.into_inner());
+        *owner = None;
+        self.ready.notify_all();
+    }
 }
 
 impl TracingConsoleLayer {
@@ -184,6 +200,8 @@ impl TracingConsoleLayer {
     pub fn new(console: Console) -> Self {
         Self {
             console: Mutex::new(console),
+            console_owner: Mutex::new(None),
+            console_owner_ready: Condvar::new(),
             config: TracingConfig::default(),
         }
     }
@@ -192,6 +210,8 @@ impl TracingConsoleLayer {
     pub fn with_config(console: Console, config: TracingConfig) -> Self {
         Self {
             console: Mutex::new(console),
+            console_owner: Mutex::new(None),
+            console_owner_ready: Condvar::new(),
             config,
         }
     }
@@ -233,6 +253,9 @@ impl TracingConsoleLayer {
 
     /// Format an event into segments and write them to the console.
     fn write_event(&self, event: &Event<'_>) {
+        let Some(_console_access) = self.enter_console_access() else {
+            return;
+        };
         let metadata = event.metadata();
         let level = *metadata.level();
 
@@ -301,6 +324,29 @@ impl TracingConsoleLayer {
         console.newline();
     }
 
+    fn enter_console_access(&self) -> Option<ConsoleAccessGuard<'_>> {
+        let current = std::thread::current().id();
+        let mut owner = self.console_owner.lock().unwrap_or_else(|e| e.into_inner());
+        if owner.as_ref().is_some_and(|id| *id == current) {
+            return None;
+        }
+        while owner.is_some() {
+            owner = self
+                .console_owner_ready
+                .wait(owner)
+                .unwrap_or_else(|e| e.into_inner());
+            if owner.as_ref().is_some_and(|id| *id == current) {
+                return None;
+            }
+        }
+        *owner = Some(current);
+        drop(owner);
+        Some(ConsoleAccessGuard {
+            owner: &self.console_owner,
+            ready: &self.console_owner_ready,
+        })
+    }
+
     /// Consume the layer and return the inner console (for test inspection).
     pub fn into_console(self) -> Console {
         self.console.into_inner().unwrap_or_else(|e| e.into_inner())
@@ -325,6 +371,7 @@ mod tests {
     use super::*;
     use crate::console::ConsoleSink;
     use std::io;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use tracing_subscriber::prelude::*;
 
@@ -348,6 +395,34 @@ mod tests {
 
     impl io::Write for SharedWriter {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let mut inner = self.inner.lock().expect("writer lock");
+            inner.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct ReentrantTracingWriter {
+        inner: Arc<Mutex<Vec<u8>>>,
+        fired: Arc<AtomicBool>,
+    }
+
+    impl ReentrantTracingWriter {
+        fn snapshot(&self) -> String {
+            let bytes = self.inner.lock().expect("writer lock").clone();
+            String::from_utf8(bytes).unwrap_or_default()
+        }
+    }
+
+    impl io::Write for ReentrantTracingWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if !self.fired.swap(true, Ordering::SeqCst) {
+                tracing::info!("nested from writer");
+            }
             let mut inner = self.inner.lock().expect("writer lock");
             inner.extend_from_slice(buf);
             Ok(buf.len())
@@ -402,6 +477,28 @@ mod tests {
         assert!(!layer.config.show_target);
         assert!(layer.config.show_fields);
         assert!(layer.config.show_source);
+    }
+
+    #[test]
+    fn reentrant_writer_logging_is_dropped_instead_of_deadlocking() {
+        let writer = ReentrantTracingWriter::default();
+        let probe = writer.clone();
+        let sink = ConsoleSink::writer(writer);
+        let console = Console::new(120, sink);
+        let layer = TracingConsoleLayer::with_config(console, no_frills_config());
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let dispatch = tracing::Dispatch::new(subscriber);
+
+        tracing::dispatcher::with_default(&dispatch, || {
+            tracing::info!("outer");
+        });
+
+        let output = probe.snapshot();
+        assert!(output.contains("outer"));
+        assert!(
+            !output.contains("nested from writer"),
+            "reentrant nested event should be dropped"
+        );
     }
 
     // -- Level styling tests --

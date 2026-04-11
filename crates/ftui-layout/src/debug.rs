@@ -438,7 +438,7 @@ pub struct LayoutDebugger {
     enabled: AtomicBool,
     records: Mutex<Vec<LayoutRecord>>,
     grid_records: Mutex<Vec<GridLayoutRecord>>,
-    telemetry_hooks: Mutex<Option<LayoutTelemetryHooks>>,
+    telemetry_hooks: Mutex<Option<Arc<LayoutTelemetryHooks>>>,
 }
 
 impl std::fmt::Debug for LayoutDebugger {
@@ -479,7 +479,7 @@ impl LayoutDebugger {
     /// Attach telemetry hooks for external observability.
     pub fn set_telemetry_hooks(&self, hooks: LayoutTelemetryHooks) {
         if let Ok(mut h) = self.telemetry_hooks.lock() {
-            *h = Some(hooks);
+            *h = Some(Arc::new(hooks));
         }
     }
 
@@ -488,6 +488,13 @@ impl LayoutDebugger {
         if let Ok(mut h) = self.telemetry_hooks.lock() {
             *h = None;
         }
+    }
+
+    fn telemetry_hooks_snapshot(&self) -> Option<Arc<LayoutTelemetryHooks>> {
+        self.telemetry_hooks
+            .lock()
+            .ok()
+            .and_then(|hooks| hooks.clone())
     }
 
     /// Check if debugging is enabled.
@@ -533,9 +540,7 @@ impl LayoutDebugger {
         }
 
         // Fire telemetry hooks before recording
-        if let Ok(hooks) = self.telemetry_hooks.lock()
-            && let Some(ref h) = *hooks
-        {
+        if let Some(h) = self.telemetry_hooks_snapshot() {
             h.fire_layout_solve(&record);
             if record.has_overflow() {
                 h.fire_overflow(&record);
@@ -562,9 +567,7 @@ impl LayoutDebugger {
         }
 
         // Fire telemetry hooks before recording
-        if let Ok(hooks) = self.telemetry_hooks.lock()
-            && let Some(ref h) = *hooks
-        {
+        if let Some(h) = self.telemetry_hooks_snapshot() {
             h.fire_grid_solve(&record);
         }
 
@@ -1258,6 +1261,36 @@ mod tests {
 
         // Counter should still be 1 (hooks cleared)
         assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn telemetry_hook_can_clear_hooks_reentrantly_without_deadlocking() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let debugger = LayoutDebugger::new();
+        debugger.set_enabled(true);
+
+        let (done_tx, done_rx) = mpsc::channel();
+        let debugger_for_hook = Arc::clone(&debugger);
+        let hooks = LayoutTelemetryHooks::new().on_layout_solve(move |_record| {
+            debugger_for_hook.clear_telemetry_hooks();
+            done_tx.send(()).expect("completion signal");
+        });
+        debugger.set_telemetry_hooks(hooks);
+
+        let debugger_for_thread = Arc::clone(&debugger);
+        let handle = std::thread::spawn(move || {
+            let mut record = LayoutRecord::new("reentrant_clear");
+            record.available_size = 100;
+            record.computed_sizes = smallvec::smallvec![50u16, 50u16];
+            debugger_for_thread.record(record);
+        });
+
+        done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("reentrant hook should complete without deadlocking");
+        handle.join().expect("layout debug thread");
     }
 
     #[test]
