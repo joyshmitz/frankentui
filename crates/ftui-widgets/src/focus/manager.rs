@@ -1808,6 +1808,19 @@ mod tests {
     }
 
     #[test]
+    fn push_trap_autofocuses_negative_tabindex_member_when_group_has_no_tabbable_nodes() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, -1));
+        fm.focus(1);
+
+        fm.create_group(42, vec![2]);
+        assert!(fm.push_trap(42));
+        assert!(fm.is_trapped());
+        assert_eq!(fm.current(), Some(2));
+    }
+
+    #[test]
     fn push_trap_retargets_when_current_group_member_becomes_unfocusable() {
         let mut fm = FocusManager::new();
         fm.graph_mut().insert(node(1, 0));

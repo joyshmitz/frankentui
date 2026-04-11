@@ -1051,6 +1051,25 @@ mod tests {
     }
 
     #[test]
+    fn push_with_trap_autofocuses_negative_tabindex_member_when_modal_has_no_tabbable_nodes() {
+        let mut modals = FocusAwareModalStack::new();
+
+        modals
+            .focus_manager_mut()
+            .graph_mut()
+            .insert(make_focus_node(1));
+        modals.focus_manager_mut().graph_mut().insert(
+            FocusNode::new(2, Rect::new(0, 0, 10, 3)).with_tab_index(-1),
+        );
+        modals.focus_manager_mut().focus(1);
+
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2]);
+
+        assert!(modals.is_focus_trapped());
+        assert_eq!(modals.focus_manager().current(), Some(2));
+    }
+
+    #[test]
     fn push_without_trap_no_focus_change() {
         let mut modals = FocusAwareModalStack::new();
 
