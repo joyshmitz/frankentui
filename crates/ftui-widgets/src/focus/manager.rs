@@ -328,7 +328,7 @@ impl FocusManager {
         if self.host_focused && !self.is_current_focusable_in_group(group_id) {
             self.focus_first_in_group_without_history(group_id);
         } else if !self.host_focused {
-            self.pending_focus_on_host_gain = self.group_tab_order(group_id).first().copied();
+            self.pending_focus_on_host_gain = self.group_primary_focus_target(group_id);
         }
         true
     }
@@ -352,7 +352,7 @@ impl FocusManager {
                 .filter(|id| self.can_focus(*id) && self.allowed_by_trap(*id))
                 .or_else(|| {
                     self.active_trap_group()
-                        .and_then(|group_id| self.group_tab_order(group_id).first().copied())
+                        .and_then(|group_id| self.group_primary_focus_target(group_id))
                 });
             return if had_current {
                 self.blur().is_some()
@@ -511,7 +511,7 @@ impl FocusManager {
         }
 
         self.active_trap_group()
-            .and_then(|group_id| self.group_tab_order(group_id).first().copied())
+            .and_then(|group_id| self.group_primary_focus_target(group_id))
     }
 
     #[must_use]
@@ -774,9 +774,16 @@ impl FocusManager {
         order.into_iter().filter(|id| group.contains(*id)).collect()
     }
 
+    pub(crate) fn group_primary_focus_target(&self, group_id: u32) -> Option<FocusId> {
+        self.group_tab_order(group_id).first().copied().or_else(|| {
+            self.groups
+                .get(&group_id)
+                .and_then(|group| group.members.iter().copied().find(|id| self.can_focus(*id)))
+        })
+    }
+
     fn focus_first_in_group_without_history(&mut self, group_id: u32) -> bool {
-        let order = self.group_tab_order(group_id);
-        let Some(first) = order.first().copied() else {
+        let Some(first) = self.group_primary_focus_target(group_id) else {
             return false;
         };
         self.set_focus_without_history(first)
@@ -1817,6 +1824,22 @@ mod tests {
         fm.create_group(42, vec![2]);
         assert!(fm.push_trap(42));
         assert!(fm.is_trapped());
+        assert_eq!(fm.current(), Some(2));
+    }
+
+    #[test]
+    fn push_trap_blurred_restores_negative_tabindex_member_on_focus_gain() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, -1));
+        fm.focus(1);
+        assert!(fm.apply_host_focus(false));
+
+        fm.create_group(42, vec![2]);
+        assert!(fm.push_trap(42));
+        assert_eq!(fm.current(), None);
+
+        assert!(fm.apply_host_focus(true));
         assert_eq!(fm.current(), Some(2));
     }
 
