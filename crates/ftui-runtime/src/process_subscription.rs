@@ -53,6 +53,8 @@ pub enum ProcessEvent {
     Stderr(String),
     /// The process exited with a status code.
     Exited(i32),
+    /// The process was terminated by a Unix signal.
+    Signaled(i32),
     /// The process was killed by the subscription (stop signal or timeout).
     Killed,
     /// An error occurred spawning or monitoring the process.
@@ -258,15 +260,25 @@ impl<M: Send + 'static> Subscription<M> for ProcessSubscription<M> {
         let final_event = loop {
             match child.try_wait() {
                 Ok(Some(status)) => {
-                    let code = status.code().unwrap_or(-1);
-                    tracing::debug!(
-                        target: "ftui.process",
-                        sub_id,
-                        exit_code = code,
-                        elapsed_ms = spawn_start.elapsed().as_millis() as u64,
-                        "process exited"
-                    );
-                    break ProcessEvent::Exited(code);
+                    let event = process_exit_event(status);
+                    if let ProcessEvent::Exited(code) = &event {
+                        tracing::debug!(
+                            target: "ftui.process",
+                            sub_id,
+                            exit_code = *code,
+                            elapsed_ms = spawn_start.elapsed().as_millis() as u64,
+                            "process exited"
+                        );
+                    } else if let ProcessEvent::Signaled(signal) = &event {
+                        tracing::debug!(
+                            target: "ftui.process",
+                            sub_id,
+                            signal = *signal,
+                            elapsed_ms = spawn_start.elapsed().as_millis() as u64,
+                            "process terminated by signal"
+                        );
+                    }
+                    break event;
                 }
                 Ok(None) => {}
                 Err(e) => {
@@ -320,6 +332,19 @@ impl<M: Send + 'static> Subscription<M> for ProcessSubscription<M> {
     }
 }
 
+fn process_exit_event(status: std::process::ExitStatus) -> ProcessEvent {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+
+        if let Some(signal) = status.signal() {
+            return ProcessEvent::Signaled(signal);
+        }
+    }
+
+    ProcessEvent::Exited(status.code().unwrap_or(-1))
+}
+
 fn join_reader_thread_bounded(
     handle: std::thread::JoinHandle<()>,
     stream: &'static str,
@@ -367,12 +392,14 @@ mod tests {
         let stdout = ProcessEvent::Stdout("hello".into());
         let stderr = ProcessEvent::Stderr("warn".into());
         let exited = ProcessEvent::Exited(0);
+        let signaled = ProcessEvent::Signaled(15);
         let killed = ProcessEvent::Killed;
         let error = ProcessEvent::Error("oops".into());
 
         assert_eq!(stdout, ProcessEvent::Stdout("hello".into()));
         assert_eq!(stderr, ProcessEvent::Stderr("warn".into()));
         assert_eq!(exited, ProcessEvent::Exited(0));
+        assert_eq!(signaled, ProcessEvent::Signaled(15));
         assert_eq!(killed, ProcessEvent::Killed);
         assert_eq!(error, ProcessEvent::Error("oops".into()));
     }
@@ -632,6 +659,30 @@ mod tests {
         assert!(has_exit, "Expected Exited(42), got: {msgs:?}");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn signal_exit_is_preserved() {
+        let sub = ProcessSubscription::new("sh", TestMsg::Proc)
+            .arg("-c")
+            .arg("kill -TERM $$");
+        let (tx, rx) = stdmpsc::channel();
+        let (signal, trigger) = StopSignal::new();
+
+        let handle = thread::spawn(move || {
+            sub.run(tx, signal);
+        });
+
+        thread::sleep(Duration::from_millis(500));
+        trigger.stop();
+        handle.join().unwrap();
+
+        let msgs: Vec<TestMsg> = rx.try_iter().collect();
+        let has_signal = msgs
+            .iter()
+            .any(|m| matches!(m, TestMsg::Proc(ProcessEvent::Signaled(15))));
+        assert!(has_signal, "Expected Signaled(15), got: {msgs:?}");
+    }
+
     // =========================================================================
     // PROCESS LIFECYCLE CONTRACT TESTS (bd-3s3yw)
     //
@@ -673,7 +724,7 @@ mod tests {
 
     /// CONTRACT: Final event is always sent, even on error paths.
     /// The subscription must always emit exactly one terminal event
-    /// (Exited, Killed, or Error).
+    /// (Exited, Signaled, Killed, or Error).
     #[test]
     fn contract_always_emits_terminal_event() {
         // Happy path: process exits normally
@@ -697,7 +748,10 @@ mod tests {
                     matches!(
                         m,
                         TestMsg::Proc(
-                            ProcessEvent::Exited(_) | ProcessEvent::Killed | ProcessEvent::Error(_)
+                            ProcessEvent::Exited(_)
+                                | ProcessEvent::Signaled(_)
+                                | ProcessEvent::Killed
+                                | ProcessEvent::Error(_)
                         )
                     )
                 })
@@ -731,7 +785,10 @@ mod tests {
                     matches!(
                         m,
                         TestMsg::Proc(
-                            ProcessEvent::Exited(_) | ProcessEvent::Killed | ProcessEvent::Error(_)
+                            ProcessEvent::Exited(_)
+                                | ProcessEvent::Signaled(_)
+                                | ProcessEvent::Killed
+                                | ProcessEvent::Error(_)
                         )
                     )
                 })
@@ -769,7 +826,10 @@ mod tests {
             matches!(
                 m,
                 TestMsg::Proc(
-                    ProcessEvent::Exited(_) | ProcessEvent::Killed | ProcessEvent::Error(_)
+                    ProcessEvent::Exited(_)
+                        | ProcessEvent::Signaled(_)
+                        | ProcessEvent::Killed
+                        | ProcessEvent::Error(_)
                 )
             )
         });

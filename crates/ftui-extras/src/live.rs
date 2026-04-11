@@ -82,6 +82,7 @@ const AUTO_REFRESH_MIN_INTERVAL: Duration = Duration::from_millis(1);
 const AUTO_REFRESH_SLEEP_SLICE: Duration = Duration::from_millis(50);
 const AUTO_REFRESH_JOIN_TIMEOUT: Duration = Duration::from_millis(250);
 const AUTO_REFRESH_JOIN_POLL: Duration = Duration::from_millis(1);
+const WRITER_ACCESS_WAIT_TIMEOUT: Duration = Duration::from_millis(250);
 
 #[inline]
 fn auto_refresh_interval(rate: f64) -> Option<Duration> {
@@ -398,15 +399,30 @@ impl Live {
                 "reentrant live writer operation",
             ));
         }
+        let deadline = Instant::now() + WRITER_ACCESS_WAIT_TIMEOUT;
         while owner.is_some() {
-            owner = self
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "timed out waiting for live writer access",
+                ));
+            }
+            let (new_owner, wait_result) = self
                 .writer_owner_ready
-                .wait(owner)
+                .wait_timeout(owner, remaining)
                 .unwrap_or_else(|e| e.into_inner());
+            owner = new_owner;
             if owner.as_ref().is_some_and(|id| *id == current) {
                 return Err(io::Error::new(
                     io::ErrorKind::WouldBlock,
                     "reentrant live writer operation",
+                ));
+            }
+            if wait_result.timed_out() && owner.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "timed out waiting for live writer access",
                 ));
             }
         }
@@ -554,6 +570,60 @@ mod tests {
                 live,
                 fired: AtomicBool::new(false),
             }
+        }
+    }
+
+    #[derive(Clone)]
+    struct BlockingWriter {
+        block_writes: Arc<AtomicBool>,
+        entered_tx: Arc<Mutex<Option<mpsc::Sender<()>>>>,
+        released: Arc<(Mutex<bool>, Condvar)>,
+        sent_entered: Arc<AtomicBool>,
+    }
+
+    impl BlockingWriter {
+        fn new(
+            block_writes: Arc<AtomicBool>,
+            entered_tx: mpsc::Sender<()>,
+            released: Arc<(Mutex<bool>, Condvar)>,
+        ) -> Self {
+            Self {
+                block_writes,
+                entered_tx: Arc::new(Mutex::new(Some(entered_tx))),
+                released,
+                sent_entered: Arc::new(AtomicBool::new(false)),
+            }
+        }
+    }
+
+    impl Write for BlockingWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.block_writes.load(Ordering::SeqCst) {
+                if !self.sent_entered.swap(true, Ordering::SeqCst)
+                    && let Some(tx) = self
+                        .entered_tx
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .take()
+                {
+                    let _ = tx.send(());
+                }
+
+                let (released_lock, released_ready) = &*self.released;
+                let mut released = released_lock
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                while !*released {
+                    released = released_ready
+                        .wait(released)
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                }
+            }
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
         }
     }
 
@@ -1197,6 +1267,52 @@ mod tests {
 
         let refresh = live.refresh_thread.lock().unwrap();
         assert!(refresh.is_none(), "refresh thread should be cleared");
+    }
+
+    #[test]
+    fn stop_does_not_block_when_writer_owner_is_stuck() {
+        let block_writes = Arc::new(AtomicBool::new(false));
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let released = Arc::new((Mutex::new(false), Condvar::new()));
+        let writer =
+            BlockingWriter::new(Arc::clone(&block_writes), entered_tx, Arc::clone(&released));
+        let live = Arc::new(Live::new(Box::new(writer), 80));
+        live.start().unwrap();
+
+        block_writes.store(true, Ordering::SeqCst);
+        let live_for_update = Arc::clone(&live);
+        let update_handle = std::thread::spawn(move || {
+            live_for_update.update(|console| {
+                console.print(Segment::text("blocked"));
+            });
+        });
+
+        assert!(
+            entered_rx.recv_timeout(Duration::from_secs(1)).is_ok(),
+            "update should enter the blocking writer"
+        );
+
+        let started = Instant::now();
+        let result = live.stop();
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "stop should not block on a stuck writer owner: {elapsed:?}"
+        );
+        assert!(
+            matches!(result, Err(ref error) if error.kind() == io::ErrorKind::TimedOut),
+            "stop should report timed out writer access, got {result:?}"
+        );
+
+        let (released_lock, released_ready) = &*released;
+        let mut released = released_lock.lock().unwrap();
+        *released = true;
+        released_ready.notify_all();
+        drop(released);
+
+        update_handle
+            .join()
+            .expect("update thread should finish after release");
     }
 
     #[test]

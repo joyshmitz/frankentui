@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -95,6 +96,48 @@ pub struct RunArtifactManifest {
     pub artifact_count: usize,
     pub artifacts: Vec<ArtifactEntry>,
     pub replay_commands: Vec<ReplayCommand>,
+}
+
+pub(crate) fn retain_run_scoped_artifact_path(run_dir: &Path, value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let canonical_run_dir = fs::canonicalize(run_dir).ok()?;
+    let path = PathBuf::from(trimmed);
+    let candidate = if path.is_absolute() {
+        path
+    } else {
+        run_dir.join(&path)
+    };
+    let canonical_candidate = fs::canonicalize(candidate).ok()?;
+    canonical_candidate
+        .starts_with(&canonical_run_dir)
+        .then(|| trimmed.to_string())
+}
+
+pub(crate) fn normalize_loaded_run_meta_paths(run_dir: &Path, meta: &RunMeta) -> RunMeta {
+    let sanitize_optional = |value: &Option<String>| {
+        value
+            .as_deref()
+            .and_then(|path| retain_run_scoped_artifact_path(run_dir, path))
+    };
+
+    RunMeta {
+        run_dir: run_dir.display().to_string(),
+        output: retain_run_scoped_artifact_path(run_dir, &meta.output).unwrap_or_default(),
+        snapshot: retain_run_scoped_artifact_path(run_dir, &meta.snapshot).unwrap_or_default(),
+        evidence_ledger: sanitize_optional(&meta.evidence_ledger),
+        artifact_manifest: sanitize_optional(&meta.artifact_manifest),
+        ttyd_shim_log: sanitize_optional(&meta.ttyd_shim_log),
+        ttyd_runtime_log: sanitize_optional(&meta.ttyd_runtime_log),
+        vhs_docker_log: sanitize_optional(&meta.vhs_docker_log),
+        tmux_session_file: sanitize_optional(&meta.tmux_session_file),
+        tmux_pane_capture: sanitize_optional(&meta.tmux_pane_capture),
+        tmux_pane_log: sanitize_optional(&meta.tmux_pane_log),
+        ..meta.clone()
+    }
 }
 
 impl RunMeta {

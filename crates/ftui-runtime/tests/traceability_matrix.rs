@@ -304,6 +304,7 @@ fn i10_process_subscription_api_exists() {
     // Verify the kill-related event variants exist
     let _killed = ProcessEvent::Killed;
     let _exited = ProcessEvent::Exited(0);
+    let _signaled = ProcessEvent::Signaled(15);
     let _error = ProcessEvent::Error("test".into());
     // Verify ProcessSubscription can be constructed with timeout
     let _sub: ProcessSubscription<String> =

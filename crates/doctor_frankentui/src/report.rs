@@ -5,7 +5,7 @@ use clap::Args;
 use serde::Serialize;
 
 use crate::error::{DoctorError, Result};
-use crate::runmeta::RunMeta;
+use crate::runmeta::{RunMeta, normalize_loaded_run_meta_paths};
 use crate::util::{OutputIntegration, output_for, relative_to, write_string};
 
 #[derive(Debug, Clone, Args)]
@@ -66,17 +66,17 @@ fn resolve_existing_artifact_path(run_dir: &Path, path_value: &str) -> Option<Pa
         return None;
     }
 
+    let canonical_run_dir = fs::canonicalize(run_dir).ok()?;
     let path = PathBuf::from(trimmed);
-    if path.is_absolute() {
-        return path.exists().then_some(path);
-    }
-
-    let run_relative = run_dir.join(&path);
-    if run_relative.exists() {
-        return Some(run_relative);
-    }
-
-    path.exists().then_some(path)
+    let candidate = if path.is_absolute() {
+        path
+    } else {
+        run_dir.join(&path)
+    };
+    let canonical_candidate = fs::canonicalize(candidate).ok()?;
+    canonical_candidate
+        .starts_with(&canonical_run_dir)
+        .then_some(canonical_candidate)
 }
 
 fn push_optional_artifact_link(
@@ -452,10 +452,13 @@ fn run_report_with_integration(args: ReportArgs, integration: &OutputIntegration
             args.suite_dir.display()
         )));
     }
-
     let runs = meta_files
         .iter()
-        .map(|path| RunMeta::from_path(path))
+        .map(|path| {
+            let run = RunMeta::from_path(path)?;
+            let run_dir = path.parent().unwrap_or(args.suite_dir.as_path());
+            Ok(normalize_loaded_run_meta_paths(run_dir, &run))
+        })
         .collect::<Result<Vec<_>>>()?;
 
     run_report_with_runs(args, runs, integration)
@@ -465,6 +468,7 @@ fn run_report_with_integration(args: ReportArgs, integration: &OutputIntegration
 mod tests {
     use std::fs;
     use std::path::Path;
+    use std::sync::{LazyLock, Mutex};
 
     use tempfile::tempdir;
 
@@ -476,6 +480,8 @@ mod tests {
         ReportArgs, ReportSummary, build_report_machine_summary, find_run_meta_files, run_report,
         run_report_with_integration, run_report_with_runs,
     };
+
+    static CWD_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     #[test]
     fn report_generation_writes_outputs() {
@@ -915,6 +921,7 @@ mod tests {
 
     #[test]
     fn run_report_prefers_run_dir_for_relative_artifact_paths_over_cwd_collisions() {
+        let _cwd_lock = CWD_TEST_LOCK.lock().expect("cwd lock poisoned");
         let temp = tempdir().expect("tempdir");
         let suite_dir = temp.path().join("suite");
         let run_dir = suite_dir.join("run_01");
@@ -957,6 +964,220 @@ mod tests {
             !html.contains("../capture.mp4"),
             "report should not resolve against cwd collision: {html}"
         );
+    }
+
+    #[test]
+    fn run_report_does_not_resolve_missing_relative_artifacts_against_cwd() {
+        let _cwd_lock = CWD_TEST_LOCK.lock().expect("cwd lock poisoned");
+        let temp = tempdir().expect("tempdir");
+        let suite_dir = temp.path().join("suite");
+        let run_dir = suite_dir.join("run_01");
+        fs::create_dir_all(&run_dir).expect("mkdir");
+
+        RunMeta {
+            status: "ok".to_string(),
+            started_at: "2026-02-17T00:00:00Z".to_string(),
+            profile: "analytics-empty".to_string(),
+            output: "capture.mp4".to_string(),
+            run_dir: run_dir.display().to_string(),
+            ..RunMeta::default()
+        }
+        .write_to_path(&run_dir.join("run_meta.json"))
+        .expect("write run meta");
+
+        let cwd_guard = tempdir().expect("cwd tempdir");
+        let original_cwd = std::env::current_dir().expect("capture cwd");
+        fs::write(cwd_guard.path().join("capture.mp4"), b"cwd collision").expect("write cwd file");
+        std::env::set_current_dir(cwd_guard.path()).expect("set cwd");
+
+        let report_result = run_report(ReportArgs {
+            suite_dir: suite_dir.clone(),
+            output_html: None,
+            output_json: None,
+            title: "Missing Relative Artifact Report".to_string(),
+        });
+
+        std::env::set_current_dir(&original_cwd).expect("restore cwd");
+        report_result.expect("run report");
+
+        let html = fs::read_to_string(suite_dir.join("index.html")).expect("read html");
+        assert!(
+            !html.contains("video file"),
+            "report should not resolve missing relative artifacts against cwd: {html}"
+        );
+        assert!(
+            !html.contains("capture.mp4"),
+            "report should not link cwd-relative artifacts: {html}"
+        );
+    }
+
+    #[test]
+    fn run_report_rejects_relative_artifact_paths_that_escape_run_dir() {
+        let temp = tempdir().expect("tempdir");
+        let suite_dir = temp.path().join("suite");
+        let run_dir = suite_dir.join("run_01");
+        fs::create_dir_all(&run_dir).expect("mkdir");
+
+        let outside_video = suite_dir.join("outside.mp4");
+        fs::write(&outside_video, b"outside video").expect("write outside video");
+
+        RunMeta {
+            status: "ok".to_string(),
+            started_at: "2026-02-17T00:00:00Z".to_string(),
+            profile: "analytics-empty".to_string(),
+            output: "../outside.mp4".to_string(),
+            run_dir: run_dir.display().to_string(),
+            ..RunMeta::default()
+        }
+        .write_to_path(&run_dir.join("run_meta.json"))
+        .expect("write run meta");
+
+        run_report(ReportArgs {
+            suite_dir: suite_dir.clone(),
+            output_html: None,
+            output_json: None,
+            title: "Escaping Relative Artifact Report".to_string(),
+        })
+        .expect("run report");
+
+        let html = fs::read_to_string(suite_dir.join("index.html")).expect("read html");
+        assert!(
+            !html.contains("video file"),
+            "report should not link artifacts outside the run directory: {html}"
+        );
+        assert!(
+            !html.contains("outside.mp4"),
+            "report should reject escaping relative artifact paths: {html}"
+        );
+    }
+
+    #[test]
+    fn run_report_rejects_absolute_artifact_paths_outside_run_dir() {
+        let temp = tempdir().expect("tempdir");
+        let suite_dir = temp.path().join("suite");
+        let run_dir = suite_dir.join("run_01");
+        fs::create_dir_all(&run_dir).expect("mkdir");
+
+        let outside_video = suite_dir.join("outside.mp4");
+        fs::write(&outside_video, b"outside video").expect("write outside video");
+
+        RunMeta {
+            status: "ok".to_string(),
+            started_at: "2026-02-17T00:00:00Z".to_string(),
+            profile: "analytics-empty".to_string(),
+            output: outside_video.display().to_string(),
+            run_dir: run_dir.display().to_string(),
+            ..RunMeta::default()
+        }
+        .write_to_path(&run_dir.join("run_meta.json"))
+        .expect("write run meta");
+
+        run_report(ReportArgs {
+            suite_dir: suite_dir.clone(),
+            output_html: None,
+            output_json: None,
+            title: "Escaping Absolute Artifact Report".to_string(),
+        })
+        .expect("run report");
+
+        let html = fs::read_to_string(suite_dir.join("index.html")).expect("read html");
+        assert!(
+            !html.contains("video file"),
+            "report should not link absolute artifacts outside the run directory: {html}"
+        );
+        assert!(
+            !html.contains("outside.mp4"),
+            "report should reject escaping absolute artifact paths: {html}"
+        );
+    }
+
+    #[test]
+    fn run_report_uses_discovered_run_dir_over_runmeta_run_dir() {
+        let temp = tempdir().expect("tempdir");
+        let suite_dir = temp.path().join("suite");
+        let run_dir = suite_dir.join("run_01");
+        let forged_run_dir = temp.path().join("forged_run");
+        fs::create_dir_all(&run_dir).expect("mkdir run dir");
+        fs::create_dir_all(&forged_run_dir).expect("mkdir forged run dir");
+
+        fs::write(run_dir.join("capture.mp4"), b"run-local video").expect("write run-local video");
+        fs::write(forged_run_dir.join("capture.mp4"), b"forged video").expect("write forged video");
+
+        RunMeta {
+            status: "ok".to_string(),
+            started_at: "2026-02-17T00:00:00Z".to_string(),
+            profile: "analytics-empty".to_string(),
+            output: "capture.mp4".to_string(),
+            run_dir: forged_run_dir.display().to_string(),
+            ..RunMeta::default()
+        }
+        .write_to_path(&run_dir.join("run_meta.json"))
+        .expect("write run meta");
+
+        run_report(ReportArgs {
+            suite_dir: suite_dir.clone(),
+            output_html: None,
+            output_json: None,
+            title: "Discovered Run Dir Report".to_string(),
+        })
+        .expect("run report");
+
+        let html = fs::read_to_string(suite_dir.join("index.html")).expect("read html");
+        assert!(
+            html.contains(r#"href="run_01&#x2f;capture.mp4""#),
+            "report should resolve artifacts under the discovered run directory: {html}"
+        );
+        assert!(
+            !html.contains("forged_run"),
+            "report should not trust run_meta run_dir when it points elsewhere: {html}"
+        );
+    }
+
+    #[test]
+    fn run_report_json_sanitizes_loaded_runmeta_paths_against_discovered_run_dir() {
+        let temp = tempdir().expect("tempdir");
+        let suite_dir = temp.path().join("suite");
+        let run_dir = suite_dir.join("run_01");
+        let forged_run_dir = temp.path().join("forged_run");
+        fs::create_dir_all(&run_dir).expect("mkdir run dir");
+        fs::create_dir_all(&forged_run_dir).expect("mkdir forged run dir");
+
+        let outside_video = temp.path().join("outside.mp4");
+        let outside_log = temp.path().join("outside.log");
+        fs::write(&outside_video, b"outside video").expect("write outside video");
+        fs::write(&outside_log, b"outside log").expect("write outside log");
+        fs::write(run_dir.join("snapshot.png"), b"snapshot").expect("write snapshot");
+
+        RunMeta {
+            status: "ok".to_string(),
+            started_at: "2026-02-17T00:00:00Z".to_string(),
+            profile: "analytics-empty".to_string(),
+            output: outside_video.display().to_string(),
+            snapshot: "snapshot.png".to_string(),
+            run_dir: forged_run_dir.display().to_string(),
+            evidence_ledger: Some("../outside.log".to_string()),
+            ..RunMeta::default()
+        }
+        .write_to_path(&run_dir.join("run_meta.json"))
+        .expect("write run meta");
+
+        run_report(ReportArgs {
+            suite_dir: suite_dir.clone(),
+            output_html: None,
+            output_json: None,
+            title: "Sanitized Report JSON".to_string(),
+        })
+        .expect("run report");
+
+        let report_json: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(suite_dir.join("report.json")).expect("read report json"),
+        )
+        .expect("parse report json");
+        let run = &report_json["runs"][0];
+        assert_eq!(run["run_dir"], run_dir.display().to_string());
+        assert_eq!(run["output"], "");
+        assert_eq!(run["snapshot"], "snapshot.png");
+        assert!(run["evidence_ledger"].is_null());
     }
 
     #[test]

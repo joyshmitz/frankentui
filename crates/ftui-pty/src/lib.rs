@@ -63,6 +63,8 @@ pub struct PtyConfig {
     pub test_name: Option<String>,
     /// Enable structured PTY logging to stderr.
     pub log_events: bool,
+    /// Maximum time to wait for PTY input writes before failing.
+    pub input_write_timeout: Duration,
 }
 
 impl Default for PtyConfig {
@@ -74,6 +76,7 @@ impl Default for PtyConfig {
             env: Vec::new(),
             test_name: None,
             log_events: true,
+            input_write_timeout: DEFAULT_INPUT_WRITE_TIMEOUT,
         }
     }
 }
@@ -112,6 +115,13 @@ impl PtyConfig {
     #[must_use]
     pub fn logging(mut self, enabled: bool) -> Self {
         self.log_events = enabled;
+        self
+    }
+
+    /// Override the PTY input write timeout.
+    #[must_use]
+    pub fn with_input_write_timeout(mut self, timeout: Duration) -> Self {
+        self.input_write_timeout = timeout;
         self
     }
 }
@@ -211,6 +221,119 @@ impl CleanupExpectations {
     }
 }
 
+pub(crate) const DEFAULT_INPUT_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+
+pub(crate) fn normalize_line_input(line: &[u8]) -> Vec<u8> {
+    let trimmed = if line.last() == Some(&b'\n') {
+        &line[..line.len().saturating_sub(1)]
+    } else {
+        line
+    };
+
+    let mut normalized = Vec::with_capacity(trimmed.len() + 2);
+    normalized.extend_from_slice(trimmed);
+    if normalized.last() == Some(&b'\r') {
+        normalized.push(b'\n');
+    } else {
+        normalized.extend_from_slice(b"\r\n");
+    }
+    normalized
+}
+
+enum WriterCommand {
+    Write {
+        bytes: Vec<u8>,
+        response: mpsc::Sender<io::Result<()>>,
+    },
+    Flush {
+        response: mpsc::Sender<io::Result<()>>,
+    },
+}
+
+pub(crate) struct PtyInputWriter {
+    tx: mpsc::Sender<WriterCommand>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl PtyInputWriter {
+    pub(crate) fn spawn(writer: Box<dyn Write + Send>, thread_name: &str) -> io::Result<Self> {
+        let (tx, rx) = mpsc::channel::<WriterCommand>();
+        let handle = thread::Builder::new()
+            .name(thread_name.to_string())
+            .spawn(move || {
+                let mut writer = writer;
+                while let Ok(command) = rx.recv() {
+                    match command {
+                        WriterCommand::Write { bytes, response } => {
+                            let result = writer.write_all(&bytes).and_then(|_| writer.flush());
+                            let _ = response.send(result);
+                        }
+                        WriterCommand::Flush { response } => {
+                            let _ = response.send(writer.flush());
+                        }
+                    }
+                }
+            })
+            .map_err(|error| {
+                io::Error::other(format!("failed to spawn PTY writer thread: {error}"))
+            })?;
+
+        Ok(Self {
+            tx,
+            thread: Some(handle),
+        })
+    }
+
+    pub(crate) fn write_with_timeout(
+        &mut self,
+        bytes: &[u8],
+        timeout: Duration,
+        _worker_name: &str,
+        _detach_name: &str,
+    ) -> io::Result<()> {
+        let (response_tx, response_rx) = mpsc::channel::<io::Result<()>>();
+        self.tx
+            .send(WriterCommand::Write {
+                bytes: bytes.to_vec(),
+                response: response_tx,
+            })
+            .map_err(|_| {
+                io::Error::new(io::ErrorKind::BrokenPipe, "PTY input writer is unavailable")
+            })?;
+
+        match response_rx.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("PTY input write timed out after {} ms", timeout.as_millis()),
+            )),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "PTY input writer thread exited unexpectedly",
+            )),
+        }
+    }
+
+    pub(crate) fn flush_best_effort(&mut self) {
+        let (response_tx, response_rx) = mpsc::channel::<io::Result<()>>();
+        if self
+            .tx
+            .send(WriterCommand::Flush {
+                response: response_tx,
+            })
+            .is_ok()
+        {
+            let _ = response_rx.recv_timeout(Duration::from_millis(100));
+        }
+    }
+
+    pub(crate) fn detach_thread(&mut self, detach_name: &str) {
+        if let Some(handle) = self.thread.take() {
+            detach_join(handle, detach_name);
+        }
+    }
+}
+
 #[derive(Debug)]
 enum ReaderMsg {
     Data(Vec<u8>),
@@ -221,7 +344,7 @@ enum ReaderMsg {
 /// A spawned PTY session with captured output.
 pub struct PtySession {
     child: Box<dyn portable_pty::Child + Send + Sync>,
-    writer: Box<dyn Write + Send>,
+    input_writer: PtyInputWriter,
     rx: mpsc::Receiver<ReaderMsg>,
     reader_thread: Option<thread::JoinHandle<()>>,
     captured: Vec<u8>,
@@ -268,6 +391,7 @@ pub fn spawn_command(mut config: PtyConfig, mut cmd: CommandBuilder) -> io::Resu
     let child = pair.slave.spawn_command(cmd).map_err(portable_pty_error)?;
     let mut reader = pair.master.try_clone_reader().map_err(portable_pty_error)?;
     let writer = pair.master.take_writer().map_err(portable_pty_error)?;
+    let input_writer = PtyInputWriter::spawn(writer, "ftui-pty-session-writer")?;
 
     let (tx, rx) = mpsc::channel::<ReaderMsg>();
     let reader_thread = thread::spawn(move || {
@@ -291,7 +415,7 @@ pub fn spawn_command(mut config: PtyConfig, mut cmd: CommandBuilder) -> io::Resu
 
     Ok(PtySession {
         child,
-        writer,
+        input_writer,
         rx,
         reader_thread: Some(reader_thread),
         captured: Vec::new(),
@@ -427,14 +551,28 @@ impl PtySession {
         ))
     }
 
-    /// Send input bytes to the child process.
+    /// Send raw input bytes to the child process.
+    ///
+    /// For interactive shell commands, prefer [`Self::send_line`] so Enter is
+    /// encoded as carriage return instead of a bare line feed.
     pub fn send_input(&mut self, bytes: &[u8]) -> io::Result<()> {
         if bytes.is_empty() {
             return Ok(());
         }
 
-        self.writer.write_all(bytes)?;
-        self.writer.flush()?;
+        let result = self.input_writer.write_with_timeout(
+            bytes,
+            self.config.input_write_timeout,
+            "ftui-pty-session-write",
+            "ftui-pty-session-detached-write",
+        );
+        if matches!(
+            result.as_ref().err().map(io::Error::kind),
+            Some(io::ErrorKind::TimedOut)
+        ) {
+            let _ = self.child.kill();
+        }
+        result?;
 
         log_event(
             self.config.log_events,
@@ -443,6 +581,12 @@ impl PtySession {
         );
 
         Ok(())
+    }
+
+    /// Send a line of interactive input, normalizing Enter to carriage return.
+    pub fn send_line(&mut self, line: impl AsRef<[u8]>) -> io::Result<()> {
+        let normalized = normalize_line_input(line.as_ref());
+        self.send_input(&normalized)
     }
 
     /// Wait for the child to exit and return its status.
@@ -629,9 +773,10 @@ impl PtySession {
 
 impl Drop for PtySession {
     fn drop(&mut self) {
-        // Best-effort cleanup: close writer (sends EOF), then try to terminate the child.
-        let _ = self.writer.flush();
         let _ = self.child.kill();
+        self.input_writer.flush_best_effort();
+        self.input_writer
+            .detach_thread("ftui-pty-session-detached-writer");
 
         if let Some(handle) = self.reader_thread.take() {
             detach_reader_join(handle);
@@ -640,8 +785,12 @@ impl Drop for PtySession {
 }
 
 fn detach_reader_join(handle: thread::JoinHandle<()>) {
+    detach_join(handle, "ftui-pty-detached-reader-join");
+}
+
+pub(crate) fn detach_join(handle: thread::JoinHandle<()>, thread_name: &str) {
     let _ = thread::Builder::new()
-        .name("ftui-pty-detached-join".to_string())
+        .name(thread_name.to_string())
         .spawn(move || {
             let _ = handle.join();
         });
@@ -815,6 +964,21 @@ const KITTY_DISABLE_SEQS: &[&[u8]] = &[b"\x1b[<u"];
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalize_line_input_appends_carriage_return() {
+        assert_eq!(normalize_line_input(b"echo hi"), b"echo hi\r\n");
+    }
+
+    #[test]
+    fn normalize_line_input_replaces_trailing_line_feed() {
+        assert_eq!(normalize_line_input(b"echo hi\n"), b"echo hi\r\n");
+    }
+
+    #[test]
+    fn normalize_line_input_preserves_existing_carriage_return() {
+        assert_eq!(normalize_line_input(b"echo hi\r"), b"echo hi\r\n");
+    }
     #[cfg(unix)]
     use ftui_core::terminal_session::{TerminalSession, best_effort_cleanup_for_exit};
 
@@ -1657,5 +1821,32 @@ mod tests {
             "PtySession drop should not wait for background descendants to close the PTY"
         );
         drop_thread.join().expect("drop thread join");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn send_input_times_out_when_child_does_not_drain_stdin() {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let mut cmd = CommandBuilder::new(&shell);
+        cmd.arg("-c");
+        cmd.arg("sleep 5");
+        let mut session = spawn_command(
+            PtyConfig::default()
+                .logging(false)
+                .with_input_write_timeout(Duration::from_millis(100)),
+            cmd,
+        )
+        .expect("spawn session");
+
+        let payload = vec![b'x'; 8 * 1024 * 1024];
+        let start = Instant::now();
+        let err = session
+            .send_input(&payload)
+            .expect_err("send_input should time out when the child never reads stdin");
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "send_input should fail promptly instead of hanging"
+        );
     }
 }

@@ -24,6 +24,7 @@
 use std::fmt::{self, Write as FmtWrite};
 use std::sync::{Condvar, Mutex};
 use std::thread::ThreadId;
+use std::time::{Duration, Instant};
 
 use ftui_render::cell::PackedRgba;
 use ftui_style::Style;
@@ -182,6 +183,8 @@ pub struct TracingConsoleLayer {
     config: TracingConfig,
 }
 
+const CONSOLE_ACCESS_WAIT_TIMEOUT: Duration = Duration::from_millis(250);
+
 struct ConsoleAccessGuard<'a> {
     owner: &'a Mutex<Option<ThreadId>>,
     ready: &'a Condvar,
@@ -330,11 +333,20 @@ impl TracingConsoleLayer {
         if owner.as_ref().is_some_and(|id| *id == current) {
             return None;
         }
+        let deadline = Instant::now() + CONSOLE_ACCESS_WAIT_TIMEOUT;
         while owner.is_some() {
-            owner = self
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return None;
+            }
+            let (next_owner, wait_result) = self
                 .console_owner_ready
-                .wait(owner)
+                .wait_timeout(owner, remaining)
                 .unwrap_or_else(|e| e.into_inner());
+            owner = next_owner;
+            if wait_result.timed_out() && owner.is_some() {
+                return None;
+            }
             if owner.as_ref().is_some_and(|id| *id == current) {
                 return None;
             }
@@ -372,7 +384,8 @@ mod tests {
     use crate::console::ConsoleSink;
     use std::io;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Condvar, Mutex, mpsc};
+    use std::time::{Duration, Instant};
     use tracing_subscriber::prelude::*;
 
     #[derive(Clone, Default)]
@@ -423,6 +436,62 @@ mod tests {
             if !self.fired.swap(true, Ordering::SeqCst) {
                 tracing::info!("nested from writer");
             }
+            let mut inner = self.inner.lock().expect("writer lock");
+            inner.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Clone)]
+    struct BlockingTracingWriter {
+        inner: Arc<Mutex<Vec<u8>>>,
+        block_writes: Arc<AtomicBool>,
+        entered_tx: Arc<Mutex<Option<mpsc::Sender<()>>>>,
+        released: Arc<(Mutex<bool>, Condvar)>,
+        sent_entered: Arc<AtomicBool>,
+    }
+
+    impl BlockingTracingWriter {
+        fn new(
+            block_writes: Arc<AtomicBool>,
+            entered_tx: mpsc::Sender<()>,
+            released: Arc<(Mutex<bool>, Condvar)>,
+        ) -> Self {
+            Self {
+                inner: Arc::new(Mutex::new(Vec::new())),
+                block_writes,
+                entered_tx: Arc::new(Mutex::new(Some(entered_tx))),
+                released,
+                sent_entered: Arc::new(AtomicBool::new(false)),
+            }
+        }
+
+        fn snapshot(&self) -> String {
+            let bytes = self.inner.lock().expect("writer lock").clone();
+            String::from_utf8(bytes).unwrap_or_default()
+        }
+    }
+
+    impl io::Write for BlockingTracingWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.block_writes.load(Ordering::SeqCst) {
+                if !self.sent_entered.swap(true, Ordering::SeqCst) {
+                    let entered_tx = self.entered_tx.lock().expect("entered tx lock").take();
+                    if let Some(entered_tx) = entered_tx {
+                        let _ = entered_tx.send(());
+                    }
+                }
+                let (released_lock, released_ready) = &*self.released;
+                let mut released = released_lock.lock().expect("released lock");
+                while !*released {
+                    released = released_ready.wait(released).expect("released wait");
+                }
+            }
+
             let mut inner = self.inner.lock().expect("writer lock");
             inner.extend_from_slice(buf);
             Ok(buf.len())
@@ -498,6 +567,71 @@ mod tests {
         assert!(
             !output.contains("nested from writer"),
             "reentrant nested event should be dropped"
+        );
+    }
+
+    #[test]
+    fn stalled_writer_does_not_block_later_log_events() {
+        let block_writes = Arc::new(AtomicBool::new(false));
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let released = Arc::new((Mutex::new(false), Condvar::new()));
+        let writer = BlockingTracingWriter::new(
+            Arc::clone(&block_writes),
+            entered_tx,
+            Arc::clone(&released),
+        );
+        let probe = writer.clone();
+        let sink = ConsoleSink::writer(writer);
+        let console = Console::new(120, sink);
+        let layer = TracingConsoleLayer::with_config(console, no_frills_config());
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let dispatch = tracing::Dispatch::new(subscriber);
+
+        block_writes.store(true, Ordering::SeqCst);
+
+        let blocked_dispatch = dispatch.clone();
+        let blocked_handle = std::thread::spawn(move || {
+            tracing::dispatcher::with_default(&blocked_dispatch, || {
+                tracing::info!("blocked event");
+            });
+        });
+
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("blocked writer entered");
+
+        let second_dispatch = dispatch.clone();
+        let (done_tx, done_rx) = mpsc::channel();
+        let second_handle = std::thread::spawn(move || {
+            tracing::dispatcher::with_default(&second_dispatch, || {
+                tracing::info!("later event");
+            });
+            let _ = done_tx.send(Instant::now());
+        });
+
+        let start = Instant::now();
+        done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("later log event should not block behind a stuck writer");
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "later log event should fail open instead of hanging"
+        );
+
+        let (released_lock, released_ready) = &*released;
+        let mut released = released_lock.lock().expect("released lock");
+        *released = true;
+        released_ready.notify_all();
+        drop(released);
+
+        blocked_handle.join().expect("blocked log thread join");
+        second_handle.join().expect("later log thread join");
+
+        let output = probe.snapshot();
+        assert!(output.contains("blocked event"), "output: {output}");
+        assert!(
+            !output.contains("later event"),
+            "timed-out event should be dropped instead of blocking: {output}"
         );
     }
 

@@ -1,6 +1,9 @@
+use std::collections::BTreeSet;
+use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::io::{self, Write};
+use std::path::{Component, Path, PathBuf};
+use std::process::ExitStatus;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
@@ -12,7 +15,7 @@ use sqlmodel_console::OutputMode as SqlModelOutputMode;
 use crate::error::{DoctorError, Result};
 
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::{fs::PermissionsExt, process::ExitStatusExt};
 
 #[must_use]
 pub fn now_utc_iso() -> String {
@@ -183,6 +186,225 @@ pub fn ensure_exists(path: &Path) -> Result<()> {
     }
 }
 
+pub fn ensure_safe_path_component(value: &str, field_name: &str) -> Result<()> {
+    let mut components = Path::new(value).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(name)), None) if name == OsStr::new(value) => Ok(()),
+        _ => Err(DoctorError::invalid(format!(
+            "{field_name} must be a single safe path component: {value}",
+        ))),
+    }
+}
+
+pub fn join_validated_child_path(
+    base: &Path,
+    child_name: &str,
+    field_name: &str,
+) -> Result<PathBuf> {
+    ensure_safe_path_component(child_name, field_name)?;
+    Ok(base.join(child_name))
+}
+
+fn invalid_snapshot_data_error(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
+
+pub fn copy_tree_snapshot_materialized<F>(
+    source_dir: &Path,
+    snapshot_dir: &Path,
+    should_skip: F,
+) -> io::Result<()>
+where
+    F: Fn(&Path) -> bool,
+{
+    let canonical_root = fs::canonicalize(source_dir).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "unable to resolve source root {}: {error}",
+                source_dir.display()
+            ),
+        )
+    })?;
+
+    let mut active_dirs = BTreeSet::new();
+    copy_tree_snapshot_materialized_inner(
+        source_dir,
+        snapshot_dir,
+        Path::new(""),
+        &canonical_root,
+        &should_skip,
+        &mut active_dirs,
+    )
+}
+
+fn copy_tree_snapshot_materialized_inner<F>(
+    source_dir: &Path,
+    snapshot_dir: &Path,
+    relative_prefix: &Path,
+    canonical_root: &Path,
+    should_skip: &F,
+    active_dirs: &mut BTreeSet<PathBuf>,
+) -> io::Result<()>
+where
+    F: Fn(&Path) -> bool,
+{
+    let canonical_dir = fs::canonicalize(source_dir).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "unable to resolve source directory {}: {error}",
+                source_dir.display()
+            ),
+        )
+    })?;
+
+    if !canonical_dir.starts_with(canonical_root) {
+        return Err(invalid_snapshot_data_error(format!(
+            "snapshot source escapes source root: {}",
+            source_dir.display()
+        )));
+    }
+
+    if !active_dirs.insert(canonical_dir.clone()) {
+        return Err(invalid_snapshot_data_error(format!(
+            "symlink cycle detected while materializing snapshot at {}",
+            source_dir.display()
+        )));
+    }
+
+    fs::create_dir_all(snapshot_dir)?;
+
+    let result = (|| -> io::Result<()> {
+        for entry in fs::read_dir(source_dir)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let relative_path = if relative_prefix.as_os_str().is_empty() {
+                PathBuf::from(&name)
+            } else {
+                relative_prefix.join(&name)
+            };
+
+            if should_skip(&relative_path) {
+                continue;
+            }
+
+            let source_path = entry.path();
+            let target_path = snapshot_dir.join(&name);
+            let file_type = entry.file_type()?;
+
+            if file_type.is_dir() {
+                copy_tree_snapshot_materialized_inner(
+                    &source_path,
+                    &target_path,
+                    &relative_path,
+                    canonical_root,
+                    should_skip,
+                    active_dirs,
+                )?;
+                continue;
+            }
+
+            if file_type.is_file() {
+                if let Some(parent) = target_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::copy(&source_path, &target_path)?;
+                continue;
+            }
+
+            if file_type.is_symlink() {
+                materialize_snapshot_symlink(
+                    &source_path,
+                    &target_path,
+                    &relative_path,
+                    canonical_root,
+                    should_skip,
+                    active_dirs,
+                )?;
+                continue;
+            }
+
+            return Err(invalid_snapshot_data_error(format!(
+                "unsupported filesystem entry in snapshot source: {}",
+                source_path.display()
+            )));
+        }
+
+        Ok(())
+    })();
+
+    active_dirs.remove(&canonical_dir);
+    result
+}
+
+fn materialize_snapshot_symlink<F>(
+    source_path: &Path,
+    target_path: &Path,
+    relative_path: &Path,
+    canonical_root: &Path,
+    should_skip: &F,
+    active_dirs: &mut BTreeSet<PathBuf>,
+) -> io::Result<()>
+where
+    F: Fn(&Path) -> bool,
+{
+    let resolved_path = fs::canonicalize(source_path).map_err(|error| {
+        invalid_snapshot_data_error(format!(
+            "unable to resolve symlink {}: {error}",
+            source_path.display()
+        ))
+    })?;
+
+    if !resolved_path.starts_with(canonical_root) {
+        return Err(invalid_snapshot_data_error(format!(
+            "snapshot source symlink escapes source root: {} -> {}",
+            source_path.display(),
+            resolved_path.display()
+        )));
+    }
+
+    if let Ok(resolved_relative) = resolved_path.strip_prefix(canonical_root)
+        && should_skip(resolved_relative)
+    {
+        return Ok(());
+    }
+
+    let metadata = fs::metadata(source_path).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "unable to inspect symlink target {}: {error}",
+                source_path.display()
+            ),
+        )
+    })?;
+
+    if metadata.is_dir() {
+        return copy_tree_snapshot_materialized_inner(
+            &resolved_path,
+            target_path,
+            relative_path,
+            canonical_root,
+            should_skip,
+            active_dirs,
+        );
+    }
+
+    if metadata.is_file() {
+        if let Some(parent) = target_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(&resolved_path, target_path)?;
+        return Ok(());
+    }
+
+    Err(invalid_snapshot_data_error(format!(
+        "snapshot source symlink points to unsupported entry type: {}",
+        source_path.display()
+    )))
+}
+
 pub fn ensure_executable(path: &Path) -> Result<()> {
     ensure_exists(path)?;
 
@@ -220,6 +442,20 @@ pub fn append_line(path: &Path, line: &str) -> Result<()> {
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     writeln!(file, "{line}")?;
     Ok(())
+}
+
+#[must_use]
+pub fn exit_status_code(status: ExitStatus) -> i32 {
+    if let Some(code) = status.code() {
+        return code;
+    }
+
+    #[cfg(unix)]
+    if let Some(signal) = status.signal() {
+        return 128 + signal;
+    }
+
+    1
 }
 
 #[must_use]
@@ -303,10 +539,15 @@ mod tests {
     use crate::error::DoctorError;
 
     use super::{
-        OutputIntegration, append_line, bool_to_u8, command_exists, duration_literal, ensure_dir,
-        ensure_executable, ensure_exists, normalize_http_path, output_for, parse_duration_value,
-        relative_to, require_command, shell_single_quote, tape_escape, write_string,
+        OutputIntegration, append_line, bool_to_u8, command_exists,
+        copy_tree_snapshot_materialized, duration_literal, ensure_dir, ensure_executable,
+        ensure_exists, ensure_safe_path_component, exit_status_code, join_validated_child_path,
+        normalize_http_path, output_for, parse_duration_value, relative_to, require_command,
+        shell_single_quote, tape_escape, write_string,
     };
+
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
 
     #[test]
     fn parse_duration_supports_ms_s_and_plain_seconds() {
@@ -331,6 +572,13 @@ mod tests {
 
         let malformed = parse_duration_value("bad").expect_err("malformed duration should fail");
         assert!(malformed.to_string().contains("invalid duration value"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exit_status_code_preserves_signal_exit_using_shell_convention() {
+        let status = std::process::ExitStatus::from_raw(15);
+        assert_eq!(exit_status_code(status), 143);
     }
 
     #[test]
@@ -465,6 +713,75 @@ mod tests {
         let missing = PathBuf::from("/tmp/doctor_frankentui/missing-executable");
         let error = ensure_executable(&missing).expect_err("missing executable should fail");
         assert!(matches!(error, DoctorError::MissingPath { path } if path == missing));
+    }
+
+    #[test]
+    fn join_validated_child_path_accepts_single_component() {
+        let base = Path::new("/tmp/root");
+        let joined = join_validated_child_path(base, "child_dir", "run_name")
+            .expect("safe child path should validate");
+        assert_eq!(joined, base.join("child_dir"));
+    }
+
+    #[test]
+    fn ensure_safe_path_component_rejects_traversal() {
+        let error = ensure_safe_path_component("../escape", "run_name")
+            .expect_err("traversal should be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("run_name must be a single safe path component")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_tree_snapshot_materialized_materializes_internal_file_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let src = tempdir().expect("tempdir");
+        let dst = tempdir().expect("tempdir");
+
+        write_string(&src.path().join("real.txt"), "hello").expect("write real file");
+        symlink(src.path().join("real.txt"), src.path().join("alias.txt"))
+            .expect("create internal symlink");
+
+        copy_tree_snapshot_materialized(src.path(), dst.path(), |_| false)
+            .expect("copy snapshot with internal symlink");
+
+        let alias_path = dst.path().join("alias.txt");
+        assert_eq!(
+            std::fs::read_to_string(&alias_path).expect("read alias"),
+            "hello"
+        );
+        assert!(
+            !std::fs::symlink_metadata(&alias_path)
+                .expect("metadata")
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_tree_snapshot_materialized_rejects_symlink_escape() {
+        use std::io::ErrorKind;
+        use std::os::unix::fs::symlink;
+
+        let src = tempdir().expect("tempdir");
+        let dst = tempdir().expect("tempdir");
+        let outside = tempdir().expect("tempdir");
+
+        write_string(&outside.path().join("secret.txt"), "secret").expect("write outside file");
+        symlink(
+            outside.path().join("secret.txt"),
+            src.path().join("escape.txt"),
+        )
+        .expect("create escape symlink");
+
+        let error = copy_tree_snapshot_materialized(src.path(), dst.path(), |_| false)
+            .expect_err("symlink escape should fail");
+        assert_eq!(error.kind(), ErrorKind::InvalidData);
     }
 
     #[cfg(unix)]

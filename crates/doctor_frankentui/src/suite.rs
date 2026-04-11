@@ -9,10 +9,10 @@ use serde::Serialize;
 use crate::error::{DoctorError, Result};
 use crate::profile::list_profile_names;
 use crate::report::{ReportArgs, run_report_with_runs};
-use crate::runmeta::RunMeta;
+use crate::runmeta::{RunMeta, normalize_loaded_run_meta_paths};
 use crate::util::{
-    OutputIntegration, ensure_dir, ensure_exists, now_compact_timestamp, now_utc_iso, output_for,
-    write_string,
+    OutputIntegration, ensure_dir, ensure_exists, exit_status_code, now_compact_timestamp,
+    now_utc_iso, output_for, write_string,
 };
 
 #[derive(Debug, Clone, Args)]
@@ -259,7 +259,7 @@ fn run_capture_subprocess_to_log(command: &mut Command, log_path: &std::path::Pa
         .stderr(Stdio::from(stderr_log));
 
     match command.status() {
-        Ok(status) => Ok(status.code().unwrap_or(1)),
+        Ok(status) => Ok(exit_status_code(status)),
         Err(error) => {
             let _ = writeln!(
                 spawn_error_log,
@@ -363,12 +363,16 @@ fn load_suite_run_records(
         .iter()
         .map(|execution| {
             let path = suite_run_meta_path(suite_dir, &execution.plan.run_name);
+            let run_dir = suite_run_dir(suite_dir, &execution.plan.run_name);
             Ok(SuiteRunRecord {
                 plan: execution.plan.clone(),
                 exit_code: execution.exit_code,
                 run_meta: path
                     .exists()
-                    .then(|| RunMeta::from_path(&path))
+                    .then(|| {
+                        RunMeta::from_path(&path)
+                            .map(|meta| normalize_loaded_run_meta_paths(&run_dir, &meta))
+                    })
                     .transpose()?,
             })
         })
@@ -898,6 +902,20 @@ mod tests {
         let log = fs::read_to_string(&log_path).expect("read log");
         assert!(log.contains("stdout-line"));
         assert!(log.contains("stderr-line"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_capture_subprocess_to_log_preserves_signal_exit_code() {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("runner.log");
+        let mut command = Command::new("sh");
+        command.arg("-c").arg("kill -TERM $$");
+
+        let exit_code = super::run_capture_subprocess_to_log(&mut command, &log_path)
+            .expect("command should run");
+
+        assert_eq!(exit_code, 143);
     }
 
     #[test]
@@ -1584,17 +1602,30 @@ mod tests {
     }
 
     #[test]
-    fn load_suite_run_records_reads_expected_run_meta_paths() {
+    fn load_suite_run_records_normalizes_run_dir_and_drops_escaped_artifact_paths() {
         let temp = tempdir().expect("tempdir");
         let suite_dir = temp.path().join("suite");
         fs::create_dir_all(&suite_dir).expect("suite dir");
         let run_name = "run_a";
         let run_dir = suite_dir.join(run_name);
+        let forged_run_dir = temp.path().join("forged_run");
         fs::create_dir_all(&run_dir).expect("run dir");
+        fs::create_dir_all(&forged_run_dir).expect("forged run dir");
+
+        let outside_video = temp.path().join("outside.mp4");
+        let outside_log = temp.path().join("outside.log");
+        fs::write(&outside_video, b"outside video").expect("write outside video");
+        fs::write(&outside_log, b"outside log").expect("write outside log");
+        fs::write(run_dir.join("snapshot.png"), b"snapshot").expect("write snapshot");
+
         crate::runmeta::RunMeta {
             profile: "profile-a".to_string(),
-            run_dir: run_dir.display().to_string(),
+            run_dir: forged_run_dir.display().to_string(),
             status: "ok".to_string(),
+            output: outside_video.display().to_string(),
+            snapshot: "snapshot.png".to_string(),
+            evidence_ledger: Some(outside_log.display().to_string()),
+            tmux_pane_log: Some("../outside.log".to_string()),
             ..crate::runmeta::RunMeta::default()
         }
         .write_to_path(&run_dir.join("run_meta.json"))
@@ -1614,9 +1645,12 @@ mod tests {
         .expect("load records");
 
         assert_eq!(records.len(), 1);
-        assert_eq!(
-            records[0].run_meta.as_ref().expect("run meta").profile,
-            "profile-a"
-        );
+        let meta = records[0].run_meta.as_ref().expect("run meta");
+        assert_eq!(meta.profile, "profile-a");
+        assert_eq!(meta.run_dir, run_dir.display().to_string());
+        assert_eq!(meta.output, "");
+        assert_eq!(meta.snapshot, "snapshot.png");
+        assert!(meta.evidence_ledger.is_none());
+        assert!(meta.tmux_pane_log.is_none());
     }
 }

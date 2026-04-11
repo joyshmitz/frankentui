@@ -12,8 +12,8 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{DoctorError, Result};
 use crate::util::{
-    OutputIntegration, command_exists, ensure_dir, now_compact_timestamp, now_utc_iso, output_for,
-    write_string,
+    OutputIntegration, command_exists, copy_tree_snapshot_materialized, ensure_dir,
+    join_validated_child_path, now_compact_timestamp, now_utc_iso, output_for, write_string,
 };
 
 const DEFAULT_IMPORT_RUN_ROOT: &str = "/tmp/doctor_frankentui/import";
@@ -246,7 +246,7 @@ pub fn run_import(args: ImportArgs) -> Result<()> {
         .run_name
         .clone()
         .unwrap_or_else(|| format!("intake_{}", now_compact_timestamp()));
-    let run_dir = args.run_root.join(&run_name);
+    let run_dir = join_validated_child_path(&args.run_root, &run_name, "run_name")?;
 
     if run_dir.exists() {
         return Err(DoctorError::invalid(format!(
@@ -390,11 +390,11 @@ fn intake_local_source(
         false
     };
 
-    if pinned_commit_requested || is_git_work_tree {
+    if pinned_commit_requested {
         ensure_required_command("git", IntakeErrorClass::IncompatibleRepo)?;
         ensure_required_command("tar", IntakeErrorClass::IncompatibleRepo)?;
 
-        if !is_git_work_tree && pinned_commit_requested {
+        if !is_git_work_tree {
             return Err(IntakeFailure::new(
                 IntakeErrorClass::IncompatibleRepo,
                 "pinned commit requested for local source that is not a git work tree",
@@ -427,19 +427,25 @@ fn intake_git_source(
         )
     })?;
 
-    let mut clone = Command::new("git");
-    clone
-        .arg("clone")
-        .arg("--no-checkout")
-        .arg("--filter=blob:none")
-        .arg(&args.source)
-        .arg(&clone_dir);
-    run_git_command_with_classification(clone, "git clone", IntakeErrorClass::Network)?;
+    let result = (|| {
+        let mut clone = Command::new("git");
+        clone
+            .arg("clone")
+            .arg("--no-checkout")
+            .arg("--filter=blob:none")
+            .arg(&args.source)
+            .arg(&clone_dir);
+        run_git_command_with_classification(clone, "git clone", IntakeErrorClass::Network)?;
 
-    let commit_ref = args.pinned_commit.as_deref().unwrap_or("HEAD");
-    let resolved_commit = resolve_git_commit(&clone_dir, commit_ref)?;
-    materialize_git_snapshot(&clone_dir, &resolved_commit, snapshot_dir)?;
-    Ok(Some(resolved_commit))
+        let commit_ref = args.pinned_commit.as_deref().unwrap_or("HEAD");
+        let resolved_commit = resolve_git_commit(&clone_dir, commit_ref)?;
+        materialize_git_snapshot(&clone_dir, &resolved_commit, snapshot_dir)?;
+        Ok(Some(resolved_commit))
+    })();
+
+    let _ = fs::remove_dir_all(&clone_dir);
+
+    result
 }
 
 fn resolve_git_commit(
@@ -1329,125 +1335,19 @@ fn copy_tree_snapshot(
     source_dir: &Path,
     snapshot_dir: &Path,
 ) -> std::result::Result<(), IntakeFailure> {
-    let mut stack = vec![source_dir.to_path_buf()];
-    while let Some(current_dir) = stack.pop() {
-        let entries = fs::read_dir(&current_dir).map_err(|error| {
-            IntakeFailure::new(
-                IntakeErrorClass::Unknown,
-                format!(
-                    "unable to read source directory {}: {error}",
-                    current_dir.display()
-                ),
-            )
-        })?;
-
-        for entry in entries {
-            let entry = entry.map_err(|error| {
-                IntakeFailure::new(
-                    IntakeErrorClass::Unknown,
-                    format!("unable to read source directory entry: {error}"),
-                )
-            })?;
-            let source_path = entry.path();
-            let relative = source_path.strip_prefix(source_dir).map_err(|error| {
-                IntakeFailure::new(
-                    IntakeErrorClass::Unknown,
-                    format!("unable to compute source relative path: {error}"),
-                )
-            })?;
-
-            if should_skip_path(relative) {
-                continue;
-            }
-
-            let target_path = snapshot_dir.join(relative);
-            let file_type = entry.file_type().map_err(|error| {
-                IntakeFailure::new(
-                    IntakeErrorClass::Unknown,
-                    format!(
-                        "unable to determine source entry type for {}: {error}",
-                        source_path.display()
-                    ),
-                )
-            })?;
-
-            if file_type.is_dir() {
-                ensure_dir(&target_path).map_err(|error| {
-                    IntakeFailure::new(
-                        IntakeErrorClass::Unknown,
-                        format!(
-                            "unable to create snapshot directory {}: {error}",
-                            target_path.display()
-                        ),
-                    )
-                })?;
-                stack.push(source_path);
-                continue;
-            }
-
-            if file_type.is_file() {
-                if let Some(parent) = target_path.parent() {
-                    ensure_dir(parent).map_err(|error| {
-                        IntakeFailure::new(
-                            IntakeErrorClass::Unknown,
-                            format!(
-                                "unable to create snapshot parent {}: {error}",
-                                parent.display()
-                            ),
-                        )
-                    })?;
-                }
-                fs::copy(&source_path, &target_path).map_err(|error| {
-                    IntakeFailure::new(
-                        IntakeErrorClass::Unknown,
-                        format!(
-                            "unable to copy {} to snapshot: {error}",
-                            source_path.display()
-                        ),
-                    )
-                })?;
-                continue;
-            }
-
-            #[cfg(unix)]
-            if file_type.is_symlink() {
-                use std::os::unix::fs::symlink;
-
-                let link_target = fs::read_link(&source_path).map_err(|error| {
-                    IntakeFailure::new(
-                        IntakeErrorClass::Unknown,
-                        format!(
-                            "unable to read symlink target for {}: {error}",
-                            source_path.display()
-                        ),
-                    )
-                })?;
-
-                if let Some(parent) = target_path.parent() {
-                    ensure_dir(parent).map_err(|error| {
-                        IntakeFailure::new(
-                            IntakeErrorClass::Unknown,
-                            format!(
-                                "unable to create symlink parent directory {}: {error}",
-                                parent.display()
-                            ),
-                        )
-                    })?;
-                }
-                symlink(&link_target, &target_path).map_err(|error| {
-                    IntakeFailure::new(
-                        IntakeErrorClass::Unknown,
-                        format!(
-                            "unable to create snapshot symlink {}: {error}",
-                            target_path.display()
-                        ),
-                    )
-                })?;
-            }
-        }
-    }
-
-    Ok(())
+    copy_tree_snapshot_materialized(source_dir, snapshot_dir, should_skip_path).map_err(|error| {
+        let class = match error.kind() {
+            std::io::ErrorKind::InvalidData => IntakeErrorClass::IncompatibleRepo,
+            _ => IntakeErrorClass::Unknown,
+        };
+        IntakeFailure::new(
+            class,
+            format!(
+                "unable to materialize local snapshot from {}: {error}",
+                source_dir.display()
+            ),
+        )
+    })
 }
 
 fn should_skip_path(relative: &Path) -> bool {
@@ -1651,8 +1551,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        ImportArgs, IntakeErrorClass, classify_git_stderr, detect_source_kind,
-        parse_package_manager_field, run_import,
+        GIT_CLONE_STAGING_DIR_NAME, ImportArgs, IntakeErrorClass, classify_git_stderr,
+        detect_source_kind, parse_package_manager_field, run_import,
     };
 
     fn run_git(repo: &Path, args: &[&str]) {
@@ -1803,6 +1703,147 @@ mod tests {
     }
 
     #[test]
+    fn run_import_local_git_repo_without_pinned_commit_preserves_working_tree_changes() {
+        let temp = tempdir().expect("tempdir");
+        let source = temp.path().join("source");
+        let (_first_commit, _second_commit) = create_git_repo(&source);
+        let run_root = temp.path().join("runs");
+
+        fs::write(
+            source.join("src/main.tsx"),
+            "export const version = 'dirty-working-tree';\n",
+        )
+        .expect("write dirty working tree file");
+
+        let args = ImportArgs {
+            source: source.display().to_string(),
+            pinned_commit: None,
+            run_root: run_root.clone(),
+            run_name: Some("local_dirty".to_string()),
+            allow_non_opentui: false,
+        };
+
+        run_import(args).expect("import should preserve local working tree state");
+
+        let snapshot_main = run_root.join("local_dirty/snapshot/src/main.tsx");
+        let snapshot_text = fs::read_to_string(&snapshot_main).expect("read snapshot main");
+        assert!(
+            snapshot_text.contains("dirty-working-tree"),
+            "snapshot must preserve uncommitted local changes"
+        );
+
+        let intake_meta_path = run_root.join("local_dirty/intake_meta.json");
+        let intake_meta_text = fs::read_to_string(&intake_meta_path).expect("read intake metadata");
+        let intake_meta: Value =
+            serde_json::from_str(&intake_meta_text).expect("parse intake metadata");
+        assert!(intake_meta["resolved_commit"].is_null());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_import_local_source_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir().expect("tempdir");
+        let source = temp.path().join("source");
+        let outside = temp.path().join("outside");
+        let run_root = temp.path().join("runs");
+
+        fs::create_dir_all(&source).expect("create source dir");
+        fs::create_dir_all(&outside).expect("create outside dir");
+        fs::write(source.join("package.json"), r#"{"name":"fixture"}"#)
+            .expect("write package json");
+        fs::write(outside.join("secret.ts"), "export const secret = true;\n")
+            .expect("write outside file");
+        symlink(outside.join("secret.ts"), source.join("escape.ts"))
+            .expect("create escape symlink");
+
+        let args = ImportArgs {
+            source: source.display().to_string(),
+            pinned_commit: None,
+            run_root: run_root.clone(),
+            run_name: Some("escape".to_string()),
+            allow_non_opentui: false,
+        };
+
+        let error = run_import(args).expect_err("symlink escape should fail import");
+        assert!(
+            error.to_string().contains("class=incompatible_repo"),
+            "unexpected error: {error}"
+        );
+
+        let intake_meta_path = run_root.join("escape/intake_meta.json");
+        let intake_meta_text = fs::read_to_string(&intake_meta_path).expect("read intake metadata");
+        let intake_meta: Value =
+            serde_json::from_str(&intake_meta_text).expect("parse intake metadata");
+        assert_eq!(
+            intake_meta["error_class"],
+            Value::String("incompatible_repo".to_string())
+        );
+    }
+
+    #[test]
+    fn run_import_git_url_cleans_up_clone_staging_dir_on_success() {
+        if !super::command_exists("git") || !super::command_exists("tar") {
+            return;
+        }
+
+        let temp = tempdir().expect("tempdir");
+        let source = temp.path().join("source");
+        let (first_commit, _second_commit) = create_git_repo(&source);
+        let run_root = temp.path().join("runs");
+
+        let args = ImportArgs {
+            source: format!("file://{}", source.display()),
+            pinned_commit: Some(first_commit),
+            run_root: run_root.clone(),
+            run_name: Some("git_url_success".to_string()),
+            allow_non_opentui: false,
+        };
+
+        run_import(args).expect("git url import should succeed");
+
+        assert!(
+            !run_root
+                .join("git_url_success")
+                .join(GIT_CLONE_STAGING_DIR_NAME)
+                .exists()
+        );
+    }
+
+    #[test]
+    fn run_import_git_url_cleans_up_clone_staging_dir_on_failure() {
+        if !super::command_exists("git") || !super::command_exists("tar") {
+            return;
+        }
+
+        let temp = tempdir().expect("tempdir");
+        let source = temp.path().join("source");
+        let (_first_commit, _second_commit) = create_git_repo(&source);
+        let run_root = temp.path().join("runs");
+
+        let args = ImportArgs {
+            source: format!("file://{}", source.display()),
+            pinned_commit: Some("deadbeef".to_string()),
+            run_root: run_root.clone(),
+            run_name: Some("git_url_failure".to_string()),
+            allow_non_opentui: false,
+        };
+
+        let error = run_import(args).expect_err("git url import should fail for bad pinned commit");
+        assert!(
+            error.to_string().contains("class=missing_files"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            !run_root
+                .join("git_url_failure")
+                .join(GIT_CLONE_STAGING_DIR_NAME)
+                .exists()
+        );
+    }
+
+    #[test]
     fn run_import_missing_source_classifies_failure_and_writes_metadata() {
         let temp = tempdir().expect("tempdir");
         let run_root = temp.path().join("runs");
@@ -1853,6 +1894,31 @@ mod tests {
             error.to_string().contains("run directory already exists"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn run_import_rejects_unsafe_run_name() {
+        let temp = tempdir().expect("tempdir");
+        let source = temp.path().join("source");
+        let run_root = temp.path().join("runs");
+        fs::create_dir_all(&source).expect("create source dir");
+
+        let args = ImportArgs {
+            source: source.display().to_string(),
+            pinned_commit: None,
+            run_root: run_root.clone(),
+            run_name: Some("../escape".to_string()),
+            allow_non_opentui: true,
+        };
+
+        let error = run_import(args).expect_err("unsafe run name should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("run_name must be a single safe path component"),
+            "unexpected error: {error}"
+        );
+        assert!(!temp.path().join("escape").exists());
     }
 
     #[test]

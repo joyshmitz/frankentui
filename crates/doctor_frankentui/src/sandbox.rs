@@ -12,7 +12,9 @@
 //! 4. **Reproducible**: violation reports include full reproduction metadata.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::ffi::OsString;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -594,42 +596,121 @@ impl SandboxEnforcer {
         }
     }
 
-    // ── FS Checks ────────────────────────────────────────────────────────
+    fn read_deny_pattern(&self, path: &str) -> Option<&str> {
+        self.policy
+            .fs
+            .read_deny
+            .iter()
+            .find(|pattern| glob_match(pattern, path))
+            .map(String::as_str)
+    }
 
-    /// Check whether a file read is allowed. Fails closed on violation.
-    pub fn check_read(&mut self, path: &Path) -> SandboxResult {
-        let path_str = path.to_string_lossy();
-
-        // Check deny list first.
-        for pattern in &self.policy.fs.read_deny {
-            if glob_match(pattern, &path_str) {
-                let v = SandboxViolation::new(
-                    ViolationKind::FsReadDenied,
-                    format!("read denied by pattern '{pattern}': {path_str}"),
-                )
-                .with_path(path_str.to_string());
-                self.audit.record_violation("fs", &v);
-                return Err(Box::new(v));
-            }
-        }
-
-        // Check allow list (if non-empty, must match at least one).
-        if !self.policy.fs.read_allow.is_empty() {
-            let allowed = self
+    fn read_allowed(&self, path: &str) -> bool {
+        self.policy.fs.read_allow.is_empty()
+            || self
                 .policy
                 .fs
                 .read_allow
                 .iter()
-                .any(|p| glob_match(p, &path_str));
-            if !allowed {
+                .any(|pattern| glob_match(pattern, path))
+    }
+
+    fn write_allowed(&self, path: &str) -> bool {
+        !self.policy.fs.write_allow.is_empty()
+            && self
+                .policy
+                .fs
+                .write_allow
+                .iter()
+                .any(|pattern| glob_match(pattern, path))
+    }
+
+    fn resolved_read_path(path: &Path) -> Option<String> {
+        let resolved = fs::canonicalize(path).ok()?;
+        let resolved_str = resolved.to_string_lossy().to_string();
+        let path_str = path.to_string_lossy();
+        if resolved_str == path_str {
+            None
+        } else {
+            Some(resolved_str)
+        }
+    }
+
+    fn resolved_write_path(path: &Path) -> Option<String> {
+        if let Ok(resolved) = fs::canonicalize(path) {
+            return Some(resolved.to_string_lossy().to_string());
+        }
+
+        let mut existing = path;
+        let mut suffix: Vec<OsString> = Vec::new();
+        while !existing.exists() {
+            let name = existing.file_name()?.to_owned();
+            suffix.push(name);
+            existing = existing.parent()?;
+        }
+
+        let mut resolved: PathBuf = fs::canonicalize(existing).ok()?;
+        for component in suffix.iter().rev() {
+            resolved.push(component);
+        }
+        Some(resolved.to_string_lossy().to_string())
+    }
+
+    // ── FS Checks ────────────────────────────────────────────────────────
+
+    /// Check whether a file read is allowed. Fails closed on violation.
+    pub fn check_read(&mut self, path: &Path) -> SandboxResult {
+        let path_str = path.to_string_lossy().to_string();
+
+        if let Some(pattern) = self.read_deny_pattern(&path_str) {
+            let v = SandboxViolation::new(
+                ViolationKind::FsReadDenied,
+                format!("read denied by pattern '{pattern}': {path_str}"),
+            )
+            .with_path(path_str.clone());
+            self.audit.record_violation("fs", &v);
+            return Err(Box::new(v));
+        }
+
+        if !self.read_allowed(&path_str) {
+            let v = SandboxViolation::new(
+                ViolationKind::FsReadDenied,
+                format!("read not in allow list: {path_str}"),
+            )
+            .with_path(path_str.clone());
+            self.audit.record_violation("fs", &v);
+            return Err(Box::new(v));
+        }
+
+        if let Some(resolved_path) = Self::resolved_read_path(path) {
+            if let Some(pattern) = self.read_deny_pattern(&resolved_path) {
                 let v = SandboxViolation::new(
                     ViolationKind::FsReadDenied,
-                    format!("read not in allow list: {path_str}"),
+                    format!(
+                        "read resolves to denied path by pattern '{pattern}': {path_str} -> {resolved_path}"
+                    ),
                 )
-                .with_path(path_str.to_string());
+                .with_path(path_str.clone());
                 self.audit.record_violation("fs", &v);
                 return Err(Box::new(v));
             }
+
+            if !self.read_allowed(&resolved_path) {
+                let v = SandboxViolation::new(
+                    ViolationKind::FsReadDenied,
+                    format!("read resolves outside allow list: {path_str} -> {resolved_path}"),
+                )
+                .with_path(path_str.clone());
+                self.audit.record_violation("fs", &v);
+                return Err(Box::new(v));
+            }
+
+            self.audit.record(
+                "fs",
+                "allow",
+                &format!("read: {path_str} -> {resolved_path}"),
+            );
+            return Ok(());
         }
 
         self.audit
@@ -639,30 +720,37 @@ impl SandboxEnforcer {
 
     /// Check whether a file write is allowed. Fails closed on violation.
     pub fn check_write(&mut self, path: &Path) -> SandboxResult {
-        let path_str = path.to_string_lossy();
+        let path_str = path.to_string_lossy().to_string();
 
         if self.policy.fs.write_allow.is_empty() {
             let v = SandboxViolation::new(
                 ViolationKind::FsWriteDenied,
                 format!("all writes denied: {path_str}"),
             )
-            .with_path(path_str.to_string());
+            .with_path(path_str.clone());
             self.audit.record_violation("fs", &v);
             return Err(Box::new(v));
         }
 
-        let allowed = self
-            .policy
-            .fs
-            .write_allow
-            .iter()
-            .any(|p| glob_match(p, &path_str));
-        if !allowed {
+        if !self.write_allowed(&path_str) {
             let v = SandboxViolation::new(
                 ViolationKind::FsWriteDenied,
                 format!("write not in allow list: {path_str}"),
             )
-            .with_path(path_str.to_string());
+            .with_path(path_str.clone());
+            self.audit.record_violation("fs", &v);
+            return Err(Box::new(v));
+        }
+
+        if let Some(resolved_path) = Self::resolved_write_path(path)
+            && resolved_path != path_str
+            && !self.write_allowed(&resolved_path)
+        {
+            let v = SandboxViolation::new(
+                ViolationKind::FsWriteDenied,
+                format!("write resolves outside allow list: {path_str} -> {resolved_path}"),
+            )
+            .with_path(path_str.clone());
             self.audit.record_violation("fs", &v);
             return Err(Box::new(v));
         }
@@ -1545,6 +1633,53 @@ mod tests {
         std::thread::sleep(Duration::from_millis(10));
         let d2 = enforcer.elapsed();
         assert!(d2 > d1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn check_read_denies_symlink_escape_from_allowed_prefix() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let snapshot_dir = temp.path().join("snapshot");
+        let outside_dir = temp.path().join("outside");
+        fs::create_dir_all(&snapshot_dir).unwrap();
+        fs::create_dir_all(&outside_dir).unwrap();
+
+        let outside_file = outside_dir.join("secret.txt");
+        fs::write(&outside_file, "top-secret").unwrap();
+        symlink(&outside_file, snapshot_dir.join("escape.txt")).unwrap();
+
+        let mut policy = SandboxProfile::Strict.to_policy();
+        policy.allow_read_path(format!("{}/**", snapshot_dir.display()));
+        let mut enforcer = SandboxEnforcer::new(policy, "test-run");
+
+        let error = enforcer
+            .check_read(&snapshot_dir.join("escape.txt"))
+            .expect_err("symlink escape should be denied");
+        assert_eq!(error.kind, ViolationKind::FsReadDenied);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn check_write_denies_symlink_parent_escape_from_allowed_prefix() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let output_dir = temp.path().join("output");
+        let outside_dir = temp.path().join("outside");
+        fs::create_dir_all(&output_dir).unwrap();
+        fs::create_dir_all(&outside_dir).unwrap();
+        symlink(&outside_dir, output_dir.join("escape")).unwrap();
+
+        let mut policy = SandboxProfile::Standard.to_policy();
+        policy.allow_write_path(format!("{}/**", output_dir.display()));
+        let mut enforcer = SandboxEnforcer::new(policy, "test-run");
+
+        let error = enforcer
+            .check_write(&output_dir.join("escape/out.txt"))
+            .expect_err("symlinked parent escape should be denied");
+        assert_eq!(error.kind, ViolationKind::FsWriteDenied);
     }
 
     #[test]

@@ -19,12 +19,17 @@ use crate::seed::SeedDemoConfig;
 use crate::tape::{TapeSpec, build_capture_tape};
 use crate::util::{
     CliOutput, OutputIntegration, bool_to_u8, command_exists, ensure_dir, ensure_executable,
-    ensure_exists, normalize_http_path, now_compact_timestamp, now_utc_iso, output_for,
-    parse_duration_value, require_command, shell_single_quote, write_string,
+    ensure_exists, exit_status_code, join_validated_child_path, normalize_http_path,
+    now_compact_timestamp, now_utc_iso, output_for, parse_duration_value, require_command,
+    shell_single_quote, write_string,
 };
 
 const POLICY_ID: &str = "doctor_frankentui/v1";
 const VHS_DOCKER_IMAGE: &str = "ghcr.io/charmbracelet/vhs:v0.10.1-devel";
+const VHS_LOG_PUMP_JOIN_TIMEOUT: Duration = Duration::from_millis(250);
+const VHS_LOG_PUMP_JOIN_POLL: Duration = Duration::from_millis(1);
+const SEED_THREAD_CANCEL_JOIN_TIMEOUT: Duration = Duration::from_millis(250);
+const SEED_THREAD_JOIN_POLL: Duration = Duration::from_millis(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
 pub enum ObserveMode {
@@ -546,7 +551,7 @@ fn start_tmux_observer(
         .status()?;
     if !status.success() {
         return Err(DoctorError::exit(
-            status.code().unwrap_or(1),
+            exit_status_code(status),
             format!(
                 "failed to start tmux observer session {}",
                 artifacts.session_name
@@ -568,7 +573,7 @@ fn start_tmux_observer(
     if !pipe_status.success() {
         kill_tmux_session(&artifacts.session_name);
         return Err(DoctorError::exit(
-            pipe_status.code().unwrap_or(1),
+            exit_status_code(pipe_status),
             format!(
                 "failed to attach tmux observer pipe-pane for {}",
                 artifacts.session_name
@@ -1254,7 +1259,7 @@ fn run_vhs_with_docker(
     let mut timed_out = false;
     let exit_code = match status {
         Some(status) => {
-            let code = status.code().unwrap_or(1);
+            let code = exit_status_code(status);
             eprintln!(
                 "[doctor:subprocess] docker vhs exited pid={} code={} elapsed={}ms",
                 docker_pid,
@@ -1330,6 +1335,26 @@ where
         }
         let _ = sink.flush();
     })
+}
+
+fn join_vhs_log_pump_bounded(handle: thread::JoinHandle<()>, stream: &'static str) {
+    let start = std::time::Instant::now();
+    while !handle.is_finished() {
+        if start.elapsed() >= VHS_LOG_PUMP_JOIN_TIMEOUT {
+            detach_vhs_log_pump_join(handle, stream);
+            return;
+        }
+        thread::sleep(VHS_LOG_PUMP_JOIN_POLL);
+    }
+    let _ = handle.join();
+}
+
+fn detach_vhs_log_pump_join(handle: thread::JoinHandle<()>, stream: &'static str) {
+    let _ = thread::Builder::new()
+        .name(format!("doctor-vhs-{stream}-detached-join"))
+        .spawn(move || {
+            let _ = handle.join();
+        });
 }
 
 fn parse_defunct_ttyd_from_ps(stdout: &[u8]) -> bool {
@@ -1578,7 +1603,7 @@ fn run_vhs_with_driver(
         poll_count += 1;
 
         if let Some(status) = child.try_wait()? {
-            let code = status.code().unwrap_or(1);
+            let code = exit_status_code(status);
             eprintln!(
                 "[doctor:subprocess] vhs exited pid={} code={} elapsed={}ms polls={}",
                 child_pid,
@@ -1603,7 +1628,7 @@ fn run_vhs_with_driver(
             terminate_process_group(child_pid);
             let _ = child.kill();
             let status = child.wait_timeout(Duration::from_secs(2))?;
-            break status.and_then(|value| value.code()).unwrap_or(125);
+            break status.map_or(125, exit_status_code);
         }
 
         if !defunct_ttyd_observed && has_defunct_ttyd_child(child_pid) {
@@ -1634,8 +1659,8 @@ fn run_vhs_with_driver(
 
         thread::sleep(Duration::from_millis(200));
     };
-    let _ = stdout_pump.join();
-    let _ = stderr_pump.join();
+    join_vhs_log_pump_bounded(stdout_pump, "stdout");
+    join_vhs_log_pump_bounded(stderr_pump, "stderr");
 
     if vhs_exit != 0 {
         if fatal_capture_reason.is_none() {
@@ -1839,7 +1864,7 @@ fn wait_for_seed_child_exit(
 
         match child.wait_timeout(Duration::from_millis(25)) {
             Ok(Some(status)) => {
-                return SeedDemoThreadOutcome::Completed(status.code().unwrap_or(1));
+                return SeedDemoThreadOutcome::Completed(exit_status_code(status));
             }
             Ok(None) => {}
             Err(error) => {
@@ -1851,20 +1876,35 @@ fn wait_for_seed_child_exit(
 }
 
 fn cancel_seed_demo_thread(seed_thread: Option<SeedDemoThread>) {
-    let _ = finish_seed_demo_thread(seed_thread, true);
+    let _ = finish_seed_demo_thread(seed_thread, true, SEED_THREAD_CANCEL_JOIN_TIMEOUT);
 }
 
 fn finish_seed_demo_thread(
     seed_thread: Option<SeedDemoThread>,
     cancel_incomplete: bool,
+    join_timeout: Duration,
 ) -> Option<i32> {
-    let seed_thread = seed_thread?;
+    let SeedDemoThread { cancel, handle } = seed_thread?;
 
     if cancel_incomplete {
-        seed_thread.cancel.store(true, Ordering::Release);
+        cancel.store(true, Ordering::Release);
     }
 
-    match seed_thread.handle.join() {
+    let start = std::time::Instant::now();
+    while !handle.is_finished() {
+        if start.elapsed() >= join_timeout {
+            cancel.store(true, Ordering::Release);
+            eprintln!(
+                "[doctor:subprocess] seed demo thread join timeout timeout_ms={} cancel_incomplete={}",
+                join_timeout.as_millis(),
+                cancel_incomplete
+            );
+            return if cancel_incomplete { None } else { Some(1) };
+        }
+        thread::sleep(SEED_THREAD_JOIN_POLL);
+    }
+
+    match handle.join() {
         Ok(SeedDemoThreadOutcome::Completed(code)) => Some(code),
         Ok(SeedDemoThreadOutcome::Canceled) => None,
         Err(_) => Some(1),
@@ -2000,7 +2040,7 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
             .unwrap_or_else(|| PathBuf::from("."));
         (parent, output)
     } else {
-        let run_dir = cfg.run_root.join(&run_name);
+        let run_dir = join_validated_child_path(&cfg.run_root, &run_name, "run_name")?;
         let output = run_dir.join(format!("capture.{}", cfg.video_ext));
         (run_dir, output)
     };
@@ -2317,7 +2357,14 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
     // Preserve the pre-refactor success-path semantics: once capture finishes
     // normally, wait for any in-flight seed-demo work to complete instead of
     // cancelling it and converting a real success into a synthetic failure.
-    let seed_exit = finish_seed_demo_thread(seed_thread, false);
+    let seed_exit = if let Some(seed_thread) = seed_thread {
+        let seed_join_timeout = parse_duration_value(&cfg.seed_delay)?
+            .saturating_add(Duration::from_secs(cfg.seed_timeout))
+            .saturating_add(Duration::from_secs(1));
+        finish_seed_demo_thread(Some(seed_thread), false, seed_join_timeout)
+    } else {
+        None
+    };
 
     let mut snapshot_status = if cfg.no_snapshot {
         "skipped".to_string()
@@ -2343,7 +2390,7 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
                 .stderr(Stdio::null())
                 .status()?;
 
-            let ffmpeg_exit_code = status.code().unwrap_or(1);
+            let ffmpeg_exit_code = exit_status_code(status);
             let snapshot_written = snapshot_path.exists();
             let (next_status, next_exit_code) =
                 resolve_snapshot_capture_result(ffmpeg_exit_code, snapshot_written);
@@ -2613,9 +2660,10 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
 mod tests {
     use std::collections::BTreeMap;
     use std::fs;
+    use std::io;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Condvar, Mutex, mpsc};
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -2954,6 +3002,32 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn wait_for_seed_child_exit_preserves_signal_exit_code() {
+        let temp = tempdir().expect("tempdir");
+        let stderr_log = temp.path().join("seed.stderr.log");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("kill -TERM $$")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn self-terminating shell");
+
+        let outcome = super::wait_for_seed_child_exit(&mut child, cancel.as_ref(), &stderr_log);
+
+        assert!(matches!(
+            outcome,
+            super::SeedDemoThreadOutcome::Completed(143)
+        ));
+        assert!(
+            !stderr_log.exists(),
+            "successful wait should not record a wait error"
+        );
+    }
+
     #[test]
     fn finish_seed_demo_thread_cancels_pending_launch_and_reports_none() {
         let temp = tempdir().expect("tempdir");
@@ -2977,7 +3051,8 @@ mod tests {
         );
 
         let start = Instant::now();
-        let exit_code = super::finish_seed_demo_thread(Some(seed), true);
+        let exit_code =
+            super::finish_seed_demo_thread(Some(seed), true, Duration::from_millis(250));
         assert!(
             start.elapsed() < Duration::from_secs(1),
             "finishing a delayed seed thread should cancel promptly"
@@ -2997,14 +3072,94 @@ mod tests {
             super::SeedDemoThreadOutcome::Completed(7)
         });
 
-        let exit_code =
-            super::finish_seed_demo_thread(Some(super::SeedDemoThread { cancel, handle }), false);
+        let exit_code = super::finish_seed_demo_thread(
+            Some(super::SeedDemoThread { cancel, handle }),
+            false,
+            Duration::from_secs(1),
+        );
 
         assert!(
             started.elapsed() >= Duration::from_millis(40),
             "normal finalization should wait for in-flight seed work to finish"
         );
         assert_eq!(exit_code, Some(7));
+    }
+
+    #[test]
+    fn finish_seed_demo_thread_cancel_timeout_does_not_block() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_for_thread = Arc::clone(&cancel);
+        let released = Arc::new((Mutex::new(false), Condvar::new()));
+        let released_for_thread = Arc::clone(&released);
+        let handle = thread::spawn(move || {
+            while !cancel_for_thread.load(Ordering::Acquire) {
+                thread::sleep(Duration::from_millis(5));
+            }
+            let (released_lock, released_ready) = &*released_for_thread;
+            let mut released = released_lock.lock().expect("released lock");
+            while !*released {
+                released = released_ready.wait(released).expect("released wait");
+            }
+            super::SeedDemoThreadOutcome::Canceled
+        });
+
+        let started = Instant::now();
+        let exit_code = super::finish_seed_demo_thread(
+            Some(super::SeedDemoThread { cancel, handle }),
+            true,
+            Duration::from_millis(50),
+        );
+
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "cancelling a stuck seed thread should not block indefinitely"
+        );
+        assert_eq!(exit_code, None);
+
+        let (released_lock, released_ready) = &*released;
+        *released_lock.lock().expect("released lock") = true;
+        released_ready.notify_all();
+    }
+
+    #[test]
+    fn finish_seed_demo_thread_timeout_requests_cancel_and_returns_failure() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_for_thread = Arc::clone(&cancel);
+        let released = Arc::new((Mutex::new(false), Condvar::new()));
+        let released_for_thread = Arc::clone(&released);
+        let handle = thread::spawn(move || {
+            while !cancel_for_thread.load(Ordering::Acquire) {
+                thread::sleep(Duration::from_millis(5));
+            }
+            let (released_lock, released_ready) = &*released_for_thread;
+            let mut released = released_lock.lock().expect("released lock");
+            while !*released {
+                released = released_ready.wait(released).expect("released wait");
+            }
+            super::SeedDemoThreadOutcome::Completed(0)
+        });
+
+        let cancel_probe = Arc::clone(&cancel);
+        let started = Instant::now();
+        let exit_code = super::finish_seed_demo_thread(
+            Some(super::SeedDemoThread { cancel, handle }),
+            false,
+            Duration::from_millis(50),
+        );
+
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "timed-out normal finalization should not block indefinitely"
+        );
+        assert_eq!(exit_code, Some(1));
+        assert!(
+            cancel_probe.load(Ordering::Acquire),
+            "timed-out finalization should request cancellation before detaching"
+        );
+
+        let (released_lock, released_ready) = &*released;
+        *released_lock.lock().expect("released lock") = true;
+        released_ready.notify_all();
     }
 
     #[test]
@@ -3082,6 +3237,30 @@ mod tests {
         assert!(!run_dir.join("tmux_pane.txt").exists());
         assert!(run_dir.join("run_meta.json").exists());
         assert!(run_dir.join("run_artifact_manifest.json").exists());
+    }
+
+    #[test]
+    fn run_capture_rejects_unsafe_run_name() {
+        if !super::command_exists("vhs") && !super::command_exists("docker") {
+            return;
+        }
+
+        let temp = tempdir().expect("tempdir");
+        let run_root = temp.path().join("runs");
+
+        let mut args = minimal_args();
+        args.run_root = Some(run_root);
+        args.run_name = Some("../escape".to_string());
+        args.dry_run = true;
+
+        let error = super::run_capture(args).expect_err("unsafe run name should fail capture");
+        assert!(
+            error
+                .to_string()
+                .contains("run_name must be a single safe path component"),
+            "unexpected error: {error}"
+        );
+        assert!(!temp.path().join("escape").exists());
     }
 
     #[test]
@@ -3610,6 +3789,58 @@ mod tests {
             fatal_reason.lock().expect("fatal reason mutex").as_deref(),
             Some("vhs could not open ttyd (EOF)")
         );
+    }
+
+    struct BlockingLogReader {
+        entered_tx: Option<mpsc::Sender<()>>,
+        released: Arc<(Mutex<bool>, Condvar)>,
+    }
+
+    impl std::io::Read for BlockingLogReader {
+        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+            if let Some(tx) = self.entered_tx.take() {
+                let _ = tx.send(());
+            }
+            let (released_lock, released_ready) = &*self.released;
+            let mut released = released_lock.lock().expect("released lock");
+            while !*released {
+                released = released_ready.wait(released).expect("released wait");
+            }
+            Ok(0)
+        }
+    }
+
+    #[test]
+    fn join_vhs_log_pump_bounded_does_not_block_on_stuck_reader() {
+        let temp = tempdir().expect("tempdir");
+        let sink_path = temp.path().join("vhs.log");
+        let sink = fs::File::create(&sink_path).expect("create sink");
+        let fatal_reason = Arc::new(Mutex::new(None::<String>));
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let released = Arc::new((Mutex::new(false), Condvar::new()));
+        let reader = BlockingLogReader {
+            entered_tx: Some(entered_tx),
+            released: Arc::clone(&released),
+        };
+
+        let handle = super::spawn_vhs_log_pump(reader, sink, fatal_reason);
+        assert!(
+            entered_rx.recv_timeout(Duration::from_secs(1)).is_ok(),
+            "log pump should begin reading promptly"
+        );
+
+        let started = Instant::now();
+        super::join_vhs_log_pump_bounded(handle, "stdout");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "bounded log pump join should not block on stuck reader: {elapsed:?}"
+        );
+
+        let (released_lock, released_ready) = &*released;
+        let mut released = released_lock.lock().expect("released lock");
+        *released = true;
+        released_ready.notify_all();
     }
 
     #[test]

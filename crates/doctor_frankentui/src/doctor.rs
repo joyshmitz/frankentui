@@ -10,10 +10,10 @@ use wait_timeout::ChildExt;
 
 use crate::error::{DoctorError, Result};
 use crate::profile::list_profile_names;
-use crate::runmeta::RunMeta;
+use crate::runmeta::{RunMeta, normalize_loaded_run_meta_paths};
 use crate::util::{
     CliOutput, OutputIntegration, command_exists, ensure_dir, ensure_executable, ensure_exists,
-    now_compact_timestamp, output_for, shell_single_quote, write_string,
+    exit_status_code, now_compact_timestamp, output_for, shell_single_quote, write_string,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
@@ -221,7 +221,7 @@ fn run_help_check(exe: &PathBuf, command: &str) -> Result<()> {
         Ok(())
     } else {
         Err(DoctorError::exit(
-            status.code().unwrap_or(1),
+            exit_status_code(status),
             format!("help check failed for command: {command}"),
         ))
     }
@@ -237,66 +237,59 @@ fn describe_capture_smoke_failure(run_root: &Path, run_name: &str) -> Option<Str
     let mut fallback_reason: Option<String> = None;
     let mut capture_error_reason: Option<String> = None;
 
-    if let Ok(content) = std::fs::read_to_string(&meta_path)
-        && let Ok(value) = serde_json::from_str::<serde_json::Value>(&content)
-    {
-        if let Some(meta_status) = value.get("status").and_then(serde_json::Value::as_str) {
-            status = Some(meta_status.to_string());
-            facts.push(format!("status={meta_status}"));
+    if let Ok(meta) = RunMeta::from_path(&meta_path) {
+        let meta = normalize_loaded_run_meta_paths(&run_dir, &meta);
+        if meta.status.is_empty() == false {
+            status = Some(meta.status.clone());
+            facts.push(format!("status={}", meta.status));
         }
-        if let Some(meta_vhs_exit) = value
-            .get("vhs_exit_code")
-            .and_then(serde_json::Value::as_i64)
-        {
+        if let Some(meta_vhs_exit) = meta.vhs_exit_code.map(i64::from) {
             vhs_exit = Some(meta_vhs_exit);
             facts.push(format!("vhs_exit={meta_vhs_exit}"));
         }
-        if let Some(meta_host_vhs_exit) = value
-            .get("host_vhs_exit_code")
-            .and_then(serde_json::Value::as_i64)
-        {
+        if let Some(meta_host_vhs_exit) = meta.host_vhs_exit_code.map(i64::from) {
             facts.push(format!("host_vhs_exit={meta_host_vhs_exit}"));
         }
-        if let Some(driver) = value
-            .get("vhs_driver_used")
-            .and_then(serde_json::Value::as_str)
+        if let Some(driver) = meta
+            .vhs_driver_used
+            .as_deref()
             .filter(|value| !value.is_empty())
         {
             facts.push(format!("vhs_driver_used={driver}"));
         }
-        if let Some(reason) = value
-            .get("fallback_reason")
-            .and_then(serde_json::Value::as_str)
+        if let Some(reason) = meta
+            .fallback_reason
+            .as_deref()
             .filter(|value| !value.is_empty())
         {
             fallback_reason = Some(reason.to_string());
             facts.push(format!("fallback_reason={reason}"));
         }
-        if let Some(reason) = value
-            .get("capture_error_reason")
-            .and_then(serde_json::Value::as_str)
+        if let Some(reason) = meta
+            .capture_error_reason
+            .as_deref()
             .filter(|value| !value.is_empty())
         {
             capture_error_reason = Some(reason.to_string());
             facts.push(format!("capture_error_reason={reason}"));
         }
-        if let Some(path) = value
-            .get("ttyd_shim_log")
-            .and_then(serde_json::Value::as_str)
+        if let Some(path) = meta
+            .ttyd_shim_log
+            .as_deref()
             .filter(|value| !value.is_empty())
         {
             facts.push(format!("ttyd_shim_log={path}"));
         }
-        if let Some(path) = value
-            .get("ttyd_runtime_log")
-            .and_then(serde_json::Value::as_str)
+        if let Some(path) = meta
+            .ttyd_runtime_log
+            .as_deref()
             .filter(|value| !value.is_empty())
         {
             facts.push(format!("ttyd_runtime_log={path}"));
         }
-        if let Some(path) = value
-            .get("vhs_docker_log")
-            .and_then(serde_json::Value::as_str)
+        if let Some(path) = meta
+            .vhs_docker_log
+            .as_deref()
             .filter(|value| !value.is_empty())
         {
             facts.push(format!("vhs_docker_log={path}"));
@@ -335,7 +328,7 @@ fn load_capture_smoke_observability(
 ) -> Option<CaptureSmokeObservability> {
     let run_dir = run_root.join(run_name);
     let meta_path = run_dir.join("run_meta.json");
-    let meta = RunMeta::from_path(&meta_path).ok()?;
+    let meta = normalize_loaded_run_meta_paths(&run_dir, &RunMeta::from_path(&meta_path).ok()?);
     let (failure_signature, remediation_hint) = classify_capture_failure(
         Some(&meta.status),
         meta.vhs_exit_code.map(i64::from),
@@ -462,7 +455,7 @@ fn run_app_smoke_fallback(args: &DoctorArgs, ui: &CliOutput) -> Result<AppSmokeR
     let timeout = Duration::from_secs(APP_SMOKE_TIMEOUT_SECONDS);
     let mut timed_out = false;
     let exit_code = match child.wait_timeout(timeout)? {
-        Some(status) => status.code(),
+        Some(status) => Some(exit_status_code(status)),
         None => {
             timed_out = true;
             child.kill()?;
@@ -587,7 +580,7 @@ fn capture_tmux_pane(session_name: &str, output_path: &Path) -> Result<()> {
         Ok(())
     } else {
         Err(DoctorError::exit(
-            status.code().unwrap_or(1),
+            exit_status_code(status),
             format!("tmux capture-pane failed for session {session_name}"),
         ))
     }
@@ -639,7 +632,7 @@ fn run_tmux_app_smoke_fallback(
         .status()?;
     if !new_status.success() {
         return Err(DoctorError::exit(
-            new_status.code().unwrap_or(1),
+            exit_status_code(new_status),
             format!("failed to start tmux app smoke session {session_name}"),
         ));
     }
@@ -658,7 +651,7 @@ fn run_tmux_app_smoke_fallback(
     if !pipe_status.success() {
         kill_tmux_session(&session_name);
         return Err(DoctorError::exit(
-            pipe_status.code().unwrap_or(1),
+            exit_status_code(pipe_status),
             format!("failed to attach tmux pipe-pane for session {session_name}"),
         ));
     }
@@ -844,7 +837,7 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
     let dry_status = dry.status()?;
     if !dry_status.success() {
         return Err(DoctorError::exit(
-            dry_status.code().unwrap_or(1),
+            exit_status_code(dry_status),
             "dry-run smoke failed",
         ));
     }
@@ -858,7 +851,7 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
 
         if !full_status.success() {
             degraded_capture = true;
-            let exit_code = full_status.code().unwrap_or(1);
+            let exit_code = exit_status_code(full_status);
             capture_smoke_detail =
                 describe_capture_smoke_failure(&args.run_root, "doctor_full_run");
             degraded_reason = capture_smoke_detail
@@ -1136,6 +1129,44 @@ exit 1
         assert!(
             message.contains("help check failed for command: capture"),
             "unexpected error shape: {message}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_help_check_preserves_signal_exit_code() {
+        let temp = tempdir().expect("tempdir");
+        // doctor_frankentui:no-fake-allow (unit test) writes a temp shell script to
+        // validate signal-exit propagation without depending on host binaries.
+        let script_path = temp.path().join("fake-cli.sh");
+
+        let script = r#"#!/bin/sh
+kill -TERM $$
+"#;
+        fs::write(&script_path, script).expect("write script");
+
+        let mut perms = fs::metadata(&script_path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms).expect("set permissions");
+
+        let mut result = super::run_help_check(&script_path, "capture");
+        for _ in 0..5 {
+            if let Err(e) = &result
+                && (e.to_string().contains("Text file busy") || e.to_string().contains("26"))
+            {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                result = super::run_help_check(&script_path, "capture");
+                continue;
+            }
+            break;
+        }
+
+        let error = result.expect_err("help check should fail for signal exit");
+        assert_eq!(error.exit_code(), 143);
+        assert!(
+            error
+                .to_string()
+                .contains("help check failed for command: capture")
         );
     }
 
@@ -1430,6 +1461,8 @@ exit 1
         let run_dir = temp.path().join("doctor_full_run");
         fs::create_dir_all(&run_dir).expect("create run dir");
         let meta_path = run_dir.join("run_meta.json");
+        let artifact_manifest = run_dir.join("run_artifact_manifest.json");
+        fs::write(&artifact_manifest, b"{}\n").expect("write artifact manifest");
         let run_meta = RunMeta {
             status: "failed".to_string(),
             profile: "analytics-empty".to_string(),
@@ -1439,12 +1472,7 @@ exit 1
             fallback_reason: Some("capture timeout exceeded 30s".to_string()),
             capture_error_reason: Some("ttyd handshake EOF".to_string()),
             evidence_ledger: Some(run_dir.join("evidence_ledger.jsonl").display().to_string()),
-            artifact_manifest: Some(
-                run_dir
-                    .join("run_artifact_manifest.json")
-                    .display()
-                    .to_string(),
-            ),
+            artifact_manifest: Some(artifact_manifest.display().to_string()),
             ttyd_runtime_log: Some(run_dir.join("ttyd_runtime.log").display().to_string()),
             vhs_exit_code: Some(124),
             host_vhs_exit_code: Some(124),
@@ -1455,10 +1483,7 @@ exit 1
 
         let observability = super::load_capture_smoke_observability(temp.path(), "doctor_full_run")
             .expect("load observability");
-        let expected_artifact_manifest = run_dir
-            .join("run_artifact_manifest.json")
-            .display()
-            .to_string();
+        let expected_artifact_manifest = artifact_manifest.display().to_string();
 
         assert_eq!(observability.run_name, "doctor_full_run");
         assert_eq!(observability.status, "failed");
@@ -1477,5 +1502,72 @@ exit 1
                 .as_deref()
                 .is_some_and(|value| value.contains("VHS"))
         );
+    }
+
+    #[test]
+    fn load_capture_smoke_observability_sanitizes_loaded_artifact_paths() {
+        let temp = tempdir().expect("tempdir");
+        let run_dir = temp.path().join("doctor_full_run");
+        let forged_run_dir = temp.path().join("forged_run");
+        fs::create_dir_all(&run_dir).expect("create run dir");
+        fs::create_dir_all(&forged_run_dir).expect("create forged run dir");
+        let outside_log = temp.path().join("outside.log");
+        fs::write(&outside_log, b"outside log").expect("write outside log");
+
+        RunMeta {
+            status: "failed".to_string(),
+            profile: "analytics-empty".to_string(),
+            run_dir: forged_run_dir.display().to_string(),
+            artifact_manifest: Some(outside_log.display().to_string()),
+            evidence_ledger: Some("../outside.log".to_string()),
+            tmux_pane_log: Some("../outside.log".to_string()),
+            ..RunMeta::default()
+        }
+        .write_to_path(&run_dir.join("run_meta.json"))
+        .expect("write run meta");
+
+        let observability = super::load_capture_smoke_observability(temp.path(), "doctor_full_run")
+            .expect("load observability");
+
+        assert_eq!(observability.run_dir, run_dir.display().to_string());
+        assert!(observability.artifact_manifest.is_none());
+        assert!(observability.evidence_ledger.is_none());
+        assert!(observability.tmux_pane_log.is_none());
+    }
+
+    #[test]
+    fn describe_capture_smoke_failure_sanitizes_loaded_artifact_paths() {
+        let temp = tempdir().expect("tempdir");
+        let run_dir = temp.path().join("doctor_full_run");
+        let forged_run_dir = temp.path().join("forged_run");
+        fs::create_dir_all(&run_dir).expect("create run dir");
+        fs::create_dir_all(&forged_run_dir).expect("create forged run dir");
+        let outside_log = temp.path().join("outside.log");
+        fs::write(&outside_log, b"outside log").expect("write outside log");
+
+        RunMeta {
+            status: "failed".to_string(),
+            profile: "analytics-empty".to_string(),
+            run_dir: forged_run_dir.display().to_string(),
+            vhs_exit_code: Some(124),
+            fallback_reason: Some("capture timeout exceeded 30s".to_string()),
+            ttyd_shim_log: Some(outside_log.display().to_string()),
+            ttyd_runtime_log: Some("../outside.log".to_string()),
+            vhs_docker_log: Some("../outside.log".to_string()),
+            ..RunMeta::default()
+        }
+        .write_to_path(&run_dir.join("run_meta.json"))
+        .expect("write run meta");
+
+        let detail = super::describe_capture_smoke_failure(temp.path(), "doctor_full_run")
+            .expect("describe capture smoke failure");
+
+        assert!(detail.contains(&run_dir.display().to_string()));
+        assert!(detail.contains("status=failed"));
+        assert!(detail.contains("diagnosis=vhs_capture_timeout"));
+        assert!(!detail.contains(&outside_log.display().to_string()));
+        assert!(!detail.contains("ttyd_shim_log="));
+        assert!(!detail.contains("ttyd_runtime_log="));
+        assert!(!detail.contains("vhs_docker_log="));
     }
 }

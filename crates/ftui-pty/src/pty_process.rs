@@ -20,12 +20,13 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::{DEFAULT_INPUT_WRITE_TIMEOUT, PtyInputWriter, detach_join, normalize_line_input};
 use portable_pty::{CommandBuilder, ExitStatus, MasterPty, PtySize};
 
 /// Configuration for spawning a shell process.
@@ -55,6 +56,9 @@ pub struct ShellConfig {
 
     /// Enable logging of PTY events.
     pub log_events: bool,
+
+    /// Maximum time to wait for PTY input writes before failing.
+    pub input_write_timeout: Duration,
 }
 
 impl Default for ShellConfig {
@@ -68,6 +72,7 @@ impl Default for ShellConfig {
             rows: 24,
             term: "xterm-256color".to_string(),
             log_events: false,
+            input_write_timeout: DEFAULT_INPUT_WRITE_TIMEOUT,
         }
     }
 }
@@ -134,10 +139,21 @@ impl ShellConfig {
         self
     }
 
+    /// Override the PTY input write timeout.
+    #[must_use]
+    pub fn input_write_timeout(mut self, timeout: Duration) -> Self {
+        self.input_write_timeout = timeout;
+        self
+    }
+
     /// Resolve the shell path.
     fn resolve_shell(&self) -> PathBuf {
         if let Some(ref shell) = self.shell {
             return shell.clone();
+        }
+
+        if let Some(shell) = preferred_default_shell() {
+            return shell;
         }
 
         // Try $SHELL environment variable
@@ -159,14 +175,14 @@ enum ReaderMsg {
 }
 
 /// Process state tracking.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProcessState {
     /// Process is running.
     Running,
-    /// Process has exited with the given status.
-    Exited(i32),
-    /// Process was killed by a signal.
-    Signaled(i32),
+    /// Process exited normally with the given status code.
+    Exited(u32),
+    /// Process was terminated by a signal.
+    Signaled(String),
     /// Process state is unknown (e.g., after kill attempt).
     Unknown,
 }
@@ -174,15 +190,24 @@ pub enum ProcessState {
 impl ProcessState {
     /// Returns `true` if the process is still running.
     #[must_use]
-    pub const fn is_alive(self) -> bool {
+    pub fn is_alive(&self) -> bool {
         matches!(self, ProcessState::Running)
     }
 
-    /// Returns the exit code if the process has exited normally.
+    /// Returns the exit code if the process exited normally.
     #[must_use]
-    pub const fn exit_code(self) -> Option<i32> {
+    pub fn exit_code(&self) -> Option<u32> {
         match self {
-            ProcessState::Exited(code) => Some(code),
+            ProcessState::Exited(code) => Some(*code),
+            _ => None,
+        }
+    }
+
+    /// Returns the terminating signal description, if any.
+    #[must_use]
+    pub fn signal_name(&self) -> Option<&str> {
+        match self {
+            ProcessState::Signaled(signal) => Some(signal.as_str()),
             _ => None,
         }
     }
@@ -203,7 +228,7 @@ impl ProcessState {
 /// let mut proc = PtyProcess::spawn(config)?;
 ///
 /// // Send a command
-/// proc.write_all(b"echo hello\n")?;
+/// proc.write_line("echo hello")?;
 ///
 /// // Read output
 /// let output = proc.read_until(b"hello", Duration::from_secs(5))?;
@@ -217,7 +242,7 @@ impl ProcessState {
 pub struct PtyProcess {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    input_writer: PtyInputWriter,
     rx: mpsc::Receiver<ReaderMsg>,
     reader_thread: Option<thread::JoinHandle<()>>,
     captured: Vec<u8>,
@@ -301,6 +326,7 @@ impl PtyProcess {
             .master
             .take_writer()
             .map_err(|e| io::Error::other(e.to_string()))?;
+        let input_writer = PtyInputWriter::spawn(writer, "ftui-pty-process-writer")?;
 
         // Start reader thread
         let (tx, rx) = mpsc::channel::<ReaderMsg>();
@@ -333,7 +359,7 @@ impl PtyProcess {
         Ok(Self {
             child,
             master: pair.master,
-            writer,
+            input_writer,
             rx,
             reader_thread: Some(reader_thread),
             captured: Vec::new(),
@@ -356,7 +382,7 @@ impl PtyProcess {
     #[must_use]
     pub fn state(&mut self) -> ProcessState {
         self.poll_state();
-        self.state
+        self.state.clone()
     }
 
     /// Get the process ID, if available.
@@ -443,20 +469,41 @@ impl PtyProcess {
         }
     }
 
-    /// Send input to the process.
+    /// Send raw input bytes to the process.
+    ///
+    /// For interactive shell commands, prefer [`Self::write_line`] so Enter is
+    /// encoded as carriage return instead of a bare line feed.
     ///
     /// # Errors
     ///
     /// Returns an error if the write fails.
     pub fn write_all(&mut self, data: &[u8]) -> io::Result<()> {
-        self.writer.write_all(data)?;
-        self.writer.flush()?;
+        let result = self.input_writer.write_with_timeout(
+            data,
+            self.config.input_write_timeout,
+            "ftui-pty-process-write",
+            "ftui-pty-process-detached-write",
+        );
+        if matches!(
+            result.as_ref().err().map(io::Error::kind),
+            Some(io::ErrorKind::TimedOut)
+        ) {
+            let _ = self.child.kill();
+            self.state = ProcessState::Unknown;
+        }
+        result?;
 
         if self.config.log_events {
             log_event("PTY_PROCESS_INPUT", format!("bytes={}", data.len()));
         }
 
         Ok(())
+    }
+
+    /// Send a line of interactive input, normalizing Enter to carriage return.
+    pub fn write_line(&mut self, line: impl AsRef<[u8]>) -> io::Result<()> {
+        let normalized = normalize_line_input(line.as_ref());
+        self.write_all(&normalized)
     }
 
     /// Read any available output without blocking.
@@ -573,14 +620,12 @@ impl PtyProcess {
     }
 
     fn update_state_from_exit(&mut self, status: &ExitStatus) {
-        if status.success() {
-            self.state = ProcessState::Exited(0);
-        } else {
-            // portable-pty doesn't distinguish signal vs exit code well
-            // Use a heuristic: codes > 128 are often signal-based
-            let code = 1; // Default failure code
-            self.state = ProcessState::Exited(code);
+        if let Some(signal) = status.signal() {
+            self.state = ProcessState::Signaled(signal.to_string());
+            return;
         }
+
+        self.state = ProcessState::Exited(status.exit_code());
     }
 
     fn drain_channel(&mut self, timeout: Duration) -> io::Result<usize> {
@@ -650,8 +695,10 @@ impl PtyProcess {
 impl Drop for PtyProcess {
     fn drop(&mut self) {
         // Best-effort cleanup
-        let _ = self.writer.flush();
         let _ = self.child.kill();
+        self.input_writer.flush_best_effort();
+        self.input_writer
+            .detach_thread("ftui-pty-process-detached-writer");
 
         if let Some(handle) = self.reader_thread.take() {
             detach_reader_join(handle);
@@ -667,14 +714,17 @@ impl Drop for PtyProcess {
 }
 
 fn detach_reader_join(handle: thread::JoinHandle<()>) {
-    let _ = thread::Builder::new()
-        .name("ftui-pty-process-detached-join".to_string())
-        .spawn(move || {
-            let _ = handle.join();
-        });
+    detach_join(handle, "ftui-pty-process-detached-reader-join");
 }
 
 // ── Helper Functions ──────────────────────────────────────────────────
+
+fn preferred_default_shell() -> Option<PathBuf> {
+    ["/bin/bash", "/usr/bin/bash"]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|candidate| candidate.is_file())
+}
 
 fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() {
@@ -743,12 +793,17 @@ mod tests {
     }
 
     #[test]
-    fn shell_config_resolve_shell_env() {
-        // This test depends on $SHELL being set
+    fn shell_config_resolve_shell_prefers_bash_when_available() {
         let config = ShellConfig::default();
         let shell = config.resolve_shell();
-        // Should be either $SHELL or /bin/sh
-        assert!(shell.to_str().unwrap().contains("sh") || shell.to_str().unwrap().contains("zsh"));
+
+        if let Some(preferred) = preferred_default_shell() {
+            assert_eq!(shell, preferred);
+        } else if let Ok(env_shell) = std::env::var("SHELL") {
+            assert_eq!(shell, PathBuf::from(env_shell));
+        } else {
+            assert_eq!(shell, PathBuf::from("/bin/sh"));
+        }
     }
 
     // ── ProcessState Tests ────────────────────────────────────────────
@@ -757,7 +812,7 @@ mod tests {
     fn process_state_is_alive() {
         assert!(ProcessState::Running.is_alive());
         assert!(!ProcessState::Exited(0).is_alive());
-        assert!(!ProcessState::Signaled(9).is_alive());
+        assert!(!ProcessState::Signaled("SIGTERM".to_string()).is_alive());
         assert!(!ProcessState::Unknown.is_alive());
     }
 
@@ -765,9 +820,22 @@ mod tests {
     fn process_state_exit_code() {
         assert_eq!(ProcessState::Running.exit_code(), None);
         assert_eq!(ProcessState::Exited(0).exit_code(), Some(0));
-        assert_eq!(ProcessState::Exited(1).exit_code(), Some(1));
-        assert_eq!(ProcessState::Signaled(9).exit_code(), None);
+        assert_eq!(ProcessState::Exited(7).exit_code(), Some(7));
+        assert_eq!(
+            ProcessState::Signaled("SIGTERM".to_string()).exit_code(),
+            None
+        );
         assert_eq!(ProcessState::Unknown.exit_code(), None);
+    }
+
+    #[test]
+    fn process_state_signal_name() {
+        assert_eq!(ProcessState::Running.signal_name(), None);
+        assert_eq!(
+            ProcessState::Signaled("Terminated".to_string()).signal_name(),
+            Some("Terminated")
+        );
+        assert_eq!(ProcessState::Exited(7).signal_name(), None);
     }
 
     // ── find_subsequence Tests ────────────────────────────────────────
@@ -792,7 +860,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn spawn_and_basic_io() {
-        let config = ShellConfig::default().logging(false);
+        let config = ShellConfig::default()
+            .logging(false)
+            .env("FTUI_BASIC", "hello-pty-process");
         let mut proc = PtyProcess::spawn(config).expect("spawn should succeed");
 
         // Should be alive
@@ -800,14 +870,12 @@ mod tests {
         assert!(proc.pid().is_some());
 
         // Send a simple command
-        proc.write_all(b"echo hello-pty-process\n")
+        proc.write_line("echo $FTUI_BASIC")
             .expect("write should succeed");
 
-        // Read output
         let output = proc
             .read_until(b"hello-pty-process", Duration::from_secs(5))
             .expect("should find output");
-
         assert!(
             output
                 .windows(b"hello-pty-process".len())
@@ -829,7 +897,7 @@ mod tests {
 
         let mut proc = PtyProcess::spawn(config).expect("spawn should succeed");
 
-        proc.write_all(b"echo $TEST_VAR\n")
+        proc.write_line("echo $TEST_VAR")
             .expect("write should succeed");
 
         let output = proc
@@ -852,7 +920,7 @@ mod tests {
         let config = ShellConfig::default().logging(false);
         let mut proc = PtyProcess::spawn(config).expect("spawn should succeed");
 
-        proc.write_all(b"exit 0\n").expect("write should succeed");
+        proc.write_line("exit 0").expect("write should succeed");
 
         // Wait for exit
         let status = proc
@@ -860,6 +928,44 @@ mod tests {
             .expect("wait should succeed");
         assert!(status.success());
         assert!(!proc.is_alive());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_zero_exit_preserves_exit_code() {
+        let config = ShellConfig::with_shell("/bin/sh")
+            .logging(false)
+            .arg("-c")
+            .arg("exit 7");
+        let mut proc = PtyProcess::spawn(config).expect("spawn should succeed");
+
+        let status = proc
+            .wait_timeout(Duration::from_secs(5))
+            .expect("wait should succeed");
+        assert!(!status.success());
+        assert_eq!(status.exit_code(), 7);
+        assert_eq!(proc.state().exit_code(), Some(7));
+        assert_eq!(proc.state(), ProcessState::Exited(7));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signal_exit_preserves_signaled_state() {
+        let config = ShellConfig::with_shell("/bin/sh")
+            .logging(false)
+            .arg("-c")
+            .arg("kill -KILL $$");
+        let mut proc = PtyProcess::spawn(config).expect("spawn should succeed");
+
+        let status = proc
+            .wait_timeout(Duration::from_secs(5))
+            .expect("wait should succeed");
+        assert!(!status.success());
+        assert!(status.signal().is_some(), "expected signal exit status");
+
+        let state = proc.state();
+        assert!(matches!(state, ProcessState::Signaled(_)));
+        assert!(state.signal_name().is_some());
     }
 
     #[cfg(unix)]
@@ -882,7 +988,7 @@ mod tests {
         let mut proc = PtyProcess::spawn(config).expect("spawn should succeed");
 
         // Generate output and exit
-        proc.write_all(b"for i in 1 2 3 4 5; do echo line$i; done; exit 0\n")
+        proc.write_line("for i in 1 2 3 4 5; do echo line$i; done; exit 0")
             .expect("write should succeed");
 
         // Wait for exit
@@ -906,11 +1012,10 @@ mod tests {
         let config = ShellConfig::default().logging(false);
         let mut proc = PtyProcess::spawn(config).expect("spawn should succeed");
 
-        proc.write_all(b"echo test\n")
-            .expect("write should succeed");
+        proc.write_line("echo test").expect("write should succeed");
         let _ = proc
             .read_until(b"test", Duration::from_secs(5))
-            .expect("should capture echoed output");
+            .expect("should capture output after sending a line");
 
         assert!(!proc.output().is_empty());
 
@@ -961,5 +1066,28 @@ mod tests {
             "PtyProcess drop should not wait for background descendants to close the PTY"
         );
         drop_thread.join().expect("drop thread join");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_all_times_out_when_child_does_not_drain_stdin() {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let config = ShellConfig::with_shell(shell)
+            .logging(false)
+            .input_write_timeout(Duration::from_millis(100))
+            .arg("-c")
+            .arg("sleep 5");
+        let mut proc = PtyProcess::spawn(config).expect("spawn should succeed");
+
+        let payload = vec![b'x'; 8 * 1024 * 1024];
+        let start = Instant::now();
+        let err = proc
+            .write_all(&payload)
+            .expect_err("write_all should time out when the child never reads stdin");
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "write_all should fail promptly instead of hanging"
+        );
     }
 }

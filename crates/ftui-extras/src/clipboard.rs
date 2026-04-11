@@ -14,6 +14,10 @@ use ftui_core::terminal_capabilities::TerminalCapabilities;
 const ENV_CLIPBOARD_BACKEND: &str = "FTUI_CLIPBOARD_BACKEND";
 #[cfg(feature = "clipboard-fallback")]
 const EXTERNAL_CMD_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(feature = "clipboard-fallback")]
+const EXTERNAL_IO_JOIN_TIMEOUT: Duration = Duration::from_millis(250);
+#[cfg(feature = "clipboard-fallback")]
+const EXTERNAL_IO_JOIN_POLL: Duration = Duration::from_millis(5);
 
 /// OSC 52 clipboard selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -672,6 +676,9 @@ fn get_external_backend(backend: ExternalBackend) -> Result<String, ClipboardErr
 #[cfg(feature = "clipboard-fallback")]
 fn run_command_with_input(cmd: &str, args: &[&str], content: &str) -> Result<(), ClipboardError> {
     use std::process::{Command, Stdio};
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Instant;
 
     let mut child = Command::new(cmd)
         .args(args)
@@ -681,39 +688,67 @@ fn run_command_with_input(cmd: &str, args: &[&str], content: &str) -> Result<(),
         .spawn()
         .map_err(|err| ClipboardError::WriteError(err.to_string()))?;
 
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(content.as_bytes())
-            .map_err(|err| ClipboardError::WriteError(err.to_string()))?;
-    }
+    let stdin = child.stdin.take().ok_or_else(|| {
+        ClipboardError::WriteError(["clipboard command missing stdin: ", cmd].concat())
+    })?;
+    let input = content.as_bytes().to_vec();
+    let (stdin_tx, stdin_rx) = mpsc::channel();
+    let stdin_writer = thread::spawn(move || {
+        let mut stdin = stdin;
+        let result = stdin
+            .write_all(&input)
+            .and_then(|_| stdin.flush())
+            .map_err(|err| err.to_string());
+        let _ = stdin_tx.send(result);
+    });
 
-    let deadline = std::time::Instant::now() + EXTERNAL_CMD_TIMEOUT;
-    loop {
+    let deadline = Instant::now() + EXTERNAL_CMD_TIMEOUT;
+    let status = loop {
         if let Some(status) = child
             .try_wait()
             .map_err(|err| ClipboardError::WriteError(err.to_string()))?
         {
-            if status.success() {
-                return Ok(());
-            }
-            return Err(ClipboardError::WriteError(format!(
-                "clipboard command failed: {cmd}"
-            )));
+            break status;
         }
-        if std::time::Instant::now() >= deadline {
+        if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(ClipboardError::WriteError(format!(
-                "clipboard command timed out: {cmd}"
-            )));
+            finish_external_io_thread(stdin_writer);
+            return Err(ClipboardError::WriteError(
+                ["clipboard command timed out: ", cmd].concat(),
+            ));
         }
-        std::thread::sleep(Duration::from_millis(5));
+        thread::sleep(Duration::from_millis(5));
+    };
+
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let input_result = if remaining.is_zero() {
+        stdin_rx.try_recv().map_err(|_| {
+            ClipboardError::WriteError(["clipboard command input drain timed out: ", cmd].concat())
+        })?
+    } else {
+        stdin_rx.recv_timeout(remaining).map_err(|_| {
+            ClipboardError::WriteError(["clipboard command input drain timed out: ", cmd].concat())
+        })?
+    };
+
+    let _ = stdin_writer.join();
+
+    if !status.success() {
+        return Err(ClipboardError::WriteError(
+            ["clipboard command failed: ", cmd].concat(),
+        ));
     }
+
+    input_result.map_err(ClipboardError::WriteError)
 }
 
 #[cfg(feature = "clipboard-fallback")]
 fn run_command_output(cmd: &str, args: &[&str]) -> Result<String, ClipboardError> {
     use std::process::{Command, Stdio};
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Instant;
 
     let mut child = Command::new(cmd)
         .args(args)
@@ -722,7 +757,21 @@ fn run_command_output(cmd: &str, args: &[&str]) -> Result<String, ClipboardError
         .spawn()
         .map_err(|err| ClipboardError::ReadError(err.to_string()))?;
 
-    let deadline = std::time::Instant::now() + EXTERNAL_CMD_TIMEOUT;
+    let stdout = child.stdout.take().ok_or_else(|| {
+        ClipboardError::ReadError(["clipboard command missing stdout: ", cmd].concat())
+    })?;
+    let (stdout_tx, stdout_rx) = mpsc::channel();
+    let stdout_reader = thread::spawn(move || {
+        let mut stdout = stdout;
+        let mut bytes = Vec::new();
+        let result = stdout
+            .read_to_end(&mut bytes)
+            .map(|_| bytes)
+            .map_err(|err| err.to_string());
+        let _ = stdout_tx.send(result);
+    });
+
+    let deadline = Instant::now() + EXTERNAL_CMD_TIMEOUT;
     let status = loop {
         if let Some(status) = child
             .try_wait()
@@ -730,28 +779,61 @@ fn run_command_output(cmd: &str, args: &[&str]) -> Result<String, ClipboardError
         {
             break status;
         }
-        if std::time::Instant::now() >= deadline {
+        if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(ClipboardError::ReadError(format!(
-                "clipboard command timed out: {cmd}"
-            )));
+            finish_external_io_thread(stdout_reader);
+            return Err(ClipboardError::ReadError(
+                ["clipboard command timed out: ", cmd].concat(),
+            ));
         }
-        std::thread::sleep(Duration::from_millis(5));
+        thread::sleep(Duration::from_millis(5));
     };
 
     if !status.success() {
-        return Err(ClipboardError::ReadError(format!(
-            "clipboard command failed: {cmd}"
-        )));
+        finish_external_io_thread(stdout_reader);
+        return Err(ClipboardError::ReadError(
+            ["clipboard command failed: ", cmd].concat(),
+        ));
     }
 
-    let mut stdout = Vec::new();
-    if let Some(mut out) = child.stdout.take() {
-        out.read_to_end(&mut stdout)
-            .map_err(|err| ClipboardError::ReadError(err.to_string()))?;
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let stdout = if remaining.is_zero() {
+        stdout_rx.try_recv().map_err(|_| {
+            ClipboardError::ReadError(["clipboard command output drain timed out: ", cmd].concat())
+        })?
+    } else {
+        stdout_rx.recv_timeout(remaining).map_err(|_| {
+            ClipboardError::ReadError(["clipboard command output drain timed out: ", cmd].concat())
+        })?
     }
+    .map_err(ClipboardError::ReadError)?;
+
+    let _ = stdout_reader.join();
+
     String::from_utf8(stdout).map_err(|err| ClipboardError::ReadError(err.to_string()))
+}
+
+#[cfg(feature = "clipboard-fallback")]
+fn finish_external_io_thread(handle: std::thread::JoinHandle<()>) {
+    let start = std::time::Instant::now();
+    while !handle.is_finished() {
+        if start.elapsed() >= EXTERNAL_IO_JOIN_TIMEOUT {
+            detach_external_io_join(handle);
+            return;
+        }
+        std::thread::sleep(EXTERNAL_IO_JOIN_POLL);
+    }
+    let _ = handle.join();
+}
+
+#[cfg(feature = "clipboard-fallback")]
+fn detach_external_io_join(handle: std::thread::JoinHandle<()>) {
+    let _ = std::thread::Builder::new()
+        .name("ftui-clipboard-io-detached-join".into())
+        .spawn(move || {
+            let _ = handle.join();
+        });
 }
 
 #[cfg(feature = "clipboard-logging")]
@@ -785,6 +867,8 @@ mod tests {
         TerminalCapabilities,
     };
     use base64::{Engine as _, engine::general_purpose::STANDARD};
+    #[cfg(feature = "clipboard-fallback")]
+    use std::process::{Command, Stdio};
 
     fn caps_with_clipboard() -> TerminalCapabilities {
         let mut caps = TerminalCapabilities::basic();
@@ -1436,6 +1520,53 @@ mod tests {
         use std::error::Error;
         let err = ClipboardError::Timeout;
         assert!(err.source().is_none());
+    }
+
+    #[cfg(feature = "clipboard-fallback")]
+    #[test]
+    fn fallback_reader_drains_large_stdout_without_pipe_deadlock() {
+        let python3 = Command::new("python3")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        if python3.is_err() {
+            return;
+        }
+
+        let output = super::run_command_output(
+            "python3",
+            &["-c", "import sys; sys.stdout.write('x' * 200000)"],
+        )
+        .expect("large stdout should be drained without timing out");
+        assert_eq!(output.len(), 200000);
+        assert!(output.bytes().all(|byte| byte == b'x'));
+    }
+
+    #[cfg(feature = "clipboard-fallback")]
+    #[test]
+    fn fallback_writer_times_out_when_child_does_not_drain_stdin() {
+        let python3 = Command::new("python3")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        if python3.is_err() {
+            return;
+        }
+
+        let start = std::time::Instant::now();
+        let err = super::run_command_with_input(
+            "python3",
+            &["-c", "import time; time.sleep(30)"],
+            &"x".repeat(1_000_000),
+        )
+        .expect_err("non-reading clipboard helper should time out instead of hanging forever");
+        assert!(matches!(
+            err,
+            ClipboardError::WriteError(ref msg) if msg.contains("timed out")
+        ));
+        assert!(start.elapsed() < super::EXTERNAL_CMD_TIMEOUT + std::time::Duration::from_secs(2));
     }
 
     // --- Cut buffer edge cases ---

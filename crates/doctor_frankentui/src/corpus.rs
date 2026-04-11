@@ -14,12 +14,14 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::error::{DoctorError, Result};
+use crate::util::{copy_tree_snapshot_materialized, join_validated_child_path};
 
 // ── Configuration ────────────────────────────────────────────────────────
 
@@ -301,7 +303,20 @@ pub fn acquire_corpus(manifest: &CorpusManifest, corpus_root: &Path) -> Vec<Acqu
 /// Acquire a single corpus entry.
 fn acquire_entry(entry: &CorpusEntry, corpus_root: &Path) -> AcquisitionResult {
     let start = std::time::Instant::now();
-    let entry_dir = corpus_root.join(&entry.slug);
+    let entry_dir = match join_validated_child_path(corpus_root, &entry.slug, "slug") {
+        Ok(path) => path,
+        Err(error) => {
+            return AcquisitionResult {
+                slug: entry.slug.clone(),
+                status: AcquisitionStatus::Failed,
+                snapshot_path: None,
+                source_hash: None,
+                metrics: None,
+                error_message: Some(error.to_string()),
+                duration_ms: start.elapsed().as_millis() as u64,
+            };
+        }
+    };
 
     // Create entry directory.
     if let Err(e) = fs::create_dir_all(&entry_dir) {
@@ -399,99 +414,138 @@ fn acquire_from_git(
         fs::remove_dir_all(&clone_dir).map_err(|e| format!("cleanup failed: {e}"))?;
     }
 
-    // Shallow clone at pinned commit.
-    let output = std::process::Command::new("git")
-        .args([
-            "clone",
-            "--depth",
-            "1",
-            "--single-branch",
-            &entry.source_url,
-            &clone_dir.to_string_lossy(),
-        ])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .map_err(|e| format!("git clone failed: {e}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("git clone failed: {stderr}"));
-    }
-
-    // Checkout pinned commit if not HEAD.
-    if !entry.pinned_commit.is_empty() {
-        // Fetch the specific commit (depth=1 may not have it).
-        let _ = std::process::Command::new("git")
-            .args(["fetch", "origin", &entry.pinned_commit])
-            .current_dir(&clone_dir)
+    let result = (|| {
+        // Shallow clone at pinned commit.
+        let output = std::process::Command::new("git")
+            .args([
+                "clone",
+                "--depth",
+                "1",
+                "--single-branch",
+                &entry.source_url,
+                &clone_dir.to_string_lossy(),
+            ])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .output();
+            .output()
+            .map_err(|e| format!("git clone failed: {e}"))?;
 
-        let checkout = std::process::Command::new("git")
-            .args(["checkout", &entry.pinned_commit])
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("git clone failed: {stderr}"));
+        }
+
+        // Checkout pinned commit if not HEAD.
+        if !entry.pinned_commit.is_empty() {
+            // Fetch the specific commit (depth=1 may not have it).
+            let _ = std::process::Command::new("git")
+                .args(["fetch", "origin", &entry.pinned_commit])
+                .current_dir(&clone_dir)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output();
+
+            let checkout = std::process::Command::new("git")
+                .args(["checkout", &entry.pinned_commit])
+                .current_dir(&clone_dir)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output()
+                .map_err(|e| format!("git checkout failed: {e}"))?;
+
+            if !checkout.status.success() {
+                let stderr = String::from_utf8_lossy(&checkout.stderr);
+                return Err(format!(
+                    "git checkout {} failed: {stderr}",
+                    entry.pinned_commit
+                ));
+            }
+        }
+
+        // Materialize snapshot via archive (deterministic, excludes .git).
+        if snapshot_dir.exists() {
+            fs::remove_dir_all(snapshot_dir).map_err(|e| format!("snapshot cleanup: {e}"))?;
+        }
+        fs::create_dir_all(snapshot_dir).map_err(|e| format!("create snapshot dir: {e}"))?;
+
+        let archive = std::process::Command::new("git")
+            .args(["archive", "--format=tar", "HEAD"])
             .current_dir(&clone_dir)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .output()
-            .map_err(|e| format!("git checkout failed: {e}"))?;
+            .map_err(|e| format!("git archive failed: {e}"))?;
 
-        if !checkout.status.success() {
-            let stderr = String::from_utf8_lossy(&checkout.stderr);
-            return Err(format!(
-                "git checkout {} failed: {stderr}",
-                entry.pinned_commit
-            ));
+        if !archive.status.success() {
+            let stderr = String::from_utf8_lossy(&archive.stderr);
+            let trimmed = stderr.trim();
+            if trimmed.is_empty() {
+                return Err("git archive failed".to_string());
+            }
+            return Err(format!("git archive failed: {trimmed}"));
         }
-    }
 
-    // Materialize snapshot via archive (deterministic, excludes .git).
-    if snapshot_dir.exists() {
-        fs::remove_dir_all(snapshot_dir).map_err(|e| format!("snapshot cleanup: {e}"))?;
-    }
-    fs::create_dir_all(snapshot_dir).map_err(|e| format!("create snapshot dir: {e}"))?;
+        extract_tar_archive(snapshot_dir, &archive.stdout)?;
 
-    let archive = std::process::Command::new("git")
-        .args(["archive", "--format=tar", "HEAD"])
-        .current_dir(&clone_dir)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .map_err(|e| format!("git archive failed: {e}"))?;
+        // Compute metrics.
+        let source_hash =
+            compute_directory_hash(snapshot_dir).unwrap_or_else(|| "hash_failed".to_string());
+        let metrics = compute_snapshot_metrics(snapshot_dir);
 
-    if !archive.status.success() {
-        return Err("git archive failed".to_string());
-    }
+        Ok((source_hash, metrics))
+    })();
 
-    let tar = std::process::Command::new("tar")
+    let _ = fs::remove_dir_all(&clone_dir);
+
+    result
+}
+
+fn extract_tar_archive(
+    snapshot_dir: &Path,
+    archive_bytes: &[u8],
+) -> std::result::Result<(), String> {
+    let mut child = std::process::Command::new("tar")
         .args(["xf", "-"])
         .current_dir(snapshot_dir)
         .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
-        .spawn();
+        .spawn()
+        .map_err(|e| format!("tar extract failed: {e}"))?;
 
-    match tar {
-        Ok(mut child) => {
-            if let Some(ref mut stdin) = child.stdin {
-                use std::io::Write;
-                let _ = stdin.write_all(&archive.stdout);
-            }
-            let _ = child.wait();
+    let write_result = child
+        .stdin
+        .take()
+        .ok_or_else(|| "tar extract failed: stdin pipe unavailable".to_string())
+        .and_then(|mut stdin| {
+            stdin
+                .write_all(archive_bytes)
+                .map_err(|e| format!("tar extract stdin write failed: {e}"))
+        });
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("tar extract wait failed: {e}"))?;
+
+    if let Err(error) = write_result {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let trimmed = stderr.trim();
+        if trimmed.is_empty() {
+            return Err(error);
         }
-        Err(e) => return Err(format!("tar extract failed: {e}")),
+        return Err(format!("{error}; tar stderr: {trimmed}"));
     }
 
-    // Cleanup clone dir.
-    let _ = fs::remove_dir_all(&clone_dir);
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let trimmed = stderr.trim();
+        if trimmed.is_empty() {
+            return Err("tar extract failed".to_string());
+        }
+        return Err(format!("tar extract failed: {trimmed}"));
+    }
 
-    // Compute metrics.
-    let source_hash =
-        compute_directory_hash(snapshot_dir).unwrap_or_else(|| "hash_failed".to_string());
-    let metrics = compute_snapshot_metrics(snapshot_dir);
-
-    Ok((source_hash, metrics))
+    Ok(())
 }
 
 fn acquire_from_local(
@@ -566,7 +620,18 @@ pub fn verify_corpus(manifest: &CorpusManifest, corpus_root: &Path) -> Verificat
             continue;
         }
 
-        let snapshot_dir = corpus_root.join(slug).join("snapshot");
+        let snapshot_dir = match join_validated_child_path(corpus_root, slug, "slug") {
+            Ok(path) => path.join("snapshot"),
+            Err(error) => {
+                entries.push(EntryVerification {
+                    slug: slug.clone(),
+                    status: VerificationStatus::Missing,
+                    message: Some(error.to_string()),
+                });
+                missing += 1;
+                continue;
+            }
+        };
         if !snapshot_dir.exists() {
             entries.push(EntryVerification {
                 slug: slug.clone(),
@@ -850,26 +915,16 @@ fn compute_snapshot_metrics(dir: &Path) -> CorpusMetrics {
 
 /// Copy a directory tree, skipping .git and node_modules.
 fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-
-        if name_str == ".git" || name_str == "node_modules" {
-            continue;
-        }
-
-        let src_path = entry.path();
-        let dst_path = dst.join(&name);
-
-        if src_path.is_dir() {
-            fs::create_dir_all(&dst_path)?;
-            copy_tree(&src_path, &dst_path)?;
-        } else {
-            fs::copy(&src_path, &dst_path)?;
-        }
-    }
-    Ok(())
+    copy_tree_snapshot_materialized(src, dst, |relative| {
+        relative.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::Normal(name)
+                    if name == std::ffi::OsStr::new(".git")
+                        || name == std::ffi::OsStr::new("node_modules")
+            )
+        })
+    })
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -1095,6 +1150,19 @@ mod tests {
     }
 
     #[test]
+    fn verify_rejects_unsafe_slug_paths() {
+        let manifest = make_manifest(vec![make_entry("../escape", "abc")]);
+        let report = verify_corpus(&manifest, Path::new("/tmp/corpus_test_nonexistent"));
+        assert_eq!(report.missing, 1);
+        assert_eq!(report.entries[0].status, VerificationStatus::Missing);
+        assert!(
+            report.entries[0].message.as_deref().is_some_and(
+                |message| message.contains("slug must be a single safe path component")
+            )
+        );
+    }
+
+    #[test]
     fn verify_skips_inactive_entries() {
         let mut entry = make_entry("inactive_test", "abc");
         entry.active = false;
@@ -1219,6 +1287,168 @@ mod tests {
         assert!(!dst.path().join("node_modules").exists());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn acquire_local_entry_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let src = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(src.path().join("index.tsx"), "function App() {}").unwrap();
+        fs::write(
+            outside.path().join("secret.ts"),
+            "export const secret = true;\n",
+        )
+        .unwrap();
+        symlink(
+            outside.path().join("secret.ts"),
+            src.path().join("escape.ts"),
+        )
+        .unwrap();
+
+        let entry = CorpusEntry {
+            slug: "escape_test".to_string(),
+            description: "test".to_string(),
+            source_url: src.path().to_string_lossy().to_string(),
+            pinned_commit: "local".to_string(),
+            license: "MIT".to_string(),
+            license_verified: true,
+            provenance: CorpusProvenance {
+                added_by: "test".to_string(),
+                added_at: "now".to_string(),
+                rationale: "test".to_string(),
+                source_type: ProvenanceSourceType::Synthetic,
+                attribution_notes: None,
+            },
+            complexity_tags: vec![ComplexityTag::Trivial],
+            feature_tags: vec![],
+            expected_metrics: None,
+            active: true,
+        };
+
+        let corpus_dir = tempfile::tempdir().unwrap();
+        let result = acquire_entry(&entry, corpus_dir.path());
+        assert_eq!(result.status, AcquisitionStatus::Failed);
+        assert!(
+            result
+                .error_message
+                .as_deref()
+                .is_some_and(|message| message.contains("escapes source root")),
+            "unexpected error: {:?}",
+            result.error_message
+        );
+    }
+
+    #[test]
+    fn extract_tar_archive_materializes_valid_archive() {
+        let source = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("file.txt"), "hello").unwrap();
+
+        let archive = std::process::Command::new("tar")
+            .args(["cf", "-", "."])
+            .current_dir(source.path())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .unwrap();
+        assert!(archive.status.success());
+
+        let dest = tempfile::tempdir().unwrap();
+        super::extract_tar_archive(dest.path(), &archive.stdout).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(dest.path().join("file.txt")).unwrap(),
+            "hello"
+        );
+    }
+
+    #[test]
+    fn extract_tar_archive_reports_invalid_archive_bytes() {
+        let dest = tempfile::tempdir().unwrap();
+        let error = super::extract_tar_archive(dest.path(), b"not a tar archive")
+            .expect_err("invalid tar input should fail");
+
+        assert!(error.contains("tar extract failed"));
+        assert!(!dest.path().join("file.txt").exists());
+    }
+
+    #[test]
+    fn acquire_from_git_cleans_up_clone_dir_on_checkout_failure() {
+        let repo = tempfile::tempdir().unwrap();
+        let init = std::process::Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(repo.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(init.success());
+
+        let config_email = std::process::Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(repo.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(config_email.success());
+
+        let config_name = std::process::Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(repo.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(config_name.success());
+
+        fs::write(repo.path().join("README.md"), "hello").unwrap();
+        let add = std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(add.success());
+
+        let commit = std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(repo.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(commit.success());
+
+        let entry_dir = tempfile::tempdir().unwrap();
+        let snapshot_dir = entry_dir.path().join("snapshot");
+        let entry = CorpusEntry {
+            slug: "git-cleanup".to_string(),
+            description: "cleanup regression".to_string(),
+            source_url: repo.path().to_string_lossy().to_string(),
+            pinned_commit: "deadbeef".to_string(),
+            license: "MIT".to_string(),
+            license_verified: true,
+            provenance: CorpusProvenance {
+                added_by: "test".to_string(),
+                added_at: "2026-01-01T00:00:00Z".to_string(),
+                rationale: "regression".to_string(),
+                source_type: ProvenanceSourceType::Synthetic,
+                attribution_notes: None,
+            },
+            complexity_tags: vec![],
+            feature_tags: vec![],
+            expected_metrics: None,
+            active: true,
+        };
+
+        let error = super::acquire_from_git(&entry, entry_dir.path(), &snapshot_dir)
+            .expect_err("invalid pinned commit should fail checkout");
+        assert!(error.contains("git checkout deadbeef failed"));
+        assert!(!entry_dir.path().join("_clone").exists());
+    }
+
     #[test]
     fn acquire_local_entry() {
         let src = tempfile::tempdir().unwrap();
@@ -1256,6 +1486,44 @@ mod tests {
         assert!(result.source_hash.is_some());
         assert!(result.metrics.is_some());
         assert_eq!(result.metrics.as_ref().unwrap().file_count, 1);
+    }
+
+    #[test]
+    fn acquire_entry_rejects_unsafe_slug() {
+        let src = tempfile::tempdir().unwrap();
+        fs::write(src.path().join("index.tsx"), "function App() {}").unwrap();
+
+        let entry = CorpusEntry {
+            slug: "../escape".to_string(),
+            description: "test".to_string(),
+            source_url: src.path().to_string_lossy().to_string(),
+            pinned_commit: "local".to_string(),
+            license: "MIT".to_string(),
+            license_verified: true,
+            provenance: CorpusProvenance {
+                added_by: "test".to_string(),
+                added_at: "now".to_string(),
+                rationale: "test".to_string(),
+                source_type: ProvenanceSourceType::Synthetic,
+                attribution_notes: None,
+            },
+            complexity_tags: vec![ComplexityTag::Trivial],
+            feature_tags: vec![],
+            expected_metrics: None,
+            active: true,
+        };
+
+        let corpus_dir = tempfile::tempdir().unwrap();
+        let result = acquire_entry(&entry, corpus_dir.path());
+        assert_eq!(result.status, AcquisitionStatus::Failed);
+        assert!(
+            result.error_message.as_deref().is_some_and(
+                |message| message.contains("slug must be a single safe path component")
+            ),
+            "unexpected error: {:?}",
+            result.error_message
+        );
+        assert!(!corpus_dir.path().join("escape").exists());
     }
 
     #[test]
