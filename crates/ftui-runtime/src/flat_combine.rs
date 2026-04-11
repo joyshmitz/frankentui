@@ -35,6 +35,7 @@
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread::ThreadId;
 
 /// Statistics for monitoring flat combining performance.
 #[derive(Debug, Clone, Default)]
@@ -78,9 +79,32 @@ pub struct FlatCombiner<S> {
     generation: AtomicU64,
     /// Performance statistics.
     stats: Mutex<CombinerStats>,
+    /// Owner thread when `combine_with` is actively running a user callback.
+    combine_with_owner: Mutex<Option<ThreadId>>,
 }
 
 type BoxedOp<S> = Box<dyn FnOnce(&mut S) + Send>;
+
+struct CombineWithOwnerGuard<'a> {
+    owner: &'a Mutex<Option<ThreadId>>,
+}
+
+impl Drop for CombineWithOwnerGuard<'_> {
+    fn drop(&mut self) {
+        let mut owner = self.owner.lock().unwrap_or_else(|e| e.into_inner());
+        *owner = None;
+    }
+}
+
+impl<'a> CombineWithOwnerGuard<'a> {
+    fn new(owner: &'a Mutex<Option<ThreadId>>) -> Self {
+        let current = std::thread::current().id();
+        let mut owner_guard = owner.lock().unwrap_or_else(|e| e.into_inner());
+        *owner_guard = Some(current);
+        drop(owner_guard);
+        Self { owner }
+    }
+}
 
 impl<S> FlatCombiner<S> {
     /// Create a new flat combiner wrapping the given shared state.
@@ -90,6 +114,21 @@ impl<S> FlatCombiner<S> {
             queue: Mutex::new(Vec::new()),
             generation: AtomicU64::new(0),
             stats: Mutex::new(CombinerStats::default()),
+            combine_with_owner: Mutex::new(None),
+        }
+    }
+
+    fn assert_not_reentrant_from_combine_with(&self, operation: &str) {
+        let current = std::thread::current().id();
+        let owner = self
+            .combine_with_owner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if owner
+            .as_ref()
+            .is_some_and(|thread_id| *thread_id == current)
+        {
+            panic!("FlatCombiner::{operation} cannot be called reentrantly from combine_with");
         }
     }
 
@@ -98,12 +137,14 @@ impl<S> FlatCombiner<S> {
     /// Bypasses the publication queue. Use this when you need a return
     /// value or when contention is not expected.
     pub fn execute<R>(&self, op: impl FnOnce(&mut S) -> R) -> R {
+        self.assert_not_reentrant_from_combine_with("execute");
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         op(&mut state)
     }
 
     /// Read from the shared state without mutation.
     pub fn with_state<R>(&self, f: impl FnOnce(&S) -> R) -> R {
+        self.assert_not_reentrant_from_combine_with("with_state");
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         f(&state)
     }
@@ -130,6 +171,7 @@ impl<S> FlatCombiner<S> {
     ///
     /// Returns 0 if no operations are pending.
     pub fn combine(&self) -> usize {
+        self.assert_not_reentrant_from_combine_with("combine");
         // Drain the queue (short lock)
         let ops: Vec<BoxedOp<S>> = {
             let mut queue = self.queue.lock().unwrap_or_else(|e| e.into_inner());
@@ -167,7 +209,13 @@ impl<S> FlatCombiner<S> {
     /// and a closure that executes all pending operations. This allows
     /// wrapping the batch with setup/teardown logic (e.g., marking a
     /// dirty flag, snapshotting state).
+    ///
+    /// Reentrant calls back into [`execute`](Self::execute),
+    /// [`with_state`](Self::with_state), [`combine`](Self::combine), or
+    /// [`combine_with`](Self::combine_with) from inside `around` are rejected
+    /// with a panic instead of deadlocking on the state mutex.
     pub fn combine_with<R>(&self, around: impl FnOnce(&mut S, &dyn Fn(&mut S)) -> R) -> (usize, R) {
+        self.assert_not_reentrant_from_combine_with("combine_with");
         let ops: Vec<BoxedOp<S>> = {
             let mut queue = self.queue.lock().unwrap_or_else(|e| e.into_inner());
             std::mem::take(&mut *queue)
@@ -175,6 +223,7 @@ impl<S> FlatCombiner<S> {
 
         let count = ops.len();
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let _owner_guard = CombineWithOwnerGuard::new(&self.combine_with_owner);
 
         // We need to move ops into the closure, but the Fn trait requires
         // shared reference. Use a Cell-like approach with RefCell.
@@ -514,5 +563,27 @@ mod tests {
     fn avg_batch_size_zero_when_no_combines() {
         let stats = CombinerStats::default();
         assert_eq!(stats.avg_batch_size(), 0.0);
+    }
+
+    #[test]
+    fn combine_with_panics_on_reentrant_execute_instead_of_deadlocking() {
+        let fc = FlatCombiner::new(0u64);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = fc.combine_with(|_, _| fc.execute(|state| *state));
+        }));
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn combine_with_panics_on_reentrant_with_state_instead_of_deadlocking() {
+        let fc = FlatCombiner::new(7u64);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = fc.combine_with(|_, _| fc.with_state(|state| *state));
+        }));
+
+        assert!(result.is_err());
     }
 }

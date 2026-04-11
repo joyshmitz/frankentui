@@ -254,12 +254,12 @@ impl StyleSheet {
         if std::ptr::eq(self, other) {
             return;
         }
-        let other_styles = other.styles.read().expect("StyleSheet lock poisoned");
+        let other_styles = {
+            let other_styles = other.styles.read().expect("StyleSheet lock poisoned");
+            other_styles.clone()
+        };
         let mut self_styles = self.styles.write().expect("StyleSheet lock poisoned");
-
-        for (name, style) in other_styles.iter() {
-            self_styles.insert(name.clone(), *style);
-        }
+        self_styles.extend(other_styles);
     }
 
     /// Clear all styles from the stylesheet.
@@ -460,6 +460,59 @@ mod tests {
         let style = sheet1.get("test").unwrap();
         assert!(!style.has_attr(StyleFlags::BOLD));
         assert!(style.has_attr(StyleFlags::ITALIC));
+    }
+
+    #[test]
+    fn concurrent_bidirectional_extend_completes() {
+        use std::sync::{Arc, Barrier, mpsc};
+        use std::time::Duration;
+
+        let sheet1 = Arc::new(StyleSheet::new());
+        sheet1.define("a", Style::new().bold());
+
+        let sheet2 = Arc::new(StyleSheet::new());
+        sheet2.define("b", Style::new().italic());
+
+        let barrier = Arc::new(Barrier::new(3));
+        let (done_tx, done_rx) = mpsc::channel();
+
+        let sheet1_to_sheet2 = {
+            let barrier = Arc::clone(&barrier);
+            let done_tx = done_tx.clone();
+            let sheet1 = Arc::clone(&sheet1);
+            let sheet2 = Arc::clone(&sheet2);
+            std::thread::spawn(move || {
+                barrier.wait();
+                sheet1.extend(&sheet2);
+                done_tx.send(()).expect("completion signal");
+            })
+        };
+
+        let sheet2_to_sheet1 = {
+            let barrier = Arc::clone(&barrier);
+            let done_tx = done_tx.clone();
+            let sheet1 = Arc::clone(&sheet1);
+            let sheet2 = Arc::clone(&sheet2);
+            std::thread::spawn(move || {
+                barrier.wait();
+                sheet2.extend(&sheet1);
+                done_tx.send(()).expect("completion signal");
+            })
+        };
+
+        barrier.wait();
+
+        for _ in 0..2 {
+            done_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("cross-extend should complete without deadlocking");
+        }
+
+        sheet1_to_sheet2.join().expect("sheet1 extend thread");
+        sheet2_to_sheet1.join().expect("sheet2 extend thread");
+
+        assert!(sheet1.contains("b"));
+        assert!(sheet2.contains("a"));
     }
 
     #[test]
