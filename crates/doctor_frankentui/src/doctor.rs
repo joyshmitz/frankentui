@@ -251,6 +251,14 @@ fn check_capture_driver_dependencies(ui: &CliOutput) -> Result<()> {
     })
 }
 
+fn check_app_smoke_fallback_dependencies(observe: ObserveMode, ui: &CliOutput) -> Result<()> {
+    check_command("bash", ui)?;
+    if observe == ObserveMode::Tmux {
+        check_command("tmux", ui)?;
+    }
+    Ok(())
+}
+
 fn run_help_check(exe: &PathBuf, command: &str) -> Result<()> {
     let status = Command::new(exe)
         .arg(command)
@@ -814,10 +822,8 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
         integration.sqlmodel_mode, integration.sqlmodel_agent
     ));
 
-    check_capture_driver_dependencies(&ui)?;
-    if args.observe == ObserveMode::Tmux {
-        check_command("bash", &ui)?;
-        check_command("tmux", &ui)?;
+    if args.full {
+        check_capture_driver_dependencies(&ui)?;
     }
 
     if command_exists("ffmpeg") {
@@ -901,7 +907,9 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
             }
 
             let smoke_paths = app_smoke_paths(&args.run_root);
-            match run_app_smoke_fallback(&args, &ui) {
+            match check_app_smoke_fallback_dependencies(args.observe, &ui)
+                .and_then(|_| run_app_smoke_fallback(&args, &ui))
+            {
                 Ok(smoke) => {
                     app_smoke_summary = Some(smoke.summary_path.display().to_string());
                     app_smoke_stdout_log = smoke

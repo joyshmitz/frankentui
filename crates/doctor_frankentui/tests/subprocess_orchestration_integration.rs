@@ -399,6 +399,7 @@ fn doctor_missing_dependency_and_json_output_contract() {
     let missing_output = run_doctor_command_with_path(
         &[
             "doctor",
+            "--full",
             "--project-dir",
             project_dir.to_str().expect("project dir str"),
             "--run-root",
@@ -446,23 +447,14 @@ fn doctor_missing_dependency_and_json_output_contract() {
 }
 
 #[test]
-fn doctor_json_mode_accepts_docker_without_host_vhs() {
-    if skip_if_missing(
-        &["docker"],
-        "doctor_json_mode_accepts_docker_without_host_vhs",
-    ) {
-        return;
-    }
-
+fn doctor_json_mode_succeeds_without_capture_driver_commands() {
     let temp = tempdir().expect("tempdir");
     let project_dir = temp.path().join("project");
-    let run_root = temp.path().join("doctor_json_docker_only");
-    let tool_dir = temp.path().join("tools");
+    let run_root = temp.path().join("doctor_json_no_capture_tools");
 
     fs::create_dir_all(&project_dir).expect("project dir");
     fs::create_dir_all(&run_root).expect("run root");
 
-    let path_env = build_path_with_selected_commands(&tool_dir, &["docker"]);
     let output = run_doctor_command_with_path(
         &[
             "doctor",
@@ -473,13 +465,13 @@ fn doctor_json_mode_accepts_docker_without_host_vhs() {
             "--app-command",
             "echo demo",
         ],
-        &path_env,
+        "",
         &[("SQLMODEL_JSON", "1")],
     );
 
     assert!(
         output.status.success(),
-        "expected docker-only doctor run to pass, got: {}",
+        "expected dry-run doctor to pass without capture tooling, got: {}",
         stderr_text(&output)
     );
 
@@ -489,23 +481,14 @@ fn doctor_json_mode_accepts_docker_without_host_vhs() {
 }
 
 #[test]
-fn doctor_json_mode_tmux_observe_requires_bash_even_with_docker() {
-    if skip_if_missing(
-        &["docker", "tmux"],
-        "doctor_json_mode_tmux_observe_requires_bash_even_with_docker",
-    ) {
-        return;
-    }
-
+fn doctor_json_mode_tmux_observe_dry_run_succeeds_without_bash_or_tmux() {
     let temp = tempdir().expect("tempdir");
     let project_dir = temp.path().join("project");
-    let run_root = temp.path().join("doctor_json_tmux_missing_bash");
-    let tool_dir = temp.path().join("tools");
+    let run_root = temp.path().join("doctor_json_tmux_dry_run");
 
     fs::create_dir_all(&project_dir).expect("project dir");
     fs::create_dir_all(&run_root).expect("run root");
 
-    let path_env = build_path_with_selected_commands(&tool_dir, &["docker", "tmux"]);
     let output = run_doctor_command_with_path(
         &[
             "doctor",
@@ -518,44 +501,34 @@ fn doctor_json_mode_tmux_observe_requires_bash_even_with_docker() {
             "--observe",
             "tmux",
         ],
-        &path_env,
+        "",
         &[("SQLMODEL_JSON", "1")],
     );
 
-    assert_eq!(output.status.code(), Some(1));
-    let payload = parse_stderr_json(&output);
-    assert_eq!(payload["status"], "error");
-    assert_eq!(payload["exit_code"], 1);
     assert!(
-        payload["error"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("missing dependency command: bash"),
-        "unexpected error payload: {payload}"
+        output.status.success(),
+        "expected dry-run tmux-observe doctor to pass without tmux/bash, got: {}",
+        stderr_text(&output)
     );
+
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["status"], "ok");
+    assert_eq!(payload["command"], "doctor");
 }
 
 #[test]
-fn doctor_json_mode_missing_capture_driver_emits_machine_readable_stderr_payload() {
-    if skip_if_missing(
-        &["bash"],
-        "doctor_json_mode_missing_capture_driver_emits_machine_readable_stderr_payload",
-    ) {
-        return;
-    }
-
+fn doctor_full_json_mode_missing_capture_driver_emits_machine_readable_stderr_payload() {
     let temp = tempdir().expect("tempdir");
     let project_dir = temp.path().join("project");
     let run_root = temp.path().join("doctor_json_missing_capture_driver");
-    let tool_dir = temp.path().join("tools");
 
     fs::create_dir_all(&project_dir).expect("project dir");
     fs::create_dir_all(&run_root).expect("run root");
 
-    let path_env = build_path_with_selected_commands(&tool_dir, &["bash"]);
     let output = run_doctor_command_with_path(
         &[
             "doctor",
+            "--full",
             "--project-dir",
             project_dir.to_str().expect("project dir str"),
             "--run-root",
@@ -563,7 +536,7 @@ fn doctor_json_mode_missing_capture_driver_emits_machine_readable_stderr_payload
             "--app-command",
             "echo demo",
         ],
-        &path_env,
+        "",
         &[("SQLMODEL_JSON", "1")],
     );
 

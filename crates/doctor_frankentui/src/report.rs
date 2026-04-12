@@ -72,18 +72,32 @@ fn report_run_dir(suite_dir: &Path, run: &RunMeta) -> Option<PathBuf> {
     })
 }
 
+fn clear_run_scoped_artifacts_for_report(run: RunMeta) -> RunMeta {
+    RunMeta {
+        output: String::new(),
+        snapshot: String::new(),
+        evidence_ledger: None,
+        artifact_manifest: None,
+        ttyd_shim_log: None,
+        ttyd_runtime_log: None,
+        vhs_docker_log: None,
+        tmux_session_file: None,
+        tmux_pane_capture: None,
+        tmux_pane_log: None,
+        tmux_attach_command: run
+            .tmux_session
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(tmux_attach_command_literal),
+        ..run
+    }
+}
+
 fn sanitize_run_for_report(suite_dir: &Path, run: RunMeta) -> RunMeta {
     if let Some(run_dir) = report_run_dir(suite_dir, &run) {
         normalize_loaded_run_meta_paths(&run_dir, &run)
     } else {
-        RunMeta {
-            tmux_attach_command: run
-                .tmux_session
-                .as_deref()
-                .filter(|value| !value.trim().is_empty())
-                .map(tmux_attach_command_literal),
-            ..run
-        }
+        clear_run_scoped_artifacts_for_report(run)
     }
 }
 
@@ -974,6 +988,95 @@ mod tests {
             "tmux attach-session -t 'tmux demo'"
         );
         assert!(report_json["runs"][0]["evidence_ledger"].is_null());
+    }
+
+    #[test]
+    fn run_report_with_runs_clears_run_scoped_artifacts_when_run_dir_is_blank() {
+        let _cwd_lock = CWD_TEST_LOCK.lock().expect("cwd lock poisoned");
+        let temp = tempdir().expect("tempdir");
+        let suite_dir = temp.path().join("suite");
+        fs::create_dir_all(&suite_dir).expect("mkdir suite dir");
+
+        let cwd_guard = tempdir().expect("cwd tempdir");
+        let original_cwd = std::env::current_dir().expect("capture cwd");
+        fs::write(cwd_guard.path().join("capture.mp4"), b"cwd video").expect("write cwd video");
+        fs::write(cwd_guard.path().join("snapshot.png"), b"cwd snapshot")
+            .expect("write cwd snapshot");
+        fs::write(cwd_guard.path().join("run_artifact_manifest.json"), b"{}")
+            .expect("write cwd manifest");
+        fs::write(cwd_guard.path().join("evidence_ledger.jsonl"), b"{}\n")
+            .expect("write cwd ledger");
+        std::env::set_current_dir(cwd_guard.path()).expect("set cwd");
+
+        let integration = OutputIntegration {
+            fastapi_mode: "plain".to_string(),
+            fastapi_agent: true,
+            fastapi_ci: false,
+            fastapi_tty: false,
+            sqlmodel_mode: "plain".to_string(),
+            sqlmodel_agent: false,
+        };
+
+        let report_result = run_report_with_runs(
+            ReportArgs {
+                suite_dir: suite_dir.clone(),
+                output_html: None,
+                output_json: None,
+                title: "Blank Run Dir Report".to_string(),
+            },
+            vec![RunMeta {
+                status: "ok".to_string(),
+                started_at: "2026-02-17T00:00:00Z".to_string(),
+                profile: "analytics-empty".to_string(),
+                output: "capture.mp4".to_string(),
+                snapshot: "snapshot.png".to_string(),
+                run_dir: String::new(),
+                tmux_session: Some("tmux demo".to_string()),
+                tmux_attach_command: Some("echo pwned".to_string()),
+                evidence_ledger: Some("evidence_ledger.jsonl".to_string()),
+                artifact_manifest: Some("run_artifact_manifest.json".to_string()),
+                ..RunMeta::default()
+            }],
+            &integration,
+        );
+
+        std::env::set_current_dir(&original_cwd).expect("restore cwd");
+        report_result.expect("run report with blank run dir");
+
+        let html = fs::read_to_string(suite_dir.join("index.html")).expect("read html");
+        assert!(
+            !html.contains("capture.mp4"),
+            "report should not link cwd video: {html}"
+        );
+        assert!(
+            !html.contains("snapshot.png"),
+            "report should not link cwd snapshot: {html}"
+        );
+        assert!(
+            !html.contains("evidence_ledger.jsonl"),
+            "report should not link cwd ledger: {html}"
+        );
+        assert!(
+            !html.contains("run_artifact_manifest.json"),
+            "report should not link cwd manifest: {html}"
+        );
+        assert!(html.contains("tmux attach-session -t &#x27;tmux demo&#x27;"));
+        assert!(!html.contains("echo pwned"));
+
+        let report_json: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(suite_dir.join("report.json")).expect("read report json"),
+        )
+        .expect("parse report json");
+        let run = &report_json["runs"][0];
+        assert_eq!(run["run_dir"], "");
+        assert_eq!(run["output"], "");
+        assert_eq!(run["snapshot"], "");
+        assert!(run["evidence_ledger"].is_null());
+        assert!(run["artifact_manifest"].is_null());
+        assert_eq!(
+            run["tmux_attach_command"],
+            "tmux attach-session -t 'tmux demo'"
+        );
     }
 
     #[test]
