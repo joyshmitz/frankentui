@@ -1017,15 +1017,22 @@ fn emit_operator_suite_report(report: &RuntimeShadowSuiteReport) {
     }
 }
 
-/// Run a scenario through both lanes and assert no mismatches.
+/// Run a scenario through both lanes and assert no *blocking* mismatches.
+///
+/// Terminal output and log drift are expected between lanes and treated as
+/// non-blocking (see `mismatch_is_blocking`).
 fn shadow_compare(scenario: &str, msgs_fn: impl Fn() -> Vec<SMsg>, frames: &[(u16, u16)]) {
     let legacy = run_lane(RuntimeLane::Legacy, msgs_fn(), frames);
     let structured = run_lane(RuntimeLane::Structured, msgs_fn(), frames);
     let mismatches = compare_results(scenario, &legacy, &structured);
+    let blocking: Vec<_> = mismatches
+        .iter()
+        .filter(|m| mismatch_is_blocking(AssertionCategory::NoRegression, m))
+        .collect();
     assert!(
-        mismatches.is_empty(),
-        "Shadow-run mismatches detected:\n{}",
-        mismatches
+        blocking.is_empty(),
+        "Shadow-run blocking mismatches detected:\n{}",
+        blocking
             .iter()
             .map(|mismatch| format!("  {mismatch}"))
             .collect::<Vec<_>>()

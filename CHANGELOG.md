@@ -8,10 +8,10 @@ All notable changes to [FrankenTUI](https://github.com/Dicklesworthstone/franken
 
 ---
 
-## [Unreleased] (after v0.2.1)
+## [0.3.0] (2026-04-12)
 
-> Commits on `main` since the v0.2.1 tag (2026-03-07).
-> Compare: <https://github.com/Dicklesworthstone/frankentui/compare/v0.2.1...main>
+> 190 commits since v0.2.1 (2026-03-07).
+> Compare: <https://github.com/Dicklesworthstone/frankentui/compare/v0.2.1...v0.3.0>
 
 ### Accessibility (ftui-a11y) -- New Crate
 
