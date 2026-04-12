@@ -43,6 +43,18 @@ fn skip_if_missing(commands: &[&str], test_name: &str) -> bool {
     true
 }
 
+fn skip_if_missing_doctor_capture_stack(test_name: &str) -> bool {
+    if skip_if_missing(&["bash"], test_name) {
+        return true;
+    }
+
+    if resolve_command_path("docker").is_some() {
+        return false;
+    }
+
+    skip_if_missing(&["vhs", "ttyd"], test_name)
+}
+
 fn skip_without_real_tool_opt_in(test_name: &str) -> bool {
     match std::env::var("DOCTOR_REAL_TOOL_INTEGRATION").as_deref() {
         Ok("1") => false,
@@ -164,8 +176,7 @@ fn doctor_subprocess_dry_and_full_smoke_generate_expected_artifacts() {
         return;
     }
 
-    if skip_if_missing(
-        &["bash", "vhs"],
+    if skip_if_missing_doctor_capture_stack(
         "doctor_subprocess_dry_and_full_smoke_generate_expected_artifacts",
     ) {
         return;
@@ -243,8 +254,7 @@ fn capture_suite_and_report_subprocesses_enforce_artifacts_and_exit_semantics() 
         return;
     }
 
-    if skip_if_missing(
-        &["bash", "vhs"],
+    if skip_if_missing_doctor_capture_stack(
         "capture_suite_and_report_subprocesses_enforce_artifacts_and_exit_semantics",
     ) {
         return;
@@ -401,15 +411,12 @@ fn doctor_missing_dependency_and_json_output_contract() {
     );
     assert_eq!(missing_output.status.code(), Some(1));
     assert!(
-        stderr_text(&missing_output).contains("missing dependency command: bash"),
-        "expected missing bash dependency, got: {}",
+        stderr_text(&missing_output).contains("missing dependency command: vhs or docker"),
+        "expected missing capture driver dependency, got: {}",
         stderr_text(&missing_output)
     );
 
-    if skip_if_missing(
-        &["bash", "vhs"],
-        "doctor_missing_dependency_and_json_output_contract",
-    ) {
+    if skip_if_missing_doctor_capture_stack("doctor_missing_dependency_and_json_output_contract") {
         return;
     }
 
@@ -439,17 +446,107 @@ fn doctor_missing_dependency_and_json_output_contract() {
 }
 
 #[test]
-fn doctor_json_mode_missing_vhs_emits_machine_readable_stderr_payload() {
+fn doctor_json_mode_accepts_docker_without_host_vhs() {
     if skip_if_missing(
-        &["bash"],
-        "doctor_json_mode_missing_vhs_emits_machine_readable_stderr_payload",
+        &["docker"],
+        "doctor_json_mode_accepts_docker_without_host_vhs",
     ) {
         return;
     }
 
     let temp = tempdir().expect("tempdir");
     let project_dir = temp.path().join("project");
-    let run_root = temp.path().join("doctor_json_missing_vhs");
+    let run_root = temp.path().join("doctor_json_docker_only");
+    let tool_dir = temp.path().join("tools");
+
+    fs::create_dir_all(&project_dir).expect("project dir");
+    fs::create_dir_all(&run_root).expect("run root");
+
+    let path_env = build_path_with_selected_commands(&tool_dir, &["docker"]);
+    let output = run_doctor_command_with_path(
+        &[
+            "doctor",
+            "--project-dir",
+            project_dir.to_str().expect("project dir str"),
+            "--run-root",
+            run_root.to_str().expect("run root str"),
+            "--app-command",
+            "echo demo",
+        ],
+        &path_env,
+        &[("SQLMODEL_JSON", "1")],
+    );
+
+    assert!(
+        output.status.success(),
+        "expected docker-only doctor run to pass, got: {}",
+        stderr_text(&output)
+    );
+
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["status"], "ok");
+    assert_eq!(payload["command"], "doctor");
+}
+
+#[test]
+fn doctor_json_mode_tmux_observe_requires_bash_even_with_docker() {
+    if skip_if_missing(
+        &["docker", "tmux"],
+        "doctor_json_mode_tmux_observe_requires_bash_even_with_docker",
+    ) {
+        return;
+    }
+
+    let temp = tempdir().expect("tempdir");
+    let project_dir = temp.path().join("project");
+    let run_root = temp.path().join("doctor_json_tmux_missing_bash");
+    let tool_dir = temp.path().join("tools");
+
+    fs::create_dir_all(&project_dir).expect("project dir");
+    fs::create_dir_all(&run_root).expect("run root");
+
+    let path_env = build_path_with_selected_commands(&tool_dir, &["docker", "tmux"]);
+    let output = run_doctor_command_with_path(
+        &[
+            "doctor",
+            "--project-dir",
+            project_dir.to_str().expect("project dir str"),
+            "--run-root",
+            run_root.to_str().expect("run root str"),
+            "--app-command",
+            "echo demo",
+            "--observe",
+            "tmux",
+        ],
+        &path_env,
+        &[("SQLMODEL_JSON", "1")],
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+    let payload = parse_stderr_json(&output);
+    assert_eq!(payload["status"], "error");
+    assert_eq!(payload["exit_code"], 1);
+    assert!(
+        payload["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("missing dependency command: bash"),
+        "unexpected error payload: {payload}"
+    );
+}
+
+#[test]
+fn doctor_json_mode_missing_capture_driver_emits_machine_readable_stderr_payload() {
+    if skip_if_missing(
+        &["bash"],
+        "doctor_json_mode_missing_capture_driver_emits_machine_readable_stderr_payload",
+    ) {
+        return;
+    }
+
+    let temp = tempdir().expect("tempdir");
+    let project_dir = temp.path().join("project");
+    let run_root = temp.path().join("doctor_json_missing_capture_driver");
     let tool_dir = temp.path().join("tools");
 
     fs::create_dir_all(&project_dir).expect("project dir");
@@ -484,7 +581,7 @@ fn doctor_json_mode_missing_vhs_emits_machine_readable_stderr_payload() {
         payload["error"]
             .as_str()
             .unwrap_or_default()
-            .contains("missing dependency command: vhs"),
+            .contains("missing dependency command: vhs or docker"),
         "unexpected error payload: {payload}"
     );
     assert_eq!(payload["integration"]["sqlmodel_mode"], "json");
@@ -533,22 +630,58 @@ fn json_mode_failure_emits_machine_readable_stderr_payload() {
 }
 
 #[test]
-fn capture_dry_run_honors_conservative_env_and_output_override_contract() {
-    if skip_if_missing(
-        &["vhs"],
-        "capture_dry_run_honors_conservative_env_and_output_override_contract",
-    ) {
-        return;
-    }
-
+fn capture_dry_run_json_mode_succeeds_without_capture_driver_commands() {
     let temp = tempdir().expect("tempdir");
     let project_dir = temp.path().join("project");
     let run_root = temp.path().join("capture_runs");
-    let output_dir = temp.path().join("custom_output");
-    let output_path = output_dir.join("capture.mp4");
+    let tool_dir = temp.path().join("tools");
 
     fs::create_dir_all(&project_dir).expect("project dir");
-    fs::create_dir_all(&output_dir).expect("output dir");
+    fs::create_dir_all(&run_root).expect("run root");
+    fs::create_dir_all(&tool_dir).expect("tool dir");
+
+    let path_env = tool_dir.display().to_string();
+    let output = run_doctor_command_with_path(
+        &[
+            "capture",
+            "--profile",
+            "analytics-empty",
+            "--project-dir",
+            project_dir.to_str().expect("project dir str"),
+            "--run-root",
+            run_root.to_str().expect("run root str"),
+            "--run-name",
+            "driverless_dry_run",
+            "--dry-run",
+        ],
+        &path_env,
+        &[("SQLMODEL_JSON", "1")],
+    );
+
+    assert!(
+        output.status.success(),
+        "capture dry-run should not require vhs or docker: {}",
+        stderr_text(&output)
+    );
+
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["command"], "capture");
+    assert_eq!(payload["status"], "dry_run_ok");
+    assert_eq!(
+        payload["run_dir"],
+        run_root.join("driverless_dry_run").display().to_string()
+    );
+}
+
+#[test]
+fn capture_dry_run_honors_conservative_env_and_output_override_contract() {
+    let temp = tempdir().expect("tempdir");
+    let project_dir = temp.path().join("project");
+    let run_root = temp.path().join("capture_runs");
+    let run_name = "dry-run-output-override";
+    let output_override = PathBuf::from("artifacts/capture.mp4");
+
+    fs::create_dir_all(&project_dir).expect("project dir");
 
     let output = run_doctor_command(
         &[
@@ -559,8 +692,10 @@ fn capture_dry_run_honors_conservative_env_and_output_override_contract() {
             project_dir.to_str().expect("project dir str"),
             "--run-root",
             run_root.to_str().expect("run root str"),
+            "--run-name",
+            run_name,
             "--output",
-            output_path.to_str().expect("output path str"),
+            output_override.to_str().expect("output override str"),
             "--jump-key",
             "7",
             "--capture-sleep",
@@ -587,10 +722,8 @@ fn capture_dry_run_honors_conservative_env_and_output_override_contract() {
     assert_eq!(payload["command"], "capture");
     assert_eq!(payload["status"], "dry_run_ok");
 
-    let run_dir = output_path
-        .parent()
-        .expect("output path parent should exist")
-        .to_path_buf();
+    let run_dir = run_root.join(run_name);
+    let expected_output = run_dir.join(&output_override);
     assert_eq!(payload["run_dir"], run_dir.display().to_string());
 
     let meta: Value = serde_json::from_str(
@@ -598,7 +731,7 @@ fn capture_dry_run_honors_conservative_env_and_output_override_contract() {
     )
     .expect("parse run meta json");
     assert_eq!(meta["status"], "running");
-    assert_eq!(meta["output"], output_path.display().to_string());
+    assert_eq!(meta["output"], expected_output.display().to_string());
     assert_eq!(meta["run_dir"], run_dir.display().to_string());
     assert_eq!(meta["seed_demo"], 0);
     assert_eq!(meta["seed_required"], 0);
@@ -617,13 +750,6 @@ fn capture_dry_run_honors_conservative_env_and_output_override_contract() {
 
 #[test]
 fn capture_dry_run_legacy_binary_mode_writes_legacy_runtime_command() {
-    if skip_if_missing(
-        &["vhs"],
-        "capture_dry_run_legacy_binary_mode_writes_legacy_runtime_command",
-    ) {
-        return;
-    }
-
     let temp = tempdir().expect("tempdir");
     let project_dir = temp.path().join("project");
     let run_root = temp.path().join("legacy_capture_runs");
@@ -837,10 +963,7 @@ fn suite_report_failure_and_json_output_contracts() {
         return;
     }
 
-    if skip_if_missing(
-        &["bash", "vhs"],
-        "suite_report_failure_and_json_output_contracts",
-    ) {
+    if skip_if_missing_doctor_capture_stack("suite_report_failure_and_json_output_contracts") {
         return;
     }
 

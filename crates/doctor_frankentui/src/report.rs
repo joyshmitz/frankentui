@@ -6,7 +6,9 @@ use serde::Serialize;
 
 use crate::error::{DoctorError, Result};
 use crate::runmeta::{RunMeta, normalize_loaded_run_meta_paths};
-use crate::util::{OutputIntegration, output_for, relative_to, write_string};
+use crate::util::{
+    OutputIntegration, output_for, relative_to, tmux_attach_command_literal, write_string,
+};
 
 #[derive(Debug, Clone, Args)]
 pub struct ReportArgs {
@@ -54,6 +56,35 @@ fn find_run_meta_files(suite_dir: &Path) -> Result<Vec<PathBuf>> {
 
     files.sort();
     Ok(files)
+}
+
+fn report_run_dir(suite_dir: &Path, run: &RunMeta) -> Option<PathBuf> {
+    let trimmed = run.run_dir.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let run_dir = PathBuf::from(trimmed);
+    Some(if run_dir.is_absolute() {
+        run_dir
+    } else {
+        suite_dir.join(run_dir)
+    })
+}
+
+fn sanitize_run_for_report(suite_dir: &Path, run: RunMeta) -> RunMeta {
+    if let Some(run_dir) = report_run_dir(suite_dir, &run) {
+        normalize_loaded_run_meta_paths(&run_dir, &run)
+    } else {
+        RunMeta {
+            tmux_attach_command: run
+                .tmux_session
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .map(tmux_attach_command_literal),
+            ..run
+        }
+    }
 }
 
 fn html_escape(value: &str) -> String {
@@ -210,13 +241,14 @@ fn render_html(summary: &ReportSummary, link_base: &Path) -> String {
             ));
         }
         if let Some(tmux_attach_command) = run
-            .tmux_attach_command
+            .tmux_session
             .as_deref()
             .filter(|value| !value.is_empty())
+            .map(tmux_attach_command_literal)
         {
             html.push_str(&format!(
                 "<div class=\"row\"><span class=\"label\">tmux_attach_command</span><code>{}</code></div>\n",
-                html_escape(tmux_attach_command)
+                html_escape(&tmux_attach_command)
             ));
         }
         push_optional_artifact_link(
@@ -377,6 +409,11 @@ pub(crate) fn run_report_with_runs(
     let output_json = args
         .output_json
         .unwrap_or_else(|| args.suite_dir.join("report.json"));
+
+    let runs = runs
+        .into_iter()
+        .map(|run| sanitize_run_for_report(&args.suite_dir, run))
+        .collect::<Vec<_>>();
 
     let ok_runs = runs.iter().filter(|run| run.status == "ok").count();
     let failed_runs = runs.len().saturating_sub(ok_runs);
@@ -824,8 +861,8 @@ mod tests {
             trace_id: Some("trace-123".to_string()),
             fallback_reason: Some("capture timed out".to_string()),
             capture_error_reason: Some("ffmpeg missing".to_string()),
-            tmux_session: Some("tmux-demo".to_string()),
-            tmux_attach_command: Some("tmux attach-session -t tmux-demo".to_string()),
+            tmux_session: Some("tmux demo".to_string()),
+            tmux_attach_command: Some("echo pwned".to_string()),
             tmux_session_file: Some(tmux_session_file.display().to_string()),
             tmux_pane_capture: Some(tmux_pane_capture.display().to_string()),
             tmux_pane_log: Some(tmux_pane_log.display().to_string()),
@@ -849,8 +886,9 @@ mod tests {
         assert!(html.contains("trace-123"));
         assert!(html.contains("capture timed out"));
         assert!(html.contains("ffmpeg missing"));
-        assert!(html.contains("tmux-demo"));
-        assert!(html.contains("tmux attach-session -t tmux-demo"));
+        assert!(html.contains("tmux demo"));
+        assert!(html.contains("tmux attach-session -t &#x27;tmux demo&#x27;"));
+        assert!(!html.contains("echo pwned"));
         assert!(html.contains("tmux_session_file"));
         assert!(html.contains("tmux_session.txt"));
         assert!(html.contains("tmux_pane_capture"));
@@ -876,6 +914,66 @@ mod tests {
         assert_eq!(report_json["trace_ids"][0], "trace-123");
         assert_eq!(report_json["fallback_profiles"][0], "analytics-empty");
         assert_eq!(report_json["capture_error_profiles"][0], "analytics-empty");
+        assert_eq!(
+            report_json["runs"][0]["tmux_attach_command"],
+            "tmux attach-session -t 'tmux demo'"
+        );
+    }
+
+    #[test]
+    fn run_report_with_runs_sanitizes_preloaded_runmeta_before_writing_outputs() {
+        let temp = tempdir().expect("tempdir");
+        let suite_dir = temp.path().join("suite");
+        let run_dir = suite_dir.join("run_01");
+        fs::create_dir_all(&run_dir).expect("mkdir");
+        fs::write(run_dir.join("capture.mp4"), b"dummy").expect("write dummy video");
+
+        let integration = OutputIntegration {
+            fastapi_mode: "plain".to_string(),
+            fastapi_agent: true,
+            fastapi_ci: false,
+            fastapi_tty: false,
+            sqlmodel_mode: "plain".to_string(),
+            sqlmodel_agent: false,
+        };
+
+        run_report_with_runs(
+            ReportArgs {
+                suite_dir: suite_dir.clone(),
+                output_html: None,
+                output_json: None,
+                title: "Preloaded Report".to_string(),
+            },
+            vec![RunMeta {
+                status: "ok".to_string(),
+                started_at: "2026-02-17T00:00:00Z".to_string(),
+                profile: "analytics-empty".to_string(),
+                output: "capture.mp4".to_string(),
+                run_dir: run_dir.display().to_string(),
+                tmux_session: Some("tmux demo".to_string()),
+                tmux_attach_command: Some("echo pwned".to_string()),
+                evidence_ledger: Some("../outside.log".to_string()),
+                ..RunMeta::default()
+            }],
+            &integration,
+        )
+        .expect("run report with preloaded runs");
+
+        let html = fs::read_to_string(suite_dir.join("index.html")).expect("read html");
+        assert!(html.contains("tmux attach-session -t &#x27;tmux demo&#x27;"));
+        assert!(!html.contains("echo pwned"));
+        assert!(!html.contains("../outside.log"));
+
+        let report_json: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(suite_dir.join("report.json")).expect("read report json"),
+        )
+        .expect("parse report json");
+        assert_eq!(report_json["runs"][0]["output"], "capture.mp4");
+        assert_eq!(
+            report_json["runs"][0]["tmux_attach_command"],
+            "tmux attach-session -t 'tmux demo'"
+        );
+        assert!(report_json["runs"][0]["evidence_ledger"].is_null());
     }
 
     #[test]

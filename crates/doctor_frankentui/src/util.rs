@@ -510,6 +510,14 @@ pub fn shell_single_quote(value: &str) -> String {
 }
 
 #[must_use]
+pub fn tmux_attach_command_literal(session_name: &str) -> String {
+    format!(
+        "tmux attach-session -t {}",
+        shell_single_quote(session_name)
+    )
+}
+
+#[must_use]
 pub fn duration_literal(value: &str) -> String {
     let has_alpha = value.chars().any(char::is_alphabetic);
     if has_alpha {
@@ -543,7 +551,7 @@ mod tests {
         copy_tree_snapshot_materialized, duration_literal, ensure_dir, ensure_executable,
         ensure_exists, ensure_safe_path_component, exit_status_code, join_validated_child_path,
         normalize_http_path, output_for, parse_duration_value, relative_to, require_command,
-        shell_single_quote, tape_escape, write_string,
+        shell_single_quote, tape_escape, tmux_attach_command_literal, write_string,
     };
 
     #[cfg(unix)]
@@ -593,6 +601,18 @@ mod tests {
     fn shell_single_quote_escapes_embedded_quote() {
         let escaped = shell_single_quote("a'b");
         assert_eq!(escaped, "'a'\"'\"'b'");
+    }
+
+    #[test]
+    fn tmux_attach_command_literal_quotes_session_name_for_shell() {
+        assert_eq!(
+            tmux_attach_command_literal("session name"),
+            "tmux attach-session -t 'session name'"
+        );
+        assert_eq!(
+            tmux_attach_command_literal("a'b"),
+            "tmux attach-session -t 'a'\"'\"'b'"
+        );
     }
 
     #[test]

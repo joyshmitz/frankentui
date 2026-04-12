@@ -14,14 +14,14 @@ use wait_timeout::ChildExt;
 
 use crate::error::{DoctorError, Result};
 use crate::profile::{list_profile_names, load_profile};
-use crate::runmeta::{DecisionRecord, RunMeta};
+use crate::runmeta::{DecisionRecord, RunMeta, retain_run_scoped_artifact_path};
 use crate::seed::SeedDemoConfig;
 use crate::tape::{TapeSpec, build_capture_tape};
 use crate::util::{
     CliOutput, OutputIntegration, bool_to_u8, command_exists, ensure_dir, ensure_executable,
     ensure_exists, exit_status_code, join_validated_child_path, normalize_http_path,
     now_compact_timestamp, now_utc_iso, output_for, parse_duration_value, require_command,
-    shell_single_quote, write_string,
+    shell_single_quote, tmux_attach_command_literal, write_string,
 };
 
 const POLICY_ID: &str = "doctor_frankentui/v1";
@@ -479,7 +479,7 @@ struct TmuxObserveArtifacts {
 fn tmux_observe_paths(run_dir: &Path) -> TmuxObserveArtifacts {
     let session_name = format!("capture-{}", now_compact_timestamp());
     TmuxObserveArtifacts {
-        attach_command: format!("tmux attach-session -t {session_name}"),
+        attach_command: tmux_attach_command_literal(&session_name),
         session_file: run_dir.join("tmux_session.txt"),
         pane_capture: run_dir.join("tmux_pane.txt"),
         pane_log: run_dir.join("tmux_pane.log"),
@@ -518,7 +518,7 @@ fn start_tmux_observer(
     let mut artifacts = tmux_observe_paths(run_dir);
     if let Some(session_name) = cfg.tmux_session_name.clone() {
         artifacts.session_name = session_name;
-        artifacts.attach_command = format!("tmux attach-session -t {}", artifacts.session_name);
+        artifacts.attach_command = tmux_attach_command_literal(&artifacts.session_name);
     }
 
     let Some(app_command) = cfg
@@ -699,6 +699,32 @@ fn resolved_binary_label(cfg: &ResolvedCaptureConfig) -> String {
             .unwrap_or_default()
             .to_string()
     }
+}
+
+fn resolve_run_artifact_path(
+    run_dir: &Path,
+    configured: Option<&Path>,
+    default_relative: &Path,
+    field_name: &str,
+) -> Result<PathBuf> {
+    let raw = configured.map_or_else(|| default_relative.to_path_buf(), Path::to_path_buf);
+    let retained =
+        retain_run_scoped_artifact_path(run_dir, &raw.to_string_lossy()).ok_or_else(|| {
+            DoctorError::invalid(format!(
+                "{field_name} must stay within the validated run directory: {}",
+                raw.display()
+            ))
+        })?;
+    let retained_path = PathBuf::from(retained);
+    let resolved = if retained_path.is_absolute() {
+        retained_path
+    } else {
+        run_dir.join(retained_path)
+    };
+    if let Some(parent) = resolved.parent() {
+        ensure_dir(parent)?;
+    }
+    Ok(resolved)
 }
 
 fn capture_server_command(
@@ -2010,13 +2036,15 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
         ));
     }
 
-    if cfg.vhs_driver == VhsDriver::Auto && !command_exists("vhs") {
-        ui.warning("vhs command not found; switching to --vhs-driver docker");
-        cfg.vhs_driver = VhsDriver::Docker;
-    }
-    match cfg.vhs_driver {
-        VhsDriver::Host | VhsDriver::Auto => require_command("vhs")?,
-        VhsDriver::Docker => require_command("docker")?,
+    if !cfg.dry_run {
+        if cfg.vhs_driver == VhsDriver::Auto && !command_exists("vhs") {
+            ui.warning("vhs command not found; switching to --vhs-driver docker");
+            cfg.vhs_driver = VhsDriver::Docker;
+        }
+        match cfg.vhs_driver {
+            VhsDriver::Host | VhsDriver::Auto => require_command("vhs")?,
+            VhsDriver::Docker => require_command("docker")?,
+        }
     }
 
     if using_legacy_binary(&cfg) {
@@ -2033,24 +2061,23 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
     let start_epoch = std::time::SystemTime::now();
     let start_iso = now_utc_iso();
 
-    let (run_dir, output) = if let Some(output) = cfg.output.clone() {
-        let parent = output
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        (parent, output)
-    } else {
-        let run_dir = join_validated_child_path(&cfg.run_root, &run_name, "run_name")?;
-        let output = run_dir.join(format!("capture.{}", cfg.video_ext));
-        (run_dir, output)
-    };
-
+    let run_dir = join_validated_child_path(&cfg.run_root, &run_name, "run_name")?;
     ensure_dir(&run_dir)?;
 
-    let mut snapshot = cfg.snapshot.clone();
-    if snapshot.is_none() && !cfg.no_snapshot {
-        snapshot = Some(run_dir.join("snapshot.png"));
-    }
+    let default_output = PathBuf::from(format!("capture.{}", cfg.video_ext));
+    let output =
+        resolve_run_artifact_path(&run_dir, cfg.output.as_deref(), &default_output, "output")?;
+
+    let snapshot = if cfg.no_snapshot {
+        None
+    } else {
+        Some(resolve_run_artifact_path(
+            &run_dir,
+            cfg.snapshot.as_deref(),
+            Path::new("snapshot.png"),
+            "snapshot",
+        )?)
+    };
 
     let storage_root = run_dir.join("storage_root");
     ensure_dir(&storage_root)?;
@@ -3241,10 +3268,6 @@ mod tests {
 
     #[test]
     fn run_capture_rejects_unsafe_run_name() {
-        if !super::command_exists("vhs") && !super::command_exists("docker") {
-            return;
-        }
-
         let temp = tempdir().expect("tempdir");
         let run_root = temp.path().join("runs");
 
@@ -3261,6 +3284,69 @@ mod tests {
             "unexpected error: {error}"
         );
         assert!(!temp.path().join("escape").exists());
+    }
+
+    #[test]
+    fn resolve_run_artifact_path_rebases_relative_override_inside_run_dir() {
+        let temp = tempdir().expect("tempdir");
+        let run_dir = temp.path().join("run");
+        std::fs::create_dir_all(&run_dir).expect("run dir");
+
+        let resolved = super::resolve_run_artifact_path(
+            &run_dir,
+            Some(Path::new("artifacts/capture.mp4")),
+            Path::new("capture.mp4"),
+            "output",
+        )
+        .expect("relative override should resolve inside run dir");
+
+        assert_eq!(resolved, run_dir.join("artifacts/capture.mp4"));
+        assert!(run_dir.join("artifacts").is_dir());
+    }
+
+    #[test]
+    fn resolve_run_artifact_path_rejects_external_absolute_override() {
+        let temp = tempdir().expect("tempdir");
+        let run_dir = temp.path().join("run");
+        std::fs::create_dir_all(&run_dir).expect("run dir");
+        let outside = temp.path().join("outside/capture.mp4");
+
+        let error = super::resolve_run_artifact_path(
+            &run_dir,
+            Some(outside.as_path()),
+            Path::new("capture.mp4"),
+            "output",
+        )
+        .expect_err("external override should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("output must stay within the validated run directory"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn resolve_run_artifact_path_rejects_relative_traversal() {
+        let temp = tempdir().expect("tempdir");
+        let run_dir = temp.path().join("run");
+        std::fs::create_dir_all(&run_dir).expect("run dir");
+
+        let error = super::resolve_run_artifact_path(
+            &run_dir,
+            Some(Path::new("../capture.mp4")),
+            Path::new("capture.mp4"),
+            "output",
+        )
+        .expect_err("relative traversal should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("output must stay within the validated run directory"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -3354,8 +3440,8 @@ mod tests {
     fn capture_server_command_prefers_tmux_attach_when_observing() {
         let cfg = ResolvedCaptureConfig::defaults("analytics-empty");
         let observer = super::TmuxObserveArtifacts {
-            session_name: "capture-123".to_string(),
-            attach_command: "tmux attach-session -t capture-123".to_string(),
+            session_name: "capture 123".to_string(),
+            attach_command: "tmux attach-session -t 'capture 123'".to_string(),
             session_file: PathBuf::from("/tmp/session.txt"),
             pane_capture: PathBuf::from("/tmp/pane.txt"),
             pane_log: PathBuf::from("/tmp/pane.log"),
@@ -3367,7 +3453,7 @@ mod tests {
             "sqlite:///tmp/db",
             Path::new("/tmp/storage"),
         );
-        assert_eq!(command, "tmux attach-session -t capture-123");
+        assert_eq!(command, "tmux attach-session -t 'capture 123'");
     }
 
     #[test]

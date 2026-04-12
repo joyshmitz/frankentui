@@ -13,7 +13,8 @@ use crate::profile::list_profile_names;
 use crate::runmeta::{RunMeta, normalize_loaded_run_meta_paths};
 use crate::util::{
     CliOutput, OutputIntegration, command_exists, ensure_dir, ensure_executable, ensure_exists,
-    exit_status_code, now_compact_timestamp, output_for, shell_single_quote, write_string,
+    exit_status_code, now_compact_timestamp, output_for, shell_single_quote,
+    tmux_attach_command_literal, write_string,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
@@ -66,7 +67,6 @@ struct AppSmokeResult {
     stdout_log: Option<PathBuf>,
     stderr_log: Option<PathBuf>,
     tmux_session: Option<String>,
-    tmux_attach_command: Option<String>,
     tmux_session_file: Option<PathBuf>,
     tmux_pane_capture: Option<PathBuf>,
     tmux_pane_log: Option<PathBuf>,
@@ -88,7 +88,6 @@ struct DoctorSummaryInputs<'a> {
     app_smoke_stdout_log: Option<&'a str>,
     app_smoke_stderr_log: Option<&'a str>,
     tmux_session: Option<&'a str>,
-    tmux_attach_command: Option<&'a str>,
     tmux_session_file: Option<&'a str>,
     tmux_pane_capture: Option<&'a str>,
     tmux_pane_log: Option<&'a str>,
@@ -129,6 +128,10 @@ fn build_doctor_summary(
     integration: &OutputIntegration,
     inputs: &DoctorSummaryInputs<'_>,
 ) -> serde_json::Value {
+    let tmux_attach_command = inputs
+        .tmux_session
+        .filter(|value| !value.trim().is_empty())
+        .map(tmux_attach_command_literal);
     json!({
         "command": "doctor",
         "status": inputs.status,
@@ -146,7 +149,7 @@ fn build_doctor_summary(
         "app_smoke_stdout_log": inputs.app_smoke_stdout_log,
         "app_smoke_stderr_log": inputs.app_smoke_stderr_log,
         "tmux_session": inputs.tmux_session,
-        "tmux_attach_command": inputs.tmux_attach_command,
+        "tmux_attach_command": tmux_attach_command,
         "tmux_session_file": inputs.tmux_session_file,
         "tmux_pane_capture": inputs.tmux_pane_capture,
         "tmux_pane_log": inputs.tmux_pane_log,
@@ -210,6 +213,44 @@ fn check_command(name: &str, ui: &CliOutput) -> Result<()> {
     }
 }
 
+fn check_capture_driver_dependencies(ui: &CliOutput) -> Result<()> {
+    let has_vhs = command_exists("vhs");
+    let has_docker = command_exists("docker");
+    let has_ttyd = command_exists("ttyd");
+
+    if has_vhs {
+        ui.success("command available: vhs");
+    } else {
+        ui.warning("command missing: vhs (doctor capture smoke will use docker if available)");
+    }
+
+    if has_docker {
+        ui.success("command available: docker");
+    } else if !has_vhs {
+        ui.error("command missing: docker");
+        return Err(DoctorError::MissingCommand {
+            command: "vhs or docker".to_string(),
+        });
+    }
+
+    if has_ttyd {
+        ui.success("command available: ttyd");
+        return Ok(());
+    }
+
+    if has_docker {
+        ui.warning(
+            "command missing: ttyd (host VHS path unavailable, but Docker VHS remains available)",
+        );
+        return Ok(());
+    }
+
+    ui.error("command missing: ttyd");
+    Err(DoctorError::MissingCommand {
+        command: "ttyd".to_string(),
+    })
+}
+
 fn run_help_check(exe: &PathBuf, command: &str) -> Result<()> {
     let status = Command::new(exe)
         .arg(command)
@@ -239,7 +280,7 @@ fn describe_capture_smoke_failure(run_root: &Path, run_name: &str) -> Option<Str
 
     if let Ok(meta) = RunMeta::from_path(&meta_path) {
         let meta = normalize_loaded_run_meta_paths(&run_dir, &meta);
-        if meta.status.is_empty() == false {
+        if !meta.status.is_empty() {
             status = Some(meta.status.clone());
             facts.push(format!("status={}", meta.status));
         }
@@ -501,7 +542,6 @@ fn run_app_smoke_fallback(args: &DoctorArgs, ui: &CliOutput) -> Result<AppSmokeR
         stdout_log: Some(smoke_paths.stdout_log),
         stderr_log: Some(smoke_paths.stderr_log),
         tmux_session: None,
-        tmux_attach_command: None,
         tmux_session_file: None,
         tmux_pane_capture: None,
         tmux_pane_log: None,
@@ -542,7 +582,7 @@ fn tmux_session_name(args: &DoctorArgs) -> String {
 }
 
 fn tmux_attach_command(session_name: &str) -> String {
-    format!("tmux attach-session -t {session_name}")
+    tmux_attach_command_literal(session_name)
 }
 
 fn tmux_target(session_name: &str) -> String {
@@ -725,7 +765,6 @@ fn run_tmux_app_smoke_fallback(
         stdout_log: None,
         stderr_log: None,
         tmux_session: Some(session_name),
-        tmux_attach_command: Some(attach_command),
         tmux_session_file: Some(smoke_paths.tmux_session_file.clone()),
         tmux_pane_capture: smoke_paths
             .tmux_pane_capture
@@ -775,10 +814,9 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
         integration.sqlmodel_mode, integration.sqlmodel_agent
     ));
 
-    check_command("bash", &ui)?;
-    check_command("vhs", &ui)?;
-    check_command("ttyd", &ui)?;
+    check_capture_driver_dependencies(&ui)?;
     if args.observe == ObserveMode::Tmux {
+        check_command("bash", &ui)?;
         check_command("tmux", &ui)?;
     }
 
@@ -805,7 +843,6 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
     let mut app_smoke_stdout_log: Option<String> = None;
     let mut app_smoke_stderr_log: Option<String> = None;
     let mut tmux_session: Option<String> = None;
-    let mut tmux_attach_command: Option<String> = None;
     let mut tmux_session_file: Option<String> = None;
     let mut tmux_pane_capture: Option<String> = None;
     let mut tmux_pane_log: Option<String> = None;
@@ -876,7 +913,6 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
                         .as_ref()
                         .map(|path| path.display().to_string());
                     tmux_session = smoke.tmux_session;
-                    tmux_attach_command = smoke.tmux_attach_command;
                     tmux_session_file = smoke
                         .tmux_session_file
                         .as_ref()
@@ -903,8 +939,11 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
                             "app smoke logs: stdout={stdout_log}, stderr={stderr_log}"
                         ));
                     }
-                    if let Some(attach_command) = &tmux_attach_command {
-                        ui.info(&format!("attach to live app smoke: {attach_command}"));
+                    if let Some(session_name) = tmux_session.as_deref() {
+                        ui.info(&format!(
+                            "attach to live app smoke: {}",
+                            tmux_attach_command(session_name)
+                        ));
                     }
                 }
                 Err(error) => {
@@ -963,7 +1002,6 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
             app_smoke_stdout_log: app_smoke_stdout_log.as_deref(),
             app_smoke_stderr_log: app_smoke_stderr_log.as_deref(),
             tmux_session: tmux_session.as_deref(),
-            tmux_attach_command: tmux_attach_command.as_deref(),
             tmux_session_file: tmux_session_file.as_deref(),
             tmux_pane_capture: tmux_pane_capture.as_deref(),
             tmux_pane_log: tmux_pane_log.as_deref(),
@@ -1385,7 +1423,6 @@ kill -TERM $$
                 app_smoke_stdout_log: Some("/tmp/doctor-run/doctor_app_smoke/stdout.log"),
                 app_smoke_stderr_log: Some("/tmp/doctor-run/doctor_app_smoke/stderr.log"),
                 tmux_session: Some("doctor-frankentui-demo"),
-                tmux_attach_command: Some("tmux attach-session -t doctor-frankentui-demo"),
                 tmux_session_file: Some("/tmp/doctor-run/doctor_app_smoke/tmux_session.txt"),
                 tmux_pane_capture: Some("/tmp/doctor-run/doctor_app_smoke/tmux_pane.txt"),
                 tmux_pane_log: Some("/tmp/doctor-run/doctor_app_smoke/tmux_pane.log"),
@@ -1438,7 +1475,7 @@ kill -TERM $$
         assert_eq!(parsed["tmux_session"], "doctor-frankentui-demo");
         assert_eq!(
             parsed["tmux_attach_command"],
-            "tmux attach-session -t doctor-frankentui-demo"
+            "tmux attach-session -t 'doctor-frankentui-demo'"
         );
         assert_eq!(
             parsed["tmux_session_file"],

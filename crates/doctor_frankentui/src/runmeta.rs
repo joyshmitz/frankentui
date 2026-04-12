@@ -1,11 +1,12 @@
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use crate::util::{append_line, shell_single_quote, write_string};
+use crate::util::{append_line, shell_single_quote, tmux_attach_command_literal, write_string};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -106,15 +107,50 @@ pub(crate) fn retain_run_scoped_artifact_path(run_dir: &Path, value: &str) -> Op
 
     let canonical_run_dir = fs::canonicalize(run_dir).ok()?;
     let path = PathBuf::from(trimmed);
+    if !path.is_absolute()
+        && path
+            .components()
+            .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    {
+        return None;
+    }
+
     let candidate = if path.is_absolute() {
         path
     } else {
         run_dir.join(&path)
     };
-    let canonical_candidate = fs::canonicalize(candidate).ok()?;
+    let canonical_candidate = canonicalize_run_scoped_candidate(&canonical_run_dir, &candidate)?;
     canonical_candidate
         .starts_with(&canonical_run_dir)
         .then(|| trimmed.to_string())
+}
+
+fn canonicalize_run_scoped_candidate(
+    canonical_run_dir: &Path,
+    candidate: &Path,
+) -> Option<PathBuf> {
+    if candidate.exists() {
+        return fs::canonicalize(candidate).ok();
+    }
+
+    let mut existing = candidate;
+    let mut missing_suffix = Vec::<OsString>::new();
+    while !existing.exists() {
+        missing_suffix.push(existing.file_name()?.to_os_string());
+        existing = existing.parent()?;
+    }
+
+    let canonical_existing = fs::canonicalize(existing).ok()?;
+    if !canonical_existing.starts_with(canonical_run_dir) {
+        return None;
+    }
+
+    let mut canonical_candidate = canonical_existing;
+    for component in missing_suffix.iter().rev() {
+        canonical_candidate.push(component);
+    }
+    Some(canonical_candidate)
 }
 
 pub(crate) fn normalize_loaded_run_meta_paths(run_dir: &Path, meta: &RunMeta) -> RunMeta {
@@ -123,6 +159,11 @@ pub(crate) fn normalize_loaded_run_meta_paths(run_dir: &Path, meta: &RunMeta) ->
             .as_deref()
             .and_then(|path| retain_run_scoped_artifact_path(run_dir, path))
     };
+    let tmux_attach_command = meta
+        .tmux_session
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(tmux_attach_command_literal);
 
     RunMeta {
         run_dir: run_dir.display().to_string(),
@@ -131,6 +172,7 @@ pub(crate) fn normalize_loaded_run_meta_paths(run_dir: &Path, meta: &RunMeta) ->
         evidence_ledger: sanitize_optional(&meta.evidence_ledger),
         artifact_manifest: sanitize_optional(&meta.artifact_manifest),
         ttyd_shim_log: sanitize_optional(&meta.ttyd_shim_log),
+        tmux_attach_command,
         ttyd_runtime_log: sanitize_optional(&meta.ttyd_runtime_log),
         vhs_docker_log: sanitize_optional(&meta.vhs_docker_log),
         tmux_session_file: sanitize_optional(&meta.tmux_session_file),
@@ -154,6 +196,28 @@ impl RunMeta {
     fn run_dir_path(&self) -> Option<PathBuf> {
         let trimmed = self.run_dir.trim();
         (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
+    }
+
+    fn resolve_run_scoped_path(&self, value: &str) -> Option<PathBuf> {
+        let run_dir = self.run_dir_path()?;
+        let retained = retain_run_scoped_artifact_path(&run_dir, value)?;
+        let path = PathBuf::from(retained);
+        Some(if path.is_absolute() {
+            path
+        } else {
+            run_dir.join(path)
+        })
+    }
+
+    fn configured_artifact_manifest_path(&self) -> Option<PathBuf> {
+        self.artifact_manifest.as_deref()?;
+        self.artifact_manifest
+            .as_deref()
+            .and_then(|value| self.resolve_run_scoped_path(value))
+            .or_else(|| {
+                self.run_dir_path()
+                    .map(|run_dir| run_dir.join("run_artifact_manifest.json"))
+            })
     }
 
     fn push_artifact_entry(
@@ -217,18 +281,10 @@ impl RunMeta {
                                   role: ArtifactRole,
                                   purpose: &str,
                                   value: &str| {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
+            let Some(path) = self.resolve_run_scoped_path(value) else {
                 return;
-            }
-            Self::push_artifact_entry(
-                entries,
-                seen_paths,
-                key,
-                role,
-                purpose,
-                PathBuf::from(trimmed),
-            );
+            };
+            Self::push_artifact_entry(entries, seen_paths, key, role, purpose, path);
         };
 
         push_optional_path(
@@ -258,8 +314,8 @@ impl RunMeta {
                 path,
             );
         }
-        if let Some(path) = &self.artifact_manifest {
-            push_optional_path(
+        if let Some(path) = self.configured_artifact_manifest_path() {
+            Self::push_artifact_entry(
                 &mut entries,
                 &mut seen_paths,
                 "artifact_manifest",
@@ -362,12 +418,15 @@ impl RunMeta {
         if let Some(path) = self
             .evidence_ledger
             .as_deref()
-            .filter(|value| !value.trim().is_empty())
+            .and_then(|value| self.resolve_run_scoped_path(value))
         {
             commands.push(ReplayCommand {
                 key: "tail_evidence_ledger".to_string(),
                 purpose: "Inspect the most recent evidence-ledger decisions.".to_string(),
-                command: format!("tail -n 80 {}", shell_single_quote(path)),
+                command: format!(
+                    "tail -n 80 {}",
+                    shell_single_quote(&path.display().to_string())
+                ),
             });
         }
 
@@ -384,15 +443,16 @@ impl RunMeta {
         }
 
         if let Some(command) = self
-            .tmux_attach_command
+            .tmux_session
             .as_deref()
             .filter(|value| !value.trim().is_empty())
+            .map(tmux_attach_command_literal)
         {
             commands.push(ReplayCommand {
                 key: "attach_tmux_observer".to_string(),
                 purpose: "Attach to the preserved tmux observer session for live context."
                     .to_string(),
-                command: command.to_string(),
+                command,
             });
         }
 
@@ -415,12 +475,7 @@ impl RunMeta {
     }
 
     pub fn write_artifact_manifest(&self) -> Result<Option<PathBuf>> {
-        let Some(path) = self
-            .artifact_manifest
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .map(PathBuf::from)
-        else {
+        let Some(path) = self.configured_artifact_manifest_path() else {
             return Ok(None);
         };
 
@@ -461,7 +516,7 @@ impl DecisionRecord {
 mod tests {
     use tempfile::tempdir;
 
-    use super::{ArtifactRole, DecisionRecord, RunMeta};
+    use super::{ArtifactRole, DecisionRecord, RunMeta, normalize_loaded_run_meta_paths};
 
     #[test]
     fn runmeta_round_trip_preserves_fields() {
@@ -643,7 +698,8 @@ mod tests {
                     .display()
                     .to_string(),
             ),
-            tmux_attach_command: Some("tmux attach-session -t capture-demo".to_string()),
+            tmux_session: Some("capture demo".to_string()),
+            tmux_attach_command: Some("echo pwned".to_string()),
             ..RunMeta::default()
         };
 
@@ -671,11 +727,169 @@ mod tests {
                 .iter()
                 .any(|command| command.key == "replay_capture_tape")
         );
+        assert!(manifest.replay_commands.iter().any(|command| {
+            command.key == "attach_tmux_observer"
+                && command.command == "tmux attach-session -t 'capture demo'"
+        }));
+    }
+
+    #[test]
+    fn loaded_runmeta_rebases_relative_artifact_paths_against_run_dir() {
+        let temp = tempdir().expect("tempdir");
+        let run_dir = temp.path().join("run");
+        std::fs::create_dir_all(&run_dir).expect("run dir");
+        std::fs::write(run_dir.join("run_meta.json"), "{}").expect("write run meta");
+        std::fs::write(run_dir.join("run_summary.txt"), "summary").expect("write run summary");
+        std::fs::write(run_dir.join("capture.tape"), "Output demo").expect("write tape");
+        std::fs::write(run_dir.join("capture.mp4"), b"video").expect("write video");
+        std::fs::write(run_dir.join("evidence_ledger.jsonl"), b"{}\n").expect("write ledger");
+
+        let meta = RunMeta {
+            status: "failed".to_string(),
+            started_at: "2026-02-17T00:00:00Z".to_string(),
+            profile: "analytics-empty".to_string(),
+            output: "capture.mp4".to_string(),
+            run_dir: run_dir.display().to_string(),
+            evidence_ledger: Some("evidence_ledger.jsonl".to_string()),
+            artifact_manifest: Some("run_artifact_manifest.json".to_string()),
+            tmux_session: Some("capture demo".to_string()),
+            tmux_attach_command: Some("echo pwned".to_string()),
+            ..RunMeta::default()
+        };
+        meta.write_to_path(&run_dir.join("run_meta.json"))
+            .expect("write relative run meta");
+
+        let loaded = normalize_loaded_run_meta_paths(
+            &run_dir,
+            &RunMeta::from_path(&run_dir.join("run_meta.json")).expect("read run meta"),
+        );
+
+        let entries = loaded.artifact_entries();
+        assert!(entries.iter().any(|entry| {
+            entry.key == "capture_output"
+                && entry.path == run_dir.join("capture.mp4").display().to_string()
+                && entry.exists
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.key == "artifact_manifest"
+                && entry.path
+                    == run_dir
+                        .join("run_artifact_manifest.json")
+                        .display()
+                        .to_string()
+                && !entry.exists
+        }));
+
+        let replay_commands = loaded.replay_commands();
+        assert!(replay_commands.iter().any(|command| {
+            command.key == "tail_evidence_ledger"
+                && command.command
+                    == format!(
+                        "tail -n 80 {}",
+                        super::shell_single_quote(
+                            &run_dir.join("evidence_ledger.jsonl").display().to_string()
+                        )
+                    )
+        }));
+        assert!(replay_commands.iter().any(|command| {
+            command.key == "attach_tmux_observer"
+                && command.command == "tmux attach-session -t 'capture demo'"
+        }));
+        assert_eq!(
+            loaded.tmux_attach_command.as_deref(),
+            Some("tmux attach-session -t 'capture demo'")
+        );
+    }
+
+    #[test]
+    fn loaded_runmeta_writes_relative_artifact_manifest_inside_run_dir() {
+        let temp = tempdir().expect("tempdir");
+        let run_dir = temp.path().join("run");
+        std::fs::create_dir_all(&run_dir).expect("run dir");
+        std::fs::write(run_dir.join("run_meta.json"), "{}").expect("write run meta");
+        std::fs::write(run_dir.join("run_summary.txt"), "summary").expect("write run summary");
+        std::fs::write(run_dir.join("capture.tape"), "Output demo").expect("write tape");
+
+        let meta = RunMeta {
+            status: "ok".to_string(),
+            started_at: "2026-02-17T00:00:00Z".to_string(),
+            profile: "analytics-empty".to_string(),
+            run_dir: run_dir.display().to_string(),
+            artifact_manifest: Some("nested/run_artifact_manifest.json".to_string()),
+            ..RunMeta::default()
+        };
+        meta.write_to_path(&run_dir.join("run_meta.json"))
+            .expect("write relative run meta");
+
+        let loaded = normalize_loaded_run_meta_paths(
+            &run_dir,
+            &RunMeta::from_path(&run_dir.join("run_meta.json")).expect("read run meta"),
+        );
+
+        let manifest_path = loaded
+            .write_artifact_manifest()
+            .expect("write artifact manifest")
+            .expect("manifest path");
+        assert_eq!(
+            manifest_path,
+            run_dir.join("nested/run_artifact_manifest.json")
+        );
+        assert!(manifest_path.exists());
+    }
+
+    #[test]
+    fn write_artifact_manifest_falls_back_inside_run_dir_when_paths_escape() {
+        let temp = tempdir().expect("tempdir");
+        let run_dir = temp.path().join("run");
+        let outside_dir = temp.path().join("outside");
+        std::fs::create_dir_all(&run_dir).expect("run dir");
+        std::fs::create_dir_all(&outside_dir).expect("outside dir");
+        std::fs::write(run_dir.join("run_meta.json"), "{}").expect("write run meta");
+        std::fs::write(run_dir.join("run_summary.txt"), "summary").expect("write run summary");
+        std::fs::write(run_dir.join("capture.tape"), "Output demo").expect("write tape");
+        std::fs::write(outside_dir.join("capture.mp4"), b"video").expect("write outside video");
+        std::fs::write(outside_dir.join("evidence_ledger.jsonl"), b"{}\n")
+            .expect("write outside ledger");
+
+        let meta = RunMeta {
+            status: "ok".to_string(),
+            started_at: "2026-02-17T00:00:00Z".to_string(),
+            profile: "analytics-empty".to_string(),
+            run_dir: run_dir.display().to_string(),
+            output: "../outside/capture.mp4".to_string(),
+            evidence_ledger: Some("../outside/evidence_ledger.jsonl".to_string()),
+            artifact_manifest: Some("../outside/run_artifact_manifest.json".to_string()),
+            ..RunMeta::default()
+        };
+
+        let manifest_path = meta
+            .write_artifact_manifest()
+            .expect("write artifact manifest")
+            .expect("manifest path");
+        let manifest: super::RunArtifactManifest = serde_json::from_str(
+            &std::fs::read_to_string(&manifest_path).expect("read artifact manifest"),
+        )
+        .expect("parse artifact manifest");
+
+        assert_eq!(manifest_path, run_dir.join("run_artifact_manifest.json"));
+        assert!(manifest_path.exists());
+        assert!(!outside_dir.join("run_artifact_manifest.json").exists());
+        assert!(manifest.artifacts.iter().any(|entry| {
+            entry.key == "artifact_manifest"
+                && entry.path == manifest_path.display().to_string()
+                && entry.exists
+        }));
         assert!(
-            manifest
+            !manifest
+                .artifacts
+                .iter()
+                .any(|entry| entry.path.contains("outside"))
+        );
+        assert!(
+            !manifest
                 .replay_commands
                 .iter()
-                .any(|command| command.key == "attach_tmux_observer")
+                .any(|command| command.command.contains("outside"))
         );
     }
 }
