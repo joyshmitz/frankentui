@@ -18,7 +18,7 @@ FRANKENTUI DASHBOARD
 │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                        ││                        ││MEM ██░░░░  41%│   │╭──5 pane-3──■╭──7 pane-4───╮│
 │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                        ││struct App<T: Send + Syn││NET ░░░░░░   8%│   ││            ■│             ││
 │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                        ││    frames: u64,        ││FRM         n/a│   ││ 14x16  @90 ■│ 15x16  @104 ││
-│Click → Visual ││Click → Data Viz        ││Click → Code Exploreru16││Click → Perform│   ││            ││             ││
+│Click → Visual ││Click → Data Viz        ││Click → Code Explorer   ││Click → Perform│   ││            ││             ││
 ╰───────────────╯╰────────────────────────╯╰────────────────────────╯╰───────────────╯   ││            ││             ││
 ╭Text FX · 3-Up (1/2│╭────────────Activity────────────│╭──Markdown · Streaming… 0%──╮    ││            ││             ││
 │Sample 1 of 3 · 3-U││SEV TIME  COMP  MESSAGE         ││▌                           │    ││            ││             ││

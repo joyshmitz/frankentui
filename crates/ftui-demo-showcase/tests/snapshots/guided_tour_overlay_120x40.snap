@@ -18,23 +18,23 @@
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                        ││    Quit,               ││MEM ██░░░░  41%│  │╭──5 pane-3──■╭──7 pane-4──╮││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                        ││}                       ││NET ░░░░░░   8%│  ││            ■│            │││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                        ││                        ││FRM         n/a│  ││ 14x14  @90 ■│ 14x14  @10 │││
-││Click → Visual ││Click → Data Viz        ││Click → Code ExplorerSyn││Click → Perform│  ││            ││            │││
+││Click → Visual ││Click → Data Viz        ││Click → Code Explorer   ││Click → Perform│  ││            ││            │││
 │╰───────────────╯╰────────────────────────╯╰────────────────────────╯╰───────────────╯  ││            ││            │││
 │╭Text FX · 3-Up (1/2│╭────────────Activity────────────│╭─Markdown · Streaming… 0%──╮    ││            ││            │││
 ││Sample 1 of 3 · 3-U││SEV TIME  COMP  MESSAGE         ││▌                          │    ││            ││            │││
 ││1 · None · S1      ││ INFO  00:02   CPU spike detecte││      ╭─────────────────────Guided Tour──────────────────────╮│
-││# FX Lab · Determin││                                ││      │2/16 · Tour · LIVE  │    ││            ││            │││
-││> *"Render truth, n││                                ││      │Speed 1.00x · Next 5.2s  ││            ││            │││
-││2 · FadeIn · S2    ││                                ││      │Dashboard           │    ││            ││            │││
-││## GFM Stress · Led││                                ││      │Navigation is instant: everything is searchable and  │││
-││1. **Bold** + _ital⋮│                                ⋮│      │tagged.             │    ││            ││            │││
-││3 · FadeOut · S3   ││                                ││      │Press Ctrl+K to open the Command Palette.────────────╯││
-││### Runtime Ledger ││                                ││      │Controls: Space pause · ←/→ step · Esc exit───────────││
-││- [x] Tasks        ││                                ││      │Steps:              │                                 ││
-││                   ││                                ││      │• Tour · Dashboard  │    ╭Pane Studio─────────────────││
-││                   ││                                ││      │▶ Tour · Dashboard  │    │Drag docks | Right click mod││
+││# FX Lab · Determin││                                ││      │2/16 · Tour · LIVE                                    ││
+││> *"Render truth, n││                                ││      │Speed 1.00x · Next 5.2s                               ││
+││2 · FadeIn · S2    ││                                ││      │Dashboard                                             ││
+││## GFM Stress · Led││                                ││      │Navigation is instant: everything is searchable and   ││
+││1. **Bold** + _ital⋮│                                ⋮│      │tagged.                                               ││
+││3 · FadeOut · S3   ││                                ││      │Press Ctrl+K to open the Command Palette.             ││
+││### Runtime Ledger ││                                ││      │Controls: Space pause · ←/→ step · Esc exit           ││
+││- [x] Tasks        ││                                ││      │Steps:                                                ││
+││                   ││                                ││      │• Tour · Dashboard                                    ││
+││                   ││                                ││      │▶ Tour · Dashboard                                    ││
 ││drag panes in dashb││Click → Action Timeline         ││Click │• Visuals · Mermaid Showcase                          ││
-│╰───────────────────│╰────────────────────────────────│╰──────│• Tour · Inline Mode╯    ╰────────────────────────────││
+│╰───────────────────│╰────────────────────────────────│╰──────│• Tour · Inline Mode                                  ││
 │g:charts c:code e:fx m:md | drag bottom dividers: resize | 1-9╰──────────────────────────────────────────────────────╯│
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
  Dashboard [1/45]  Cyberpunk Aurora [h] [cmd] [p] [d]  Mouse: AUTO (alt:ON)    Tab/Shift+Tab: next/prev    120x40 00:00 

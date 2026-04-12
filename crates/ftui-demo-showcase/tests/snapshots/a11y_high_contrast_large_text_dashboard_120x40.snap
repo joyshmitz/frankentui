@@ -18,7 +18,7 @@
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                        ││    Quit,               ││MEM ██░░░░  41%│  │╭──5 pane-3──■╭──7 pane-4──╮││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                        ││}                       ││NET ░░░░░░   8%│  ││            ■│            │││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                        ││                        ││FRM         n/a│  ││ 14x14  @90 ■│ 14x14  @10 │││
-││Click → Visual ││Click → Data Viz        ││Click → Code ExplorerSyn││Click → Perform│  ││            ││            │││
+││Click → Visual ││Click → Data Viz        ││Click → Code Explorer   ││Click → Perform│  ││            ││            │││
 │╰───────────────╯╰────────────────────────╯╰────────────────────────╯╰───────────────╯  ││            ││            │││
 │╭Text FX · 3-Up (1/2│╭────────────Activity────────────│╭─Markdown · Streaming… 0%──╮    ││            ││            │││
 ││Sample 1 of 3 · 3-U││SEV TIME  COMP  MESSAGE         ││▌                          │    ││            ││            │││
