@@ -766,8 +766,11 @@ mod tests {
         let mut tabs_state = TabsState::default();
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(20, 1, &mut pool);
+        tracing::callsite::rebuild_interest_cache();
         StatefulWidget::render(&tabs, Rect::new(0, 0, 20, 1), &mut frame, &mut tabs_state);
+        tracing::callsite::rebuild_interest_cache();
         assert!(tabs_state.handle_key(&KeyEvent::new(KeyCode::Right), 3));
+        tracing::callsite::rebuild_interest_cache();
 
         let snapshot = state.lock().expect("tabs trace lock");
         assert!(snapshot.saw_render_span, "expected tabs.render span");

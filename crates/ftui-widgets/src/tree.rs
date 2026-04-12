@@ -2397,7 +2397,9 @@ mod tests {
         );
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(20, 6, &mut pool);
+        tracing::callsite::rebuild_interest_cache();
         tree.render(Rect::new(0, 0, 20, 6), &mut frame);
+        tracing::callsite::rebuild_interest_cache();
         assert!(tree.handle_key(&KeyEvent::new(KeyCode::Enter), 1));
 
         tracing::callsite::rebuild_interest_cache();

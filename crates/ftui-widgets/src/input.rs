@@ -2315,8 +2315,11 @@ mod tests {
         tracing::callsite::rebuild_interest_cache();
 
         let mut input = TextInput::new().with_value("ab");
+        tracing::callsite::rebuild_interest_cache();
         assert!(input.handle_event(&Event::Key(KeyEvent::new(KeyCode::Char('c')))));
+        tracing::callsite::rebuild_interest_cache();
         assert!(input.handle_event(&Event::Key(KeyEvent::new(KeyCode::Left))));
+        tracing::callsite::rebuild_interest_cache();
         assert!(input.handle_event(&Event::Key(KeyEvent::new(KeyCode::Backspace))));
 
         tracing::callsite::rebuild_interest_cache();

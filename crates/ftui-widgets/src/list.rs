@@ -2182,7 +2182,9 @@ mod tests {
         state.select(Some(0));
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(10, 3, &mut pool);
+        tracing::callsite::rebuild_interest_cache();
         StatefulWidget::render(&list, Rect::new(0, 0, 10, 3), &mut frame, &mut state);
+        tracing::callsite::rebuild_interest_cache();
         assert!(list.handle_key(&mut state, &KeyEvent::new(KeyCode::Down)));
 
         tracing::callsite::rebuild_interest_cache();

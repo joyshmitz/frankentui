@@ -235,10 +235,11 @@ pub(crate) mod tracing_test_support {
     pub(crate) fn acquire() -> TraceTestGuard {
         static TRACE_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
+        // Preserve serialization even if an earlier tracing assertion panicked.
         let lock = TRACE_TEST_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
-            .expect("ftui-widgets tracing test lock poisoned");
+            .unwrap_or_else(|e| e.into_inner());
         tracing::callsite::rebuild_interest_cache();
         TraceTestGuard { _lock: lock }
     }

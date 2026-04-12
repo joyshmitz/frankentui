@@ -3126,6 +3126,9 @@ mod tests {
         };
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(6, 4, &mut pool);
+        // Parallel workspace tests can perturb callsite interest after the
+        // subscriber is installed, so rebuild immediately before the traced render.
+        tracing::callsite::rebuild_interest_cache();
         StatefulWidget::render(&table, area, &mut frame, &mut state);
 
         tracing::callsite::rebuild_interest_cache();

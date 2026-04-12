@@ -2379,6 +2379,7 @@ mod tests {
         {
             let mut integrator = ModalFocusIntegration::new(&mut stack, &mut focus);
             let modal = WidgetModalEntry::new(StubWidget).with_focusable_ids(vec![1, 2]);
+            tracing::callsite::rebuild_interest_cache();
             integrator.push_with_focus(Box::new(modal));
 
             let escape = Event::Key(KeyEvent {
@@ -2386,6 +2387,7 @@ mod tests {
                 modifiers: Modifiers::empty(),
                 kind: KeyEventKind::Press,
             });
+            tracing::callsite::rebuild_interest_cache();
             let _ = integrator.handle_event(&escape, None);
         }
         tracing::callsite::rebuild_interest_cache();

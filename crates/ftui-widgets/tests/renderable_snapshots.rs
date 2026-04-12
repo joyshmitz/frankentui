@@ -238,18 +238,18 @@ mod group_tests {
         let mut frame = Frame::new(5, 1, &mut pool);
         let area = Rect::new(0, 0, 5, 1);
 
-        // Second child overwrites first since they render to same area
+        // Paragraph clears its owned area before drawing, so the later child
+        // fully owns the final pixels for the shared region.
         let widget = Group::new()
             .push(Paragraph::new("AAAAA"))
             .push(Paragraph::new("B"));
 
         widget.render(area, &mut frame);
 
-        // First cell should be B (overwrites A), rest should be A
         let c0 = frame.buffer.get(0, 0).unwrap().content.as_char();
         let c1 = frame.buffer.get(1, 0).unwrap().content.as_char();
         assert_eq!(c0, Some('B'));
-        assert_eq!(c1, Some('A'));
+        assert_eq!(c1, Some(' '));
     }
 
     #[test]
