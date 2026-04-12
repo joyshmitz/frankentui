@@ -85,7 +85,7 @@ toml = { version = "0.8", optional = true }
 
 [dev-dependencies]
 ftui-core = { path = "../ftui-core", version = "0.3.0", features = ["test-helpers"] }
-ftui-harness = { path = "../ftui-harness", version = "0.3.0" }
+ftui-harness = { path = "../ftui-harness" }
 criterion = { version = "0.8.2", features = ["html_reports"] }
 proptest = "1.7.0"
 tempfile = "3.22.0"
