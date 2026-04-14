@@ -169,3 +169,7 @@ storage.sqlite3-wal.corrupt-*
 
 # NTM session state
 .ntm/
+
+# Patch artifacts (failed merges / quilt / git am)
+*.orig
+*.rej
