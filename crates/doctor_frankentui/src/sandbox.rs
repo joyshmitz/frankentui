@@ -1077,9 +1077,15 @@ fn glob_match_inner(pattern: &str, path: &str) -> bool {
 
     // Handle trailing **
     if let Some(prefix) = pattern.strip_suffix("/**") {
-        return path.starts_with(prefix)
-            || path == prefix.trim_end_matches('/')
-            || glob_match_inner(pattern.trim_end_matches("/**"), path);
+        if glob_match_inner(prefix, path) {
+            return true;
+        }
+        for (i, ch) in path.char_indices() {
+            if ch == '/' && glob_match_inner(prefix, &path[..i]) {
+                return true;
+            }
+        }
+        return false;
     }
 
     let mut pat_chars = pattern.chars().peekable();
@@ -1166,9 +1172,13 @@ mod tests {
 
     #[test]
     fn glob_doublestar_trailing() {
+        assert!(glob_match("src/**", "src"));
         assert!(glob_match("src/**", "src/foo.rs"));
         assert!(glob_match("src/**", "src/a/b/c.rs"));
         assert!(!glob_match("src/**", "lib/foo.rs"));
+        assert!(!glob_match("src/**", "src2/foo.rs"));
+        assert!(glob_match("*/src/**", "project/src/main.rs"));
+        assert!(!glob_match("*/src/**", "project/src2/main.rs"));
     }
 
     #[test]
