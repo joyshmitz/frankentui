@@ -20,11 +20,11 @@ use ftui_demo_showcase::pane_interaction::{
     update_selection_for_pointer_down,
 };
 use ftui_layout::{
-    PANE_EDGE_GRIP_INSET_CELLS, PANE_MAGNETIC_FIELD_CELLS, PaneDockPreview, PaneDockZone,
-    PaneDragResizeEffect, PaneId, PaneInteractionTimeline, PaneLayoutIntelligenceMode,
-    PaneModifierSnapshot, PaneMotionVector, PaneNodeKind, PaneOperation, PanePointerButton,
-    PanePointerPosition, PanePressureSnapProfile, PaneResizeGrip, PaneResizeTarget,
-    PaneSelectionState, PaneTree, Rect, SplitAxis, WorkspaceMetadata, WorkspaceSnapshot,
+    PANE_EDGE_GRIP_INSET_CELLS, PANE_MAGNETIC_FIELD_CELLS, PaneDragResizeEffect, PaneId,
+    PaneInteractionTimeline, PaneLayoutIntelligenceMode, PaneModifierSnapshot, PaneMotionVector,
+    PaneNodeKind, PaneOperation, PanePointerButton, PanePointerPosition, PanePressureSnapProfile,
+    PaneResizeTarget, PaneSelectionState, PaneTree, Rect, SplitAxis, WorkspaceMetadata,
+    WorkspaceSnapshot,
 };
 use ftui_web::pane_pointer_capture::{
     PanePointerCaptureAdapter, PanePointerCaptureCommand, PanePointerCaptureConfig,
@@ -1156,6 +1156,7 @@ mod tests {
         dynamic_live_reflow_threshold_bps, dynamic_preview_switch_advantage_bps,
         edge_fling_projection,
     };
+    use ftui_layout::{PaneDockPreview, PaneDockZone, PaneResizeGrip};
 
     #[test]
     fn live_reflow_threshold_drops_for_fast_confident_motion() {

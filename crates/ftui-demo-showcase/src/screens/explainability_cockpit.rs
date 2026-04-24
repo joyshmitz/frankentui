@@ -6,8 +6,12 @@
 //! into a single panel with a compact timeline for debugging.
 
 use std::cell::Cell as StdCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::VecDeque;
+#[cfg(not(target_arch = "wasm32"))]
 use std::fs;
+#[cfg(not(target_arch = "wasm32"))]
 use std::io::{self, BufRead};
 use std::path::PathBuf;
 use std::time::SystemTime;
