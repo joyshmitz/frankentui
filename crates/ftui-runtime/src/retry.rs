@@ -41,6 +41,26 @@ use web_time::Duration;
 const TASK_THREAD_JOIN_TIMEOUT: Duration = Duration::from_millis(250);
 const TASK_THREAD_JOIN_POLL: Duration = Duration::from_millis(5);
 
+fn duration_from_millis_saturating(millis: u128) -> Duration {
+    if millis >= Duration::MAX.as_millis() {
+        Duration::MAX
+    } else {
+        let seconds = millis / 1_000;
+        let subsecond_millis = millis % 1_000;
+        let Ok(seconds) = u64::try_from(seconds) else {
+            return Duration::MAX;
+        };
+        let Ok(nanos) = u32::try_from(subsecond_millis.saturating_mul(1_000_000)) else {
+            return Duration::MAX;
+        };
+        Duration::new(seconds, nanos)
+    }
+}
+
+fn add_millis_saturating(total: &mut u128, millis: u128) {
+    *total = total.saturating_add(millis).min(Duration::MAX.as_millis());
+}
+
 fn join_task_thread(handle: std::thread::JoinHandle<()>) {
     let _ = handle.join();
 }
@@ -137,11 +157,58 @@ impl RetryPolicy {
 
     /// Total maximum delay across all retries (for timeout budgeting).
     pub fn total_max_delay(&self) -> Duration {
-        let mut total = Duration::ZERO;
-        for i in 0..self.max_retries {
-            total += self.delay(i);
+        let retry_count = u128::from(self.max_retries);
+        let max_duration_millis = Duration::MAX.as_millis();
+        match &self.backoff {
+            BackoffStrategy::Fixed { delay_ms } => {
+                duration_from_millis_saturating(u128::from(*delay_ms).saturating_mul(retry_count))
+            }
+            BackoffStrategy::Linear { base_ms, max_ms } => {
+                if self.max_retries == 0 || *base_ms == 0 || *max_ms == 0 {
+                    return Duration::ZERO;
+                }
+
+                let uncapped_terms = retry_count.min(u128::from(*max_ms / *base_ms));
+                let arithmetic_sum =
+                    uncapped_terms.saturating_mul(uncapped_terms.saturating_add(1)) / 2;
+                let mut total_millis = u128::from(*base_ms)
+                    .saturating_mul(arithmetic_sum)
+                    .min(max_duration_millis);
+
+                let capped_terms = retry_count.saturating_sub(uncapped_terms);
+                add_millis_saturating(
+                    &mut total_millis,
+                    u128::from(*max_ms).saturating_mul(capped_terms),
+                );
+                duration_from_millis_saturating(total_millis)
+            }
+            BackoffStrategy::Exponential { base_ms, max_ms } => {
+                if self.max_retries == 0 || *base_ms == 0 || *max_ms == 0 {
+                    return Duration::ZERO;
+                }
+
+                let mut total_millis = 0_u128;
+                let mut attempt = 0_u32;
+                while attempt < self.max_retries {
+                    let delay_millis = match 1_u64.checked_shl(attempt) {
+                        Some(multiplier) => base_ms.saturating_mul(multiplier).min(*max_ms),
+                        None => *max_ms,
+                    };
+                    add_millis_saturating(&mut total_millis, u128::from(delay_millis));
+                    attempt = attempt.saturating_add(1);
+
+                    if delay_millis == *max_ms {
+                        let remaining = u128::from(self.max_retries.saturating_sub(attempt));
+                        add_millis_saturating(
+                            &mut total_millis,
+                            u128::from(*max_ms).saturating_mul(remaining),
+                        );
+                        break;
+                    }
+                }
+                duration_from_millis_saturating(total_millis)
+            }
         }
-        total
     }
 }
 
@@ -387,6 +454,77 @@ mod tests {
     fn total_max_delay_zero_retries() {
         let policy = RetryPolicy::no_retry();
         assert_eq!(policy.total_max_delay(), Duration::ZERO);
+    }
+
+    #[test]
+    fn total_max_delay_fixed_saturates_without_iterating() {
+        let policy = RetryPolicy::new(u32::MAX, BackoffStrategy::Fixed { delay_ms: u64::MAX });
+        assert_eq!(policy.total_max_delay(), Duration::MAX);
+    }
+
+    #[test]
+    fn total_max_delay_linear_handles_large_retry_counts() {
+        let policy = RetryPolicy::new(
+            u32::MAX,
+            BackoffStrategy::Linear {
+                base_ms: 1,
+                max_ms: 10,
+            },
+        );
+        assert_eq!(
+            policy.total_max_delay(),
+            Duration::from_millis(10_u64.saturating_mul(u64::from(u32::MAX)) - 45)
+        );
+    }
+
+    #[test]
+    fn total_max_delay_exponential_saturates_after_cap() {
+        let policy = RetryPolicy::new(
+            6,
+            BackoffStrategy::Exponential {
+                base_ms: 10,
+                max_ms: 35,
+            },
+        );
+        assert_eq!(
+            policy.total_max_delay(),
+            Duration::from_millis(10 + 20 + 35 * 4)
+        );
+    }
+
+    #[test]
+    fn total_max_delay_matches_delay_sequence_for_representative_policies() {
+        let policies = [
+            RetryPolicy::new(5, BackoffStrategy::Fixed { delay_ms: 7 }),
+            RetryPolicy::new(
+                6,
+                BackoffStrategy::Linear {
+                    base_ms: 3,
+                    max_ms: 10,
+                },
+            ),
+            RetryPolicy::new(
+                4,
+                BackoffStrategy::Linear {
+                    base_ms: 10,
+                    max_ms: 3,
+                },
+            ),
+            RetryPolicy::new(
+                6,
+                BackoffStrategy::Exponential {
+                    base_ms: 2,
+                    max_ms: 9,
+                },
+            ),
+        ];
+
+        for policy in policies {
+            let expected_millis = (0..policy.max_retries)
+                .map(|attempt| policy.delay(attempt).as_millis())
+                .sum::<u128>();
+            assert_eq!(policy.total_max_delay().as_millis(), expected_millis);
+        }
     }
 
     #[test]

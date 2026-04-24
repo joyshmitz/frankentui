@@ -187,15 +187,21 @@ pub enum ToastEntranceAnimation {
 }
 
 impl ToastEntranceAnimation {
+    fn offset_from_dimension(value: u16) -> i16 {
+        i16::try_from(value).unwrap_or(i16::MAX)
+    }
+
     /// Get the initial offset for this entrance animation.
     ///
     /// Returns (dx, dy) offset in cells from the final position.
     pub fn initial_offset(self, toast_width: u16, toast_height: u16) -> (i16, i16) {
+        let width_offset = Self::offset_from_dimension(toast_width);
+        let height_offset = Self::offset_from_dimension(toast_height);
         match self {
-            Self::SlideFromTop => (0, -(toast_height as i16)),
-            Self::SlideFromRight => (toast_width as i16, 0),
-            Self::SlideFromBottom => (0, toast_height as i16),
-            Self::SlideFromLeft => (-(toast_width as i16), 0),
+            Self::SlideFromTop => (0, -height_offset),
+            Self::SlideFromRight => (width_offset, 0),
+            Self::SlideFromBottom => (0, height_offset),
+            Self::SlideFromLeft => (-width_offset, 0),
             Self::FadeIn | Self::None => (0, 0),
         }
     }
@@ -252,16 +258,18 @@ impl ToastExitAnimation {
         toast_height: u16,
         entrance: ToastEntranceAnimation,
     ) -> (i16, i16) {
+        let width_offset = ToastEntranceAnimation::offset_from_dimension(toast_width);
+        let height_offset = ToastEntranceAnimation::offset_from_dimension(toast_height);
         match self {
             Self::SlideOut => {
                 // Reverse of entrance direction
                 let (dx, dy) = entrance.initial_offset(toast_width, toast_height);
                 (-dx, -dy)
             }
-            Self::SlideToTop => (0, -(toast_height as i16)),
-            Self::SlideToRight => (toast_width as i16, 0),
-            Self::SlideToBottom => (0, toast_height as i16),
-            Self::SlideToLeft => (-(toast_width as i16), 0),
+            Self::SlideToTop => (0, -height_offset),
+            Self::SlideToRight => (width_offset, 0),
+            Self::SlideToBottom => (0, height_offset),
+            Self::SlideToLeft => (-width_offset, 0),
             Self::FadeOut | Self::None => (0, 0),
         }
     }
@@ -2590,6 +2598,22 @@ mod tests {
         assert_eq!(dy, 0);
     }
 
+    #[test]
+    fn entrance_offsets_saturate_large_dimensions() {
+        assert_eq!(
+            ToastEntranceAnimation::SlideFromRight.initial_offset(u16::MAX, u16::MAX),
+            (i16::MAX, 0)
+        );
+        assert_eq!(
+            ToastEntranceAnimation::SlideFromLeft.initial_offset(u16::MAX, u16::MAX),
+            (-i16::MAX, 0)
+        );
+        assert_eq!(
+            ToastEntranceAnimation::SlideFromTop.initial_offset(u16::MAX, u16::MAX),
+            (0, -i16::MAX)
+        );
+    }
+
     // =========================================================================
     // Exit animation all variants (bd-9vqk6)
     // =========================================================================
@@ -2650,6 +2674,23 @@ mod tests {
 
         let (dx, dy) = ToastExitAnimation::SlideToTop.offset_at_progress(5.0, 20, 5, entrance);
         assert_eq!((dx, dy), (0, -5)); // Clamped to 1.0
+    }
+
+    #[test]
+    fn exit_offsets_saturate_large_dimensions() {
+        let entrance = ToastEntranceAnimation::SlideFromRight;
+        assert_eq!(
+            ToastExitAnimation::SlideToRight.final_offset(u16::MAX, u16::MAX, entrance),
+            (i16::MAX, 0)
+        );
+        assert_eq!(
+            ToastExitAnimation::SlideToBottom.final_offset(u16::MAX, u16::MAX, entrance),
+            (0, i16::MAX)
+        );
+        assert_eq!(
+            ToastExitAnimation::SlideOut.final_offset(u16::MAX, u16::MAX, entrance),
+            (-i16::MAX, 0)
+        );
     }
 
     // =========================================================================

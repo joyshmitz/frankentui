@@ -149,7 +149,7 @@ pub enum BackoffStrategy {
     Fixed { delay_ms: u64 },
     /// Exponential backoff: `base_ms * multiplier^attempt`.
     Exponential { base_ms: u64, multiplier_x100: u64 },
-    /// Linear backoff: `base_ms * attempt`.
+    /// Linear backoff: `base_ms * (attempt + 1)`.
     Linear { base_ms: u64 },
 }
 
@@ -450,10 +450,22 @@ pub fn compute_retry_delay(backoff: &BackoffStrategy, attempt: u32) -> u64 {
             multiplier_x100,
         } => {
             let multiplier = *multiplier_x100 as f64 / 100.0;
-            let delay = *base_ms as f64 * multiplier.powi(attempt as i32);
-            delay.round() as u64
+            let delay = *base_ms as f64 * multiplier.powf(f64::from(attempt));
+            round_nonnegative_f64_to_u64_saturating(delay)
         }
-        BackoffStrategy::Linear { base_ms } => base_ms * (attempt as u64 + 1),
+        BackoffStrategy::Linear { base_ms } => {
+            base_ms.saturating_mul(u64::from(attempt).saturating_add(1))
+        }
+    }
+}
+
+fn round_nonnegative_f64_to_u64_saturating(value: f64) -> u64 {
+    if value.is_nan() || value <= 0.0 {
+        0
+    } else if value >= u64::MAX as f64 {
+        u64::MAX
+    } else {
+        value.round() as u64
     }
 }
 
@@ -868,6 +880,21 @@ mod tests {
         assert_eq!(compute_retry_delay(&backoff, 0), 500); // 500 * 1
         assert_eq!(compute_retry_delay(&backoff, 1), 1000); // 500 * 2
         assert_eq!(compute_retry_delay(&backoff, 2), 1500); // 500 * 3
+    }
+
+    #[test]
+    fn linear_backoff_saturates_on_overflow() {
+        let backoff = BackoffStrategy::Linear { base_ms: u64::MAX };
+        assert_eq!(compute_retry_delay(&backoff, 1), u64::MAX);
+    }
+
+    #[test]
+    fn exponential_backoff_large_attempt_saturates_without_wrapping() {
+        let backoff = BackoffStrategy::Exponential {
+            base_ms: 1,
+            multiplier_x100: 200,
+        };
+        assert_eq!(compute_retry_delay(&backoff, u32::MAX), u64::MAX);
     }
 
     #[test]
