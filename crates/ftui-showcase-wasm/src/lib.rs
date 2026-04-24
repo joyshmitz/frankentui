@@ -917,6 +917,63 @@ mod tests {
     }
 
     #[test]
+    fn runner_core_pane_context_lost_releases_active_capture() {
+        let mut core = RunnerCore::new(80, 24);
+        core.init();
+        let modifiers = PaneModifierSnapshot::default();
+
+        let down = core.pane_pointer_down(
+            test_target(),
+            97,
+            PanePointerButton::Primary,
+            11,
+            9,
+            modifiers,
+        );
+        assert!(down.accepted());
+        let acquired = core.pane_capture_acquired(97);
+        assert!(acquired.accepted());
+
+        let context_lost = core.pane_context_lost();
+        assert!(context_lost.accepted());
+        assert!(matches!(
+            context_lost.outcome,
+            PaneDispatchOutcome::SemanticForwarded
+        ));
+        assert_eq!(
+            context_lost.capture_command,
+            Some(PanePointerCaptureCommand::Release { pointer_id: 97 })
+        );
+        assert_eq!(core.pane_active_pointer_id(), None);
+    }
+
+    #[test]
+    fn runner_core_pane_render_stalled_before_capture_ack_cancels_without_release() {
+        let mut core = RunnerCore::new(80, 24);
+        core.init();
+        let modifiers = PaneModifierSnapshot::default();
+
+        let down = core.pane_pointer_down(
+            test_target(),
+            98,
+            PanePointerButton::Primary,
+            12,
+            9,
+            modifiers,
+        );
+        assert!(down.accepted());
+
+        let stalled = core.pane_render_stalled();
+        assert!(stalled.accepted());
+        assert!(matches!(
+            stalled.outcome,
+            PaneDispatchOutcome::SemanticForwarded
+        ));
+        assert_eq!(stalled.capture_command, None);
+        assert_eq!(core.pane_active_pointer_id(), None);
+    }
+
+    #[test]
     fn runner_core_pane_logs_are_drained_with_take_logs() {
         let mut core = RunnerCore::new(80, 24);
         core.init();
