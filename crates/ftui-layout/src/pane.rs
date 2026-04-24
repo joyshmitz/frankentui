@@ -1097,6 +1097,8 @@ pub enum PaneCancelReason {
     FocusLost,
     Blur,
     Programmatic,
+    ContextLost,
+    RenderStalled,
 }
 
 /// Versioned semantic pane interaction event kind.
@@ -1671,6 +1673,8 @@ fn pane_semantic_input_trace_checksum_payload(
             PaneCancelReason::FocusLost => 3,
             PaneCancelReason::Blur => 4,
             PaneCancelReason::Programmatic => 5,
+            PaneCancelReason::ContextLost => 6,
+            PaneCancelReason::RenderStalled => 7,
         };
         mix(hash, value);
     }

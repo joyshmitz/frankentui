@@ -707,6 +707,20 @@ impl RunnerCore {
         self.record_pane_dispatch(dispatch)
     }
 
+    /// Handle host rendering context loss for pane interaction lifecycle.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub fn pane_context_lost(&mut self) -> PaneDispatchSummary {
+        let dispatch = self.pane_adapter.context_lost();
+        self.record_pane_dispatch(dispatch)
+    }
+
+    /// Handle host render stalls that interrupt pane interaction lifecycle.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub fn pane_render_stalled(&mut self) -> PaneDispatchSummary {
+        let dispatch = self.pane_adapter.render_stalled();
+        self.record_pane_dispatch(dispatch)
+    }
+
     fn viewport_rect(&self) -> Rect {
         let (width, height) = self.inner.size();
         Rect::new(0, 0, width.max(1), height.max(1))
@@ -970,7 +984,9 @@ impl RunnerCore {
             | PanePointerLifecyclePhase::PointerLeave
             | PanePointerLifecyclePhase::Blur
             | PanePointerLifecyclePhase::VisibilityHidden
-            | PanePointerLifecyclePhase::LostPointerCapture => {
+            | PanePointerLifecyclePhase::LostPointerCapture
+            | PanePointerLifecyclePhase::ContextLost
+            | PanePointerLifecyclePhase::RenderStalled => {
                 self.hover_pointer = None;
             }
             PanePointerLifecyclePhase::CaptureAcquired => {}
@@ -1029,6 +1045,8 @@ fn format_pane_log_entry(log: PanePointerLogEntry) -> String {
         PanePointerLifecyclePhase::Blur => "blur",
         PanePointerLifecyclePhase::VisibilityHidden => "visibility_hidden",
         PanePointerLifecyclePhase::LostPointerCapture => "lost_pointer_capture",
+        PanePointerLifecyclePhase::ContextLost => "context_lost",
+        PanePointerLifecyclePhase::RenderStalled => "render_stalled",
         PanePointerLifecyclePhase::CaptureAcquired => "capture_acquired",
     };
     let pointer_id = log

@@ -177,6 +177,8 @@ pub enum PanePointerLifecyclePhase {
     Blur,
     VisibilityHidden,
     LostPointerCapture,
+    ContextLost,
+    RenderStalled,
     CaptureAcquired,
 }
 
@@ -635,6 +637,26 @@ impl PanePointerCaptureAdapter {
             Some(pointer_id),
             PaneCancelReason::PointerCancel,
             false,
+        )
+    }
+
+    /// Handle WebGPU or host rendering context loss.
+    pub fn context_lost(&mut self) -> PanePointerDispatch {
+        self.cancel_active(
+            PanePointerLifecyclePhase::ContextLost,
+            None,
+            PaneCancelReason::ContextLost,
+            true,
+        )
+    }
+
+    /// Handle a host render stall that interrupts an active pane gesture.
+    pub fn render_stalled(&mut self) -> PanePointerDispatch {
+        self.cancel_active(
+            PanePointerLifecyclePhase::RenderStalled,
+            None,
+            PaneCancelReason::RenderStalled,
+            true,
         )
     }
 
@@ -1259,5 +1281,70 @@ mod tests {
             PanePointerLogOutcome::Ignored(PanePointerIgnoredReason::LeaveWhileCaptured)
         );
         assert_eq!(adapter.active_pointer_id(), Some(55));
+    }
+
+    #[test]
+    fn context_lost_releases_capture_and_cancels_with_explicit_reason() {
+        let mut adapter = adapter();
+        adapter.pointer_down(
+            target(),
+            91,
+            PanePointerButton::Primary,
+            pos(5, 5),
+            PaneModifierSnapshot::default(),
+        );
+        let ack = adapter.capture_acquired(91);
+        assert_eq!(ack.log.outcome, PanePointerLogOutcome::CaptureStateUpdated);
+
+        let dispatch = adapter.context_lost();
+
+        assert_eq!(dispatch.log.phase, PanePointerLifecyclePhase::ContextLost);
+        assert!(matches!(
+            dispatch
+                .semantic_event
+                .as_ref()
+                .expect("semantic event expected")
+                .kind,
+            PaneSemanticInputEventKind::Cancel {
+                reason: PaneCancelReason::ContextLost,
+                ..
+            }
+        ));
+        assert_eq!(
+            dispatch.capture_command,
+            Some(PanePointerCaptureCommand::Release { pointer_id: 91 })
+        );
+        assert_eq!(adapter.active_pointer_id(), None);
+        assert_eq!(adapter.machine_state(), PaneDragResizeState::Idle);
+    }
+
+    #[test]
+    fn render_stalled_before_capture_ack_cancels_without_release() {
+        let mut adapter = adapter();
+        adapter.pointer_down(
+            target(),
+            92,
+            PanePointerButton::Primary,
+            pos(8, 6),
+            PaneModifierSnapshot::default(),
+        );
+
+        let dispatch = adapter.render_stalled();
+
+        assert_eq!(dispatch.log.phase, PanePointerLifecyclePhase::RenderStalled);
+        assert!(matches!(
+            dispatch
+                .semantic_event
+                .as_ref()
+                .expect("semantic event expected")
+                .kind,
+            PaneSemanticInputEventKind::Cancel {
+                reason: PaneCancelReason::RenderStalled,
+                ..
+            }
+        ));
+        assert_eq!(dispatch.capture_command, None);
+        assert_eq!(adapter.active_pointer_id(), None);
+        assert_eq!(adapter.machine_state(), PaneDragResizeState::Idle);
     }
 }
