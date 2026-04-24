@@ -564,6 +564,8 @@ impl FocusManager {
     }
 
     pub(crate) fn repair_focus_after_excluding_ids(&mut self, excluded: &[FocusId]) {
+        self.history.retain(|id| !excluded.contains(id));
+
         if !self.host_focused {
             if self.current.is_some_and(|id| excluded.contains(&id)) {
                 let _ = self.blur();

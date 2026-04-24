@@ -862,6 +862,27 @@ mod tests {
     }
 
     #[test]
+    fn pop_discards_closed_modal_focus_history() {
+        let mut modals = FocusAwareModalStack::new();
+        for id in 1..=3 {
+            modals
+                .focus_manager_mut()
+                .graph_mut()
+                .insert(make_focus_node(id));
+        }
+
+        modals.focus(1);
+        modals.push_with_trap(Box::new(WidgetModalEntry::new(StubWidget)), vec![2, 3]);
+        assert_eq!(modals.focus(3), Some(2));
+
+        let result = modals.pop();
+        assert!(result.is_some());
+        assert_eq!(modals.focus_manager().current(), Some(1));
+        assert!(!modals.focus_manager_mut().focus_back());
+        assert_eq!(modals.focus_manager().current(), Some(1));
+    }
+
+    #[test]
     fn pop_skips_closed_modal_focus_ids_when_background_focus_disappears() {
         let mut modals = FocusAwareModalStack::new();
         modals
