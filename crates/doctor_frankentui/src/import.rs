@@ -480,8 +480,10 @@ fn materialize_git_snapshot(
     commit: &str,
     snapshot_dir: &Path,
 ) -> std::result::Result<(), IntakeFailure> {
+    let command_cwd = stable_command_cwd();
     let mut git_archive = Command::new("git");
     git_archive
+        .current_dir(&command_cwd)
         .arg("-C")
         .arg(repo_dir)
         .arg("archive")
@@ -505,6 +507,7 @@ fn materialize_git_snapshot(
     })?;
 
     let tar_output = Command::new("tar")
+        .current_dir(&command_cwd)
         .arg("-xf")
         .arg("-")
         .arg("-C")
@@ -988,8 +991,8 @@ fn package_json_has_dependency(parsed: &serde_json::Value, dep_name: &str) -> bo
     })
 }
 
-fn package_json_script_contains(parsed: &serde_json::Value, token: &str) -> bool {
-    let token = token.to_ascii_lowercase();
+fn package_json_script_contains(parsed: &serde_json::Value, script_fragment: &str) -> bool {
+    let script_fragment = script_fragment.to_ascii_lowercase();
     parsed
         .get("scripts")
         .and_then(serde_json::Value::as_object)
@@ -997,7 +1000,7 @@ fn package_json_script_contains(parsed: &serde_json::Value, token: &str) -> bool
             scripts.values().any(|value| {
                 value
                     .as_str()
-                    .is_some_and(|script| script.to_ascii_lowercase().contains(token.as_str()))
+                    .is_some_and(|script| script.to_ascii_lowercase().contains(&script_fragment))
             })
         })
 }
@@ -1400,6 +1403,7 @@ fn ensure_required_command(
 
 fn is_git_work_tree(path: &Path) -> std::result::Result<bool, IntakeFailure> {
     let output = Command::new("git")
+        .current_dir(stable_command_cwd())
         .arg("-C")
         .arg(path)
         .arg("rev-parse")
@@ -1424,6 +1428,10 @@ fn run_git_command_with_classification(
     label: &str,
     fallback_class: IntakeErrorClass,
 ) -> std::result::Result<std::process::Output, IntakeFailure> {
+    if command.get_current_dir().is_none() {
+        command.current_dir(stable_command_cwd());
+    }
+
     let output = command.output().map_err(|error| {
         IntakeFailure::new(
             fallback_class,
@@ -1447,6 +1455,10 @@ fn run_git_command_with_classification(
         class,
         format!("{label} failed: {}", normalize_stderr(&stderr)),
     ))
+}
+
+fn stable_command_cwd() -> PathBuf {
+    std::env::temp_dir()
 }
 
 fn detect_source_kind(source: &str) -> SourceKind {
@@ -1557,6 +1569,7 @@ mod tests {
 
     fn run_git(repo: &Path, args: &[&str]) {
         let status = Command::new("git")
+            .current_dir(super::stable_command_cwd())
             .arg("-C")
             .arg(repo)
             .args(args)
@@ -1567,6 +1580,7 @@ mod tests {
 
     fn git_stdout(repo: &Path, args: &[&str]) -> String {
         let output = Command::new("git")
+            .current_dir(super::stable_command_cwd())
             .arg("-C")
             .arg(repo)
             .args(args)
@@ -1753,9 +1767,12 @@ mod tests {
         fs::create_dir_all(&outside).expect("create outside dir");
         fs::write(source.join("package.json"), r#"{"name":"fixture"}"#)
             .expect("write package json");
-        fs::write(outside.join("secret.ts"), "export const secret = true;\n")
-            .expect("write outside file");
-        symlink(outside.join("secret.ts"), source.join("escape.ts"))
+        fs::write(
+            outside.join("outside-data.ts"),
+            "export const outsideData = true;\n",
+        )
+        .expect("write outside file");
+        symlink(outside.join("outside-data.ts"), source.join("escape.ts"))
             .expect("create escape symlink");
 
         let args = ImportArgs {

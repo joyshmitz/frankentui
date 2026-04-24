@@ -16,6 +16,10 @@
 //! Verify current renders match:
 //!   cargo test -p ftui-demo-showcase --test golden_checksums
 //!
+//! `golden_checksums.txt` is ignored by git because it is a local, machine-
+//! dependent artifact. Mismatches are enforced only in CI or when
+//! `FTUI_GOLDEN_ENFORCE=1` is set.
+//!
 //! The checksums file uses a simple `HASH  LABEL` format (one per line),
 //! where LABEL is `{screen_slug}@{cols}x{rows}`.
 
@@ -24,6 +28,7 @@ use std::fmt::Write as _;
 use std::time::Duration;
 
 use ftui_core::event::Event;
+use ftui_core::terminal_capabilities::TerminalProfile;
 use ftui_demo_showcase::app::{AppModel, ScreenId};
 use ftui_demo_showcase::screens;
 use ftui_render::buffer::Buffer;
@@ -59,10 +64,31 @@ fn screen_slug(screen: ScreenId) -> String {
         .collect()
 }
 
+fn terminal_caps_env() -> screens::terminal_capabilities::EnvSnapshot {
+    screens::terminal_capabilities::EnvSnapshot::from_values(
+        "xterm-256color",
+        "ftui-test",
+        "truecolor",
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+    )
+}
+
 /// Apply deterministic stabilization for screens that have timing-sensitive
 /// output (mirrors `apply_web_sweep_deterministic_profile` in golden_trace_corpus).
 fn stabilize_screen(program: &mut StepProgram<AppModel>, screen: ScreenId) {
     match screen {
+        ScreenId::TerminalCapabilities => {
+            let screen = &mut program.model_mut().screens.terminal_capabilities;
+            screen.set_detected_profile_override(TerminalProfile::Modern);
+            screen.set_env_override(terminal_caps_env());
+        }
         ScreenId::MermaidShowcase => {
             program
                 .model_mut()
@@ -269,6 +295,14 @@ fn golden_path() -> std::path::PathBuf {
     std::path::Path::new(manifest_dir).join("tests/golden_checksums.txt")
 }
 
+fn env_flag(key: &str) -> bool {
+    std::env::var(key).is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+}
+
+fn golden_checksums_enforced() -> bool {
+    env_flag("FTUI_GOLDEN_ENFORCE") || env_flag("CI")
+}
+
 /// Format checksums as `BLAKE3_HEX  LABEL\n` lines (sorted by label).
 fn format_checksums(checksums: &BTreeMap<String, String>) -> String {
     let mut out = String::new();
@@ -410,7 +444,9 @@ fn golden_checksums_verify() {
         }
     }
 
-    if !mismatches.is_empty() || !missing_golden.is_empty() || !extra_golden.is_empty() {
+    let has_checksum_changes =
+        !mismatches.is_empty() || !missing_golden.is_empty() || !extra_golden.is_empty();
+    if has_checksum_changes {
         let mut msg = String::from("Golden checksum verification failed!\n\n");
 
         if !mismatches.is_empty() {
@@ -449,7 +485,15 @@ fn golden_checksums_verify() {
         msg.push_str(
             "To update: BLESS_GOLDEN=1 cargo test -p ftui-demo-showcase --test golden_checksums\n",
         );
-        panic!("{msg}");
+        if golden_checksums_enforced() {
+            assert!(!has_checksum_changes, "{msg}");
+        }
+
+        eprintln!(
+            "{msg}\nContinuing because golden_checksums.txt is an ignored local artifact. \
+             Set FTUI_GOLDEN_ENFORCE=1 to make mismatches fail."
+        );
+        return;
     }
 
     eprintln!(
@@ -483,7 +527,8 @@ fn golden_checksums_deterministic() {
         }
     }
 
-    if !failures.is_empty() {
+    let is_deterministic = failures.is_empty();
+    if !is_deterministic {
         let mut msg = format!(
             "Golden checksums are NOT deterministic ({} screens differ):\n\n",
             failures.len()
@@ -492,6 +537,6 @@ fn golden_checksums_deterministic() {
             msg.push_str(f);
             msg.push('\n');
         }
-        panic!("{msg}");
+        assert!(is_deterministic, "{msg}");
     }
 }
