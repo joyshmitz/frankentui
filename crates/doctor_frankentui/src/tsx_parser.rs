@@ -1254,10 +1254,11 @@ fn resolve_cross_file_symbols(project: &mut ProjectParse) {
 // ── Utilities ────────────────────────────────────────────────────────────
 
 fn truncate_snippet(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
+    if s.chars().count() <= max_len {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len])
+        let prefix = s.chars().take(max_len).collect::<String>();
+        format!("{prefix}...")
     }
 }
 
@@ -1768,6 +1769,12 @@ function Real() {
     fn truncate_snippet_works() {
         assert_eq!(truncate_snippet("short", 10), "short");
         assert_eq!(truncate_snippet("a long string here", 5), "a lon...");
+    }
+
+    #[test]
+    fn truncate_snippet_handles_unicode_boundaries() {
+        assert_eq!(truncate_snippet("éclair", 1), "é...");
+        assert_eq!(truncate_snippet("αβγδε", 3), "αβγ...");
     }
 
     #[test]

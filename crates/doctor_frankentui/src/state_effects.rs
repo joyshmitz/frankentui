@@ -788,10 +788,11 @@ fn classify_effect_capabilities(
 
 fn truncate_evidence(snippet: &str, max: usize) -> String {
     let collapsed = snippet.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.len() <= max {
+    if collapsed.chars().count() <= max {
         collapsed
     } else {
-        format!("{}...", &collapsed[..max])
+        let prefix = collapsed.chars().take(max).collect::<String>();
+        format!("{prefix}...")
     }
 }
 
@@ -1526,6 +1527,15 @@ function ThemeProvider() {
         );
         assert!(required.contains(&Capability::KeyboardInput));
         assert!(!assumptions.is_empty());
+    }
+
+    #[test]
+    fn truncate_evidence_handles_unicode_boundaries() {
+        assert_eq!(truncate_evidence("ééé document.title", 1), "é...");
+        assert_eq!(
+            truncate_evidence("window.document.title = 'ééé';", 26),
+            "window.document.title = 'é..."
+        );
     }
 
     #[test]
