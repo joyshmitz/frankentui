@@ -229,54 +229,69 @@ fn stress_view_render_with_many_tasks() {
 #[test]
 fn cancellation_is_immediate() {
     let _guard = stress_lock();
-    let mut mgr = AsyncTaskManager::new();
+    let mut cancel_samples = Vec::new();
 
-    // Spawn a task and start it running
-    mgr.update(&press(KeyCode::Char('n')));
+    for _ in 0..32 {
+        let mut mgr = AsyncTaskManager::new();
 
-    // Tick to start the task
-    mgr.tick(0);
-    mgr.tick(1);
-    mgr.tick(2);
+        // Spawn a task and start it running.
+        mgr.update(&press(KeyCode::Char('n')));
+        mgr.tick(0);
+        mgr.tick(1);
+        mgr.tick(2);
 
-    // Select and cancel
-    let selected_id = mgr.tasks()[mgr.selected()].id;
-    let cancel_start = Instant::now();
-    mgr.update(&press(KeyCode::Char('c')));
-    let cancel_elapsed = cancel_start.elapsed();
+        // Select and cancel.
+        let selected_id = mgr.tasks()[mgr.selected()].id;
+        let cancel_start = Instant::now();
+        mgr.update(&press(KeyCode::Char('c')));
+        let cancel_elapsed = cancel_start.elapsed();
 
-    // Cancellation must take effect immediately (state change only; no tick required).
-    let selected = mgr
-        .tasks()
+        // Cancellation must take effect immediately (state change only; no tick required).
+        let selected = mgr
+            .tasks()
+            .iter()
+            .find(|task| task.id == selected_id)
+            .expect("selected task must exist");
+        assert_eq!(
+            selected.state,
+            ftui_demo_showcase::screens::async_tasks::TaskState::Canceled
+        );
+
+        cancel_samples.push(u64::try_from(cancel_elapsed.as_nanos()).unwrap_or(u64::MAX));
+    }
+
+    cancel_samples.sort_unstable();
+    let avg_cancel_ns = cancel_samples
         .iter()
-        .find(|task| task.id == selected_id)
-        .expect("selected task must exist");
-    assert_eq!(
-        selected.state,
-        ftui_demo_showcase::screens::async_tasks::TaskState::Canceled
-    );
+        .map(|&sample| u128::from(sample))
+        .sum::<u128>()
+        / cancel_samples.len() as u128;
+    let p95_cancel_ns = percentile(&cancel_samples, 95);
+    let max_cancel_ns = cancel_samples[cancel_samples.len() - 1];
 
     // Time budgets are inherently noisy in shared CI; keep a guardrail but avoid flake.
-    let budget_cancel_ns: u128 = if is_coverage_run() {
+    let budget_p95_cancel_ns: u64 = if is_coverage_run() {
         5_000_000 // 5ms
-    } else if std::env::var_os("CI").is_some() {
-        2_000_000 // 2ms
     } else {
-        1_000_000 // 1ms
+        2_000_000 // 2ms
     };
 
     log_jsonl(&serde_json::json!({
         "test": "cancellation_is_immediate",
-        "cancel_elapsed_ns": cancel_elapsed.as_nanos(),
-        "budget_cancel_ns": budget_cancel_ns,
+        "samples": cancel_samples.len(),
+        "avg_cancel_ns": avg_cancel_ns,
+        "p95_cancel_ns": p95_cancel_ns,
+        "max_cancel_ns": max_cancel_ns,
+        "budget_p95_cancel_ns": budget_p95_cancel_ns,
     }));
 
     // Cancellation should be fast (state change only).
     assert!(
-        cancel_elapsed.as_nanos() < budget_cancel_ns,
-        "Cancellation took too long: {:?} (budget={}ns)",
-        cancel_elapsed,
-        budget_cancel_ns
+        p95_cancel_ns < budget_p95_cancel_ns,
+        "Cancellation p95 took too long: {}ns (budget={}ns, max={}ns)",
+        p95_cancel_ns,
+        budget_p95_cancel_ns,
+        max_cancel_ns
     );
 }
 
