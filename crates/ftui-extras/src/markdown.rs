@@ -2515,6 +2515,13 @@ mod tests {
             .join("\n")
     }
 
+    fn math_cache_len(renderer: &MarkdownRenderer) -> usize {
+        match renderer.math_cache.lock() {
+            Ok(cache) => cache.len(),
+            Err(poisoned) => poisoned.into_inner().len(),
+        }
+    }
+
     // =========================================================================
     // Basic Markdown tests (existing)
     // =========================================================================
@@ -3250,10 +3257,7 @@ The end.
 
         assert_eq!(first, second);
         assert!(plain(&first).contains('α'));
-        assert_eq!(
-            renderer.math_cache.lock().expect("math cache lock").len(),
-            1
-        );
+        assert_eq!(math_cache_len(&renderer), 1);
     }
 
     #[test]
@@ -3266,10 +3270,7 @@ The end.
 
         assert_eq!(first, second);
         assert!(plain(&first).contains('√'));
-        assert_eq!(
-            renderer.math_cache.lock().expect("math cache lock").len(),
-            1
-        );
+        assert_eq!(math_cache_len(&renderer), 1);
     }
 
     #[test]
