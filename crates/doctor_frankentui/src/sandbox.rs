@@ -1089,13 +1089,18 @@ fn glob_match_inner(pattern: &str, path: &str) -> bool {
         match pc {
             '*' => {
                 let rest_pattern: String = pat_chars.collect();
-                // Try matching rest of pattern at every position.
+                // Try matching rest of pattern after consuming any number of
+                // non-separator UTF-8 characters.
                 let remaining: String = path_chars.collect();
-                for i in 0..=remaining.len() {
-                    if i > 0 && remaining.as_bytes()[i - 1] == b'/' {
+                if glob_match_inner(&rest_pattern, &remaining) {
+                    return true;
+                }
+                for (i, ch) in remaining.char_indices() {
+                    if ch == '/' {
                         break; // * doesn't cross /
                     }
-                    if glob_match_inner(&rest_pattern, &remaining[i..]) {
+                    let next = i + ch.len_utf8();
+                    if glob_match_inner(&rest_pattern, &remaining[next..]) {
                         return true;
                     }
                 }
@@ -1142,6 +1147,13 @@ mod tests {
     #[test]
     fn glob_star_does_not_cross_separator() {
         assert!(!glob_match("*.txt", "dir/foo.txt"));
+    }
+
+    #[test]
+    fn glob_star_handles_non_ascii_without_byte_boundary_panic() {
+        assert!(glob_match("*.txt", "café.txt"));
+        assert!(glob_match("caf*.txt", "café.txt"));
+        assert!(!glob_match("caf*.rs", "café.txt"));
     }
 
     #[test]

@@ -1050,13 +1050,7 @@ impl Toast {
     pub fn is_expired(&self) -> bool {
         if let Some(duration) = self.config.duration {
             let wall_elapsed = self.state.created_at.elapsed();
-            let mut paused = self.state.total_paused;
-            if self.state.timer_paused
-                && let Some(pause_start) = self.state.pause_started
-            {
-                paused += pause_start.elapsed();
-            }
-            let effective_elapsed = wall_elapsed.saturating_sub(paused);
+            let effective_elapsed = wall_elapsed.saturating_sub(self.paused_duration());
             effective_elapsed >= duration
         } else {
             false
@@ -1129,13 +1123,7 @@ impl Toast {
     pub fn remaining_time(&self) -> Option<Duration> {
         self.config.duration.map(|d| {
             let wall_elapsed = self.state.created_at.elapsed();
-            let mut paused = self.state.total_paused;
-            if self.state.timer_paused
-                && let Some(pause_start) = self.state.pause_started
-            {
-                paused += pause_start.elapsed();
-            }
-            let effective_elapsed = wall_elapsed.saturating_sub(paused);
+            let effective_elapsed = wall_elapsed.saturating_sub(self.paused_duration());
             d.saturating_sub(effective_elapsed)
         })
     }
@@ -1203,7 +1191,10 @@ impl Toast {
     pub fn resume_timer(&mut self) {
         if self.state.timer_paused {
             if let Some(pause_start) = self.state.pause_started.take() {
-                self.state.total_paused += pause_start.elapsed();
+                self.state.total_paused = self
+                    .state
+                    .total_paused
+                    .saturating_add(pause_start.elapsed());
             }
             self.state.timer_paused = false;
         }
@@ -1226,6 +1217,16 @@ impl Toast {
         self.state
             .focused_action
             .and_then(|idx| self.actions.get(idx))
+    }
+
+    fn paused_duration(&self) -> Duration {
+        let mut paused = self.state.total_paused;
+        if self.state.timer_paused
+            && let Some(pause_start) = self.state.pause_started
+        {
+            paused = paused.saturating_add(pause_start.elapsed());
+        }
+        paused
     }
 
     /// Calculate the toast dimensions based on content.
@@ -2274,6 +2275,29 @@ mod tests {
         toast.resume_timer();
         toast.resume_timer();
         assert!(!toast.state.timer_paused);
+    }
+
+    #[test]
+    fn resume_timer_saturates_paused_duration() {
+        let mut toast = Toast::new("msg").no_animation();
+        toast.state.total_paused = Duration::MAX;
+        toast.pause_timer();
+        std::thread::sleep(Duration::from_millis(1));
+        toast.resume_timer();
+        assert_eq!(toast.state.total_paused, Duration::MAX);
+    }
+
+    #[test]
+    fn active_pause_queries_saturate_paused_duration() {
+        let mut toast = Toast::new("msg")
+            .duration(Duration::from_secs(1))
+            .no_animation();
+        toast.state.total_paused = Duration::MAX;
+        toast.pause_timer();
+        std::thread::sleep(Duration::from_millis(1));
+
+        assert!(!toast.is_expired());
+        assert_eq!(toast.remaining_time(), Some(Duration::from_secs(1)));
     }
 
     #[test]

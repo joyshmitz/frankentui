@@ -756,7 +756,7 @@ impl EventRecorder {
     pub fn resume(&mut self) {
         if self.state == RecordingState::Paused {
             if let Some(pause_start) = self.pause_start.take() {
-                self.total_paused += pause_start.elapsed();
+                self.total_paused = self.total_paused.saturating_add(pause_start.elapsed());
             }
             // Reset the inner recorder's timestamp so the next event's
             // delay is measured from the resume instant, not from the
@@ -799,7 +799,7 @@ impl EventRecorder {
     pub fn total_paused(&self) -> Duration {
         let mut total = self.total_paused;
         if let Some(pause_start) = self.pause_start {
-            total += pause_start.elapsed();
+            total = total.saturating_add(pause_start.elapsed());
         }
         total
     }
@@ -1592,6 +1592,29 @@ mod tests {
         assert_eq!(m.len(), 2);
         assert_eq!(m.bare_events()[0], key_event('a'));
         assert_eq!(m.bare_events()[1], key_event('c'));
+    }
+
+    #[test]
+    fn event_recorder_resume_saturates_total_paused() {
+        let mut rec = EventRecorder::new("test");
+        rec.start();
+        rec.total_paused = Duration::MAX;
+        rec.pause();
+        std::thread::sleep(Duration::from_millis(1));
+        rec.resume();
+
+        assert_eq!(rec.total_paused(), Duration::MAX);
+    }
+
+    #[test]
+    fn event_recorder_active_pause_saturates_total_paused_query() {
+        let mut rec = EventRecorder::new("test");
+        rec.start();
+        rec.total_paused = Duration::MAX;
+        rec.pause();
+        std::thread::sleep(Duration::from_millis(1));
+
+        assert_eq!(rec.total_paused(), Duration::MAX);
     }
 
     #[test]
