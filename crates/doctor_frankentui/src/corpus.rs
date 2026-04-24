@@ -425,6 +425,7 @@ fn acquire_from_git(
                 &entry.source_url,
                 &clone_dir.to_string_lossy(),
             ])
+            .current_dir(entry_dir)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .output()
@@ -1296,12 +1297,12 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         fs::write(src.path().join("index.tsx"), "function App() {}").unwrap();
         fs::write(
-            outside.path().join("secret.ts"),
-            "export const secret = true;\n",
+            outside.path().join("outside.ts"),
+            "export const outside_flag = true;\n",
         )
         .unwrap();
         symlink(
-            outside.path().join("secret.ts"),
+            outside.path().join("outside.ts"),
             src.path().join("escape.ts"),
         )
         .unwrap();

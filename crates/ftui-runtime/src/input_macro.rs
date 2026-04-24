@@ -165,8 +165,8 @@ pub struct MacroRecorder {
     name: String,
     terminal_size: (u16, u16),
     events: Vec<TimedEvent>,
-    start_time: Instant,
     last_event_time: Instant,
+    recorded_duration: Duration,
 }
 
 impl MacroRecorder {
@@ -177,8 +177,8 @@ impl MacroRecorder {
             name: name.into(),
             terminal_size: (80, 24),
             events: Vec::new(),
-            start_time: now,
             last_event_time: now,
+            recorded_duration: Duration::ZERO,
         }
     }
 
@@ -198,6 +198,7 @@ impl MacroRecorder {
         #[cfg(feature = "tracing")]
         tracing::debug!(event = ?event, delay = ?delay, "macro record event");
         self.events.push(TimedEvent::new(event, delay));
+        self.recorded_duration = self.recorded_duration.saturating_add(delay);
         self.last_event_time = now;
     }
 
@@ -206,8 +207,14 @@ impl MacroRecorder {
         #[cfg(feature = "tracing")]
         tracing::debug!(event = ?event, delay = ?delay, "macro record event");
         self.events.push(TimedEvent::new(event, delay));
-        // Advance the synthetic clock
-        self.last_event_time += delay;
+        self.recorded_duration = self.recorded_duration.saturating_add(delay);
+        // Advance the synthetic clock when representable. Overflow should not
+        // make explicit-delay recording panic; the accumulated duration above
+        // remains authoritative.
+        self.last_event_time = self
+            .last_event_time
+            .checked_add(delay)
+            .unwrap_or_else(Instant::now);
     }
 
     /// Get the number of events recorded so far.
@@ -217,15 +224,12 @@ impl MacroRecorder {
 
     /// Finish recording and produce the macro.
     pub fn finish(self) -> InputMacro {
-        let total_duration = self
-            .last_event_time
-            .saturating_duration_since(self.start_time);
         InputMacro {
             events: self.events,
             metadata: MacroMetadata {
                 name: self.name,
                 terminal_size: self.terminal_size,
-                total_duration,
+                total_duration: self.recorded_duration,
             },
         }
     }
@@ -489,7 +493,7 @@ impl MacroPlayback {
                     reason = "macro_empty",
                     name = %meta.name,
                     events = 0usize,
-                    duration_ms = self.input_macro.total_duration().as_millis() as u64,
+                    duration_ms = duration_millis_saturating(self.input_macro.total_duration()),
                 );
                 self.error_logged = true;
             }
@@ -506,7 +510,7 @@ impl MacroPlayback {
                 macro_event = "playback_start",
                 name = %meta.name,
                 events = self.input_macro.len(),
-                duration_ms = self.input_macro.total_duration().as_millis() as u64,
+                duration_ms = duration_millis_saturating(self.input_macro.total_duration()),
                 speed = self.speed,
                 looping = self.looping,
             );
@@ -533,7 +537,7 @@ impl MacroPlayback {
                 reason = "completed",
                 name = %meta.name,
                 events = self.input_macro.len(),
-                elapsed_ms = self.elapsed.as_millis() as u64,
+                elapsed_ms = duration_millis_saturating(self.elapsed),
                 looping = self.looping,
             );
             self.stop_logged = true;
@@ -631,6 +635,11 @@ fn duration_from_secs_f64_saturating(secs: f64) -> Duration {
         return Duration::ZERO;
     }
     Duration::try_from_secs_f64(secs).unwrap_or(Duration::MAX)
+}
+
+#[cfg(any(feature = "tracing", test))]
+fn duration_millis_saturating(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 fn loop_elapsed_remainder(elapsed: Duration, total_duration: Duration) -> Duration {
@@ -822,8 +831,8 @@ impl EventRecorder {
                 macro_event = "recorder_stop",
                 name = %meta.name,
                 events = macro_data.len(),
-                duration_ms = macro_data.total_duration().as_millis() as u64,
-                paused_ms = paused.as_millis() as u64,
+                duration_ms = duration_millis_saturating(macro_data.total_duration()),
+                paused_ms = duration_millis_saturating(paused),
                 term_cols = meta.terminal_size.0,
                 term_rows = meta.terminal_size.1,
             );
@@ -984,8 +993,8 @@ impl FilteredEventRecorder {
                 name = %meta.name,
                 events = macro_data.len(),
                 filtered,
-                duration_ms = macro_data.total_duration().as_millis() as u64,
-                paused_ms = paused.as_millis() as u64,
+                duration_ms = duration_millis_saturating(macro_data.total_duration()),
+                paused_ms = duration_millis_saturating(paused),
                 term_cols = meta.terminal_size.0,
                 term_rows = meta.terminal_size.1,
             );
@@ -1139,6 +1148,20 @@ mod tests {
         assert_eq!(m.events()[0].delay, Duration::from_millis(0));
         assert_eq!(m.events()[1].delay, Duration::from_millis(50));
         assert_eq!(m.events()[2].delay, Duration::from_millis(100));
+        assert_eq!(m.total_duration(), Duration::from_millis(150));
+    }
+
+    #[test]
+    fn recorder_explicit_delay_overflow_saturates_total_duration() {
+        let mut rec = MacroRecorder::new("huge-delay");
+        rec.record_event_with_delay(key_event('+'), Duration::MAX);
+        rec.record_event_with_delay(key_event('-'), Duration::from_millis(1));
+
+        let m = rec.finish();
+        assert_eq!(m.events()[0].delay, Duration::MAX);
+        assert_eq!(m.events()[1].delay, Duration::from_millis(1));
+        assert_eq!(m.total_duration(), Duration::MAX);
+        assert_eq!(duration_millis_saturating(m.total_duration()), u64::MAX);
     }
 
     // ---------- MacroPlayer tests ----------

@@ -268,8 +268,8 @@ pub struct InputFairnessGuard {
     processing_window: VecDeque<ProcessingRecord>,
 
     /// Accumulated processing time by event type (for Jain's index).
-    input_time_us: u64,
-    resize_time_us: u64,
+    input_time_us: u128,
+    resize_time_us: u128,
 }
 
 impl InputFairnessGuard {
@@ -398,14 +398,12 @@ impl InputFairnessGuard {
         {
             match old.event_type {
                 EventType::Input => {
-                    self.input_time_us = self
-                        .input_time_us
-                        .saturating_sub(old.duration.as_micros() as u64);
+                    self.input_time_us =
+                        self.input_time_us.saturating_sub(old.duration.as_micros());
                 }
                 EventType::Resize => {
-                    self.resize_time_us = self
-                        .resize_time_us
-                        .saturating_sub(old.duration.as_micros() as u64);
+                    self.resize_time_us =
+                        self.resize_time_us.saturating_sub(old.duration.as_micros());
                 }
                 EventType::Tick => {}
             }
@@ -414,13 +412,13 @@ impl InputFairnessGuard {
         // Add new record
         match event_type {
             EventType::Input => {
-                self.input_time_us += duration.as_micros() as u64;
+                self.input_time_us = self.input_time_us.saturating_add(duration.as_micros());
                 self.pending_input_arrival = None;
                 self.resize_dominance_count = 0; // Reset dominance on input
             }
             EventType::Resize => {
-                self.resize_time_us += duration.as_micros() as u64;
-                self.resize_dominance_count += 1;
+                self.resize_time_us = self.resize_time_us.saturating_add(duration.as_micros());
+                self.resize_dominance_count = self.resize_dominance_count.saturating_add(1);
             }
             EventType::Tick => {}
         }
@@ -585,6 +583,21 @@ mod tests {
         assert_eq!(stats.input_events, 1);
         assert_eq!(stats.resize_events, 1);
         assert_eq!(stats.tick_events, 1);
+    }
+
+    #[test]
+    fn event_processing_duration_counters_do_not_truncate() {
+        let mut guard = InputFairnessGuard::default();
+        let now = Instant::now();
+
+        guard.event_processed(EventType::Input, Duration::MAX, now);
+        guard.event_processed(EventType::Input, Duration::from_micros(1), now);
+        guard.event_processed(EventType::Resize, Duration::MAX, now);
+        guard.event_processed(EventType::Resize, Duration::from_micros(1), now);
+
+        let expected = Duration::MAX.as_micros().saturating_add(1);
+        assert_eq!(guard.input_time_us, expected);
+        assert_eq!(guard.resize_time_us, expected);
     }
 
     #[test]
