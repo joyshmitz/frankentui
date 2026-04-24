@@ -96,7 +96,7 @@ pub struct SandboxPolicy {
 /// Filesystem access policy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FsPolicy {
-    /// Allowed read paths (glob patterns). Empty = deny all.
+    /// Allowed read paths (glob patterns). Empty = deny all reads.
     pub read_allow: Vec<String>,
     /// Explicitly denied read paths (checked before allow).
     pub read_deny: Vec<String>,
@@ -606,8 +606,8 @@ impl SandboxEnforcer {
     }
 
     fn read_allowed(&self, path: &str) -> bool {
-        self.policy.fs.read_allow.is_empty()
-            || self
+        !self.policy.fs.read_allow.is_empty()
+            && self
                 .policy
                 .fs
                 .read_allow
@@ -1277,16 +1277,22 @@ mod tests {
     }
 
     #[test]
-    fn enforcer_allows_read_not_in_deny_list_with_empty_allow() {
-        // Standard has empty read_allow but populated read_deny.
-        // Empty allow list means "allow all not denied".
-        // But wait — standard has empty read_allow which means caller must add.
-        // Let's test with an allow path added.
+    fn enforcer_allows_read_not_in_deny_list_with_explicit_allow() {
         let mut policy = SandboxProfile::Standard.to_policy();
         policy.allow_read_path("/project/**");
         let mut enforcer = SandboxEnforcer::new(policy, "test-run");
         let result = enforcer.check_read(Path::new("/project/src/main.rs"));
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn enforcer_denies_read_when_allow_list_empty() {
+        for profile in [SandboxProfile::Strict, SandboxProfile::Standard] {
+            let mut enforcer = SandboxEnforcer::from_profile(profile, "test-run");
+            let result = enforcer.check_read(Path::new("/project/src/main.rs"));
+            assert!(result.is_err(), "{profile:?} should fail closed");
+            assert_eq!(result.unwrap_err().kind, ViolationKind::FsReadDenied);
+        }
     }
 
     #[test]
