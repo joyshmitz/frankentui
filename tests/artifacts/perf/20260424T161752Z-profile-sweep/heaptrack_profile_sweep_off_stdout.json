@@ -1,0 +1,6 @@
+heaptrack output will be written to "/data/projects/frankentui/tests/artifacts/perf/20260424T161752Z-profile-sweep/heaptrack_profile_sweep_off.zst"
+starting application, this might take some time...
+{"allocated_bytes":{"per_frame":{"max":2711070,"p50":460769,"p95":738402,"p99":1965602},"total":3042640904},"allocations":{"deallocations_total":11109594,"per_frame":{"max":42518,"p50":262,"p95":6191,"p99":41719},"reallocations_total":458936,"total":11159976},"arena_mode":"off","arena_peak_bytes":0,"cycles":80,"elapsed_ms":3076.166812,"frame_time_us":{"max":26761,"p50":242,"p95":1185,"p99":3561},"pipeline":{"bytes_emitted":{"max":64168,"p50":7119,"p95":23752,"p99":54870},"changed_cells_per_frame":{"max":4800,"p50":3111,"p95":4366,"p99":4380},"present_us":{"max":222,"p50":37,"p95":97,"p99":130}},"render_mode":"pipeline","renders_per_sec":2340.5752808700418,"screen_count":45,"sizes":[{"cols":80,"rows":24},{"cols":120,"rows":40}],"total_frames":7200}
+Heaptrack finished! Now run the following to investigate the data:
+
+  heaptrack --analyze "/data/projects/frankentui/tests/artifacts/perf/20260424T161752Z-profile-sweep/heaptrack_profile_sweep_off.zst"

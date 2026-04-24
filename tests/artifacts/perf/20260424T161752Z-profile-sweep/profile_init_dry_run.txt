@@ -1,0 +1,13 @@
+The following changes improve profile accuracy on Linux. They require sudo and
+change global machine state. Review each one:
+
+  1. kernel.perf_event_paranoid = -1     (or 1)  — let perf see kernel stacks
+  2. kernel.kptr_restrict       =  0              — resolve kernel symbols
+  3. kernel.nmi_watchdog        =  0              — free a PMU counter
+  4. cpupower frequency-set -g performance        — pin max clock
+  5. intel_pstate/no_turbo      =  1              — disable turbo jitter
+  6. disable SMT (optional, invasive)             — one logical core per physical
+
+Captured current state to: /home/ubuntu/.local/state/profiling-software-performance/snapshot-20260424T161932Z.env
+
+Dry-run: no changes applied. Snapshot remains at /home/ubuntu/.local/state/profiling-software-performance/snapshot-20260424T161932Z.env
