@@ -213,6 +213,10 @@ fn pane_dispatch_to_js(
         ftui_web::pane_pointer_capture::PanePointerLifecyclePhase::LostPointerCapture => {
             "lost_pointer_capture"
         }
+        ftui_web::pane_pointer_capture::PanePointerLifecyclePhase::ContextLost => "context_lost",
+        ftui_web::pane_pointer_capture::PanePointerLifecyclePhase::RenderStalled => {
+            "render_stalled"
+        }
         ftui_web::pane_pointer_capture::PanePointerLifecyclePhase::CaptureAcquired => {
             "capture_acquired"
         }
@@ -824,6 +828,20 @@ impl ShowcaseRunner {
     #[wasm_bindgen(js_name = paneLostPointerCapture)]
     pub fn pane_lost_pointer_capture(&mut self, pointer_id: u32) -> JsValue {
         let dispatch = self.inner.pane_lost_pointer_capture(pointer_id);
+        self.pane_dispatch_with_state(dispatch, None)
+    }
+
+    /// Pane-specific host context-loss path.
+    #[wasm_bindgen(js_name = paneContextLost)]
+    pub fn pane_context_lost(&mut self) -> JsValue {
+        let dispatch = self.inner.pane_context_lost();
+        self.pane_dispatch_with_state(dispatch, None)
+    }
+
+    /// Pane-specific host render-stall path.
+    #[wasm_bindgen(js_name = paneRenderStalled)]
+    pub fn pane_render_stalled(&mut self) -> JsValue {
+        let dispatch = self.inner.pane_render_stalled();
         self.pane_dispatch_with_state(dispatch, None)
     }
 
