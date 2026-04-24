@@ -479,7 +479,7 @@ impl PtySession {
             return Ok(self.captured.clone());
         }
 
-        let deadline = Instant::now() + options.timeout;
+        let deadline = deadline_after(options.timeout, "PTY read_until")?;
         let mut retries_remaining = options.max_retries;
         let mut last_error: Option<io::Error> = None;
 
@@ -683,7 +683,7 @@ impl PtySession {
             return Ok(0);
         }
 
-        let deadline = Instant::now() + timeout;
+        let deadline = deadline_after(timeout, "PTY drain_remaining")?;
         let mut total = 0usize;
 
         log_event(
@@ -786,6 +786,15 @@ impl Drop for PtySession {
 
 fn detach_reader_join(handle: thread::JoinHandle<()>) {
     detach_join(handle, "ftui-pty-detached-reader-join");
+}
+
+pub(crate) fn deadline_after(timeout: Duration, operation: &str) -> io::Result<Instant> {
+    Instant::now().checked_add(timeout).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{operation}: timeout is too large"),
+        )
+    })
 }
 
 pub(crate) fn detach_join(handle: thread::JoinHandle<()>, thread_name: &str) {
@@ -1799,6 +1808,27 @@ mod tests {
         assert!(!BRACKETED_PASTE_DISABLE_SEQS.is_empty());
         assert!(!FOCUS_DISABLE_SEQS.is_empty());
         assert!(!KITTY_DISABLE_SEQS.is_empty());
+    }
+
+    #[test]
+    fn deadline_after_rejects_unrepresentable_timeout() {
+        let error = deadline_after(Duration::MAX, "test operation")
+            .expect_err("oversized timeouts should not panic while building a deadline");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(
+            error.to_string().contains("test operation"),
+            "error should name the operation that rejected the timeout"
+        );
+    }
+
+    #[test]
+    fn deadline_after_accepts_normal_timeout() {
+        let before = Instant::now();
+        let deadline = deadline_after(Duration::from_secs(60), "test operation")
+            .expect("normal timeout should produce a deadline");
+
+        assert!(deadline >= before);
     }
 
     #[cfg(unix)]

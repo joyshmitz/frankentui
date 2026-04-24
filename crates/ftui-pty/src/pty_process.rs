@@ -26,7 +26,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::{DEFAULT_INPUT_WRITE_TIMEOUT, PtyInputWriter, detach_join, normalize_line_input};
+use crate::{
+    DEFAULT_INPUT_WRITE_TIMEOUT, PtyInputWriter, deadline_after, detach_join, normalize_line_input,
+};
 use portable_pty::{CommandBuilder, ExitStatus, MasterPty, PtySize};
 
 /// Configuration for spawning a shell process.
@@ -447,7 +449,7 @@ impl PtyProcess {
     ///
     /// Returns `TimedOut` if the timeout is reached before the process exits.
     pub fn wait_timeout(&mut self, timeout: Duration) -> io::Result<ExitStatus> {
-        let deadline = Instant::now() + timeout;
+        let deadline = deadline_after(timeout, "PtyProcess wait_timeout")?;
 
         loop {
             // Try a non-blocking wait
@@ -522,7 +524,7 @@ impl PtyProcess {
             return Ok(self.captured.clone());
         }
 
-        let deadline = Instant::now() + timeout;
+        let deadline = deadline_after(timeout, "PtyProcess read_until")?;
 
         loop {
             // Check if pattern is already in captured data
@@ -554,7 +556,7 @@ impl PtyProcess {
         }
 
         let start_len = self.captured.len();
-        let deadline = Instant::now() + timeout;
+        let deadline = deadline_after(timeout, "PtyProcess drain")?;
 
         while !self.eof && Instant::now() < deadline {
             let remaining = deadline.saturating_duration_since(Instant::now());

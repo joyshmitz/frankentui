@@ -19,7 +19,10 @@ use crate::{StatefulWidget, clear_text_area, clear_text_row, draw_text_span};
 use ftui_core::geometry::Rect;
 use ftui_render::frame::Frame;
 use ftui_style::Style;
-use std::path::{Path, PathBuf};
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
 
 /// A single entry in a directory listing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,23 +155,25 @@ impl FilePickerState {
         };
 
         if !entry.is_dir {
-            // Select the file
+            if let Some(root) = &self.root {
+                ensure_path_within_root(
+                    &entry.path,
+                    root,
+                    "Cannot select a file outside root directory",
+                )?;
+            }
             self.selected = Some(entry.path.clone());
             return Ok(false);
         }
 
         let new_dir = entry.path.clone();
 
-        // Confinement check: prevent symlinks from escaping the root
-        if let Some(root) = &self.root
-            && let (Ok(resolved_new), Ok(resolved_root)) =
-                (std::fs::canonicalize(&new_dir), std::fs::canonicalize(root))
-            && !resolved_new.starts_with(&resolved_root)
-        {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
+        if let Some(root) = &self.root {
+            ensure_path_within_root(
+                &new_dir,
+                root,
                 "Cannot traverse outside root directory via symlink",
-            ));
+            )?;
         }
 
         let new_entries = read_directory(&new_dir)?;
@@ -187,15 +192,25 @@ impl FilePickerState {
     pub fn go_back(&mut self) -> std::io::Result<bool> {
         // If root is set, prevent going above it using canonicalized paths
         if let Some(root) = &self.root {
-            let resolved_curr = std::fs::canonicalize(&self.current_dir)
-                .unwrap_or_else(|_| self.current_dir.clone());
-            let resolved_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.clone());
+            let (resolved_curr, resolved_root) = canonicalize_candidate_and_root(
+                &self.current_dir,
+                root,
+                "current file picker directory",
+            )?;
             if resolved_curr == resolved_root || !resolved_curr.starts_with(&resolved_root) {
                 return Ok(false);
             }
         }
 
-        if let Some((prev_dir, prev_cursor)) = self.history.pop() {
+        if let Some((prev_dir, prev_cursor)) = self.history.last().cloned() {
+            if let Some(root) = &self.root {
+                ensure_path_within_root(
+                    &prev_dir,
+                    root,
+                    "Cannot restore directory outside root directory",
+                )?;
+            }
+            self.history.pop();
             let entries = read_directory(&prev_dir)?;
             self.current_dir = prev_dir;
             self.entries = entries;
@@ -206,13 +221,10 @@ impl FilePickerState {
 
         // No history — try parent directory
         if let Some(parent) = self.current_dir.parent().map(|p| p.to_path_buf()) {
-            if let Some(root) = &self.root {
-                let resolved_parent =
-                    std::fs::canonicalize(&parent).unwrap_or_else(|_| parent.clone());
-                let resolved_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.clone());
-                if !resolved_parent.starts_with(&resolved_root) {
-                    return Ok(false); // Block parent traversal outside root
-                }
+            if let Some(root) = &self.root
+                && !path_is_within_root(&parent, root)?
+            {
+                return Ok(false); // Block parent traversal outside root
             }
 
             let entries = read_directory(&parent)?;
@@ -238,6 +250,39 @@ impl FilePickerState {
             self.offset = self.cursor + 1 - visible_rows;
         }
     }
+}
+
+fn canonicalize_for_confinement(path: &Path, label: &str) -> io::Result<PathBuf> {
+    std::fs::canonicalize(path).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("Cannot resolve {label} {}: {error}", path.display()),
+        )
+    })
+}
+
+fn canonicalize_candidate_and_root(
+    candidate: &Path,
+    root: &Path,
+    label: &str,
+) -> io::Result<(PathBuf, PathBuf)> {
+    let resolved_candidate = canonicalize_for_confinement(candidate, label)?;
+    let resolved_root = canonicalize_for_confinement(root, "file picker root")?;
+    Ok((resolved_candidate, resolved_root))
+}
+
+fn path_is_within_root(candidate: &Path, root: &Path) -> io::Result<bool> {
+    let (resolved_candidate, resolved_root) =
+        canonicalize_candidate_and_root(candidate, root, "file picker path")?;
+    Ok(resolved_candidate.starts_with(resolved_root))
+}
+
+fn ensure_path_within_root(candidate: &Path, root: &Path, message: &str) -> io::Result<()> {
+    if path_is_within_root(candidate, root)? {
+        return Ok(());
+    }
+
+    Err(io::Error::new(io::ErrorKind::PermissionDenied, message))
 }
 
 /// Read a directory and return sorted entries (dirs first, then files).
@@ -703,6 +748,49 @@ mod tests {
         let result = state.enter();
         assert!(result.is_ok());
         assert_eq!(state.selected, Some(PathBuf::from("/tmp/README.md")));
+    }
+
+    #[test]
+    fn enter_on_file_rejects_canonical_path_outside_root() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let repo = root
+            .parent()
+            .and_then(Path::parent)
+            .expect("crate should be under workspace crates directory");
+        let outside_file = repo.join("Cargo.toml");
+        let mut state = FilePickerState::new(
+            root.clone(),
+            vec![DirEntry::file("Cargo.toml", outside_file)],
+        )
+        .with_root(root);
+
+        let error = state
+            .enter()
+            .expect_err("root confinement should reject outside file selections");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(state.selected.is_none());
+    }
+
+    #[test]
+    fn enter_on_directory_with_unresolvable_root_fails_closed() {
+        let current_dir = std::env::current_dir().expect("test should run inside the workspace");
+        let missing_root =
+            current_dir.join(format!(".missing-file-picker-root-{}", std::process::id()));
+        let target_dir = std::env::temp_dir();
+        let mut state = FilePickerState::new(
+            current_dir.clone(),
+            vec![DirEntry::dir("tmp", target_dir.clone())],
+        )
+        .with_root(missing_root);
+
+        let error = state
+            .enter()
+            .expect_err("unresolvable confinement root should fail closed");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(state.current_dir, current_dir);
+        assert_eq!(state.entries[0].path, target_dir);
     }
 
     // ── DirEntry edge cases ───────────────────────────────────────

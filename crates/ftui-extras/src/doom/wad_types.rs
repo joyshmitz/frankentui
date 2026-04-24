@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn lump_name_str_full_8_chars() {
-        let name = [b'L', b'I', b'N', b'E', b'D', b'E', b'F', b'S'];
+        let name = *b"LINEDEFS";
         assert_eq!(lump_name_str(&name), "LINEDEFS");
     }
 

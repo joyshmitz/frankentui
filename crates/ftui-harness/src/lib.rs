@@ -394,13 +394,7 @@ pub fn current_test_profile() -> Option<TerminalProfile> {
     std::env::var("FTUI_TEST_PROFILE")
         .ok()
         .and_then(|value| value.parse::<TerminalProfile>().ok())
-        .and_then(|profile| {
-            if profile == TerminalProfile::Detected {
-                None
-            } else {
-                Some(profile)
-            }
-        })
+        .filter(|profile| *profile != TerminalProfile::Detected)
 }
 
 fn snapshot_name_with_profile(name: &str) -> String {

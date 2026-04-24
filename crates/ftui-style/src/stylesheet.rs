@@ -238,10 +238,8 @@ impl StyleSheet {
         let mut result = Style::default();
 
         for name in names {
-            match styles.get(*name) {
-                Some(style) => result = style.merge(&result),
-                None => return None,
-            }
+            let style = styles.get(*name)?;
+            result = style.merge(&result);
         }
 
         Some(result)
