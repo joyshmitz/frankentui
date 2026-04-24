@@ -107,10 +107,9 @@ pub(crate) fn retain_run_scoped_artifact_path(run_dir: &Path, value: &str) -> Op
 
     let canonical_run_dir = fs::canonicalize(run_dir).ok()?;
     let path = PathBuf::from(trimmed);
-    if !path.is_absolute()
-        && path
-            .components()
-            .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    if path
+        .components()
+        .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
     {
         return None;
     }
@@ -516,7 +515,10 @@ impl DecisionRecord {
 mod tests {
     use tempfile::tempdir;
 
-    use super::{ArtifactRole, DecisionRecord, RunMeta, normalize_loaded_run_meta_paths};
+    use super::{
+        ArtifactRole, DecisionRecord, RunMeta, normalize_loaded_run_meta_paths,
+        retain_run_scoped_artifact_path,
+    };
 
     #[test]
     fn runmeta_round_trip_preserves_fields() {
@@ -890,6 +892,24 @@ mod tests {
                 .replay_commands
                 .iter()
                 .any(|command| command.command.contains("outside"))
+        );
+    }
+
+    #[test]
+    fn retain_run_scoped_artifact_path_rejects_absolute_parent_components_before_creation() {
+        let temp = tempdir().expect("tempdir");
+        let run_dir = temp.path().join("run");
+        std::fs::create_dir_all(&run_dir).expect("run dir");
+        let escaping_candidate = run_dir
+            .join("missing")
+            .join("..")
+            .join("..")
+            .join("outside")
+            .join("capture.mp4");
+
+        assert_eq!(
+            retain_run_scoped_artifact_path(&run_dir, &escaping_candidate.display().to_string()),
+            None
         );
     }
 }
