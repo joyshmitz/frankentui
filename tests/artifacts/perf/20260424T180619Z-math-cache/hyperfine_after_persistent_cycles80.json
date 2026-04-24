@@ -1,0 +1,28 @@
+{
+  "results": [
+    {
+      "command": "taskset -c 2 /data/tmp/cargo-target/release-perf/profile_sweep --cycles 80 --render-mode pipeline --arena-mode off --json >/dev/null",
+      "mean": 2.4419563531599997,
+      "stddev": 0.2791754029909996,
+      "median": 2.34680969116,
+      "user": 2.4183990399999997,
+      "system": 0.02295142,
+      "min": 2.27896687816,
+      "max": 2.93688882016,
+      "times": [
+        2.34680969116,
+        2.93688882016,
+        2.27896687816,
+        2.2839174991599998,
+        2.36319887716
+      ],
+      "exit_codes": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    }
+  ]
+}
