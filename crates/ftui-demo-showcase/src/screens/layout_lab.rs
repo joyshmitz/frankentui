@@ -2302,9 +2302,10 @@ mod tests {
             let mut lab = LayoutLab::new();
             lab.current_preset = preset;
 
-            // Acquire scoped theme lock to prevent race with parallel tests
-            // that mutate the global CURRENT_THEME via set_theme().
-            let _theme_guard = theme::ScopedThemeLock::new(theme::ThemeId::CyberpunkAurora);
+            // Pin theme and accessibility globals so parallel tests cannot
+            // change render output between checksum passes.
+            let _render_guard =
+                theme::ScopedRenderLock::new(theme::ThemeId::CyberpunkAurora, false, 1.0);
 
             let checksum_a = {
                 let mut pool = GraphemePool::new();
@@ -2353,9 +2354,10 @@ mod tests {
         lab.align_pos = 7;
         lab.show_debug = true;
 
-        // Acquire scoped theme lock to prevent race with parallel tests
-        // that mutate the global CURRENT_THEME via set_theme().
-        let _theme_guard = theme::ScopedThemeLock::new(theme::ThemeId::CyberpunkAurora);
+        // Pin theme and accessibility globals so parallel tests cannot change
+        // render output between checksum passes.
+        let _render_guard =
+            theme::ScopedRenderLock::new(theme::ThemeId::CyberpunkAurora, false, 1.0);
 
         let checksum_a = {
             let mut pool = GraphemePool::new();

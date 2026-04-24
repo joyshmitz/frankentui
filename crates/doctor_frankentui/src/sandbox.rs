@@ -585,14 +585,25 @@ impl SandboxEnforcer {
             u64::from(self.connections_opened),
         );
         counters.insert("output_bytes".into(), self.output_bytes);
+        let violations: Vec<SandboxViolation> = self
+            .audit
+            .entries
+            .iter()
+            .filter_map(|entry| entry.violation.clone())
+            .collect();
+        let verdict = if violations.is_empty() {
+            "pass"
+        } else {
+            "fail"
+        };
 
         SandboxReport {
             run_id: self.audit.run_id.clone(),
             profile: self.policy.profile_name.clone(),
-            verdict: "pass".into(),
-            violations: vec![],
+            verdict: verdict.into(),
+            violations,
             counters,
-            wall_time_ms: elapsed.as_millis() as u64,
+            wall_time_ms: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
         }
     }
 
@@ -820,22 +831,32 @@ impl SandboxEnforcer {
 
     /// Record a file enumeration and check count limit.
     pub fn record_file_enumerated(&mut self) -> SandboxResult {
-        self.files_enumerated += 1;
-        if self.files_enumerated > self.policy.fs.max_file_count {
+        let Some(next_count) = self.files_enumerated.checked_add(1) else {
+            let v = SandboxViolation::new(
+                ViolationKind::FsFileCountExceeded,
+                "file count counter overflowed",
+            )
+            .with_limits(self.policy.fs.max_file_count.to_string(), "overflow");
+            self.audit.record_violation("fs", &v);
+            return Err(Box::new(v));
+        };
+
+        if next_count > self.policy.fs.max_file_count {
             let v = SandboxViolation::new(
                 ViolationKind::FsFileCountExceeded,
                 format!(
                     "file count exceeded: {} > {}",
-                    self.files_enumerated, self.policy.fs.max_file_count
+                    next_count, self.policy.fs.max_file_count
                 ),
             )
             .with_limits(
                 self.policy.fs.max_file_count.to_string(),
-                self.files_enumerated.to_string(),
+                next_count.to_string(),
             );
             self.audit.record_violation("fs", &v);
             return Err(Box::new(v));
         }
+        self.files_enumerated = next_count;
         Ok(())
     }
 
@@ -843,20 +864,33 @@ impl SandboxEnforcer {
 
     /// Check whether a network connection to the given host is allowed.
     pub fn check_network(&mut self, host: &str) -> SandboxResult {
+        let normalized_host = normalize_host(host);
+        if normalized_host.is_empty() {
+            let v = SandboxViolation::new(ViolationKind::NetworkHostDenied, "empty host denied");
+            self.audit.record_violation("network", &v);
+            return Err(Box::new(v));
+        }
+
         if !self.policy.network.allow_network {
             let v = SandboxViolation::new(
                 ViolationKind::NetworkBlocked,
-                format!("network access denied (policy: no network): host={host}"),
+                format!("network access denied (policy: no network): host={normalized_host}"),
             );
             self.audit.record_violation("network", &v);
             return Err(Box::new(v));
         }
 
         // Check blocked hosts.
-        if self.policy.network.blocked_hosts.iter().any(|h| h == host) {
+        if self
+            .policy
+            .network
+            .blocked_hosts
+            .iter()
+            .any(|h| normalize_host(h) == normalized_host)
+        {
             let v = SandboxViolation::new(
                 ViolationKind::NetworkHostDenied,
-                format!("host explicitly blocked: {host}"),
+                format!("host explicitly blocked: {normalized_host}"),
             );
             self.audit.record_violation("network", &v);
             return Err(Box::new(v));
@@ -864,23 +898,27 @@ impl SandboxEnforcer {
 
         // Check allowed hosts (if non-empty, must match).
         if !self.policy.network.allowed_hosts.is_empty()
-            && !self.policy.network.allowed_hosts.iter().any(|h| h == host)
+            && !self
+                .policy
+                .network
+                .allowed_hosts
+                .iter()
+                .any(|h| normalize_host(h) == normalized_host)
         {
             let v = SandboxViolation::new(
                 ViolationKind::NetworkHostDenied,
-                format!("host not in allow list: {host}"),
+                format!("host not in allow list: {normalized_host}"),
             );
             self.audit.record_violation("network", &v);
             return Err(Box::new(v));
         }
 
         // Check connection count.
-        self.connections_opened += 1;
-        if self.connections_opened > self.policy.network.max_connections {
+        if self.connections_opened >= self.policy.network.max_connections {
             let v = SandboxViolation::new(
                 ViolationKind::NetworkConnectionLimit,
                 format!(
-                    "connection limit exceeded: {} > {}",
+                    "connection limit reached: {} >= {}",
                     self.connections_opened, self.policy.network.max_connections
                 ),
             )
@@ -891,9 +929,10 @@ impl SandboxEnforcer {
             self.audit.record_violation("network", &v);
             return Err(Box::new(v));
         }
+        self.connections_opened += 1;
 
         self.audit
-            .record("network", "allow", &format!("connect: {host}"));
+            .record("network", "allow", &format!("connect: {normalized_host}"));
         Ok(())
     }
 
@@ -912,6 +951,15 @@ impl SandboxEnforcer {
 
         // Check allowed executables (if non-empty, must match).
         if !self.policy.process.allowed_executables.is_empty() {
+            if executable.contains('/') || executable.contains('\\') {
+                let v = SandboxViolation::new(
+                    ViolationKind::ProcessExecutableDenied,
+                    format!("executable path not allowed by basename policy: {executable}"),
+                );
+                self.audit.record_violation("process", &v);
+                return Err(Box::new(v));
+            }
+
             let basename = Path::new(executable)
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
@@ -1038,6 +1086,10 @@ impl SandboxEnforcer {
 }
 
 // ── Glob Matching ────────────────────────────────────────────────────────
+
+fn normalize_host(host: &str) -> String {
+    host.trim().trim_end_matches('.').to_ascii_lowercase()
+}
 
 /// Simple glob matching for sandbox path patterns.
 ///
@@ -1405,6 +1457,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn network_host_matching_is_case_insensitive_and_trims_trailing_dot() {
+        let mut enforcer = SandboxEnforcer::from_profile(SandboxProfile::Permissive, "test-run");
+        assert!(enforcer.check_network("Registry.Npmjs.Org.").is_ok());
+
+        let mut policy = SandboxProfile::Permissive.to_policy();
+        policy.network.allowed_hosts.clear();
+        policy.network.blocked_hosts = vec!["blocked.example".to_string()];
+        let mut blocked = SandboxEnforcer::new(policy, "test-run");
+        let result = blocked.check_network("BLOCKED.EXAMPLE.");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind, ViolationKind::NetworkHostDenied);
+    }
+
+    #[test]
+    fn network_connection_limit_denies_before_incrementing_counter() {
+        let mut policy = SandboxProfile::Permissive.to_policy();
+        policy.network.max_connections = 1;
+        let mut enforcer = SandboxEnforcer::new(policy, "test-run");
+
+        assert!(enforcer.check_network("registry.npmjs.org").is_ok());
+        let result = enforcer.check_network("crates.io");
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().kind,
+            ViolationKind::NetworkConnectionLimit
+        );
+
+        let report = enforcer.into_report();
+        assert_eq!(report.counters["connections_opened"], 1);
+    }
+
     // ── Process enforcement ──────────────────────────────────────────────
 
     #[test]
@@ -1432,6 +1516,20 @@ mod tests {
             result.unwrap_err().kind,
             ViolationKind::ProcessExecutableDenied
         );
+    }
+
+    #[test]
+    fn standard_profile_denies_executable_paths_even_with_allowed_basename() {
+        let mut enforcer = SandboxEnforcer::from_profile(SandboxProfile::Standard, "test-run");
+
+        for executable in ["/tmp/node", "tools/git", r"tools\tsc"] {
+            let result = enforcer.check_subprocess(executable);
+            assert!(result.is_err(), "{executable} should be denied");
+            assert_eq!(
+                result.unwrap_err().kind,
+                ViolationKind::ProcessExecutableDenied
+            );
+        }
     }
 
     #[test]
@@ -1568,6 +1666,20 @@ mod tests {
         assert_eq!(report.counters["bytes_read"], 1024);
         assert_eq!(report.counters["subprocesses_spawned"], 1);
         assert!(report.wall_time_ms < 1000); // Should be fast.
+    }
+
+    #[test]
+    fn report_captures_recorded_violations() {
+        let mut enforcer = SandboxEnforcer::from_profile(SandboxProfile::Strict, "test-run");
+        let error = enforcer
+            .check_network("example.com")
+            .expect_err("strict profile should block network");
+        assert_eq!(error.kind, ViolationKind::NetworkBlocked);
+
+        let report = enforcer.into_report();
+        assert_eq!(report.verdict, "fail");
+        assert_eq!(report.violations.len(), 1);
+        assert_eq!(report.violations[0].kind, ViolationKind::NetworkBlocked);
     }
 
     #[test]
