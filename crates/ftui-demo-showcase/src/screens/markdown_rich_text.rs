@@ -294,10 +294,9 @@ const RULE_WIDTH: u16 = 36;
 struct MarkdownPanel<'a> {
     markdown: &'a str,
     scroll: u16,
-    theme: MarkdownTheme,
+    renderer: &'a MarkdownRenderer,
     table_phase: f32,
     border_style: Style,
-    syntax_highlighter: Arc<SyntaxHighlighter>,
 }
 
 fn wrap_markdown_for_panel<'a>(text: &Text<'a>, width: u16) -> Text<'a> {
@@ -470,11 +469,12 @@ impl Widget for MarkdownPanel<'_> {
         }
 
         let max_width = inner.width.saturating_sub(1).max(1);
-        let renderer = MarkdownRenderer::new(self.theme.clone())
+        let renderer = self
+            .renderer
+            .clone()
             .rule_width(RULE_WIDTH.min(max_width))
             .table_max_width(max_width)
-            .table_effect_phase(self.table_phase)
-            .with_syntax_highlighter(self.syntax_highlighter.clone());
+            .table_effect_phase(self.table_phase);
         let rendered = renderer.render(self.markdown);
         let wrapped = wrap_markdown_for_panel(&rendered, max_width);
         Paragraph::new(wrapped)
@@ -493,8 +493,8 @@ pub struct MarkdownRichText {
     stream_paused: bool,
     stream_turbo: bool,
     stream_scroll: u16,
-    md_theme: MarkdownTheme,
-    syntax_highlighter: Arc<SyntaxHighlighter>,
+    markdown_renderer: MarkdownRenderer,
+    stream_renderer: MarkdownRenderer,
     tick_count: u64,
     markdown_backdrop: RefCell<Backdrop>,
     focus: FocusPanel,
@@ -516,15 +516,13 @@ enum FocusPanel {
 
 impl MarkdownRichText {
     pub fn new() -> Self {
-        let md_theme = Self::build_theme();
+        let markdown_renderer = Self::build_renderer(Self::build_theme());
+        let stream_renderer = Self::build_renderer(Self::build_theme());
         let theme_inputs = Self::current_fx_theme();
         let mut markdown_backdrop =
             Backdrop::new(Box::new(PlasmaFx::new(PlasmaPalette::Ocean)), theme_inputs);
         markdown_backdrop.set_effect_opacity(0.25);
         markdown_backdrop.set_scrim(Scrim::uniform(0.7));
-        let mut syntax_highlighter = SyntaxHighlighter::new();
-        syntax_highlighter.set_theme(theme::syntax_theme());
-        let syntax_highlighter = Arc::new(syntax_highlighter);
 
         Self {
             md_scroll: 0,
@@ -535,8 +533,8 @@ impl MarkdownRichText {
             stream_paused: false,
             stream_turbo: false,
             stream_scroll: 0,
-            md_theme,
-            syntax_highlighter,
+            markdown_renderer,
+            stream_renderer,
             tick_count: 0,
             markdown_backdrop: RefCell::new(markdown_backdrop),
             focus: FocusPanel::Markdown,
@@ -546,12 +544,16 @@ impl MarkdownRichText {
     }
 
     pub fn apply_theme(&mut self) {
-        self.md_theme = Self::build_theme();
+        self.markdown_renderer = Self::build_renderer(Self::build_theme());
+        self.stream_renderer = Self::build_renderer(Self::build_theme());
         let theme_inputs = Self::current_fx_theme();
         self.markdown_backdrop.borrow_mut().set_theme(theme_inputs);
+    }
+
+    fn build_renderer(theme: MarkdownTheme) -> MarkdownRenderer {
         let mut syntax_highlighter = SyntaxHighlighter::new();
         syntax_highlighter.set_theme(theme::syntax_theme());
-        self.syntax_highlighter = Arc::new(syntax_highlighter);
+        MarkdownRenderer::new(theme).with_syntax_highlighter(Arc::new(syntax_highlighter))
     }
 
     fn build_theme() -> MarkdownTheme {
@@ -678,11 +680,12 @@ impl MarkdownRichText {
     /// Adds a visible blinking cursor at the end when still streaming.
     fn render_stream_fragment(&self, width: u16) -> Text<'_> {
         let fragment = self.current_stream_fragment();
-        let renderer = MarkdownRenderer::new(self.md_theme.clone())
+        let renderer = self
+            .stream_renderer
+            .clone()
             .rule_width(RULE_WIDTH.min(width))
             .table_max_width(width)
-            .table_effect_phase(theme::table_theme_phase(self.tick_count))
-            .with_syntax_highlighter(self.syntax_highlighter.clone());
+            .table_effect_phase(theme::table_theme_phase(self.tick_count));
         let mut text = renderer.render_streaming(fragment);
 
         // Add blinking cursor at end if still streaming
@@ -738,13 +741,12 @@ impl MarkdownRichText {
         let panel = MarkdownPanel {
             markdown: SAMPLE_MARKDOWN,
             scroll: self.md_scroll,
-            theme: self.md_theme.clone(),
+            renderer: &self.markdown_renderer,
             table_phase: theme::table_theme_phase(self.tick_count),
             border_style: theme::panel_border_style(
                 self.focus == FocusPanel::Markdown,
                 theme::screen_accent::MARKDOWN,
             ),
-            syntax_highlighter: self.syntax_highlighter.clone(),
         };
 
         // Quality is now derived automatically from frame.buffer.degradation

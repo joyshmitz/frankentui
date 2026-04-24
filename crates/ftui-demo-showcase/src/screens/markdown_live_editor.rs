@@ -157,8 +157,7 @@ pub struct MarkdownLiveEditor {
     focus: Focus,
     search_results: Vec<SearchResult>,
     current_match: Option<usize>,
-    md_theme: MarkdownTheme,
-    syntax_highlighter: Arc<SyntaxHighlighter>,
+    md_renderer: MarkdownRenderer,
     diff_mode: bool,
     tick_count: u64,
     preview_scroll: u16,
@@ -175,11 +174,6 @@ impl Default for MarkdownLiveEditor {
 
 impl MarkdownLiveEditor {
     pub fn new() -> Self {
-        let md_theme = Self::build_theme();
-        let mut syntax_highlighter = SyntaxHighlighter::new();
-        syntax_highlighter.set_theme(theme::syntax_theme());
-        let syntax_highlighter = Arc::new(syntax_highlighter);
-
         let editor = TextArea::new()
             .with_text(SAMPLE_MARKDOWN)
             .with_line_numbers(true)
@@ -197,8 +191,7 @@ impl MarkdownLiveEditor {
             focus: Focus::Editor,
             search_results: Vec::new(),
             current_match: None,
-            md_theme,
-            syntax_highlighter,
+            md_renderer: Self::build_renderer(Self::build_theme()),
             diff_mode: false,
             tick_count: 0,
             preview_scroll: 0,
@@ -235,10 +228,13 @@ impl MarkdownLiveEditor {
             .with_style(input_style)
             .with_placeholder_style(placeholder_style);
 
-        self.md_theme = Self::build_theme();
+        self.md_renderer = Self::build_renderer(Self::build_theme());
+    }
+
+    fn build_renderer(theme: MarkdownTheme) -> MarkdownRenderer {
         let mut syntax_highlighter = SyntaxHighlighter::new();
         syntax_highlighter.set_theme(theme::syntax_theme());
-        self.syntax_highlighter = Arc::new(syntax_highlighter);
+        MarkdownRenderer::new(theme).with_syntax_highlighter(Arc::new(syntax_highlighter))
     }
 
     fn build_theme() -> MarkdownTheme {
@@ -278,11 +274,11 @@ impl MarkdownLiveEditor {
     }
 
     fn render_preview_text(&self, width: u16) -> Text<'_> {
-        MarkdownRenderer::new(self.md_theme.clone())
+        self.md_renderer
+            .clone()
             .rule_width(RULE_WIDTH.min(width))
             .table_max_width(width)
             .table_effect_phase(theme::table_theme_phase(self.tick_count))
-            .with_syntax_highlighter(self.syntax_highlighter.clone())
             .render(&self.editor.text())
     }
 

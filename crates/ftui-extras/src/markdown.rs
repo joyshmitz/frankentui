@@ -58,11 +58,12 @@ use ftui_text::text::Span;
 use pulldown_cmark::{
     Alignment, BlockQuoteKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
 };
-#[cfg(feature = "syntax")]
-use std::sync::Arc;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
 
 type Line = ftui_text::text::Line<'static>;
 type Text = ftui_text::text::Text<'static>;
+const LATEX_CACHE_CAPACITY: usize = 128;
 
 // ---------------------------------------------------------------------------
 // GFM Auto-Detection
@@ -529,6 +530,63 @@ fn latex_to_unicode(latex: &str) -> String {
     result
 }
 
+#[derive(Debug, Default)]
+struct LatexMathCache {
+    entries: HashMap<String, String>,
+    order: VecDeque<String>,
+}
+
+impl LatexMathCache {
+    fn get(&self, latex: &str) -> Option<String> {
+        self.entries.get(latex).cloned()
+    }
+
+    fn insert(&mut self, latex: &str, unicode: String) -> String {
+        if let Some(existing) = self.entries.get(latex) {
+            return existing.clone();
+        }
+
+        while self.entries.len() >= LATEX_CACHE_CAPACITY {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            self.entries.remove(&oldest);
+        }
+
+        let key = latex.to_owned();
+        self.order.push_back(key.clone());
+        self.entries.insert(key, unicode.clone());
+        unicode
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[cfg(test)]
+    fn contains(&self, latex: &str) -> bool {
+        self.entries.contains_key(latex)
+    }
+}
+
+fn cached_latex_to_unicode(cache: &Mutex<LatexMathCache>, latex: &str) -> String {
+    match cache.lock() {
+        Ok(cache) => {
+            if let Some(unicode) = cache.get(latex) {
+                return unicode;
+            }
+        }
+        Err(_) => return latex_to_unicode(latex),
+    }
+
+    let unicode = latex_to_unicode(latex);
+    match cache.lock() {
+        Ok(mut cache) => cache.insert(latex, unicode),
+        Err(_) => unicode,
+    }
+}
+
 /// Apply fallback conversions for LaTeX constructs not handled by unicodeit.
 fn apply_latex_fallbacks(text: &str) -> String {
     let mut result = text.to_string();
@@ -929,6 +987,7 @@ pub struct MarkdownRenderer {
     rule_width: u16,
     table_max_width: Option<u16>,
     table_effect_phase: Option<f32>,
+    math_cache: Arc<Mutex<LatexMathCache>>,
     #[cfg(feature = "syntax")]
     syntax_highlighter: Option<Arc<SyntaxHighlighter>>,
 }
@@ -942,6 +1001,7 @@ impl MarkdownRenderer {
             rule_width: 40,
             table_max_width: None,
             table_effect_phase: None,
+            math_cache: Arc::new(Mutex::new(LatexMathCache::default())),
             #[cfg(feature = "syntax")]
             syntax_highlighter: None,
         }
@@ -1006,6 +1066,7 @@ impl MarkdownRenderer {
             self.rule_width,
             self.table_max_width,
             self.table_effect_phase,
+            self.math_cache.as_ref(),
         );
         #[cfg(feature = "syntax")]
         {
@@ -1179,6 +1240,7 @@ struct RenderState<'t> {
     rule_width: u16,
     table_max_width: Option<u16>,
     table_effect_phase: Option<f32>,
+    math_cache: &'t Mutex<LatexMathCache>,
     #[cfg(feature = "syntax")]
     syntax_highlighter: Option<&'t SyntaxHighlighter>,
     lines: Vec<Line>,
@@ -1224,12 +1286,14 @@ impl<'t> RenderState<'t> {
         rule_width: u16,
         table_max_width: Option<u16>,
         table_effect_phase: Option<f32>,
+        math_cache: &'t Mutex<LatexMathCache>,
     ) -> Self {
         Self {
             theme,
             rule_width,
             table_max_width,
             table_effect_phase,
+            math_cache,
             #[cfg(feature = "syntax")]
             syntax_highlighter: None,
             lines: Vec::new(),
@@ -1600,14 +1664,14 @@ impl<'t> RenderState<'t> {
     }
 
     fn inline_math(&mut self, latex: &str) {
-        let unicode = latex_to_unicode(latex);
+        let unicode = cached_latex_to_unicode(self.math_cache, latex);
         self.current_spans
             .push(Span::styled(unicode, self.theme.math_inline));
     }
 
     fn display_math(&mut self, latex: &str) {
         self.flush_blank();
-        let unicode = latex_to_unicode(latex);
+        let unicode = cached_latex_to_unicode(self.math_cache, latex);
 
         // Center the math block with a subtle indicator
         for line in unicode.lines() {
@@ -2174,7 +2238,7 @@ impl<'t> RenderState<'t> {
 
             // Math code blocks (alternative to $$ syntax)
             if lang_lower == "math" || lang_lower == "latex" || lang_lower == "tex" {
-                let unicode = latex_to_unicode(&code);
+                let unicode = cached_latex_to_unicode(self.math_cache, &code);
                 for line in unicode.lines() {
                     self.lines
                         .push(Line::styled(format!("  {line}"), self.theme.math_block));
@@ -3174,6 +3238,53 @@ The end.
         let content = plain(&text);
         // Should contain √
         assert!(content.contains("√") || content.contains("sqrt"));
+    }
+
+    #[test]
+    fn render_repeated_inline_math_uses_renderer_cache() {
+        let renderer = MarkdownRenderer::new(MarkdownTheme::default());
+        let md = "Angles $\\alpha + \\beta$ repeat as $\\alpha + \\beta$.";
+
+        let first = renderer.render(md);
+        let second = renderer.render(md);
+
+        assert_eq!(first, second);
+        assert!(plain(&first).contains('α'));
+        assert_eq!(
+            renderer.math_cache.lock().expect("math cache lock").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn render_inline_and_display_math_share_cache_without_changing_text() {
+        let renderer = MarkdownRenderer::new(MarkdownTheme::default());
+        let md = "Inline $\\sqrt{x}$.\n\n$$\\sqrt{x}$$";
+
+        let first = renderer.render(md);
+        let second = renderer.render(md);
+
+        assert_eq!(first, second);
+        assert!(plain(&first).contains('√'));
+        assert_eq!(
+            renderer.math_cache.lock().expect("math cache lock").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn latex_math_cache_is_bounded_and_evicts_oldest_entry() {
+        let mut cache = LatexMathCache::default();
+
+        for index in 0..=LATEX_CACHE_CAPACITY {
+            let latex = format!(r"\alpha_{index}");
+            let unicode = format!("value-{index}");
+            assert_eq!(cache.insert(&latex, unicode.clone()), unicode);
+        }
+
+        assert_eq!(cache.len(), LATEX_CACHE_CAPACITY);
+        assert!(!cache.contains(r"\alpha_0"));
+        assert!(cache.contains(&format!(r"\alpha_{}", LATEX_CACHE_CAPACITY)));
     }
 
     // =========================================================================
