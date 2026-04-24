@@ -998,6 +998,61 @@ mod tests {
     }
 
     #[test]
+    fn runner_core_pane_move_logs_preserve_lifecycle_order() {
+        let mut core = RunnerCore::new(80, 24);
+        core.init();
+        let modifiers = PaneModifierSnapshot::default();
+
+        assert!(
+            core.pane_pointer_down(
+                test_target(),
+                107,
+                PanePointerButton::Primary,
+                1,
+                1,
+                modifiers,
+            )
+            .accepted()
+        );
+        assert!(core.pane_capture_acquired(107).accepted());
+        assert!(core.pane_pointer_move(107, 8, 1, modifiers).accepted());
+        assert!(core.pane_pointer_move(107, 12, 1, modifiers).accepted());
+        assert!(
+            core.pane_pointer_up(107, PanePointerButton::Primary, 12, 1, modifiers)
+                .accepted()
+        );
+
+        let pane_logs: Vec<_> = core
+            .take_logs()
+            .into_iter()
+            .filter(|line| line.contains("pane_pointer"))
+            .collect();
+        let phases: Vec<_> = pane_logs
+            .iter()
+            .filter_map(|line| {
+                line.split_whitespace()
+                    .find_map(|field| field.strip_prefix("phase="))
+            })
+            .collect();
+
+        assert_eq!(
+            phases,
+            [
+                "pointer_down",
+                "capture_acquired",
+                "pointer_move",
+                "pointer_move",
+                "pointer_up"
+            ],
+            "deferred pane log formatting must preserve lifecycle order: {pane_logs:?}"
+        );
+        assert!(
+            core.take_logs().is_empty(),
+            "take_logs should drain deferred pane logs exactly once"
+        );
+    }
+
+    #[test]
     fn runner_core_undo_clears_pointer_capture_after_structural_change() {
         let mut core = RunnerCore::new(80, 24);
         core.init();

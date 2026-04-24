@@ -52,7 +52,7 @@ pub struct RunnerCore {
     /// Deterministic pane pointer lifecycle adapter for wasm-hosted pane interactions.
     pane_adapter: PanePointerCaptureAdapter,
     /// Structured pane interaction logs (kept separate from presenter output logs).
-    pane_logs: Vec<String>,
+    pane_logs: Vec<PaneLogRecord>,
     /// Interactive pane topology model used for advanced pane semantics.
     layout_tree: PaneTree,
     /// Persistent structural timeline for undo/redo/replay.
@@ -106,6 +106,11 @@ impl PaneDispatchSummary {
     pub const fn accepted(self) -> bool {
         !matches!(self.outcome, PaneDispatchOutcome::Ignored(_))
     }
+}
+
+enum PaneLogRecord {
+    Pointer(PanePointerLogEntry),
+    Line(String),
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
@@ -326,7 +331,10 @@ impl RunnerCore {
     /// Take accumulated log lines (from the last `take_flat_patches` call).
     pub fn take_logs(&mut self) -> Vec<String> {
         let mut logs = std::mem::take(&mut self.cached_logs);
-        logs.append(&mut self.pane_logs);
+        logs.extend(self.pane_logs.drain(..).map(|record| match record {
+            PaneLogRecord::Pointer(log) => format_pane_log_entry(log),
+            PaneLogRecord::Line(line) => line,
+        }));
         logs
     }
 
@@ -484,8 +492,9 @@ impl RunnerCore {
                 changed
             }
             Err(err) => {
-                self.pane_logs
-                    .push(format!("pane_timeline undo error: {err}"));
+                self.pane_logs.push(PaneLogRecord::Line(format!(
+                    "pane_timeline undo error: {err}"
+                )));
                 false
             }
         }
@@ -504,8 +513,9 @@ impl RunnerCore {
                 changed
             }
             Err(err) => {
-                self.pane_logs
-                    .push(format!("pane_timeline redo error: {err}"));
+                self.pane_logs.push(PaneLogRecord::Line(format!(
+                    "pane_timeline redo error: {err}"
+                )));
                 false
             }
         }
@@ -524,8 +534,9 @@ impl RunnerCore {
                 true
             }
             Err(err) => {
-                self.pane_logs
-                    .push(format!("pane_timeline replay error: {err}"));
+                self.pane_logs.push(PaneLogRecord::Line(format!(
+                    "pane_timeline replay error: {err}"
+                )));
                 false
             }
         }
@@ -540,8 +551,9 @@ impl RunnerCore {
         let operations = match self.layout_tree.plan_intelligence_mode(mode, primary) {
             Ok(operations) => operations,
             Err(err) => {
-                self.pane_logs
-                    .push(format!("pane_intelligence mode_plan_error: {err}"));
+                self.pane_logs.push(PaneLogRecord::Line(format!(
+                    "pane_intelligence mode_plan_error: {err}"
+                )));
                 return false;
             }
         };
@@ -862,8 +874,9 @@ impl RunnerCore {
         ) {
             Ok(_) => {}
             Err(err) => {
-                self.pane_logs
-                    .push(format!("pane_timeline cancel_rollback error: {err}"));
+                self.pane_logs.push(PaneLogRecord::Line(format!(
+                    "pane_timeline cancel_rollback error: {err}"
+                )));
             }
         }
     }
@@ -947,7 +960,7 @@ impl RunnerCore {
                 PanePointerLogOutcome::Ignored(reason) => PaneDispatchOutcome::Ignored(reason),
             },
         };
-        self.pane_logs.push(format_pane_log_entry(dispatch.log));
+        self.pane_logs.push(PaneLogRecord::Pointer(dispatch.log));
         summary
     }
 
@@ -974,7 +987,7 @@ impl RunnerCore {
             outcome: PaneDispatchOutcome::Ignored(PanePointerIgnoredReason::MachineRejectedEvent),
         };
         self.update_hover_pointer_from_log(&log);
-        self.pane_logs.push(format_pane_log_entry(log));
+        self.pane_logs.push(PaneLogRecord::Pointer(log));
         summary
     }
 
