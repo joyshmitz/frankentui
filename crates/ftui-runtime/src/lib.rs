@@ -122,8 +122,8 @@ pub use process_subscription::{ProcessEvent, ProcessSubscription};
 pub use program::CrosstermEventSource;
 pub use program::{
     App, AppBuilder, BatchController, Cmd, EffectQueueConfig, FrameTiming, FrameTimingConfig,
-    FrameTimingSink, HeadlessEventSource, InlineAutoRemeasureConfig, Model, MouseCapturePolicy,
-    PaneTerminalAdapter, PaneTerminalAdapterConfig, PaneTerminalDispatch,
+    FrameTimingSink, HeadlessEventSource, InlineAutoRemeasureConfig, LoadGovernorConfig, Model,
+    MouseCapturePolicy, PaneTerminalAdapter, PaneTerminalAdapterConfig, PaneTerminalDispatch,
     PaneTerminalIgnoredReason, PaneTerminalLifecyclePhase, PaneTerminalLogEntry,
     PaneTerminalLogOutcome, PaneTerminalSplitterHandle, PersistenceConfig, Program, ProgramConfig,
     ResizeBehavior, RolloutPolicy, RuntimeLane, TaskExecutorBackend, TaskSpec, WidgetRefreshConfig,

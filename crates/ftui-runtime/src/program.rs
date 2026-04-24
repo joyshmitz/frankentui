@@ -87,7 +87,9 @@ use ftui_layout::{
     PaneSemanticInputEventKind, PaneTree, Rect, SplitAxis,
 };
 use ftui_render::arena::FrameArena;
-use ftui_render::budget::{BudgetDecision, DegradationLevel, FrameBudgetConfig, RenderBudget};
+use ftui_render::budget::{
+    BudgetControllerConfig, BudgetDecision, DegradationLevel, FrameBudgetConfig, RenderBudget,
+};
 use ftui_render::buffer::Buffer;
 use ftui_render::diff_strategy::DiffStrategy;
 use ftui_render::frame::{Frame, HitData, HitId, HitRegion, WidgetBudget, WidgetSignal};
@@ -2157,6 +2159,61 @@ pub struct ImmediateDrainStats {
     pub max_zero_timeout_polls_in_burst: u64,
 }
 
+/// Conservative runtime load-governor configuration.
+///
+/// The first runtime governor uses a single primary control lever: adaptive
+/// render degradation driven by measured frame times. The controller combines
+/// hysteresis, cooldown, and e-process evidence gates inside `RenderBudget`,
+/// and the legacy threshold path remains available as the safe fallback by
+/// disabling this config.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadGovernorConfig {
+    /// Whether the adaptive governor is active.
+    pub enabled: bool,
+    /// Controller used to decide degrade/upgrade transitions from frame timing.
+    pub budget_controller: BudgetControllerConfig,
+}
+
+impl Default for LoadGovernorConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            budget_controller: BudgetControllerConfig::default(),
+        }
+    }
+}
+
+impl LoadGovernorConfig {
+    /// Create an enabled governor with conservative defaults.
+    #[must_use]
+    pub fn enabled() -> Self {
+        Self::default()
+    }
+
+    /// Disable the governor and use the legacy render-budget threshold path.
+    #[must_use]
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            budget_controller: BudgetControllerConfig::default(),
+        }
+    }
+
+    /// Toggle governor activation.
+    #[must_use]
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    /// Replace the adaptive budget controller configuration.
+    #[must_use]
+    pub fn with_budget_controller(mut self, config: BudgetControllerConfig) -> Self {
+        self.budget_controller = config;
+        self
+    }
+}
+
 /// Runtime lane for the Asupersync migration rollout.
 ///
 /// Controls which subscription/effect execution backend is active.
@@ -2364,6 +2421,8 @@ pub struct ProgramConfig {
     pub ui_anchor: UiAnchor,
     /// Frame budget configuration.
     pub budget: FrameBudgetConfig,
+    /// Runtime load-governor configuration.
+    pub load_governor: LoadGovernorConfig,
     /// Diff strategy configuration for the terminal writer.
     pub diff_config: RuntimeDiffConfig,
     /// Evidence JSONL sink configuration.
@@ -2436,6 +2495,7 @@ impl Default for ProgramConfig {
             screen_mode: ScreenMode::Inline { ui_height: 4 },
             ui_anchor: UiAnchor::Bottom,
             budget: FrameBudgetConfig::default(),
+            load_governor: LoadGovernorConfig::default(),
             diff_config: RuntimeDiffConfig::default(),
             evidence_sink: EvidenceSinkConfig::default(),
             render_trace: RenderTraceConfig::default(),
@@ -2528,6 +2588,20 @@ impl ProgramConfig {
     #[must_use]
     pub fn with_budget(mut self, budget: FrameBudgetConfig) -> Self {
         self.budget = budget;
+        self
+    }
+
+    /// Set the runtime load-governor configuration.
+    #[must_use]
+    pub fn with_load_governor(mut self, config: LoadGovernorConfig) -> Self {
+        self.load_governor = config;
+        self
+    }
+
+    /// Disable the adaptive load governor and use legacy render-budget behavior.
+    #[must_use]
+    pub fn without_load_governor(mut self) -> Self {
+        self.load_governor = LoadGovernorConfig::disabled();
         self
     }
 
@@ -2744,6 +2818,17 @@ impl ProgramConfig {
         self.effect_queue
             .clone()
             .with_backend(self.runtime_lane.resolve().task_executor_backend())
+    }
+}
+
+fn render_budget_from_program_config(config: &ProgramConfig) -> RenderBudget {
+    let budget = RenderBudget::from_config(&config.budget);
+    if config.load_governor.enabled {
+        let mut controller = config.load_governor.budget_controller.clone();
+        controller.target = config.budget.total;
+        budget.with_controller(controller)
+    } else {
+        budget
     }
 }
 
@@ -4176,7 +4261,7 @@ impl<M: Model> Program<M, CrosstermEventSource, Stdout> {
         let height = h.max(1);
         writer.set_size(width, height);
 
-        let budget = RenderBudget::from_config(&config.budget);
+        let budget = render_budget_from_program_config(&config);
         let conformal_predictor = config.conformal_config.clone().map(ConformalPredictor::new);
         let locale_context = config.locale_context.clone();
         let locale_version = locale_context.version();
@@ -4312,7 +4397,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
         let frame_timing = config.frame_timing.clone();
         writer.set_timing_enabled(frame_timing.is_some());
 
-        let budget = RenderBudget::from_config(&config.budget);
+        let budget = render_budget_from_program_config(&config);
         let conformal_predictor = config.conformal_config.clone().map(ConformalPredictor::new);
         let locale_context = config.locale_context.clone();
         let locale_version = locale_context.version();
@@ -5404,8 +5489,10 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
                 budget_ms = render_budget.as_millis() as u32,
                 "render phase exceeded budget"
             );
-            // Trigger degradation if we're consistently over budget
-            if self.budget.should_degrade(render_budget) {
+            // With the load governor active, the controller decides degradation
+            // from measured frame history at the next frame boundary. The
+            // legacy path keeps its immediate threshold fallback.
+            if self.budget.controller().is_none() && self.budget.should_degrade(render_budget) {
                 self.budget.degrade();
             }
         }
@@ -6032,6 +6119,18 @@ impl<M: Model> AppBuilder<M> {
     /// Set the frame budget configuration.
     pub fn with_budget(mut self, budget: FrameBudgetConfig) -> Self {
         self.config.budget = budget;
+        self
+    }
+
+    /// Set the runtime load-governor configuration.
+    pub fn with_load_governor(mut self, config: LoadGovernorConfig) -> Self {
+        self.config.load_governor = config;
+        self
+    }
+
+    /// Disable the adaptive load governor for this app.
+    pub fn without_load_governor(mut self) -> Self {
+        self.config.load_governor = LoadGovernorConfig::disabled();
         self
     }
 
@@ -7577,6 +7676,61 @@ mod tests {
         };
         let config = ProgramConfig::default().with_budget(budget);
         assert_eq!(config.budget.total, Duration::from_millis(50));
+    }
+
+    #[test]
+    fn load_governor_default_is_enabled() {
+        let config = LoadGovernorConfig::default();
+        assert!(config.enabled);
+        assert_eq!(
+            config.budget_controller.degradation_floor,
+            DegradationLevel::SimpleBorders
+        );
+    }
+
+    #[test]
+    fn program_config_load_governor_builders() {
+        let governor = LoadGovernorConfig::disabled().with_enabled(true);
+        let config = ProgramConfig::default().with_load_governor(governor);
+        assert!(config.load_governor.enabled);
+
+        let config = config.without_load_governor();
+        assert!(!config.load_governor.enabled);
+    }
+
+    #[test]
+    fn headless_program_default_load_governor_attaches_controller() {
+        let program =
+            headless_program_with_config(TestModel { value: 0 }, ProgramConfig::default());
+        assert!(program.budget.controller().is_some());
+    }
+
+    #[test]
+    fn headless_program_load_governor_target_tracks_frame_budget() {
+        let config = ProgramConfig::default().with_budget(FrameBudgetConfig {
+            total: Duration::from_millis(50),
+            ..Default::default()
+        });
+        let program = headless_program_with_config(TestModel { value: 0 }, config);
+        assert_eq!(
+            program.budget.controller().unwrap().config().target,
+            Duration::from_millis(50)
+        );
+    }
+
+    #[test]
+    fn headless_program_without_load_governor_uses_legacy_budget() {
+        let program = headless_program_with_config(
+            TestModel { value: 0 },
+            ProgramConfig::default().without_load_governor(),
+        );
+        assert!(program.budget.controller().is_none());
+    }
+
+    #[test]
+    fn app_builder_without_load_governor_sets_config() {
+        let builder = App::new(TestModel { value: 0 }).without_load_governor();
+        assert!(!builder.config.load_governor.enabled);
     }
 
     #[test]
@@ -9149,7 +9303,7 @@ mod tests {
         let evidence_sink = EvidenceSink::from_config(&config.evidence_sink)
             .expect("headless evidence sink config");
 
-        let budget = RenderBudget::from_config(&config.budget);
+        let budget = render_budget_from_program_config(&config);
         let conformal_predictor = config.conformal_config.clone().map(ConformalPredictor::new);
         let locale_context = config.locale_context.clone();
         let locale_version = locale_context.version();
