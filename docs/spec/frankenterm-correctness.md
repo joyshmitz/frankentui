@@ -252,8 +252,10 @@ Already in CI (ftui today):
 
 Required for FrankenTerm / ftui-web before claiming "replacement-ready":
 - WASM build checks (at minimum):
-  - `cargo check -p ftui-web --target wasm32-unknown-unknown`
-  - `cargo check -p frankenterm-web --target wasm32-unknown-unknown`
+  - in this checkout:
+    - `cargo check -p ftui-web --target wasm32-unknown-unknown`
+  - in the adjacent/out-of-tree FrankenTermWeb crate when that package is part of the release scope:
+    - `cargo check -p frankenterm-web --target wasm32-unknown-unknown`
 - Proptest smoke configuration:
   - CI runs a bounded number of cases (fast) and relies on goldens/E2E for broad coverage.
 - Trace replay gate:

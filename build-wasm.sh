@@ -7,7 +7,9 @@
 #   3. wasm-opt: -Oz --converge --all-features (runs passes until no improvement)
 #
 # Temporarily removes the ftui-extras opt-level=3 override (which bloats WASM
-# by disabling size optimizations), builds both WASM crates, restores Cargo.toml.
+# by disabling size optimizations), builds the in-tree WASM showcase crate, and
+# optionally builds an adjacent/out-of-tree frankenterm-web crate when explicitly
+# requested via FRANKENTERM_WEB_CRATE_DIR.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -43,6 +45,15 @@ echo ">> WASM RUSTFLAGS: $CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS"
 
 # ── Step 1: Patch Cargo.toml to remove ftui-extras opt-level override ────────
 echo ">> Patching $CARGO_TOML (removing ftui-extras opt-level=3 override)..."
+
+restore_cargo() {
+  if [[ -f "$BACKUP" ]]; then
+    echo ">> Restoring $CARGO_TOML..."
+    mv "$BACKUP" "$CARGO_TOML"
+  fi
+}
+trap restore_cargo EXIT
+
 cp "$CARGO_TOML" "$BACKUP"
 
 # Remove the [profile.release.package.ftui-extras] section and its opt-level line.
@@ -51,22 +62,26 @@ sed -i '/^\[profile\.release\.package\.ftui-extras\]$/,/^$/d' "$CARGO_TOML"
 # Also remove the comment line before it if it's still there.
 sed -i '/^# VFX-heavy crate: prefer speed over binary size/d' "$CARGO_TOML"
 
-restore_cargo() {
-  echo ">> Restoring $CARGO_TOML..."
-  mv "$BACKUP" "$CARGO_TOML"
-}
-trap restore_cargo EXIT
-
 # ── Step 2: Build WASM crates ────────────────────────────────────────────────
 # wasm-pack runs wasm-opt automatically using flags from
 # [package.metadata.wasm-pack.profile.release] in each crate's Cargo.toml:
 #   wasm-opt = ["-Oz", "--all-features", "--converge"]
-echo ">> Building frankenterm-web (WebGPU terminal renderer)..."
-wasm-pack build crates/frankenterm-web \
-  --target web \
-  --out-dir ../../pkg \
-  --out-name FrankenTerm \
-  --release
+if [[ -n "${FRANKENTERM_WEB_CRATE_DIR:-}" ]]; then
+  if [[ ! -d "$FRANKENTERM_WEB_CRATE_DIR" ]]; then
+    echo "ERROR: FRANKENTERM_WEB_CRATE_DIR does not exist: $FRANKENTERM_WEB_CRATE_DIR" >&2
+    exit 1
+  fi
+
+  echo ">> Building external frankenterm-web from $FRANKENTERM_WEB_CRATE_DIR..."
+  wasm-pack build "$FRANKENTERM_WEB_CRATE_DIR" \
+    --target web \
+    --out-dir "$SCRIPT_DIR/pkg/frankenterm-web" \
+    --out-name FrankenTerm \
+    --release
+else
+  echo ">> Skipping frankenterm-web: this checkout has no crates/frankenterm-web."
+  echo "   Set FRANKENTERM_WEB_CRATE_DIR=/path/to/adjacent/frankenterm-web crate to build it."
+fi
 
 echo ">> Building ftui-showcase-wasm (demo runner)..."
 wasm-pack build crates/ftui-showcase-wasm \
@@ -77,13 +92,13 @@ wasm-pack build crates/ftui-showcase-wasm \
 # ── Step 3: Report sizes ────────────────────────────────────────────────────
 echo ""
 echo "── WASM binary sizes ──"
-for f in pkg/*.wasm; do
+while IFS= read -r f; do
   if [ -f "$f" ]; then
     size_bytes=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null)
     size_mb=$(echo "scale=2; $size_bytes / 1048576" | bc)
     echo "  $f: ${size_mb} MB ($size_bytes bytes)"
   fi
-done
+done < <(find pkg -type f -name '*.wasm' | sort)
 
 echo ""
 echo "── Build complete ──"

@@ -69,12 +69,17 @@ cargo check -p ftui-showcase-wasm --target wasm32-unknown-unknown
 
 # Optional: emit ftui-web release artifacts into target/wasm32-unknown-unknown/release/deps/
 cargo build -p ftui-web --target wasm32-unknown-unknown --release
+
+# Optional: build the in-tree showcase WASM package with the repo helper
+./build-wasm.sh
 ```
 
 If you need a browser-facing `FrankenTermWeb` bundle, build or import that
 package from the adjacent/external repo that owns it. Do not run
 `wasm-pack build crates/frankenterm-web` from this checkout because that path is
-not present here.
+not present here. The repo helper also skips that package by default; set
+`FRANKENTERM_WEB_CRATE_DIR=/path/to/adjacent/frankenterm-web` only when you
+explicitly want it to build an adjacent/out-of-tree crate into `pkg/`.
 
 ### 2. Initialize in a Next.js client component
 

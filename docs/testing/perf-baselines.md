@@ -90,6 +90,10 @@ This ledger tracks explicit priors/posteriors for cache + scheduler policies.
 # Scheduler objective evidence sanity
 cargo test -p ftui-runtime evidence_reports_priority_objective_terms
 
-# Cache objective evidence sanity
-cargo test -p frankenterm-web objective_tracks_pressure_and_evictions
+# In-tree web adapter evidence sanity
+cargo test -p ftui-web patch_batch_hash_is_deterministic
+
+# External frankenterm-web cache objective evidence sanity, when that adjacent
+# crate is available outside this checkout.
+# (cd /path/to/adjacent/frankenterm-web && cargo test objective_tracks_pressure_and_evictions)
 ```
