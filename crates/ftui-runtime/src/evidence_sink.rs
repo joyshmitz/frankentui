@@ -13,7 +13,7 @@
 //! reached, further writes are silently dropped to prevent unbounded disk
 //! growth. The cap can be configured via [`EvidenceSinkConfig::max_bytes`].
 
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::io::{self, BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -166,6 +166,9 @@ impl EvidenceSink {
         let (writer, existing_bytes): (Box<dyn Write + Send>, u64) = match &config.destination {
             EvidenceSinkDestination::Stdout => (Box::new(io::stdout()), 0),
             EvidenceSinkDestination::File(path) => {
+                if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                    fs::create_dir_all(parent)?;
+                }
                 let existing_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
                 let file = OpenOptions::new().create(true).append(true).open(path)?;
                 (Box::new(file), existing_size)
@@ -205,12 +208,13 @@ impl EvidenceSink {
             return Ok(());
         }
 
-        let line_bytes = line.len() as u64 + 1; // +1 for newline
+        let line_bytes = u64::try_from(line.len())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1); // +1 for newline
+        let new_total = inner.bytes_written.checked_add(line_bytes);
 
         // Check whether this write would exceed the cap.
-        if inner.cap_enabled
-            && inner.max_bytes > 0
-            && inner.bytes_written + line_bytes > inner.max_bytes
+        if inner.cap_enabled && inner.max_bytes > 0 && new_total.is_none_or(|n| n > inner.max_bytes)
         {
             inner.capped = true;
             // Best-effort: flush what we have so the file ends cleanly.
@@ -220,7 +224,7 @@ impl EvidenceSink {
 
         inner.writer.write_all(line.as_bytes())?;
         inner.writer.write_all(b"\n")?;
-        inner.bytes_written += line_bytes;
+        inner.bytes_written = new_total.unwrap_or(u64::MAX);
         if inner.flush_on_write {
             inner.writer.flush()?;
         }
@@ -400,6 +404,43 @@ mod tests {
             !content.contains("should_be_dropped"),
             "no new data should be written to an already-oversized file"
         );
+    }
+
+    #[test]
+    fn file_sink_creates_parent_directories() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("nested").join("evidence.jsonl");
+        let config = EvidenceSinkConfig::enabled_file(&path);
+        let sink = EvidenceSink::from_config(&config).unwrap().unwrap();
+
+        sink.write_jsonl(r#"{"event":"nested"}"#).unwrap();
+        sink.flush().unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "{\"event\":\"nested\"}\n");
+    }
+
+    #[test]
+    fn file_sink_caps_on_byte_counter_overflow() {
+        let sink = EvidenceSink {
+            inner: Arc::new(Mutex::new(EvidenceSinkInner {
+                writer: BufWriter::new(Box::new(io::sink())),
+                flush_on_write: true,
+                max_bytes: u64::MAX,
+                cap_enabled: true,
+                bytes_written: u64::MAX - 1,
+                capped: false,
+            })),
+        };
+
+        sink.write_jsonl("{}").unwrap();
+
+        let inner = sink.inner.lock().unwrap();
+        assert!(
+            inner.capped,
+            "overflowing cap accounting should cap the sink"
+        );
+        assert_eq!(inner.bytes_written, u64::MAX - 1);
     }
 
     #[test]
