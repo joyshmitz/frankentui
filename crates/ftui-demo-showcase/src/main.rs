@@ -141,6 +141,9 @@ fn main() -> ExitCode {
     model.mouse_capture_enabled = mouse_policy.resolve(screen_mode);
     model.current_screen = start_screen;
     model.exit_after_ms = opts.exit_after_ms;
+    if let Some(path) = opts.pane_workspace.as_deref() {
+        model.enable_pane_workspace_persistence(path);
+    }
     if opts.tour || start_screen == ScreenId::GuidedTour {
         let start_step = opts.tour_start_step.saturating_sub(1);
         model.start_tour(start_step, opts.tour_speed);

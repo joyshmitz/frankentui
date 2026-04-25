@@ -29,6 +29,7 @@ OPTIONS:
     --tour-start-step=N  Start tour at step N, 1-indexed (default: 1)
     --mouse=MODE         Mouse capture mode: 'on', 'off', or 'auto' (default: auto)
     --no-mouse           Alias for --mouse=off
+    --pane-workspace=PATH Persist Layout Lab pane workspace JSON
     --vfx-harness        Run deterministic VFX harness (locks effect/size/tick)
     --vfx-effect=NAME    VFX harness effect name (e.g., doom, quake, plasma)
     --vfx-tick-ms=N      VFX harness tick cadence in ms (default: 16)
@@ -123,6 +124,7 @@ ENVIRONMENT VARIABLES:
     FTUI_DEMO_TOUR            Override --tour (1/true to enable)
     FTUI_DEMO_TOUR_SPEED      Override --tour-speed
     FTUI_DEMO_TOUR_START_STEP Override --tour-start-step
+    FTUI_DEMO_PANE_WORKSPACE  Layout Lab pane workspace JSON path
     FTUI_DEMO_VFX_HARNESS     Enable VFX-only harness (1/true)
     FTUI_DEMO_VFX_EFFECT      Lock VFX effect (metaballs/plasma/doom/quake/...)
     FTUI_DEMO_VFX_TICK_MS     Override VFX tick interval in milliseconds
@@ -161,6 +163,8 @@ pub struct Opts {
     pub mouse_mode: String,
     /// Auto-exit after this many milliseconds (0 = disabled).
     pub exit_after_ms: u64,
+    /// Optional Layout Lab pane workspace JSON path for terminal persistence.
+    pub pane_workspace: Option<String>,
     /// Enable deterministic VFX harness mode.
     pub vfx_harness: bool,
     /// VFX harness effect name (None = default).
@@ -218,6 +222,7 @@ impl Default for Opts {
             tour_start_step: 1,
             mouse_mode: "auto".into(),
             exit_after_ms: 0,
+            pane_workspace: None,
             vfx_harness: false,
             vfx_effect: None,
             vfx_tick_ms: 16,
@@ -324,6 +329,11 @@ impl Opts {
         {
             eprintln!("WARNING: FTUI_DEMO_EXIT_AFTER_MS is set to {n}. App will auto-exit.");
             opts.exit_after_ms = n;
+        }
+        if let Some(val) = get_env("FTUI_DEMO_PANE_WORKSPACE")
+            && !val.trim().is_empty()
+        {
+            opts.pane_workspace = Some(val);
         }
         if let Some(val) = get_env("FTUI_DEMO_VFX_HARNESS") {
             let enabled = val == "1" || val.eq_ignore_ascii_case("true");
@@ -523,6 +533,10 @@ impl Opts {
                                 });
                             }
                         }
+                    } else if let Some(val) = other.strip_prefix("--pane-workspace=") {
+                        if !val.trim().is_empty() {
+                            opts.pane_workspace = Some(val.to_string());
+                        }
                     } else if let Some(val) = other.strip_prefix("--vfx-effect=") {
                         if !val.trim().is_empty() {
                             opts.vfx_effect = Some(val.to_string());
@@ -714,6 +728,7 @@ mod tests {
         assert_eq!(opts.tour_start_step, 1);
         assert_eq!(opts.mouse_mode, "auto");
         assert_eq!(opts.exit_after_ms, 0);
+        assert!(opts.pane_workspace.is_none());
         assert!(!opts.vfx_harness);
         assert!(opts.vfx_effect.is_none());
         assert_eq!(opts.vfx_tick_ms, 16);
@@ -797,6 +812,7 @@ mod tests {
         assert!(HELP_TEXT.contains("FTUI_DEMO_TOUR"));
         assert!(HELP_TEXT.contains("FTUI_DEMO_TOUR_SPEED"));
         assert!(HELP_TEXT.contains("FTUI_DEMO_TOUR_START_STEP"));
+        assert!(HELP_TEXT.contains("FTUI_DEMO_PANE_WORKSPACE"));
         assert!(HELP_TEXT.contains("FTUI_DEMO_VFX_HARNESS"));
         assert!(HELP_TEXT.contains("FTUI_DEMO_VFX_EFFECT"));
         assert!(HELP_TEXT.contains("FTUI_DEMO_VFX_TICK_MS"));
@@ -904,6 +920,36 @@ mod tests {
             Some("out.jsonl"),
             "expected FTUI_DEMO_VFX_JSONL to set vfx_jsonl, got {:?}",
             opts.vfx_jsonl
+        );
+    }
+
+    #[test]
+    fn env_pane_workspace_sets_path() {
+        let opts = parse_with_env(
+            Vec::<String>::new(),
+            &[("FTUI_DEMO_PANE_WORKSPACE", "/tmp/ftui-pane.json")],
+        )
+        .expect("parse env");
+        assert_eq!(
+            opts.pane_workspace.as_deref(),
+            Some("/tmp/ftui-pane.json"),
+            "expected FTUI_DEMO_PANE_WORKSPACE to set pane_workspace, got {:?}",
+            opts.pane_workspace
+        );
+    }
+
+    #[test]
+    fn args_override_env_pane_workspace() {
+        let opts = parse_with_env(
+            ["--pane-workspace=/tmp/cli-pane.json"],
+            &[("FTUI_DEMO_PANE_WORKSPACE", "/tmp/env-pane.json")],
+        )
+        .expect("parse args");
+        assert_eq!(
+            opts.pane_workspace.as_deref(),
+            Some("/tmp/cli-pane.json"),
+            "expected args to override env for pane_workspace, got {:?}",
+            opts.pane_workspace
         );
     }
 

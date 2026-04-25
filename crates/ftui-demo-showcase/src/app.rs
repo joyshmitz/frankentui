@@ -10,10 +10,10 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashSet, VecDeque};
 use std::env;
-use std::fs::{OpenOptions, create_dir_all};
+use std::fs::{self, OpenOptions, create_dir_all};
 use std::io::{BufWriter, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use web_time::{Duration, Instant};
 
@@ -56,6 +56,7 @@ use ftui_widgets::paragraph::Paragraph;
 const TICK_STALL_WARN_AFTER: Duration = Duration::from_millis(750);
 /// Rate-limit tick stall logs to avoid spamming.
 const TICK_STALL_LOG_INTERVAL: Duration = Duration::from_millis(2_000);
+const PANE_WORKSPACE_SAVE_RETRY_TICKS: u64 = 20;
 
 /// Shared perf-HUD logger (env-gated via `FTUI_PERF_HUD_JSONL`).
 #[allow(dead_code)]
@@ -2726,6 +2727,10 @@ pub struct AppModel {
     mouse_dispatcher: MouseDispatcher,
     /// Pending terminal mouse-capture command requested by a status-bar click.
     pending_mouse_capture_cmd: Option<bool>,
+    /// Optional filesystem-backed LayoutLab pane workspace persistence path.
+    pane_workspace_path: Option<PathBuf>,
+    /// Tick before which automatic pane workspace saves should be retried.
+    pane_workspace_next_save_tick: u64,
 }
 
 impl Default for AppModel {
@@ -2791,6 +2796,8 @@ impl AppModel {
             a11y_telemetry: None,
             mouse_dispatcher: MouseDispatcher::default(),
             pending_mouse_capture_cmd: None,
+            pane_workspace_path: None,
+            pane_workspace_next_save_tick: 0,
         };
         app.refresh_palette_actions();
         app.screens
@@ -2837,6 +2844,11 @@ impl AppModel {
         self.screens
             .set_visual_effects_deterministic_tick_ms(vfx_tick_ms);
         self.screens.voi_overlay.deterministic_tick_ms = Some(tick_ms);
+    }
+
+    pub fn enable_pane_workspace_persistence(&mut self, path: impl Into<PathBuf>) {
+        self.pane_workspace_path = Some(path.into());
+        self.pane_workspace_next_save_tick = 0;
     }
 
     fn display_screen(&self) -> ScreenId {
@@ -2920,6 +2932,114 @@ impl AppModel {
                 ("checksum", JsonlValue::Raw(&checksum_json)),
             ],
         );
+    }
+
+    fn record_pane_workspace_persistence(
+        &mut self,
+        action: &str,
+        path: &Path,
+        generation: Option<u64>,
+        detail: Option<String>,
+    ) {
+        let mut fields = vec![
+            ("action".to_string(), action.to_string()),
+            ("path".to_string(), path.display().to_string()),
+        ];
+        if let Some(generation) = generation {
+            fields.push(("generation".to_string(), generation.to_string()));
+        }
+        if let Some(detail) = detail {
+            fields.push(("detail".to_string(), detail));
+        }
+        self.screens.action_timeline.record_command_event(
+            self.tick_count,
+            "Pane workspace persistence",
+            fields,
+        );
+    }
+
+    fn load_pane_workspace_from_disk(&mut self) {
+        let Some(path) = self.pane_workspace_path.clone() else {
+            return;
+        };
+        let json = match fs::read_to_string(&path) {
+            Ok(json) => json,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
+            Err(err) => {
+                self.record_pane_workspace_persistence(
+                    "load_error",
+                    &path,
+                    None,
+                    Some(err.to_string()),
+                );
+                return;
+            }
+        };
+        match self.screens.layout_lab.pane_import_workspace_snapshot_json(&json) {
+            Ok(()) => {
+                let generation = self.screens.layout_lab.pane_workspace_generation();
+                self.record_pane_workspace_persistence("load_ok", &path, Some(generation), None);
+            }
+            Err(err) => {
+                self.record_pane_workspace_persistence("load_error", &path, None, Some(err));
+            }
+        }
+    }
+
+    fn save_pane_workspace_to_disk(&mut self, reason: &str, force: bool) {
+        let Some(path) = self.pane_workspace_path.clone() else {
+            return;
+        };
+        if !force && self.tick_count < self.pane_workspace_next_save_tick {
+            return;
+        }
+        if !force && !self.screens.layout_lab.pane_workspace_dirty() {
+            return;
+        }
+        let generation = self.screens.layout_lab.pane_workspace_generation();
+        let snapshot = match self.screens.layout_lab.pane_export_workspace_snapshot_json() {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                self.pane_workspace_next_save_tick =
+                    self.tick_count.saturating_add(PANE_WORKSPACE_SAVE_RETRY_TICKS);
+                self.record_pane_workspace_persistence(
+                    "save_export_error",
+                    &path,
+                    Some(generation),
+                    Some(err),
+                );
+                return;
+            }
+        };
+        if let Err(err) = write_pane_workspace_snapshot(&path, &snapshot) {
+            self.pane_workspace_next_save_tick =
+                self.tick_count.saturating_add(PANE_WORKSPACE_SAVE_RETRY_TICKS);
+            self.record_pane_workspace_persistence(
+                "save_write_error",
+                &path,
+                Some(generation),
+                Some(err.to_string()),
+            );
+            return;
+        }
+        if self.screens.layout_lab.pane_mark_workspace_saved(generation) {
+            self.pane_workspace_next_save_tick = 0;
+            self.record_pane_workspace_persistence(
+                "save_ok",
+                &path,
+                Some(generation),
+                Some(reason.to_string()),
+            );
+        } else {
+            self.pane_workspace_next_save_tick =
+                self.tick_count.saturating_add(PANE_WORKSPACE_SAVE_RETRY_TICKS);
+            self.record_pane_workspace_persistence(
+                "save_ack_stale",
+                &path,
+                Some(generation),
+                Some(reason.to_string()),
+            );
+        }
     }
 
     pub fn start_tour(&mut self, start_step: usize, speed: f64) {
@@ -3977,6 +4097,8 @@ impl Model for AppModel {
     type Message = AppMsg;
 
     fn init(&mut self) -> Cmd<Self::Message> {
+        self.load_pane_workspace_from_disk();
+
         if self.exit_after_ticks.is_none() && self.deterministic_mode && self.exit_after_ms > 0 {
             let tick_ms = self.tick_interval_ms().max(1);
             let ticks = (self.exit_after_ms + tick_ms.saturating_sub(1)) / tick_ms;
@@ -4003,6 +4125,7 @@ impl Model for AppModel {
 
     fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
         let cmd = self.handle_msg(msg, EventSource::User);
+        self.save_pane_workspace_to_disk("autosave", false);
         // Keep tick cadence in sync with the current screen/mode (tour/vfx/etc).
         let tick_ms = self.tick_interval_ms().max(1);
         Cmd::batch(vec![cmd, Cmd::Tick(Duration::from_millis(tick_ms))])
@@ -4134,6 +4257,22 @@ impl Model for AppModel {
     fn subscriptions(&self) -> Vec<Box<dyn Subscription<Self::Message>>> {
         Vec::new()
     }
+
+    fn on_shutdown(&mut self) -> Cmd<Self::Message> {
+        self.save_pane_workspace_to_disk("shutdown", true);
+        Cmd::None
+    }
+}
+
+fn write_pane_workspace_snapshot(path: &Path, snapshot: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        create_dir_all(parent)?;
+    }
+    let tmp_path = path.with_extension("tmp");
+    fs::write(&tmp_path, snapshot)?;
+    fs::rename(tmp_path, path)
 }
 
 #[derive(Clone, Copy)]
@@ -5356,6 +5495,7 @@ mod tests {
     use ftui_render::grapheme_pool::GraphemePool;
     use serial_test::serial;
     use std::sync::{Arc, Mutex};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn switch_screen_changes_current() {
@@ -5426,6 +5566,49 @@ mod tests {
 
         app.update(AppMsg::ToggleDebug);
         assert!(!app.debug_visible);
+    }
+
+    #[test]
+    fn pane_workspace_persistence_round_trips_through_file() {
+        let mut path = std::env::temp_dir();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+        path.push(format!(
+            "ftui-pane-workspace-{}-{nanos}.json",
+            std::process::id()
+        ));
+
+        let mut app = AppModel::new();
+        app.current_screen = ScreenId::LayoutLab;
+        app.enable_pane_workspace_persistence(path.clone());
+        app.update(AppMsg::from(Event::Key(KeyEvent {
+            code: KeyCode::Char('c'),
+            modifiers: Modifiers::NONE,
+            kind: KeyEventKind::Press,
+        })));
+
+        assert!(path.exists(), "autosave should create the pane workspace file");
+        let saved_generation = app.screens.layout_lab.pane_workspace_generation();
+        assert!(saved_generation > 0);
+        assert!(
+            !app.screens.layout_lab.pane_workspace_dirty(),
+            "successful file save should acknowledge the current generation"
+        );
+
+        let mut restored = AppModel::new();
+        restored.enable_pane_workspace_persistence(path);
+        restored.init();
+
+        assert_eq!(
+            restored.screens.layout_lab.pane_workspace_generation(),
+            saved_generation
+        );
+        assert!(
+            !restored.screens.layout_lab.pane_workspace_dirty(),
+            "loading a durable snapshot should restore a clean generation"
+        );
     }
 
     #[test]
