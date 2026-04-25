@@ -941,6 +941,34 @@ pub struct PaneInteractionTimelineCheckpointDecision {
     pub estimated_replay_depth_ns: u128,
 }
 
+/// Deterministic retained-state telemetry for pane timeline memory analysis.
+///
+/// Byte counts are conservative shallow estimates plus explicitly tracked
+/// payload bytes. They are intended for comparing timeline strategies and
+/// retention policies, not for replacing allocator-level profiling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneInteractionTimelineRetentionDiagnostics {
+    pub entry_count: usize,
+    pub cursor: usize,
+    pub redo_entry_count: usize,
+    pub checkpoint_count: usize,
+    pub checkpoint_interval: usize,
+    pub max_entries: usize,
+    pub baseline_present: bool,
+    pub retained_snapshot_count: usize,
+    pub baseline_node_count: usize,
+    pub checkpoint_node_count: usize,
+    pub retained_snapshot_node_count: usize,
+    pub retained_leaf_payload_bytes: usize,
+    pub retained_extension_entry_count: usize,
+    pub retained_extension_payload_bytes: usize,
+    pub retained_operation_payload_bytes: usize,
+    pub estimated_entry_struct_bytes: usize,
+    pub estimated_checkpoint_struct_bytes: usize,
+    pub estimated_snapshot_struct_bytes: usize,
+    pub estimated_total_retained_bytes: usize,
+}
+
 /// Persistent interaction timeline with undo/redo cursor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneInteractionTimeline {
@@ -5580,6 +5608,77 @@ impl PaneInteractionTimeline {
         }
     }
 
+    /// Retained-state diagnostics for memory telemetry and pruning analysis.
+    #[must_use]
+    pub fn retention_diagnostics(&self) -> PaneInteractionTimelineRetentionDiagnostics {
+        let mut snapshot_stats = PaneTimelineSnapshotRetentionStats::default();
+        let baseline_present = self.baseline.is_some();
+        if let Some(baseline) = &self.baseline {
+            snapshot_stats.add_snapshot(baseline);
+        }
+        for checkpoint in &self.checkpoints {
+            snapshot_stats.add_snapshot(&checkpoint.snapshot);
+        }
+
+        let retained_operation_payload_bytes = self
+            .entries
+            .iter()
+            .map(|entry| pane_operation_retained_payload_bytes(&entry.operation))
+            .sum::<usize>();
+        let estimated_entry_struct_bytes = self
+            .entries
+            .len()
+            .saturating_mul(std::mem::size_of::<PaneInteractionTimelineEntry>());
+        let estimated_checkpoint_struct_bytes = self
+            .checkpoints
+            .len()
+            .saturating_mul(std::mem::size_of::<PaneInteractionTimelineCheckpoint>());
+        let estimated_snapshot_struct_bytes = snapshot_stats
+            .snapshot_count
+            .saturating_mul(std::mem::size_of::<PaneTreeSnapshot>())
+            .saturating_add(
+                snapshot_stats
+                    .node_count
+                    .saturating_mul(std::mem::size_of::<PaneNodeRecord>()),
+            );
+        let estimated_total_retained_bytes = std::mem::size_of::<Self>()
+            .saturating_add(estimated_entry_struct_bytes)
+            .saturating_add(estimated_checkpoint_struct_bytes)
+            .saturating_add(estimated_snapshot_struct_bytes)
+            .saturating_add(snapshot_stats.leaf_payload_bytes)
+            .saturating_add(snapshot_stats.extension_payload_bytes)
+            .saturating_add(retained_operation_payload_bytes);
+
+        PaneInteractionTimelineRetentionDiagnostics {
+            entry_count: self.entries.len(),
+            cursor: self.cursor,
+            redo_entry_count: self.entries.len().saturating_sub(self.cursor),
+            checkpoint_count: self.checkpoints.len(),
+            checkpoint_interval: self.checkpoint_interval,
+            max_entries: self.max_entries,
+            baseline_present,
+            retained_snapshot_count: snapshot_stats.snapshot_count,
+            baseline_node_count: self
+                .baseline
+                .as_ref()
+                .map_or(0, |snapshot| snapshot.nodes.len()),
+            checkpoint_node_count: self
+                .checkpoints
+                .iter()
+                .map(|checkpoint| checkpoint.snapshot.nodes.len())
+                .sum(),
+            retained_snapshot_node_count: snapshot_stats.node_count,
+            retained_leaf_payload_bytes: snapshot_stats.leaf_payload_bytes,
+            retained_extension_entry_count: snapshot_stats.extension_entry_count,
+            retained_extension_payload_bytes: snapshot_stats.extension_payload_bytes,
+            retained_operation_payload_bytes,
+            estimated_entry_struct_bytes,
+            estimated_checkpoint_struct_bytes,
+            estimated_snapshot_struct_bytes,
+            estimated_total_retained_bytes,
+        }
+    }
+
     /// Deterministic checkpoint-spacing decision from measured snapshot and replay costs.
     #[must_use]
     pub fn checkpoint_decision(
@@ -5819,6 +5918,73 @@ impl PaneInteractionTimeline {
             })
             .collect();
     }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct PaneTimelineSnapshotRetentionStats {
+    snapshot_count: usize,
+    node_count: usize,
+    leaf_payload_bytes: usize,
+    extension_entry_count: usize,
+    extension_payload_bytes: usize,
+}
+
+impl PaneTimelineSnapshotRetentionStats {
+    fn add_snapshot(&mut self, snapshot: &PaneTreeSnapshot) {
+        self.snapshot_count = self.snapshot_count.saturating_add(1);
+        self.node_count = self.node_count.saturating_add(snapshot.nodes.len());
+        self.extension_entry_count = self
+            .extension_entry_count
+            .saturating_add(snapshot.extensions.len());
+        self.extension_payload_bytes = self
+            .extension_payload_bytes
+            .saturating_add(string_map_payload_bytes(&snapshot.extensions));
+
+        for node in &snapshot.nodes {
+            self.extension_entry_count = self
+                .extension_entry_count
+                .saturating_add(node.extensions.len());
+            self.extension_payload_bytes = self
+                .extension_payload_bytes
+                .saturating_add(string_map_payload_bytes(&node.extensions));
+            if let PaneNodeKind::Leaf(leaf) = &node.kind {
+                self.leaf_payload_bytes = self
+                    .leaf_payload_bytes
+                    .saturating_add(pane_leaf_surface_payload_bytes(leaf));
+                self.extension_entry_count = self
+                    .extension_entry_count
+                    .saturating_add(leaf.extensions.len());
+                self.extension_payload_bytes = self
+                    .extension_payload_bytes
+                    .saturating_add(string_map_payload_bytes(&leaf.extensions));
+            }
+        }
+    }
+}
+
+fn pane_operation_retained_payload_bytes(operation: &PaneOperation) -> usize {
+    match operation {
+        PaneOperation::SplitLeaf { new_leaf, .. } => pane_leaf_retained_payload_bytes(new_leaf),
+        PaneOperation::CloseNode { .. }
+        | PaneOperation::MoveSubtree { .. }
+        | PaneOperation::SwapNodes { .. }
+        | PaneOperation::SetSplitRatio { .. }
+        | PaneOperation::NormalizeRatios => 0,
+    }
+}
+
+fn pane_leaf_retained_payload_bytes(leaf: &PaneLeaf) -> usize {
+    pane_leaf_surface_payload_bytes(leaf).saturating_add(string_map_payload_bytes(&leaf.extensions))
+}
+
+fn pane_leaf_surface_payload_bytes(leaf: &PaneLeaf) -> usize {
+    leaf.surface_key.len()
+}
+
+fn string_map_payload_bytes(map: &BTreeMap<String, String>) -> usize {
+    map.iter()
+        .map(|(key, value)| key.len().saturating_add(value.len()))
+        .sum()
 }
 
 fn analytically_tuned_checkpoint_interval(
@@ -9562,6 +9728,120 @@ mod tests {
         assert!(diagnostics.checkpoint_hit);
         assert_eq!(diagnostics.replay_start_idx, 16);
         assert_eq!(diagnostics.replay_depth, 4);
+    }
+
+    #[test]
+    fn interaction_timeline_retention_diagnostics_reports_entry_and_snapshot_footprint() {
+        let mut tree = PaneTree::singleton("root");
+        let mut timeline = PaneInteractionTimeline::with_baseline(&tree);
+        timeline.checkpoint_interval = 1;
+
+        timeline
+            .apply_and_record(
+                &mut tree,
+                1,
+                60_000,
+                PaneOperation::SplitLeaf {
+                    target: id(1),
+                    axis: SplitAxis::Horizontal,
+                    ratio: PaneSplitRatio::new(1, 1).expect("valid ratio"),
+                    placement: PanePlacement::ExistingFirst,
+                    new_leaf: PaneLeaf::new("aux"),
+                },
+            )
+            .expect("split should apply");
+
+        let diagnostics = timeline.retention_diagnostics();
+        assert_eq!(diagnostics.entry_count, 1);
+        assert_eq!(diagnostics.cursor, 1);
+        assert_eq!(diagnostics.redo_entry_count, 0);
+        assert_eq!(diagnostics.checkpoint_count, 1);
+        assert_eq!(diagnostics.checkpoint_interval, 1);
+        assert!(diagnostics.baseline_present);
+        assert_eq!(diagnostics.retained_snapshot_count, 2);
+        assert_eq!(diagnostics.baseline_node_count, 1);
+        assert_eq!(diagnostics.checkpoint_node_count, 3);
+        assert_eq!(diagnostics.retained_snapshot_node_count, 4);
+        assert_eq!(diagnostics.retained_operation_payload_bytes, "aux".len());
+        assert!(
+            diagnostics.retained_leaf_payload_bytes >= "root".len() + "aux".len(),
+            "leaf payload bytes should include retained surface keys"
+        );
+        assert!(
+            diagnostics.estimated_total_retained_bytes
+                >= diagnostics.estimated_entry_struct_bytes
+                    + diagnostics.estimated_checkpoint_struct_bytes
+                    + diagnostics.estimated_snapshot_struct_bytes
+        );
+    }
+
+    #[test]
+    fn interaction_timeline_retention_diagnostics_separates_leaf_keys_from_extensions() {
+        let mut snapshot = make_valid_snapshot();
+        snapshot
+            .extensions
+            .insert("tree".to_string(), "wide".to_string());
+
+        let left_node = snapshot
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == id(2))
+            .expect("left leaf should be present");
+        left_node
+            .extensions
+            .insert("node".to_string(), "hot".to_string());
+        let PaneNodeKind::Leaf(leaf) = &mut left_node.kind else {
+            let expected_leaf_node = false;
+            assert!(expected_leaf_node, "left node should be a leaf");
+            return;
+        };
+        leaf.extensions
+            .insert("leaf".to_string(), "memo".to_string());
+
+        let tree = PaneTree::from_snapshot(snapshot).expect("snapshot should validate");
+        let timeline = PaneInteractionTimeline::with_baseline(&tree);
+        let diagnostics = timeline.retention_diagnostics();
+
+        assert_eq!(diagnostics.retained_snapshot_count, 1);
+        assert_eq!(
+            diagnostics.retained_leaf_payload_bytes,
+            "left".len() + "right".len()
+        );
+        assert_eq!(diagnostics.retained_extension_entry_count, 3);
+        assert_eq!(
+            diagnostics.retained_extension_payload_bytes,
+            "tree".len() + "wide".len() + "node".len() + "hot".len() + "leaf".len() + "memo".len()
+        );
+    }
+
+    #[test]
+    fn interaction_timeline_retention_diagnostics_reports_redo_entries() {
+        let mut tree = PaneTree::from_snapshot(make_valid_snapshot()).expect("valid tree");
+        let mut timeline = PaneInteractionTimeline::with_baseline(&tree);
+        let split = id(1);
+
+        for (idx, ratio) in [
+            PaneSplitRatio::new(4, 6).expect("valid ratio"),
+            PaneSplitRatio::new(6, 4).expect("valid ratio"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            timeline
+                .apply_and_record(
+                    &mut tree,
+                    idx as u64 + 1,
+                    70_000 + idx as u64,
+                    PaneOperation::SetSplitRatio { split, ratio },
+                )
+                .expect("ratio update should apply");
+        }
+
+        assert!(timeline.undo(&mut tree).expect("undo should succeed"));
+        let diagnostics = timeline.retention_diagnostics();
+        assert_eq!(diagnostics.entry_count, 2);
+        assert_eq!(diagnostics.cursor, 1);
+        assert_eq!(diagnostics.redo_entry_count, 1);
     }
 
     #[test]

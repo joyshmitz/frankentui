@@ -1,14 +1,19 @@
 use ftui_layout::{
     PaneId, PaneInteractionTimeline, PaneInteractionTimelineCheckpointDecision,
-    PaneInteractionTimelineReplayDiagnostics, PaneLeaf, PaneNodeKind, PaneOperation, PanePlacement,
-    PaneSplitRatio, PaneTree, SplitAxis,
+    PaneInteractionTimelineReplayDiagnostics, PaneInteractionTimelineRetentionDiagnostics,
+    PaneLeaf, PaneNodeKind, PaneOperation, PanePlacement, PaneSplitRatio, PaneTree, SplitAxis,
 };
 use serde::Serialize;
+use stats_alloc::{INSTRUMENTED_SYSTEM, Region, Stats, StatsAlloc};
+use std::alloc::System;
 use std::env;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+
+#[global_allocator]
+static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 
 #[derive(Debug, Clone, Serialize)]
 struct ScenarioSpec {
@@ -40,9 +45,34 @@ struct HarnessManifest {
     estimated_snapshot_cost_ns: u128,
     estimated_replay_step_cost_ns: u128,
     checkpoint_decision: PaneInteractionTimelineCheckpointDecision,
+    allocation_diagnostics: AllocationDiagnostics,
+    retention_diagnostics: PaneInteractionTimelineRetentionDiagnostics,
     baseline_snapshot_path: String,
     final_snapshot_path: String,
     log_path: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+struct AllocationDiagnostics {
+    allocations: usize,
+    deallocations: usize,
+    reallocations: usize,
+    bytes_allocated: usize,
+    bytes_deallocated: usize,
+    bytes_reallocated: isize,
+}
+
+impl AllocationDiagnostics {
+    const fn from_stats(stats: Stats) -> Self {
+        Self {
+            allocations: stats.allocations,
+            deallocations: stats.deallocations,
+            reallocations: stats.reallocations,
+            bytes_allocated: stats.bytes_allocated,
+            bytes_deallocated: stats.bytes_deallocated,
+            bytes_reallocated: stats.bytes_reallocated,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -50,6 +80,7 @@ struct IterationResult {
     final_hash: u64,
     applied_len: usize,
     replay_diagnostics: PaneInteractionTimelineReplayDiagnostics,
+    retention_diagnostics: PaneInteractionTimelineRetentionDiagnostics,
     replay_elapsed_ns: u128,
     snapshot: ftui_layout::PaneTreeSnapshot,
 }
@@ -168,13 +199,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut sample_snapshot = None;
     let mut sample_hash = 0u64;
     let mut sample_replay_diagnostics = None;
+    let mut sample_allocation_diagnostics = None;
+    let mut sample_retention_diagnostics = None;
     for iter_idx in 0..spec.iterations {
+        let allocation_region = Region::new(GLOBAL);
         let result = execute_iteration(
             &baseline,
             &split_ids,
             &ratios,
             spec.operations_per_iteration,
         )?;
+        let allocation_diagnostics = AllocationDiagnostics::from_stats(allocation_region.change());
         aggregate_hash ^= result.final_hash.rotate_left((iter_idx % 63) as u32);
         if iter_idx == 0 || iter_idx + 1 == spec.iterations {
             log_lines.push(format!(
@@ -194,9 +229,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 result.replay_diagnostics.replay_depth,
                 result.replay_elapsed_ns
             ));
+            log_lines.push(format!(
+                "iteration={} allocations={} deallocations={} reallocations={} bytes_allocated={} bytes_deallocated={} bytes_reallocated={}",
+                iter_idx,
+                allocation_diagnostics.allocations,
+                allocation_diagnostics.deallocations,
+                allocation_diagnostics.reallocations,
+                allocation_diagnostics.bytes_allocated,
+                allocation_diagnostics.bytes_deallocated,
+                allocation_diagnostics.bytes_reallocated
+            ));
+            log_lines.push(format!(
+                "iteration={} retained_snapshot_count={} retained_snapshot_node_count={} retained_leaf_payload_bytes={} retained_operation_payload_bytes={} estimated_total_retained_bytes={}",
+                iter_idx,
+                result.retention_diagnostics.retained_snapshot_count,
+                result.retention_diagnostics.retained_snapshot_node_count,
+                result.retention_diagnostics.retained_leaf_payload_bytes,
+                result.retention_diagnostics.retained_operation_payload_bytes,
+                result.retention_diagnostics.estimated_total_retained_bytes
+            ));
         }
         sample_hash = result.final_hash;
         sample_replay_diagnostics = Some(result.replay_diagnostics);
+        sample_allocation_diagnostics = Some(allocation_diagnostics);
+        sample_retention_diagnostics = Some(result.retention_diagnostics);
         sample_snapshot = Some(result.snapshot);
     }
     let elapsed = start.elapsed();
@@ -210,6 +266,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let final_snapshot = sample_snapshot.ok_or("missing sample snapshot after execution")?;
     let replay_diagnostics =
         sample_replay_diagnostics.ok_or("missing replay diagnostics after execution")?;
+    let allocation_diagnostics =
+        sample_allocation_diagnostics.ok_or("missing allocation diagnostics after execution")?;
+    let retention_diagnostics =
+        sample_retention_diagnostics.ok_or("missing retention diagnostics after execution")?;
 
     write_json(&baseline_snapshot_path, &baseline_snapshot)?;
     write_json(&final_snapshot_path, &final_snapshot)?;
@@ -235,6 +295,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         estimated_snapshot_cost_ns,
         estimated_replay_step_cost_ns,
         checkpoint_decision,
+        allocation_diagnostics,
+        retention_diagnostics,
         baseline_snapshot_path: baseline_snapshot_path.display().to_string(),
         final_snapshot_path: final_snapshot_path.display().to_string(),
         log_path: log_path.display().to_string(),
@@ -291,6 +353,7 @@ fn execute_iteration(
         )?;
     }
     let replay_diagnostics = timeline.replay_diagnostics();
+    let retention_diagnostics = timeline.retention_diagnostics();
     let replay_start = Instant::now();
     let replayed = timeline.replay()?;
     let replay_elapsed_ns = replay_start.elapsed().as_nanos();
@@ -306,6 +369,7 @@ fn execute_iteration(
         final_hash: replay_hash,
         applied_len: timeline.applied_len(),
         replay_diagnostics,
+        retention_diagnostics,
         replay_elapsed_ns,
         snapshot: replayed.to_snapshot(),
     })
