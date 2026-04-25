@@ -36,6 +36,7 @@ struct LaneResult {
     lane: RuntimeLane,
     trace: Vec<String>,
     logs: Vec<String>,
+    feature_trace: Vec<String>,
     running: bool,
     tick_rate: Option<Duration>,
     cmd_log_len: usize,
@@ -48,6 +49,7 @@ enum MismatchReasonCode {
     Trace,
     Log,
     TerminalOutput,
+    FeatureTrace,
     RunningState,
     TickRate,
     CommandLogLength,
@@ -61,6 +63,7 @@ impl MismatchReasonCode {
             Self::Trace => "TRACE_DIVERGENCE",
             Self::Log => "LOG_DIVERGENCE",
             Self::TerminalOutput => "TERMINAL_OUTPUT_DIVERGENCE",
+            Self::FeatureTrace => "FEATURE_TRACE_DIVERGENCE",
             Self::RunningState => "RUNNING_STATE_DIVERGENCE",
             Self::TickRate => "TICK_RATE_DIVERGENCE",
             Self::CommandLogLength => "COMMAND_LOG_LENGTH_DIVERGENCE",
@@ -73,6 +76,7 @@ impl MismatchReasonCode {
         match self {
             Self::Trace
             | Self::TerminalOutput
+            | Self::FeatureTrace
             | Self::RunningState
             | Self::FrameHash
             | Self::FrameCount => "semantic",
@@ -85,6 +89,7 @@ impl MismatchReasonCode {
         match self {
             Self::Trace
             | Self::TerminalOutput
+            | Self::FeatureTrace
             | Self::RunningState
             | Self::FrameHash
             | Self::FrameCount => FailureClass::ShadowDivergence,
@@ -127,6 +132,7 @@ struct LaneSummary {
     lane: String,
     trace_len: usize,
     log_len: usize,
+    feature_trace: Vec<String>,
     running: bool,
     tick_rate_ms: Option<u64>,
     cmd_log_len: usize,
@@ -159,6 +165,7 @@ struct ScenarioReport {
     baseline: LaneSummary,
     candidate: LaneSummary,
     mismatch_count: usize,
+    blocking_mismatch_count: usize,
     mismatches: Vec<MismatchEvidence>,
 }
 
@@ -168,7 +175,15 @@ struct SuiteSummary {
     matched_scenarios: usize,
     diverged_scenarios: usize,
     total_mismatches: usize,
+    total_blocking_mismatches: usize,
     scenario_filter: String,
+    contract_coverage: Vec<ContractCoverage>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ContractCoverage {
+    contract: &'static str,
+    covered: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -185,6 +200,7 @@ fn mismatch_reason(field: &str) -> MismatchReasonCode {
         "trace" => MismatchReasonCode::Trace,
         "logs" => MismatchReasonCode::Log,
         "terminal_output" => MismatchReasonCode::TerminalOutput,
+        "feature_trace" => MismatchReasonCode::FeatureTrace,
         "running" => MismatchReasonCode::RunningState,
         "tick_rate" => MismatchReasonCode::TickRate,
         "cmd_log_len" => MismatchReasonCode::CommandLogLength,
@@ -274,6 +290,16 @@ fn compare_results(
         );
     }
 
+    if legacy.feature_trace != structured.feature_trace {
+        push_mismatch(
+            &mut mismatches,
+            scenario,
+            "feature_trace",
+            format!("{:?}", legacy.feature_trace),
+            format!("{:?}", structured.feature_trace),
+        );
+    }
+
     if legacy.running != structured.running {
         push_mismatch(
             &mut mismatches,
@@ -355,6 +381,7 @@ fn terminal_output_signature(bytes: &[u8]) -> String {
 struct ShadowHarnessState {
     pending_tasks: AtomicUsize,
     scenario_quit: AtomicBool,
+    feature_trace: Mutex<Vec<String>>,
 }
 
 impl ShadowHarnessState {
@@ -388,6 +415,30 @@ impl ShadowHarnessState {
     fn scenario_quit(&self) -> bool {
         self.scenario_quit.load(Ordering::SeqCst)
     }
+
+    fn record_feature_update(&self, features: BackendFeatures) {
+        let entry = feature_signature(features);
+        if let Ok(mut trace) = self.feature_trace.lock() {
+            trace.push(entry);
+        }
+    }
+
+    fn feature_trace(&self) -> Vec<String> {
+        self.feature_trace
+            .lock()
+            .map(|trace| trace.clone())
+            .unwrap_or_default()
+    }
+}
+
+fn feature_signature(features: BackendFeatures) -> String {
+    format!(
+        "mouse={} paste={} focus={} kitty={}",
+        features.mouse_capture,
+        features.bracketed_paste,
+        features.focus_events,
+        features.kitty_keyboard
+    )
 }
 
 #[derive(Clone, Default)]
@@ -466,6 +517,7 @@ impl BackendEventSource for ScriptedEventSource {
 
     fn set_features(&mut self, features: BackendFeatures) -> Result<(), io::Error> {
         self.features = features;
+        self.shared.record_feature_update(features);
         Ok(())
     }
 
@@ -597,6 +649,10 @@ impl ShadowModel {
                 self.trace.push(format!("log:{text}"));
                 Cmd::log(text)
             }
+            SMsg::MouseCapture(enabled) => {
+                self.trace.push(format!("mouse-capture:{enabled}"));
+                Cmd::set_mouse_capture(enabled)
+            }
             SMsg::Tick => {
                 let duration = Duration::from_millis(100);
                 self.trace.push("tick".into());
@@ -639,6 +695,7 @@ enum SMsg {
     Task(String),
     TaskResult(String),
     Log(String),
+    MouseCapture(bool),
     Tick,
     Quit,
     QuitInBatch(usize),
@@ -732,11 +789,13 @@ fn run_lane(lane: RuntimeLane, msgs: Vec<SMsg>, capture_frames: &[(u16, u16)]) -
         frame_hashes.push(render_model_frame_hash(program.model(), width, height));
     }
     let terminal_output = output.snapshot();
+    let feature_trace = shared.feature_trace();
 
     LaneResult {
         lane,
         trace: program.model().trace.clone(),
         logs: observed_log_lines(&terminal_output),
+        feature_trace,
         running: program.is_running(),
         tick_rate: program.tick_rate(),
         cmd_log_len: program.executed_cmd_count(),
@@ -750,6 +809,7 @@ fn lane_summary(result: &LaneResult) -> LaneSummary {
         lane: result.lane.label().to_string(),
         trace_len: result.trace.len(),
         log_len: result.logs.len(),
+        feature_trace: result.feature_trace.clone(),
         running: result.running,
         tick_rate_ms: result
             .tick_rate
@@ -826,6 +886,18 @@ fn scenario_saturation() -> Vec<SMsg> {
     messages
 }
 
+fn scenario_terminal_safety() -> Vec<SMsg> {
+    vec![
+        SMsg::Step("before-feature-toggle".into()),
+        SMsg::MouseCapture(true),
+        SMsg::Task("capture-task".into()),
+        SMsg::Log("capture enabled".into()),
+        SMsg::MouseCapture(false),
+        SMsg::Batch(vec!["post-toggle-a".into(), "post-toggle-b".into()]),
+        SMsg::Tick,
+    ]
+}
+
 const FRAMES_SMALL: &[(u16, u16)] = &[(40, 10)];
 const FRAMES_COMPLEX: &[(u16, u16)] = &[(80, 24), (40, 10)];
 const FRAMES_EMPTY: &[(u16, u16)] = &[(10, 5)];
@@ -882,6 +954,14 @@ fn operator_scenarios() -> Vec<ScenarioSpec> {
             frames: FRAMES_EMPTY,
         },
         ScenarioSpec {
+            name: "terminal_feature_lifecycle",
+            scenario_kind: "terminal_safety",
+            contract_focus: "terminal_feature_cleanup",
+            assertion: AssertionCategory::NoRegression,
+            messages: scenario_terminal_safety,
+            frames: FRAMES_COMPLEX,
+        },
+        ScenarioSpec {
             name: "saturation_burst_load",
             scenario_kind: "saturation",
             contract_focus: "load_envelope_and_recovery",
@@ -918,6 +998,26 @@ fn select_operator_scenarios() -> Vec<ScenarioSpec> {
             selected
         }
     }
+}
+
+fn contract_coverage_for(scenarios: &[ScenarioReport]) -> Vec<ContractCoverage> {
+    const REQUIRED_CONTRACTS: &[&str] = &[
+        "saturation",
+        "cancellation_heavy",
+        "shutdown_heavy",
+        "terminal_safety",
+        "negative_control",
+    ];
+
+    REQUIRED_CONTRACTS
+        .iter()
+        .map(|contract| ContractCoverage {
+            contract,
+            covered: scenarios
+                .iter()
+                .any(|scenario| scenario.scenario_kind == *contract),
+        })
+        .collect()
 }
 
 fn build_scenario_report(spec: &ScenarioSpec) -> ScenarioReport {
@@ -968,6 +1068,7 @@ fn build_scenario_report(spec: &ScenarioSpec) -> ScenarioReport {
         baseline: lane_summary(&legacy),
         candidate: lane_summary(&structured),
         mismatch_count: mismatches.len(),
+        blocking_mismatch_count: blocking_mismatches,
         mismatches,
     }
 }
@@ -989,6 +1090,11 @@ fn build_operator_suite_report() -> RuntimeShadowSuiteReport {
         .iter()
         .map(|scenario| scenario.mismatch_count)
         .sum();
+    let total_blocking_mismatches = scenarios
+        .iter()
+        .map(|scenario| scenario.blocking_mismatch_count)
+        .sum();
+    let contract_coverage = contract_coverage_for(&scenarios);
     RuntimeShadowSuiteReport {
         schema_version: "ftui-runtime-shadow-suite-v1",
         suite: "runtime_shadow_comparison",
@@ -998,7 +1104,9 @@ fn build_operator_suite_report() -> RuntimeShadowSuiteReport {
             matched_scenarios: scenarios.len().saturating_sub(diverged_scenarios),
             diverged_scenarios,
             total_mismatches,
+            total_blocking_mismatches,
             scenario_filter,
+            contract_coverage,
         },
         scenarios,
     }
@@ -1163,6 +1271,12 @@ fn mismatch_reason_codes_cover_runtime_fields() {
             "SHADOW_DIVERGENCE",
         ),
         (
+            "feature_trace",
+            "FEATURE_TRACE_DIVERGENCE",
+            "semantic",
+            "SHADOW_DIVERGENCE",
+        ),
+        (
             "running",
             "RUNNING_STATE_DIVERGENCE",
             "semantic",
@@ -1277,7 +1391,7 @@ fn graceful_fallback_still_blocks_non_terminal_divergence() {
 #[test]
 fn shadow_runtime_operator_report_contains_replay_commands() {
     let report = build_operator_suite_report();
-    assert!(report.summary.total_scenarios >= 6);
+    assert!(report.summary.total_scenarios >= 8);
     assert_eq!(report.summary.total_scenarios, report.scenarios.len());
     assert!(
         report
@@ -1286,6 +1400,22 @@ fn shadow_runtime_operator_report_contains_replay_commands() {
             .any(|scenario| scenario.scenario_kind == "saturation"),
         "suite should include a saturation scenario"
     );
+    assert!(
+        report
+            .scenarios
+            .iter()
+            .any(|scenario| scenario.scenario_kind == "terminal_safety"),
+        "suite should include a terminal safety scenario"
+    );
+    assert!(
+        report
+            .summary
+            .contract_coverage
+            .iter()
+            .all(|coverage| coverage.covered),
+        "suite missing required contract coverage: {:?}",
+        report.summary.contract_coverage
+    );
     for scenario in &report.scenarios {
         assert!(
             !scenario.assertion_category.is_empty(),
@@ -1293,6 +1423,11 @@ fn shadow_runtime_operator_report_contains_replay_commands() {
             scenario.scenario
         );
         assert_eq!(scenario.contract_status, "within-contract");
+        assert_eq!(
+            scenario.blocking_mismatch_count, 0,
+            "scenario has blocking mismatches: {}",
+            scenario.scenario
+        );
         assert!(
             scenario
                 .replay_command
@@ -1376,6 +1511,7 @@ fn compare_results_flags_terminal_output_divergence() {
         lane: RuntimeLane::Legacy,
         trace: vec!["init".into()],
         logs: vec!["same".into()],
+        feature_trace: vec![],
         running: false,
         tick_rate: None,
         cmd_log_len: 1,
@@ -1386,6 +1522,7 @@ fn compare_results_flags_terminal_output_divergence() {
         lane: RuntimeLane::Structured,
         trace: vec!["init".into()],
         logs: vec!["same".into()],
+        feature_trace: vec![],
         running: false,
         tick_rate: None,
         cmd_log_len: 1,
@@ -1396,6 +1533,37 @@ fn compare_results_flags_terminal_output_divergence() {
     let mismatches = compare_results("terminal_output", &legacy, &structured);
     assert!(mismatches.iter().any(|mismatch| {
         mismatch.field == "terminal_output" && mismatch.reason_code == "TERMINAL_OUTPUT_DIVERGENCE"
+    }));
+}
+
+#[test]
+fn compare_results_flags_feature_trace_divergence() {
+    let legacy = LaneResult {
+        lane: RuntimeLane::Legacy,
+        trace: vec!["init".into()],
+        logs: vec![],
+        feature_trace: vec!["mouse=true paste=false focus=false kitty=false".into()],
+        running: false,
+        tick_rate: None,
+        cmd_log_len: 1,
+        frame_hashes: vec![1],
+        terminal_output: Vec::new(),
+    };
+    let structured = LaneResult {
+        lane: RuntimeLane::Structured,
+        trace: vec!["init".into()],
+        logs: vec![],
+        feature_trace: vec!["mouse=false paste=false focus=false kitty=false".into()],
+        running: false,
+        tick_rate: None,
+        cmd_log_len: 1,
+        frame_hashes: vec![1],
+        terminal_output: Vec::new(),
+    };
+
+    let mismatches = compare_results("feature_trace", &legacy, &structured);
+    assert!(mismatches.iter().any(|mismatch| {
+        mismatch.field == "feature_trace" && mismatch.reason_code == "FEATURE_TRACE_DIVERGENCE"
     }));
 }
 

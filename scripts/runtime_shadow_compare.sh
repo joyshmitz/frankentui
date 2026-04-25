@@ -139,7 +139,8 @@ PY
   echo "manifest_json=${MANIFEST_JSON}"
   echo "stdout_log=${STDOUT_LOG}"
   echo "stderr_log=${STDERR_LOG}"
-  jq -r '.summary | "total_scenarios=\(.total_scenarios)\nmatched_scenarios=\(.matched_scenarios)\ndiverged_scenarios=\(.diverged_scenarios)\ntotal_mismatches=\(.total_mismatches)"' "${REPORT_JSON}"
+  jq -r '.summary | "total_scenarios=\(.total_scenarios)\nmatched_scenarios=\(.matched_scenarios)\ndiverged_scenarios=\(.diverged_scenarios)\ntotal_mismatches=\(.total_mismatches)\ntotal_blocking_mismatches=\(.total_blocking_mismatches)"' "${REPORT_JSON}"
+  jq -r '.summary.contract_coverage[] | "contract_coverage_\(.contract)=\(.covered)"' "${REPORT_JSON}"
 } > "${SUMMARY_TXT}"
 
 cat "${SUMMARY_TXT}"
