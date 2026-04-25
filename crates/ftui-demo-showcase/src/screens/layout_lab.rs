@@ -11,7 +11,7 @@ use ftui_layout::{
     Alignment as FlexAlignment, Constraint, Flex, PANE_EDGE_GRIP_INSET_CELLS,
     PANE_MAGNETIC_FIELD_CELLS, PaneId, PaneInertialThrow, PaneInteractionTimeline,
     PaneLayoutIntelligenceMode, PaneMotionVector, PaneNodeKind, PanePointerPosition,
-    PanePressureSnapProfile, PaneSelectionState, PaneTree,
+    PanePressureSnapProfile, PaneSelectionState, PaneTree, WorkspaceMetadata, WorkspaceSnapshot,
 };
 use ftui_render::cell::{Cell as RenderCell, PackedRgba};
 use ftui_render::drawing::Draw;
@@ -120,6 +120,8 @@ pub struct LayoutLab {
     pane_next_operation_id: u64,
     /// Workspace generation counter.
     pane_workspace_generation: u64,
+    /// Last workspace generation acknowledged as durably saved.
+    pane_last_saved_workspace_generation: u64,
     /// Monotonic semantic input sequence.
     pane_sequence: u64,
     /// Last pointer position while dragging.
@@ -210,6 +212,7 @@ impl LayoutLab {
             pane_preview_state: PanePreviewState::default(),
             pane_next_operation_id: 1,
             pane_workspace_generation: 0,
+            pane_last_saved_workspace_generation: 0,
             pane_sequence: 0,
             pane_last_pointer: None,
             pane_last_motion: PaneMotionVector::from_delta(0, 0, 16, 0),
@@ -1190,6 +1193,84 @@ impl LayoutLab {
         }
     }
 
+    /// Current pane workspace generation for persistence adapters.
+    #[must_use]
+    pub const fn pane_workspace_generation(&self) -> u64 {
+        self.pane_workspace_generation
+    }
+
+    /// Last pane workspace generation acknowledged as durably saved.
+    #[must_use]
+    pub const fn pane_saved_workspace_generation(&self) -> u64 {
+        self.pane_last_saved_workspace_generation
+    }
+
+    /// Whether pane state has changed since the last save acknowledgement.
+    #[must_use]
+    pub const fn pane_workspace_dirty(&self) -> bool {
+        self.pane_workspace_generation != self.pane_last_saved_workspace_generation
+    }
+
+    /// Acknowledge that a previously exported generation was saved by the host.
+    pub fn pane_mark_workspace_saved(&mut self, generation: u64) -> bool {
+        if generation == self.pane_workspace_generation {
+            self.pane_last_saved_workspace_generation = generation;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Export the current pane workspace as canonical JSON.
+    pub fn pane_export_workspace_snapshot_json(&self) -> Result<String, String> {
+        let mut metadata = WorkspaceMetadata::new("layout-lab");
+        metadata.saved_generation = self.pane_workspace_generation;
+        let mut snapshot = WorkspaceSnapshot::new(self.pane_tree.to_snapshot(), metadata);
+        snapshot.interaction_timeline = self.pane_timeline.clone();
+        if let Some(baseline) = snapshot.interaction_timeline.baseline.as_mut() {
+            baseline.canonicalize();
+        }
+        snapshot.active_pane_id = self.pane_selection.anchor;
+        snapshot
+            .validate()
+            .map_err(|err| format!("workspace snapshot validation failed: {err}"))?;
+        serde_json::to_string(&snapshot)
+            .map_err(|err| format!("workspace snapshot encode failed: {err}"))
+    }
+
+    /// Restore a pane workspace snapshot without mutating current state on failure.
+    pub fn pane_import_workspace_snapshot_json(&mut self, json: &str) -> Result<(), String> {
+        let snapshot: WorkspaceSnapshot = serde_json::from_str(json)
+            .map_err(|err| format!("workspace snapshot parse failed: {err}"))?;
+        snapshot
+            .validate()
+            .map_err(|err| format!("workspace snapshot invalid: {err}"))?;
+        let tree = PaneTree::from_snapshot(snapshot.pane_tree.clone())
+            .map_err(|err| format!("pane tree restore failed: {err}"))?;
+        let mut timeline = snapshot.interaction_timeline;
+        if let Some(baseline) = timeline.baseline.as_mut() {
+            baseline.canonicalize();
+        }
+        if timeline.baseline.is_none() {
+            timeline = PaneInteractionTimeline::with_baseline(&tree);
+        }
+        let mut selection = PaneSelectionState::default();
+        if let Some(anchor) = snapshot.active_pane_id {
+            selection.anchor = Some(anchor);
+            let _ = selection.selected.insert(anchor);
+        }
+
+        self.pane_tree = tree;
+        self.pane_timeline = timeline;
+        self.pane_selection = selection;
+        self.pane_workspace_generation = snapshot.metadata.saved_generation;
+        self.pane_last_saved_workspace_generation = self.pane_workspace_generation;
+        self.pane_next_operation_id = self.pane_timeline.next_operation_id();
+        self.sanitize_pane_selection();
+        self.finish_pane_gesture();
+        Ok(())
+    }
+
     fn cycle_pane_intelligence_mode(&mut self) {
         let next = match self.pane_intelligence_mode {
             PaneLayoutIntelligenceMode::Focus => PaneLayoutIntelligenceMode::Compare,
@@ -1241,6 +1322,7 @@ impl LayoutLab {
         self.pane_timeline = PaneInteractionTimeline::with_baseline(&self.pane_tree);
         self.pane_next_operation_id = 1;
         self.pane_workspace_generation = 0;
+        self.pane_last_saved_workspace_generation = 0;
         self.pane_sequence = 0;
         self.pane_last_applied_ops = 0;
         self.pane_intelligence_mode = PaneLayoutIntelligenceMode::Focus;
@@ -3073,6 +3155,61 @@ mod tests {
         lab.pane_replay();
 
         assert_eq!(lab.pane_next_operation_id, 43);
+    }
+
+    #[test]
+    fn pane_workspace_save_ack_requires_current_generation() {
+        let mut lab = LayoutLab::new();
+        assert!(!lab.pane_workspace_dirty());
+        assert_eq!(lab.pane_workspace_generation(), 0);
+        assert_eq!(lab.pane_saved_workspace_generation(), 0);
+
+        lab.apply_pane_intelligence_mode(PaneLayoutIntelligenceMode::Compare);
+        assert!(lab.pane_workspace_dirty());
+        let generation = lab.pane_workspace_generation();
+        assert!(generation > 0);
+
+        let snapshot = lab
+            .pane_export_workspace_snapshot_json()
+            .expect("snapshot export should succeed");
+        assert!(
+            lab.pane_workspace_dirty(),
+            "export alone must not mark host storage durable"
+        );
+        assert!(!lab.pane_mark_workspace_saved(generation.saturating_sub(1)));
+        assert!(lab.pane_workspace_dirty());
+        assert!(lab.pane_mark_workspace_saved(generation));
+        assert!(!lab.pane_workspace_dirty());
+
+        let mut restored = LayoutLab::new();
+        restored
+            .pane_import_workspace_snapshot_json(&snapshot)
+            .expect("snapshot import should succeed");
+        assert_eq!(restored.pane_workspace_generation(), generation);
+        assert_eq!(restored.pane_saved_workspace_generation(), generation);
+        assert!(!restored.pane_workspace_dirty());
+    }
+
+    #[test]
+    fn pane_workspace_import_failure_preserves_active_state() {
+        let mut lab = LayoutLab::new();
+        lab.apply_pane_intelligence_mode(PaneLayoutIntelligenceMode::Compare);
+        let before_hash = lab.pane_tree.state_hash();
+        let before_generation = lab.pane_workspace_generation();
+        let before_saved_generation = lab.pane_saved_workspace_generation();
+        let before_dirty = lab.pane_workspace_dirty();
+
+        let err = lab
+            .pane_import_workspace_snapshot_json("{not json")
+            .expect_err("invalid JSON should fail to import");
+        assert!(err.contains("parse failed"));
+        assert_eq!(lab.pane_tree.state_hash(), before_hash);
+        assert_eq!(lab.pane_workspace_generation(), before_generation);
+        assert_eq!(
+            lab.pane_saved_workspace_generation(),
+            before_saved_generation
+        );
+        assert_eq!(lab.pane_workspace_dirty(), before_dirty);
     }
 
     #[test]

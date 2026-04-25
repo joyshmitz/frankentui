@@ -236,7 +236,6 @@ impl ExplainabilityCockpit {
             });
             self.last_modified = None;
             self.last_size = None;
-            return;
         }
 
         #[cfg(not(target_arch = "wasm32"))]

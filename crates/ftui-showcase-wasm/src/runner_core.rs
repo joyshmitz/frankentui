@@ -76,6 +76,8 @@ pub struct RunnerCore {
     intelligence_mode: PaneLayoutIntelligenceMode,
     /// Monotonic workspace generation used in persisted snapshots.
     workspace_generation: u64,
+    /// Last workspace generation the host confirmed was durably saved.
+    last_saved_workspace_generation: u64,
 }
 
 const PATCH_HASH_ALGO: &str = "fnv1a64";
@@ -188,6 +190,7 @@ impl RunnerCore {
             next_operation_id: 1,
             intelligence_mode: PaneLayoutIntelligenceMode::Focus,
             workspace_generation: 0,
+            last_saved_workspace_generation: 0,
         }
     }
 
@@ -404,6 +407,41 @@ impl RunnerCore {
         self.layout_tree.state_hash()
     }
 
+    /// Current pane workspace generation.
+    #[must_use]
+    pub const fn pane_workspace_generation(&self) -> u64 {
+        self.workspace_generation
+    }
+
+    /// Last generation acknowledged as durably saved by the host.
+    #[must_use]
+    pub const fn pane_saved_workspace_generation(&self) -> u64 {
+        self.last_saved_workspace_generation
+    }
+
+    /// Whether pane state has changed since the last host save acknowledgement.
+    #[must_use]
+    pub const fn pane_workspace_dirty(&self) -> bool {
+        self.workspace_generation != self.last_saved_workspace_generation
+    }
+
+    /// Acknowledge that a previously exported generation was durably saved.
+    ///
+    /// Hosts should call this only after their own storage write succeeds. The
+    /// generation guard prevents an async save completion from marking a newer
+    /// in-memory layout clean.
+    pub fn pane_mark_workspace_saved(&mut self, generation: u64) -> bool {
+        if generation == self.workspace_generation {
+            self.last_saved_workspace_generation = generation;
+            return true;
+        }
+        self.pane_logs.push(PaneLogRecord::Line(format!(
+            "pane_workspace save_ack_stale: saved_generation={generation} current_generation={}",
+            self.workspace_generation
+        )));
+        false
+    }
+
     /// Shared splitter/handle primitives for host-specific rendering adapters.
     #[must_use]
     pub fn pane_splitter_primitives(&self) -> Vec<PaneSplitterPrimitive> {
@@ -476,6 +514,7 @@ impl RunnerCore {
         self.clear_transient_pane_interaction_state();
         self.reset_pointer_capture_adapter();
         self.workspace_generation = snapshot.metadata.saved_generation;
+        self.last_saved_workspace_generation = self.workspace_generation;
         Ok(())
     }
 

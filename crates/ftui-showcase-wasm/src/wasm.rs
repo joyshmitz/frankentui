@@ -185,17 +185,30 @@ fn ignored_reason_label(reason: PanePointerIgnoredReason) -> &'static str {
     }
 }
 
-fn pane_dispatch_to_js(
+struct PaneDispatchView<'a> {
     dispatch: PaneDispatchSummary,
     active_pointer_id: Option<u32>,
     preview: PanePreviewState,
     timeline: PaneTimelineStatus,
     layout_hash: u64,
-    selected_ids: &[u64],
+    selected_ids: &'a [u64],
     primary_id: Option<u64>,
-    splitters: &[PaneSplitterPrimitive],
-    error: Option<&str>,
-) -> JsValue {
+    splitters: &'a [PaneSplitterPrimitive],
+    error: Option<&'a str>,
+}
+
+fn pane_dispatch_to_js(view: PaneDispatchView<'_>) -> JsValue {
+    let PaneDispatchView {
+        dispatch,
+        active_pointer_id,
+        preview,
+        timeline,
+        layout_hash,
+        selected_ids,
+        primary_id,
+        splitters,
+        error,
+    } = view;
     let obj = Object::new();
     set_js(&obj, "accepted", dispatch.accepted().into());
     let phase = match dispatch.phase {
@@ -414,6 +427,21 @@ fn pane_state_to_js(runner: &RunnerCore) -> JsValue {
         "layout_hash",
         JsValue::from_str(&runner.pane_layout_hash().to_string()),
     );
+    set_js(
+        &obj,
+        "workspace_generation",
+        JsValue::from_str(&runner.pane_workspace_generation().to_string()),
+    );
+    set_js(
+        &obj,
+        "saved_generation",
+        JsValue::from_str(&runner.pane_saved_workspace_generation().to_string()),
+    );
+    set_js(
+        &obj,
+        "workspace_dirty",
+        JsValue::from_bool(runner.pane_workspace_dirty()),
+    );
     if let Some(source) = preview.source {
         set_js(&obj, "drag_source", JsValue::from_f64(source.get() as f64));
     } else {
@@ -524,17 +552,17 @@ impl ShowcaseRunner {
     ) -> JsValue {
         let selected = self.inner.pane_selected_ids();
         let splitters = self.inner.pane_splitter_primitives();
-        pane_dispatch_to_js(
+        pane_dispatch_to_js(PaneDispatchView {
             dispatch,
-            self.inner.pane_active_pointer_id(),
-            self.inner.pane_preview_state(),
-            self.inner.pane_timeline_status(),
-            self.inner.pane_layout_hash(),
-            &selected,
-            self.inner.pane_primary_id(),
-            &splitters,
+            active_pointer_id: self.inner.pane_active_pointer_id(),
+            preview: self.inner.pane_preview_state(),
+            timeline: self.inner.pane_timeline_status(),
+            layout_hash: self.inner.pane_layout_hash(),
+            selected_ids: &selected,
+            primary_id: self.inner.pane_primary_id(),
+            splitters: &splitters,
             error,
-        )
+        })
     }
 
     /// Create a new runner with initial terminal dimensions (cols, rows).
@@ -901,6 +929,30 @@ impl ShowcaseRunner {
             return false;
         }
         true
+    }
+
+    /// Current pane workspace generation for host persistence.
+    #[wasm_bindgen(js_name = paneWorkspaceGeneration)]
+    pub fn pane_workspace_generation(&self) -> u64 {
+        self.inner.pane_workspace_generation()
+    }
+
+    /// Last pane workspace generation the host acknowledged as durably saved.
+    #[wasm_bindgen(js_name = paneSavedWorkspaceGeneration)]
+    pub fn pane_saved_workspace_generation(&self) -> u64 {
+        self.inner.pane_saved_workspace_generation()
+    }
+
+    /// Whether the pane workspace has unsaved changes.
+    #[wasm_bindgen(js_name = paneWorkspaceDirty)]
+    pub fn pane_workspace_dirty(&self) -> bool {
+        self.inner.pane_workspace_dirty()
+    }
+
+    /// Mark an exported pane workspace generation as durably saved.
+    #[wasm_bindgen(js_name = paneMarkWorkspaceSaved)]
+    pub fn pane_mark_workspace_saved(&mut self, generation: u64) -> bool {
+        self.inner.pane_mark_workspace_saved(generation)
     }
 
     /// Apply one adaptive pane layout intelligence mode.

@@ -52,20 +52,22 @@ mod tests {
             serde_json::from_str(snapshot_json).expect("snapshot json should parse as value");
         let entries = value
             .get("interaction_timeline")
-            .unwrap_or_else(|| panic!("snapshot missing interaction_timeline: {value}"))
+            .expect("snapshot should include interaction_timeline")
             .get("entries")
             .and_then(serde_json::Value::as_array)
-            .unwrap_or_else(|| panic!("snapshot timeline missing entries array: {value}"));
+            .expect("snapshot timeline should include entries array");
         entries
             .iter()
             .enumerate()
             .map(|(idx, entry)| {
-                entry
+                let operation_id = entry
                     .get("operation_id")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or_else(|| {
-                        panic!("timeline entry {idx} missing u64 operation_id: {entry}")
-                    })
+                    .and_then(serde_json::Value::as_u64);
+                assert!(
+                    operation_id.is_some(),
+                    "timeline entry {idx} should include u64 operation_id: {entry}"
+                );
+                operation_id.unwrap_or_default()
             })
             .collect()
     }
@@ -75,19 +77,22 @@ mod tests {
             serde_json::from_str(snapshot_json).expect("snapshot json should parse as value");
         let nodes = value
             .get("interaction_timeline")
-            .unwrap_or_else(|| panic!("snapshot missing interaction_timeline: {value}"))
+            .expect("snapshot should include interaction_timeline")
             .get("baseline")
-            .unwrap_or_else(|| panic!("snapshot timeline missing baseline: {value}"))
+            .expect("snapshot timeline should include baseline")
             .get("nodes")
             .and_then(serde_json::Value::as_array)
-            .unwrap_or_else(|| panic!("timeline baseline missing nodes array: {value}"));
+            .expect("timeline baseline should include nodes array");
         nodes
             .iter()
             .enumerate()
             .map(|(idx, node)| {
-                node.get("id")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or_else(|| panic!("baseline node {idx} missing u64 id: {node}"))
+                let id = node.get("id").and_then(serde_json::Value::as_u64);
+                assert!(
+                    id.is_some(),
+                    "baseline node {idx} should include u64 id: {node}"
+                );
+                id.unwrap_or_default()
             })
             .collect()
     }
@@ -693,11 +698,7 @@ mod tests {
             assert!(stepped.running);
 
             let probe_hit = find_splitter_hit_for_size(&mut core, cols, rows, pointer_id)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "expected at least one splitter hit target after resize for {cols}x{rows}"
-                    )
-                });
+                .expect("expected at least one splitter hit target after resize");
             pointer_id = pointer_id.saturating_add(1);
 
             let down = core.pane_pointer_down_at(
@@ -1178,6 +1179,76 @@ mod tests {
             baseline_ids.windows(2).all(|ids| ids[0] <= ids[1]),
             "timeline baseline node ids should be canonicalized, got: {baseline_ids:?}"
         );
+    }
+
+    #[test]
+    fn workspace_save_ack_requires_current_generation() {
+        let mut core = RunnerCore::new(80, 24);
+        core.init();
+        assert!(!core.pane_workspace_dirty());
+        assert_eq!(core.pane_workspace_generation(), 0);
+        assert_eq!(core.pane_saved_workspace_generation(), 0);
+
+        assert!(
+            apply_any_intelligence_mode(&mut core).is_some(),
+            "expected adaptive mode to mutate pane workspace"
+        );
+        let generation = core.pane_workspace_generation();
+        assert!(generation > 0);
+        assert!(core.pane_workspace_dirty());
+
+        let snapshot_json = core
+            .export_workspace_snapshot_json()
+            .expect("snapshot export should succeed");
+        assert!(
+            core.pane_workspace_dirty(),
+            "export alone must not mark host storage durable"
+        );
+        assert!(!core.pane_mark_workspace_saved(generation.saturating_sub(1)));
+        assert!(core.pane_workspace_dirty());
+        assert!(core.pane_mark_workspace_saved(generation));
+        assert!(!core.pane_workspace_dirty());
+
+        assert!(
+            apply_any_intelligence_mode(&mut core).is_some(),
+            "second adaptive mode should dirty the workspace again"
+        );
+        assert!(core.pane_workspace_dirty());
+
+        let mut restored = RunnerCore::new(80, 24);
+        restored.init();
+        restored
+            .import_workspace_snapshot_json(&snapshot_json)
+            .expect("snapshot import should succeed");
+        assert_eq!(restored.pane_workspace_generation(), generation);
+        assert_eq!(restored.pane_saved_workspace_generation(), generation);
+        assert!(!restored.pane_workspace_dirty());
+    }
+
+    #[test]
+    fn workspace_import_failure_preserves_lifecycle_state() {
+        let mut core = RunnerCore::new(80, 24);
+        core.init();
+        assert!(
+            apply_any_intelligence_mode(&mut core).is_some(),
+            "expected adaptive mode to mutate pane workspace"
+        );
+        let before_hash = core.pane_layout_hash();
+        let before_generation = core.pane_workspace_generation();
+        let before_saved_generation = core.pane_saved_workspace_generation();
+        let before_dirty = core.pane_workspace_dirty();
+
+        let err = core
+            .import_workspace_snapshot_json("{not json")
+            .expect_err("invalid JSON should fail to import");
+        assert!(err.contains("parse failed"));
+        assert_eq!(core.pane_layout_hash(), before_hash);
+        assert_eq!(core.pane_workspace_generation(), before_generation);
+        assert_eq!(
+            core.pane_saved_workspace_generation(),
+            before_saved_generation
+        );
+        assert_eq!(core.pane_workspace_dirty(), before_dirty);
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
