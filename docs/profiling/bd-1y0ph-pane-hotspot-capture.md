@@ -6,7 +6,8 @@ Purpose
   adapter path.
 
 Status
-- `bd-1y0ph` remains `in_progress`.
+- `bd-1y0ph` is closed as of 2026-04-25 after exact-binary provenance was
+  verified across all captured pane profiling surfaces.
 - The repeatable capture runner is `./scripts/pane_profile.sh`.
 - Current artifact directory: `target/pane-profiling/bd-1y0ph/`
 - Latest exact-binary trust verification:
