@@ -2960,6 +2960,59 @@ impl AppModel {
         );
     }
 
+    fn record_pane_workspace_recovery_fallback(
+        &mut self,
+        path: &Path,
+        detail: String,
+        payload: Option<&str>,
+        preserved_path: Option<&Path>,
+        preserve_error: Option<String>,
+    ) {
+        let mut fields = vec![
+            ("action".to_string(), "load_recovery_fallback".to_string()),
+            ("path".to_string(), path.display().to_string()),
+            ("decision".to_string(), "fallback_default".to_string()),
+            (
+                "source_version".to_string(),
+                payload.map_or_else(|| "unreadable".to_string(), pane_workspace_source_version),
+            ),
+            (
+                "source_checksum".to_string(),
+                payload.map_or_else(
+                    || "unavailable".to_string(),
+                    pane_workspace_payload_checksum_hex,
+                ),
+            ),
+            (
+                "resulting_state_checksum".to_string(),
+                self.pane_workspace_current_snapshot_checksum(),
+            ),
+            ("detail".to_string(), detail),
+        ];
+        if let Some(preserved_path) = preserved_path {
+            fields.push((
+                "preserved_path".to_string(),
+                preserved_path.display().to_string(),
+            ));
+        }
+        if let Some(preserve_error) = preserve_error {
+            fields.push(("preserve_error".to_string(), preserve_error));
+        }
+        self.screens.action_timeline.record_command_event(
+            self.tick_count,
+            "Pane workspace recovery",
+            fields,
+        );
+    }
+
+    fn pane_workspace_current_snapshot_checksum(&self) -> String {
+        self.screens
+            .layout_lab
+            .pane_export_workspace_snapshot_json()
+            .map(|json| pane_workspace_payload_checksum_hex(&json))
+            .unwrap_or_else(|err| format!("unavailable: {err}"))
+    }
+
     fn load_pane_workspace_from_disk(&mut self) {
         let Some(path) = self.pane_workspace_path.clone() else {
             return;
@@ -2974,6 +3027,13 @@ impl AppModel {
                     None,
                     Some(err.to_string()),
                 );
+                self.record_pane_workspace_recovery_fallback(
+                    &path,
+                    format!("workspace read failed: {err}"),
+                    None,
+                    None,
+                    None,
+                );
                 return;
             }
         };
@@ -2987,7 +3047,24 @@ impl AppModel {
                 self.record_pane_workspace_persistence("load_ok", &path, Some(generation), None);
             }
             Err(err) => {
-                self.record_pane_workspace_persistence("load_error", &path, None, Some(err));
+                self.record_pane_workspace_persistence(
+                    "load_error",
+                    &path,
+                    None,
+                    Some(err.clone()),
+                );
+                let (preserved_path, preserve_error) =
+                    match preserve_pane_workspace_recovery_copy(&path, &json) {
+                        Ok(preserved_path) => (Some(preserved_path), None),
+                        Err(preserve_error) => (None, Some(preserve_error.to_string())),
+                    };
+                self.record_pane_workspace_recovery_fallback(
+                    &path,
+                    err,
+                    Some(&json),
+                    preserved_path.as_deref(),
+                    preserve_error,
+                );
             }
         }
     }
@@ -4310,6 +4387,30 @@ fn write_pane_workspace_snapshot(path: &Path, snapshot: &str) -> std::io::Result
     ))
 }
 
+fn preserve_pane_workspace_recovery_copy(path: &Path, snapshot: &str) -> std::io::Result<PathBuf> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        create_dir_all(parent)?;
+    }
+    let recovery_path =
+        pane_workspace_recovery_path(path, pane_workspace_payload_checksum(snapshot));
+    let write_result = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&recovery_path)
+        .and_then(|file| {
+            let mut writer = BufWriter::new(file);
+            writer.write_all(snapshot.as_bytes())?;
+            writer.flush()
+        });
+    match write_result {
+        Ok(()) => Ok(recovery_path),
+        Err(err) if err.kind() == ErrorKind::AlreadyExists => Ok(recovery_path),
+        Err(err) => Err(err),
+    }
+}
+
 fn pane_workspace_temp_path(path: &Path, nonce: u64) -> PathBuf {
     let mut file_name = path.file_name().map_or_else(
         || std::ffi::OsString::from("workspace"),
@@ -4317,6 +4418,42 @@ fn pane_workspace_temp_path(path: &Path, nonce: u64) -> PathBuf {
     );
     file_name.push(format!(".{}.{}.tmp", std::process::id(), nonce));
     path.with_file_name(file_name)
+}
+
+fn pane_workspace_recovery_path(path: &Path, checksum: u64) -> PathBuf {
+    let mut file_name = path.file_name().map_or_else(
+        || std::ffi::OsString::from("workspace"),
+        std::ffi::OsString::from,
+    );
+    file_name.push(format!(".recovery.{checksum:016x}.json"));
+    path.with_file_name(file_name)
+}
+
+fn pane_workspace_payload_checksum_hex(payload: &str) -> String {
+    format!("0x{:016x}", pane_workspace_payload_checksum(payload))
+}
+
+fn pane_workspace_payload_checksum(payload: &str) -> u64 {
+    const FNV64_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const FNV64_PRIME: u64 = 0x100000001b3;
+    let mut hash = FNV64_OFFSET_BASIS;
+    for byte in payload.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV64_PRIME);
+    }
+    hash
+}
+
+fn pane_workspace_source_version(payload: &str) -> String {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
+        return "unparseable".to_string();
+    };
+    match value.get("schema_version") {
+        Some(serde_json::Value::Number(number)) => number.to_string(),
+        Some(serde_json::Value::String(version)) => version.clone(),
+        Some(_) => "non_numeric".to_string(),
+        None => "missing".to_string(),
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -5680,6 +5817,99 @@ mod tests {
             "writer must not overwrite or rename the old predictable temp path"
         );
         Ok(())
+    }
+
+    #[test]
+    fn pane_workspace_load_failure_preserves_payload_and_falls_back()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut path = std::env::temp_dir();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
+        path.push(format!(
+            "ftui-pane-workspace-recovery-{}-{nanos}.json",
+            std::process::id()
+        ));
+        fs::write(&path, "{not json")?;
+
+        let mut app = AppModel::new();
+        app.enable_pane_workspace_persistence(path.clone());
+        app.init();
+
+        assert_eq!(
+            fs::read_to_string(&path)?,
+            "{not json",
+            "startup recovery must leave the original invalid payload untouched"
+        );
+        assert_eq!(app.screens.layout_lab.pane_workspace_generation(), 0);
+        assert!(
+            !app.screens.layout_lab.pane_workspace_dirty(),
+            "fallback default workspace should remain clean until the user mutates it"
+        );
+
+        let original_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("test path should have a utf-8 file name");
+        let recovery_prefix = format!("{original_name}.recovery.");
+        let parent = path.parent().expect("test path should have a parent");
+        let recovery_files: Vec<PathBuf> = fs::read_dir(parent)?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|candidate| {
+                candidate
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name.starts_with(&recovery_prefix) && name.ends_with(".json")
+                    })
+            })
+            .collect();
+
+        assert_eq!(
+            recovery_files.len(),
+            1,
+            "expected exactly one non-destructive recovery sidecar for {original_name}"
+        );
+        assert_eq!(
+            fs::read_to_string(&recovery_files[0])?,
+            "{not json",
+            "recovery sidecar should preserve the original invalid bytes"
+        );
+
+        let mut second_start = AppModel::new();
+        second_start.enable_pane_workspace_persistence(path.clone());
+        second_start.init();
+        let recovery_files_after_second_start = fs::read_dir(parent)?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|candidate| {
+                candidate
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name.starts_with(&recovery_prefix) && name.ends_with(".json")
+                    })
+            })
+            .count();
+        assert_eq!(
+            recovery_files_after_second_start, 1,
+            "repeated startup with the same bad payload should reuse the checksum sidecar"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pane_workspace_source_version_handles_invalid_and_partial_payloads() {
+        assert_eq!(
+            pane_workspace_source_version(r#"{"schema_version":7}"#),
+            "7"
+        );
+        assert_eq!(
+            pane_workspace_source_version(r#"{"pane_tree":{}}"#),
+            "missing"
+        );
+        assert_eq!(pane_workspace_source_version("{not json"), "unparseable");
     }
 
     #[test]
