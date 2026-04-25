@@ -2975,7 +2975,11 @@ impl AppModel {
                 return;
             }
         };
-        match self.screens.layout_lab.pane_import_workspace_snapshot_json(&json) {
+        match self
+            .screens
+            .layout_lab
+            .pane_import_workspace_snapshot_json(&json)
+        {
             Ok(()) => {
                 let generation = self.screens.layout_lab.pane_workspace_generation();
                 self.record_pane_workspace_persistence("load_ok", &path, Some(generation), None);
@@ -2997,11 +3001,16 @@ impl AppModel {
             return;
         }
         let generation = self.screens.layout_lab.pane_workspace_generation();
-        let snapshot = match self.screens.layout_lab.pane_export_workspace_snapshot_json() {
+        let snapshot = match self
+            .screens
+            .layout_lab
+            .pane_export_workspace_snapshot_json()
+        {
             Ok(snapshot) => snapshot,
             Err(err) => {
-                self.pane_workspace_next_save_tick =
-                    self.tick_count.saturating_add(PANE_WORKSPACE_SAVE_RETRY_TICKS);
+                self.pane_workspace_next_save_tick = self
+                    .tick_count
+                    .saturating_add(PANE_WORKSPACE_SAVE_RETRY_TICKS);
                 self.record_pane_workspace_persistence(
                     "save_export_error",
                     &path,
@@ -3012,8 +3021,9 @@ impl AppModel {
             }
         };
         if let Err(err) = write_pane_workspace_snapshot(&path, &snapshot) {
-            self.pane_workspace_next_save_tick =
-                self.tick_count.saturating_add(PANE_WORKSPACE_SAVE_RETRY_TICKS);
+            self.pane_workspace_next_save_tick = self
+                .tick_count
+                .saturating_add(PANE_WORKSPACE_SAVE_RETRY_TICKS);
             self.record_pane_workspace_persistence(
                 "save_write_error",
                 &path,
@@ -3022,7 +3032,11 @@ impl AppModel {
             );
             return;
         }
-        if self.screens.layout_lab.pane_mark_workspace_saved(generation) {
+        if self
+            .screens
+            .layout_lab
+            .pane_mark_workspace_saved(generation)
+        {
             self.pane_workspace_next_save_tick = 0;
             self.record_pane_workspace_persistence(
                 "save_ok",
@@ -3031,8 +3045,9 @@ impl AppModel {
                 Some(reason.to_string()),
             );
         } else {
-            self.pane_workspace_next_save_tick =
-                self.tick_count.saturating_add(PANE_WORKSPACE_SAVE_RETRY_TICKS);
+            self.pane_workspace_next_save_tick = self
+                .tick_count
+                .saturating_add(PANE_WORKSPACE_SAVE_RETRY_TICKS);
             self.record_pane_workspace_persistence(
                 "save_ack_stale",
                 &path,
@@ -5573,8 +5588,7 @@ mod tests {
         let mut path = std::env::temp_dir();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .expect("system clock should be after unix epoch")
-            .as_nanos();
+            .map_or(0, |duration| duration.as_nanos());
         path.push(format!(
             "ftui-pane-workspace-{}-{nanos}.json",
             std::process::id()
@@ -5589,7 +5603,10 @@ mod tests {
             kind: KeyEventKind::Press,
         })));
 
-        assert!(path.exists(), "autosave should create the pane workspace file");
+        assert!(
+            path.exists(),
+            "autosave should create the pane workspace file"
+        );
         let saved_generation = app.screens.layout_lab.pane_workspace_generation();
         assert!(saved_generation > 0);
         assert!(
