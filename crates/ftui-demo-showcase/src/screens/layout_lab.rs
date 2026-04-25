@@ -122,6 +122,8 @@ pub struct LayoutLab {
     pane_workspace_generation: u64,
     /// Last workspace generation acknowledged as durably saved.
     pane_last_saved_workspace_generation: u64,
+    /// Latest recovery decision that should be visible to the user.
+    pane_workspace_recovery_notice: Option<PaneWorkspaceRecoveryNotice>,
     /// Monotonic semantic input sequence.
     pane_sequence: u64,
     /// Last pointer position while dragging.
@@ -148,6 +150,57 @@ pub struct LayoutLab {
     pane_intelligence_mode: PaneLayoutIntelligenceMode,
     /// Adjustable magnetic docking attraction radius.
     pane_magnetic_field_cells: f64,
+}
+
+/// User-visible summary of the latest pane workspace recovery decision.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaneWorkspaceRecoveryNotice {
+    decision: &'static str,
+    source_version: String,
+    source_checksum: String,
+    preserved_path: Option<String>,
+    detail: String,
+}
+
+impl PaneWorkspaceRecoveryNotice {
+    #[must_use]
+    pub fn fallback_default(
+        source_version: String,
+        source_checksum: String,
+        preserved_path: Option<String>,
+        detail: String,
+    ) -> Self {
+        Self {
+            decision: "fallback_default",
+            source_version,
+            source_checksum,
+            preserved_path,
+            detail,
+        }
+    }
+
+    #[must_use]
+    pub fn summary(&self) -> String {
+        let evidence = if self.preserved_path.is_some() {
+            "saved"
+        } else {
+            "missing"
+        };
+        format!(
+            "Recovery: {} src:{} sum:{} {evidence}",
+            self.decision, self.source_version, self.source_checksum
+        )
+    }
+
+    #[must_use]
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+
+    #[must_use]
+    pub fn preserved_path(&self) -> Option<&str> {
+        self.preserved_path.as_deref()
+    }
 }
 
 /// The 5 alignment modes.
@@ -213,6 +266,7 @@ impl LayoutLab {
             pane_next_operation_id: 1,
             pane_workspace_generation: 0,
             pane_last_saved_workspace_generation: 0,
+            pane_workspace_recovery_notice: None,
             pane_sequence: 0,
             pane_last_pointer: None,
             pane_last_motion: PaneMotionVector::from_delta(0, 0, 16, 0),
@@ -931,6 +985,18 @@ impl LayoutLab {
         Paragraph::new(truncate_to_width(&status, usize::from(status_area.width)))
             .style(theme::muted())
             .render(status_area, frame);
+
+        if let Some(notice) = &self.pane_workspace_recovery_notice
+            && inner.height > 1
+        {
+            let notice_area = Rect::new(inner.x, inner.y.saturating_add(1), inner.width.min(72), 1);
+            Paragraph::new(truncate_to_width(
+                &notice.summary(),
+                usize::from(notice_area.width),
+            ))
+            .style(Style::new().fg(theme::accent::WARNING))
+            .render(notice_area, frame);
+        }
     }
 
     fn render_pane_preview_overlays(&self, frame: &mut Frame, viewport: Rect) {
@@ -1215,10 +1281,27 @@ impl LayoutLab {
     pub fn pane_mark_workspace_saved(&mut self, generation: u64) -> bool {
         if generation == self.pane_workspace_generation {
             self.pane_last_saved_workspace_generation = generation;
+            self.pane_clear_workspace_recovery_notice();
             true
         } else {
             false
         }
+    }
+
+    /// Publish a recovery notice for host persistence adapters to surface.
+    pub fn pane_set_workspace_recovery_notice(&mut self, notice: PaneWorkspaceRecoveryNotice) {
+        self.pane_workspace_recovery_notice = Some(notice);
+    }
+
+    /// Clear the current workspace recovery notice.
+    pub fn pane_clear_workspace_recovery_notice(&mut self) {
+        self.pane_workspace_recovery_notice = None;
+    }
+
+    /// Current user-visible pane workspace recovery notice, if any.
+    #[must_use]
+    pub fn pane_workspace_recovery_notice(&self) -> Option<&PaneWorkspaceRecoveryNotice> {
+        self.pane_workspace_recovery_notice.as_ref()
     }
 
     /// Export the current pane workspace as canonical JSON.
@@ -1265,6 +1348,7 @@ impl LayoutLab {
         self.pane_selection = selection;
         self.pane_workspace_generation = snapshot.metadata.saved_generation;
         self.pane_last_saved_workspace_generation = self.pane_workspace_generation;
+        self.pane_clear_workspace_recovery_notice();
         self.pane_next_operation_id = self.pane_timeline.next_operation_id();
         self.sanitize_pane_selection();
         self.finish_pane_gesture();
@@ -1574,6 +1658,10 @@ impl LayoutLab {
             .map(pane_zone_label)
             .unwrap_or("none");
         let timeline_status = self.pane_timeline_status();
+        let recovery = self.pane_workspace_recovery_notice.as_ref().map_or_else(
+            || "Recovery: none".to_string(),
+            PaneWorkspaceRecoveryNotice::summary,
+        );
 
         let info = format!(
             "Preset: [{}] {}\n\
@@ -1590,7 +1678,8 @@ impl LayoutLab {
              Timeline: {}/{} (u/y/R)\n\
              Splitters: {} h:{} a:{} wu:{}\n\
              Magnetic Field: {:.1} (wheel in pane)\n\
-             Workspace Gen: {}",
+             Workspace Gen: {}\n\
+             {}",
             self.current_preset + 1,
             PRESET_NAMES[self.current_preset],
             self.direction.label(),
@@ -1612,6 +1701,7 @@ impl LayoutLab {
             self.pane_splitter_work_units.get(),
             self.pane_magnetic_field_cells,
             self.pane_workspace_generation,
+            recovery,
         );
 
         Paragraph::new(info)
@@ -2354,6 +2444,22 @@ mod tests {
             }
         }
         hasher.finish()
+    }
+
+    fn frame_text(frame: &Frame) -> String {
+        let mut text = String::new();
+        for y in 0..frame.buffer.height() {
+            for x in 0..frame.buffer.width() {
+                let ch = frame
+                    .buffer
+                    .get(x, y)
+                    .and_then(|cell| cell.content.as_char())
+                    .unwrap_or(' ');
+                text.push(ch);
+            }
+            text.push('\n');
+        }
+        text
     }
 
     fn log_jsonl(test: &str, fields: &[(&str, String)]) {
@@ -3210,6 +3316,35 @@ mod tests {
             before_saved_generation
         );
         assert_eq!(lab.pane_workspace_dirty(), before_dirty);
+    }
+
+    #[test]
+    fn pane_workspace_recovery_notice_renders_in_status_surfaces() {
+        let mut lab = LayoutLab::new();
+        lab.pane_set_workspace_recovery_notice(PaneWorkspaceRecoveryNotice::fallback_default(
+            "unparseable".to_string(),
+            "0x1234".to_string(),
+            Some("/tmp/workspace.recovery.1234.json".to_string()),
+            "workspace snapshot parse failed".to_string(),
+        ));
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(140, 40, &mut pool);
+        lab.view(&mut frame, Rect::new(0, 0, 140, 40));
+        let rendered = frame_text(&frame);
+
+        assert!(
+            rendered.contains("Recovery: fallback_default"),
+            "pane workspace should surface the recovery decision"
+        );
+        assert!(
+            rendered.contains("0x1234"),
+            "pane workspace should surface the source checksum"
+        );
+        assert!(
+            rendered.contains("saved"),
+            "pane workspace should tell users recovery evidence was preserved"
+        );
     }
 
     #[test]

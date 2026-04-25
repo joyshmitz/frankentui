@@ -2968,32 +2968,28 @@ impl AppModel {
         preserved_path: Option<&Path>,
         preserve_error: Option<String>,
     ) {
+        let source_version =
+            payload.map_or_else(|| "unreadable".to_string(), pane_workspace_source_version);
+        let source_checksum = payload.map_or_else(
+            || "unavailable".to_string(),
+            pane_workspace_payload_checksum_hex,
+        );
+        let resulting_state_checksum = self.pane_workspace_current_snapshot_checksum();
+        let preserved_path_display = preserved_path.map(|path| path.display().to_string());
         let mut fields = vec![
             ("action".to_string(), "load_recovery_fallback".to_string()),
             ("path".to_string(), path.display().to_string()),
             ("decision".to_string(), "fallback_default".to_string()),
-            (
-                "source_version".to_string(),
-                payload.map_or_else(|| "unreadable".to_string(), pane_workspace_source_version),
-            ),
-            (
-                "source_checksum".to_string(),
-                payload.map_or_else(
-                    || "unavailable".to_string(),
-                    pane_workspace_payload_checksum_hex,
-                ),
-            ),
+            ("source_version".to_string(), source_version.clone()),
+            ("source_checksum".to_string(), source_checksum.clone()),
             (
                 "resulting_state_checksum".to_string(),
-                self.pane_workspace_current_snapshot_checksum(),
+                resulting_state_checksum,
             ),
-            ("detail".to_string(), detail),
+            ("detail".to_string(), detail.clone()),
         ];
-        if let Some(preserved_path) = preserved_path {
-            fields.push((
-                "preserved_path".to_string(),
-                preserved_path.display().to_string(),
-            ));
+        if let Some(preserved_path) = &preserved_path_display {
+            fields.push(("preserved_path".to_string(), preserved_path.clone()));
         }
         if let Some(preserve_error) = preserve_error {
             fields.push(("preserve_error".to_string(), preserve_error));
@@ -3002,6 +2998,14 @@ impl AppModel {
             self.tick_count,
             "Pane workspace recovery",
             fields,
+        );
+        self.screens.layout_lab.pane_set_workspace_recovery_notice(
+            screens::layout_lab::PaneWorkspaceRecoveryNotice::fallback_default(
+                source_version,
+                source_checksum,
+                preserved_path_display,
+                detail,
+            ),
         );
     }
 
@@ -3080,6 +3084,22 @@ impl AppModel {
             return;
         }
         let generation = self.screens.layout_lab.pane_workspace_generation();
+        if force
+            && !self.screens.layout_lab.pane_workspace_dirty()
+            && self
+                .screens
+                .layout_lab
+                .pane_workspace_recovery_notice()
+                .is_some()
+        {
+            self.record_pane_workspace_persistence(
+                "save_skipped_recovery_fallback",
+                &path,
+                Some(generation),
+                Some(reason.to_string()),
+            );
+            return;
+        }
         let snapshot = match self
             .screens
             .layout_lab
@@ -5846,6 +5866,15 @@ mod tests {
             !app.screens.layout_lab.pane_workspace_dirty(),
             "fallback default workspace should remain clean until the user mutates it"
         );
+        let notice = app
+            .screens
+            .layout_lab
+            .pane_workspace_recovery_notice()
+            .expect("invalid startup payload should publish a recovery notice");
+        assert!(
+            notice.summary().contains("fallback_default"),
+            "notice should expose the recovery decision"
+        );
 
         let original_name = path
             .file_name()
@@ -5876,6 +5905,17 @@ mod tests {
             "{not json",
             "recovery sidecar should preserve the original invalid bytes"
         );
+        assert!(
+            notice.preserved_path().is_some(),
+            "notice should expose the preserved recovery sidecar path"
+        );
+
+        <AppModel as Model>::on_shutdown(&mut app);
+        assert_eq!(
+            fs::read_to_string(&path)?,
+            "{not json",
+            "clean fallback shutdown must not overwrite the invalid source payload"
+        );
 
         let mut second_start = AppModel::new();
         second_start.enable_pane_workspace_persistence(path.clone());
@@ -5895,6 +5935,26 @@ mod tests {
         assert_eq!(
             recovery_files_after_second_start, 1,
             "repeated startup with the same bad payload should reuse the checksum sidecar"
+        );
+
+        second_start.current_screen = ScreenId::LayoutLab;
+        second_start.update(AppMsg::from(Event::Key(KeyEvent {
+            code: KeyCode::Char('c'),
+            modifiers: Modifiers::NONE,
+            kind: KeyEventKind::Press,
+        })));
+        assert_ne!(
+            fs::read_to_string(&path)?,
+            "{not json",
+            "a user mutation after recovery should save the new workspace state"
+        );
+        assert!(
+            second_start
+                .screens
+                .layout_lab
+                .pane_workspace_recovery_notice()
+                .is_none(),
+            "successful save of a mutated recovered workspace should clear the notice"
         );
         Ok(())
     }
