@@ -954,9 +954,17 @@ pub struct PaneInteractionTimeline {
     pub checkpoints: Vec<PaneInteractionTimelineCheckpoint>,
     /// Entry spacing used when materializing checkpoints.
     pub checkpoint_interval: usize,
+    /// Maximum retained history entries. A value of 0 disables pruning.
+    #[serde(default = "default_pane_timeline_max_entries")]
+    pub max_entries: usize,
 }
 
 const DEFAULT_PANE_TIMELINE_CHECKPOINT_INTERVAL: usize = 16;
+const DEFAULT_PANE_TIMELINE_MAX_ENTRIES: usize = 4096;
+
+fn default_pane_timeline_max_entries() -> usize {
+    DEFAULT_PANE_TIMELINE_MAX_ENTRIES
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PaneValidationStrategy {
@@ -972,6 +980,7 @@ impl Default for PaneInteractionTimeline {
             cursor: 0,
             checkpoints: Vec::new(),
             checkpoint_interval: DEFAULT_PANE_TIMELINE_CHECKPOINT_INTERVAL,
+            max_entries: DEFAULT_PANE_TIMELINE_MAX_ENTRIES,
         }
     }
 }
@@ -5521,13 +5530,33 @@ impl PaneInteractionTimeline {
             cursor: 0,
             checkpoints: Vec::new(),
             checkpoint_interval: DEFAULT_PANE_TIMELINE_CHECKPOINT_INTERVAL,
+            max_entries: DEFAULT_PANE_TIMELINE_MAX_ENTRIES,
         }
+    }
+
+    /// Return a copy of this timeline configured with a retained-entry cap.
+    #[must_use]
+    pub fn with_max_entries(mut self, max_entries: usize) -> Self {
+        self.max_entries = max_entries;
+        self
     }
 
     /// Number of currently-applied entries.
     #[must_use]
     pub const fn applied_len(&self) -> usize {
         self.cursor
+    }
+
+    /// Next operation id above every retained history entry.
+    #[must_use]
+    pub fn next_operation_id(&self) -> u64 {
+        self.entries
+            .iter()
+            .map(|entry| entry.operation_id)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1)
+            .max(1)
     }
 
     /// Replay/checkpoint diagnostics for the current cursor.
@@ -5596,6 +5625,80 @@ impl PaneInteractionTimeline {
             after_hash: outcome.after_hash,
         });
         self.cursor = self.entries.len();
+        self.enforce_entry_limit();
+        self.maybe_record_checkpoint(tree);
+        Ok(outcome)
+    }
+
+    /// Apply one operation and merge adjacent resize deltas for the same split.
+    ///
+    /// The first delta keeps its pre-gesture hash so undo still restores the
+    /// state before the drag began, while replay uses the most recent ratio.
+    /// Coalescing is limited to entries whose operation id is above the
+    /// gesture-start boundary, so separate drags on the same split remain
+    /// separate undo steps.
+    pub fn apply_and_record_coalesced_resize_delta(
+        &mut self,
+        tree: &mut PaneTree,
+        sequence: u64,
+        operation_id: u64,
+        operation: PaneOperation,
+        coalesce_after_operation_id: u64,
+    ) -> Result<PaneOperationOutcome, PaneOperationError> {
+        if self.baseline.is_none() {
+            self.baseline = Some(tree.to_snapshot());
+        }
+        if self.cursor < self.entries.len() {
+            self.entries.truncate(self.cursor);
+            self.checkpoints
+                .retain(|checkpoint| checkpoint.applied_len <= self.cursor);
+        }
+        let coalesced_before_hash = match &operation {
+            PaneOperation::SetSplitRatio { split, .. } if self.cursor == self.entries.len() => self
+                .entries
+                .last()
+                .and_then(|entry| match &entry.operation {
+                    PaneOperation::SetSplitRatio {
+                        split: previous_split,
+                        ..
+                    } if previous_split == split
+                        && entry.operation_id > coalesce_after_operation_id =>
+                    {
+                        Some(entry.before_hash)
+                    }
+                    _ => None,
+                }),
+            _ => None,
+        };
+
+        let outcome = tree.apply_operation(operation_id, operation.clone())?;
+        if let Some(before_hash) = coalesced_before_hash
+            && let Some(entry) = self.entries.last_mut()
+        {
+            *entry = PaneInteractionTimelineEntry {
+                sequence,
+                operation_id,
+                operation,
+                before_hash,
+                after_hash: outcome.after_hash,
+            };
+            self.cursor = self.entries.len();
+            self.checkpoints
+                .retain(|checkpoint| checkpoint.applied_len < self.cursor);
+            self.enforce_entry_limit();
+            self.maybe_record_checkpoint(tree);
+            return Ok(outcome);
+        }
+
+        self.entries.push(PaneInteractionTimelineEntry {
+            sequence,
+            operation_id,
+            operation,
+            before_hash: outcome.before_hash,
+            after_hash: outcome.after_hash,
+        });
+        self.cursor = self.entries.len();
+        self.enforce_entry_limit();
         self.maybe_record_checkpoint(tree);
         Ok(outcome)
     }
@@ -5664,10 +5767,57 @@ impl PaneInteractionTimeline {
         if !self.cursor.is_multiple_of(self.checkpoint_interval) {
             return;
         }
+        if let Some(checkpoint) = self
+            .checkpoints
+            .iter_mut()
+            .find(|checkpoint| checkpoint.applied_len == self.cursor)
+        {
+            checkpoint.snapshot = tree.to_snapshot();
+            return;
+        }
         self.checkpoints.push(PaneInteractionTimelineCheckpoint {
             applied_len: self.cursor,
             snapshot: tree.to_snapshot(),
         });
+    }
+
+    fn enforce_entry_limit(&mut self) {
+        if self.max_entries == 0 || self.entries.len() <= self.max_entries {
+            return;
+        }
+
+        let prune_count = self.entries.len().saturating_sub(self.max_entries);
+        let Some(baseline) = self.baseline.clone() else {
+            return;
+        };
+        let Ok(mut baseline_tree) = PaneTree::from_snapshot(baseline) else {
+            return;
+        };
+
+        for entry in self.entries.iter().take(prune_count) {
+            if baseline_tree
+                .apply_operation_in_place_for_replay(entry.operation_id, &entry.operation)
+                .is_err()
+            {
+                return;
+            }
+        }
+
+        self.baseline = Some(baseline_tree.to_snapshot());
+        drop(self.entries.drain(..prune_count));
+        self.cursor = self
+            .cursor
+            .saturating_sub(prune_count)
+            .min(self.entries.len());
+        self.checkpoints = self
+            .checkpoints
+            .iter()
+            .filter(|checkpoint| checkpoint.applied_len > prune_count)
+            .map(|checkpoint| PaneInteractionTimelineCheckpoint {
+                applied_len: checkpoint.applied_len - prune_count,
+                snapshot: checkpoint.snapshot.clone(),
+            })
+            .collect();
     }
 }
 
@@ -6803,6 +6953,16 @@ mod tests {
             ],
             extensions: BTreeMap::new(),
         }
+    }
+
+    fn split_ratio(tree: &PaneTree, split: PaneId) -> PaneSplitRatio {
+        let node = tree.node(split).expect("split node should exist");
+        let PaneNodeKind::Split(split_node) = &node.kind else {
+            let expected_split_node = false;
+            assert!(expected_split_node, "node should be a split");
+            return PaneSplitRatio::default();
+        };
+        split_node.ratio
     }
 
     fn make_nested_snapshot() -> PaneTreeSnapshot {
@@ -9120,6 +9280,157 @@ mod tests {
 
         let replayed = timeline.replay().expect("replay should succeed");
         assert_eq!(replayed.state_hash(), tree.state_hash());
+        assert_eq!(replayed.to_snapshot(), tree.to_snapshot());
+    }
+
+    #[test]
+    fn interaction_timeline_coalesces_resize_deltas_for_same_split() {
+        let mut tree = PaneTree::from_snapshot(make_valid_snapshot()).expect("valid tree");
+        let initial_hash = tree.state_hash();
+        let split = id(1);
+        let mut timeline = PaneInteractionTimeline::with_baseline(&tree);
+        let ratios = [
+            PaneSplitRatio::new(4, 6).expect("valid ratio"),
+            PaneSplitRatio::new(7, 3).expect("valid ratio"),
+            PaneSplitRatio::new(2, 5).expect("valid ratio"),
+        ];
+
+        for (index, ratio) in ratios.into_iter().enumerate() {
+            timeline
+                .apply_and_record_coalesced_resize_delta(
+                    &mut tree,
+                    index as u64 + 1,
+                    100 + index as u64,
+                    PaneOperation::SetSplitRatio { split, ratio },
+                    0,
+                )
+                .expect("ratio update should apply");
+        }
+
+        assert_eq!(timeline.entries.len(), 1);
+        assert_eq!(timeline.cursor, 1);
+        assert_eq!(timeline.entries[0].operation_id, 102);
+        assert_eq!(timeline.entries[0].before_hash, initial_hash);
+        assert_eq!(split_ratio(&tree, split), ratios[2]);
+        assert_eq!(timeline.next_operation_id(), 103);
+
+        let replayed = timeline.replay().expect("replay should succeed");
+        assert_eq!(replayed.to_snapshot(), tree.to_snapshot());
+
+        assert!(timeline.undo(&mut tree).expect("undo should succeed"));
+        assert_eq!(tree.state_hash(), initial_hash);
+        assert!(timeline.redo(&mut tree).expect("redo should succeed"));
+        assert_eq!(split_ratio(&tree, split), ratios[2]);
+    }
+
+    #[test]
+    fn interaction_timeline_keeps_separate_resize_gestures_distinct() {
+        let mut tree = PaneTree::from_snapshot(make_valid_snapshot()).expect("valid tree");
+        let split = id(1);
+        let mut timeline = PaneInteractionTimeline::with_baseline(&tree);
+        let first_ratio = PaneSplitRatio::new(4, 6).expect("valid ratio");
+        let second_ratio = PaneSplitRatio::new(7, 3).expect("valid ratio");
+
+        timeline
+            .apply_and_record_coalesced_resize_delta(
+                &mut tree,
+                1,
+                101,
+                PaneOperation::SetSplitRatio {
+                    split,
+                    ratio: first_ratio,
+                },
+                100,
+            )
+            .expect("first gesture should apply");
+        timeline
+            .apply_and_record_coalesced_resize_delta(
+                &mut tree,
+                2,
+                102,
+                PaneOperation::SetSplitRatio {
+                    split,
+                    ratio: second_ratio,
+                },
+                101,
+            )
+            .expect("second gesture should apply");
+
+        assert_eq!(timeline.entries.len(), 2);
+        assert_eq!(timeline.cursor, 2);
+        assert_eq!(split_ratio(&tree, split), second_ratio);
+        assert!(timeline.undo(&mut tree).expect("undo should succeed"));
+        assert_eq!(split_ratio(&tree, split), first_ratio);
+    }
+
+    #[test]
+    fn interaction_timeline_refreshes_checkpoint_when_coalescing_head() {
+        let mut tree = PaneTree::from_snapshot(make_valid_snapshot()).expect("valid tree");
+        let split = id(1);
+        let mut timeline = PaneInteractionTimeline::with_baseline(&tree);
+        timeline.checkpoint_interval = 1;
+
+        timeline
+            .apply_and_record_coalesced_resize_delta(
+                &mut tree,
+                1,
+                201,
+                PaneOperation::SetSplitRatio {
+                    split,
+                    ratio: PaneSplitRatio::new(6, 4).expect("valid ratio"),
+                },
+                200,
+            )
+            .expect("first ratio should apply");
+        timeline
+            .apply_and_record_coalesced_resize_delta(
+                &mut tree,
+                2,
+                202,
+                PaneOperation::SetSplitRatio {
+                    split,
+                    ratio: PaneSplitRatio::new(8, 2).expect("valid ratio"),
+                },
+                200,
+            )
+            .expect("second ratio should apply");
+
+        assert_eq!(timeline.entries.len(), 1);
+        assert_eq!(timeline.checkpoints.len(), 1);
+        assert_eq!(timeline.checkpoints[0].applied_len, 1);
+        assert_eq!(timeline.checkpoints[0].snapshot, tree.to_snapshot());
+    }
+
+    #[test]
+    fn interaction_timeline_enforces_configured_max_entries() {
+        let mut tree = PaneTree::from_snapshot(make_valid_snapshot()).expect("valid tree");
+        let mut timeline = PaneInteractionTimeline::with_baseline(&tree).with_max_entries(3);
+        let split = id(1);
+        let ratios = [
+            PaneSplitRatio::new(4, 6).expect("valid ratio"),
+            PaneSplitRatio::new(5, 5).expect("valid ratio"),
+            PaneSplitRatio::new(6, 4).expect("valid ratio"),
+            PaneSplitRatio::new(7, 3).expect("valid ratio"),
+            PaneSplitRatio::new(8, 2).expect("valid ratio"),
+        ];
+
+        for (index, ratio) in ratios.into_iter().enumerate() {
+            timeline
+                .apply_and_record(
+                    &mut tree,
+                    index as u64 + 1,
+                    300 + index as u64,
+                    PaneOperation::SetSplitRatio { split, ratio },
+                )
+                .expect("ratio update should apply");
+        }
+
+        assert_eq!(timeline.entries.len(), 3);
+        assert_eq!(timeline.cursor, 3);
+        assert_eq!(timeline.entries[0].operation_id, 302);
+        assert_eq!(timeline.entries[2].operation_id, 304);
+        assert_eq!(timeline.next_operation_id(), 305);
+        let replayed = timeline.replay().expect("replay should succeed");
         assert_eq!(replayed.to_snapshot(), tree.to_snapshot());
     }
 

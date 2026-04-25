@@ -82,6 +82,7 @@ pub struct ActivePaneGesture {
     pub pointer_id: u32,
     pub leaf: PaneId,
     pub mode: PaneGestureMode,
+    pub coalesce_after_operation_id: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -665,6 +666,7 @@ pub fn pane_operations_signature(operations: &[PaneOperation]) -> u64 {
 pub fn arm_active_gesture(
     state: PaneGestureArmState<'_>,
     timeline_cursor: usize,
+    coalesce_after_operation_id: u64,
     pointer_id: u32,
     leaf: PaneId,
     mode: PaneGestureMode,
@@ -679,6 +681,7 @@ pub fn arm_active_gesture(
         pointer_id,
         leaf,
         mode,
+        coalesce_after_operation_id,
     });
     *gesture_timeline_cursor_start = Some(timeline_cursor);
     *live_reflow_signature = None;
@@ -692,6 +695,44 @@ pub fn apply_operations_with_timeline(
     operations: &[PaneOperation],
     pressure: PanePressureSnapProfile,
     spring_blend: bool,
+) -> usize {
+    apply_operations_with_timeline_recording(
+        state,
+        sequence,
+        operations,
+        pressure,
+        spring_blend,
+        None,
+    )
+}
+
+#[must_use]
+fn apply_resize_operations_with_timeline(
+    state: PaneTimelineApplyState<'_>,
+    sequence: u64,
+    operations: &[PaneOperation],
+    coalesce_after_operation_id: u64,
+    pressure: PanePressureSnapProfile,
+    spring_blend: bool,
+) -> usize {
+    apply_operations_with_timeline_recording(
+        state,
+        sequence,
+        operations,
+        pressure,
+        spring_blend,
+        Some(coalesce_after_operation_id),
+    )
+}
+
+#[must_use]
+fn apply_operations_with_timeline_recording(
+    state: PaneTimelineApplyState<'_>,
+    sequence: u64,
+    operations: &[PaneOperation],
+    pressure: PanePressureSnapProfile,
+    spring_blend: bool,
+    coalesce_resize_deltas_after_operation_id: Option<u64>,
 ) -> usize {
     let PaneTimelineApplyState {
         layout_tree,
@@ -709,10 +750,19 @@ pub fn apply_operations_with_timeline(
         );
         let operation_id = *next_operation_id;
         *next_operation_id = next_operation_id.saturating_add(1);
-        if timeline
-            .apply_and_record(layout_tree, sequence, operation_id, operation)
-            .is_ok()
-        {
+        let result =
+            if let Some(coalesce_after_operation_id) = coalesce_resize_deltas_after_operation_id {
+                timeline.apply_and_record_coalesced_resize_delta(
+                    layout_tree,
+                    sequence,
+                    operation_id,
+                    operation,
+                    coalesce_after_operation_id,
+                )
+            } else {
+                timeline.apply_and_record(layout_tree, sequence, operation_id, operation)
+            };
+        if result.is_ok() {
             applied = applied.saturating_add(1);
         }
     }
@@ -824,7 +874,7 @@ pub fn apply_drag_semantics(
                 else {
                     return 0;
                 };
-                apply_operations_with_timeline(
+                apply_resize_operations_with_timeline(
                     PaneTimelineApplyState {
                         layout_tree,
                         timeline,
@@ -833,6 +883,7 @@ pub fn apply_drag_semantics(
                     },
                     sequence,
                     &plan.operations,
+                    active.coalesce_after_operation_id,
                     pressure,
                     !committed,
                 )
@@ -842,7 +893,7 @@ pub fn apply_drag_semantics(
                 else {
                     return 0;
                 };
-                apply_operations_with_timeline(
+                apply_resize_operations_with_timeline(
                     PaneTimelineApplyState {
                         layout_tree,
                         timeline,
@@ -851,6 +902,7 @@ pub fn apply_drag_semantics(
                     },
                     sequence,
                     &plan.operations,
+                    active.coalesce_after_operation_id,
                     pressure,
                     !committed,
                 )
@@ -1325,7 +1377,12 @@ mod tests {
             true,
         );
         let PaneOperation::SetSplitRatio { ratio, .. } = adjusted else {
-            panic!("expected split ratio operation");
+            let expected_split_ratio_operation = false;
+            assert!(
+                expected_split_ratio_operation,
+                "expected split ratio operation"
+            );
+            return;
         };
         assert!(ratio_to_bps(ratio) >= 5_000);
         // Ensure spring blend didn't jump all the way to target in one step.
@@ -1408,7 +1465,9 @@ mod tests {
             .node(context.target.split_id)
             .expect("target split id should resolve");
         let PaneNodeKind::Split(split) = &split.kind else {
-            panic!("expected split target");
+            let expected_split_target = false;
+            assert!(expected_split_target, "expected split target");
+            return;
         };
         assert_eq!(split.axis, SplitAxis::Horizontal);
     }
@@ -1516,6 +1575,71 @@ mod tests {
         assert_eq!(timeline.entries.len(), 1);
         assert_eq!(next_operation_id, 2);
         assert_eq!(generation, 1);
+    }
+
+    #[test]
+    fn apply_resize_operations_with_timeline_coalesces_same_split_deltas() {
+        let mut tree = default_pane_layout_tree();
+        let mut timeline = PaneInteractionTimeline::with_baseline(&tree);
+        let mut next_operation_id = 1_u64;
+        let mut generation = 0_u64;
+        let split = tree
+            .nodes()
+            .find_map(|node| match node.kind {
+                PaneNodeKind::Split(_) => Some(node.id),
+                _ => None,
+            })
+            .expect("default tree should include a split");
+        let first = [PaneOperation::SetSplitRatio {
+            split,
+            ratio: PaneSplitRatio::new(6, 4).expect("valid ratio"),
+        }];
+        let second = [PaneOperation::SetSplitRatio {
+            split,
+            ratio: PaneSplitRatio::new(7, 3).expect("valid ratio"),
+        }];
+        let coalesce_after_operation_id = next_operation_id.saturating_sub(1);
+
+        let first_applied = apply_resize_operations_with_timeline(
+            PaneTimelineApplyState {
+                layout_tree: &mut tree,
+                timeline: &mut timeline,
+                next_operation_id: &mut next_operation_id,
+                workspace_generation: &mut generation,
+            },
+            1,
+            &first,
+            coalesce_after_operation_id,
+            PanePressureSnapProfile {
+                strength_bps: 8_000,
+                hysteresis_bps: 350,
+            },
+            false,
+        );
+        let second_applied = apply_resize_operations_with_timeline(
+            PaneTimelineApplyState {
+                layout_tree: &mut tree,
+                timeline: &mut timeline,
+                next_operation_id: &mut next_operation_id,
+                workspace_generation: &mut generation,
+            },
+            2,
+            &second,
+            coalesce_after_operation_id,
+            PanePressureSnapProfile {
+                strength_bps: 8_000,
+                hysteresis_bps: 350,
+            },
+            false,
+        );
+
+        assert_eq!(first_applied, 1);
+        assert_eq!(second_applied, 1);
+        assert_eq!(timeline.cursor, 1);
+        assert_eq!(timeline.entries.len(), 1);
+        assert_eq!(timeline.entries[0].operation_id, 2);
+        assert_eq!(next_operation_id, 3);
+        assert_eq!(generation, 2);
     }
 
     #[test]
@@ -1693,6 +1817,7 @@ mod tests {
                     pointer_id: 7,
                     leaf: PaneId::new(999).expect("nonexistent pane id should be constructible"),
                     mode: PaneGestureMode::Move,
+                    coalesce_after_operation_id: 0,
                 },
                 pointer: PanePointerPosition::new(30, 10),
                 pressure: PanePressureSnapProfile {
@@ -1781,6 +1906,7 @@ mod tests {
                 SplitAxis::Horizontal => PaneGestureMode::Resize(PaneResizeGrip::Right),
                 SplitAxis::Vertical => PaneGestureMode::Resize(PaneResizeGrip::Bottom),
             },
+            coalesce_after_operation_id: 0,
         };
         let active = collect_splitter_primitives(
             &tree,

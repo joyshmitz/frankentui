@@ -859,6 +859,7 @@ impl RunnerCore {
                 preview_state: &mut self.preview_state,
             },
             self.timeline.cursor,
+            self.next_operation_id.saturating_sub(1),
             pointer_id,
             leaf,
             mode,
@@ -922,15 +923,7 @@ impl RunnerCore {
     }
 
     fn refresh_next_operation_id_from_timeline(&mut self) {
-        self.next_operation_id = self
-            .timeline
-            .entries
-            .iter()
-            .map(|entry| entry.operation_id)
-            .max()
-            .unwrap_or(0)
-            .saturating_add(1)
-            .max(1);
+        self.next_operation_id = self.timeline.next_operation_id();
     }
 
     fn refresh_cached_patch_meta_from_live_outputs(&mut self) {
@@ -1316,13 +1309,17 @@ mod tests {
             PaneModifierSnapshot::default(),
         );
         assert!(summary.accepted());
-        match runner.active_gesture {
-            Some(ActivePaneGesture {
-                mode: PaneGestureMode::Resize(PaneResizeGrip::TopLeft),
-                ..
-            }) => {}
-            other => panic!("expected top-left resize gesture, got {other:?}"),
-        }
+        assert!(
+            matches!(
+                runner.active_gesture,
+                Some(ActivePaneGesture {
+                    mode: PaneGestureMode::Resize(PaneResizeGrip::TopLeft),
+                    ..
+                })
+            ),
+            "expected top-left resize gesture, got {:?}",
+            runner.active_gesture
+        );
     }
 
     #[test]

@@ -1065,6 +1065,7 @@ impl LayoutLab {
                 preview_state: &mut self.pane_preview_state,
             },
             self.pane_timeline.cursor,
+            self.pane_next_operation_id.saturating_sub(1),
             1,
             context.leaf,
             context.mode,
@@ -1183,8 +1184,7 @@ impl LayoutLab {
         if let Ok(tree) = self.pane_timeline.replay() {
             self.pane_tree = tree;
             self.pane_workspace_generation = self.pane_workspace_generation.saturating_add(1);
-            self.pane_next_operation_id =
-                (self.pane_timeline.entries.len() as u64).saturating_add(1);
+            self.pane_next_operation_id = self.pane_timeline.next_operation_id();
             self.sanitize_pane_selection();
             self.finish_pane_gesture();
         }
@@ -1751,6 +1751,7 @@ pub fn solve_flex_horizontal(area: Rect, constraints: &[Constraint]) -> ftui_lay
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_layout::{PaneOperation, PaneSplitRatio};
 
     // ==========================================================================
     // Basic Layout Tests
@@ -3028,6 +3029,50 @@ mod tests {
             (lab.pane_timeline.entries.len() as u64).saturating_add(1),
             "replay should realign the next operation id with the journal"
         );
+    }
+
+    #[test]
+    fn pane_replay_keeps_next_operation_id_above_coalesced_resize_history() {
+        let mut lab = LayoutLab::new();
+        let split = lab
+            .pane_tree
+            .nodes()
+            .find_map(|node| match node.kind {
+                PaneNodeKind::Split(_) => Some(node.id),
+                _ => None,
+            })
+            .expect("default pane tree should include a split");
+
+        lab.pane_timeline
+            .apply_and_record_coalesced_resize_delta(
+                &mut lab.pane_tree,
+                1,
+                41,
+                PaneOperation::SetSplitRatio {
+                    split,
+                    ratio: PaneSplitRatio::new(6, 4).expect("valid ratio"),
+                },
+                40,
+            )
+            .expect("first resize delta should apply");
+        lab.pane_timeline
+            .apply_and_record_coalesced_resize_delta(
+                &mut lab.pane_tree,
+                2,
+                42,
+                PaneOperation::SetSplitRatio {
+                    split,
+                    ratio: PaneSplitRatio::new(7, 3).expect("valid ratio"),
+                },
+                40,
+            )
+            .expect("second resize delta should apply");
+        assert_eq!(lab.pane_timeline.entries.len(), 1);
+
+        lab.pane_next_operation_id = 1;
+        lab.pane_replay();
+
+        assert_eq!(lab.pane_next_operation_id, 43);
     }
 
     #[test]
