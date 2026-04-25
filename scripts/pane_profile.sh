@@ -22,6 +22,7 @@ STACK_REPORTS=false
 declare -A BENCH_BINARY_PATHS=()
 declare -A BENCH_EXECUTED_PATHS=()
 declare -A BENCH_WORKERS=()
+declare -A BENCH_WORKER_ENDPOINTS=()
 declare -A BENCH_EXACT_BINARY_ARTIFACTS=()
 declare -A BENCH_FETCH_ERRORS=()
 declare -A BENCH_BINARY_SOURCES=()
@@ -99,7 +100,14 @@ parse_bench_binary_from_output() {
 parse_worker_from_output() {
     local output_file="$1"
     strip_ansi_file "$output_file" \
-        | sed -nE 's#.*Selected worker: .* at ([^ ]+) .*#\1#p' \
+        | sed -nE 's#.*Selected worker: ([^ ]+) at [^ ]+([[:space:]].*)?$#\1#p' \
+        | tail -n1
+}
+
+parse_worker_endpoint_from_output() {
+    local output_file="$1"
+    strip_ansi_file "$output_file" \
+        | sed -nE 's#.*Selected worker: [^ ]+ at ([^ ]+)([[:space:]].*)?$#\1#p' \
         | tail -n1
 }
 
@@ -107,7 +115,9 @@ fetch_exact_bench_binary() {
     local label="$1"
     local executed_path="$2"
     local worker="$3"
-    local artifact_path="${EXACT_BINARY_DIR}/${label}-$(basename "$executed_path")"
+    local artifact_path
+
+    artifact_path="${EXACT_BINARY_DIR}/${label}-$(basename "$executed_path")"
 
     if [[ -z "$worker" ]]; then
         BENCH_FETCH_ERRORS["$label"]="worker_unknown"
@@ -129,7 +139,9 @@ fetch_exact_bench_binary() {
 preserve_local_bench_binary() {
     local label="$1"
     local bench_binary="$2"
-    local artifact_path="${EXACT_BINARY_DIR}/${label}-$(basename "$bench_binary")"
+    local artifact_path
+
+    artifact_path="${EXACT_BINARY_DIR}/${label}-$(basename "$bench_binary")"
 
     cp "$bench_binary" "$artifact_path"
     chmod u+x "$artifact_path" || true
@@ -143,12 +155,17 @@ record_executed_binary_metadata() {
     local output_file="$2"
     local bench_binary
     local worker
+    local worker_endpoint
 
     bench_binary="$(parse_bench_binary_from_output "$output_file")"
     worker="$(parse_worker_from_output "$output_file")"
+    worker_endpoint="$(parse_worker_endpoint_from_output "$output_file")"
 
     if [[ -n "$worker" ]]; then
         BENCH_WORKERS["$label"]="$worker"
+    fi
+    if [[ -n "$worker_endpoint" ]]; then
+        BENCH_WORKER_ENDPOINTS["$label"]="$worker_endpoint"
     fi
 
     if [[ -z "$bench_binary" ]]; then
@@ -192,9 +209,15 @@ run_bench() {
 find_latest_local_bench_binary() {
     local prefix="$1"
     local binary
+    local deps_dir="${PROJECT_ROOT}/target/release/deps"
+
+    if [[ ! -d "$deps_dir" ]]; then
+        printf '\n'
+        return 0
+    fi
 
     binary="$(
-        find "${PROJECT_ROOT}/target/release/deps" \
+        find "$deps_dir" \
             -maxdepth 1 \
             -type f \
             -name "${prefix}-*" \
@@ -417,6 +440,7 @@ record_symbol_metadata() {
         local binary="${BENCH_EXACT_BINARY_ARTIFACTS[$prefix]:-}"
         local executed_path="${BENCH_EXECUTED_PATHS[$prefix]:-}"
         local worker="${BENCH_WORKERS[$prefix]:-local}"
+        local worker_endpoint="${BENCH_WORKER_ENDPOINTS[$prefix]:-local}"
         local fetch_error="${BENCH_FETCH_ERRORS[$prefix]:-}"
         local local_candidate=""
         local source="${BENCH_BINARY_SOURCES[$prefix]:-executed_local}"
@@ -432,6 +456,7 @@ record_symbol_metadata() {
             echo "== ${prefix} =="
             echo "executed_path=${executed_path:-unknown}"
             echo "worker=${worker}"
+            echo "worker_endpoint=${worker_endpoint}"
             echo "binary_source=${source}"
             echo "exact_binary_status=${exact_status}"
             if [[ -n "$binary" ]]; then

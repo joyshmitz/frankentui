@@ -9,6 +9,8 @@ Status
 - `bd-1y0ph` remains `in_progress`.
 - The repeatable capture runner is `./scripts/pane_profile.sh`.
 - Current artifact directory: `target/pane-profiling/bd-1y0ph/`
+- Latest exact-binary trust verification:
+  `target/pane-profiling/bd-1y0ph-windybeaver/`
 
 ## Captured Surfaces
 
@@ -144,6 +146,12 @@ executed bench binary under `executed-binaries/` for every surface. When `rch`
 ran the benchmark on a worker, the runner first uses the retrieved local binary
 when present and falls back to explicit remote fetch if needed.
 
+Important `rch` trust boundary: remote fetches must use the selected worker
+alias, such as `ts2`, not the printed endpoint, such as
+`ubuntu@192.168.1.124`. The alias carries the SSH identity and host options
+that make the worker reachable. The endpoint is recorded separately as
+`worker_endpoint` for audit context only.
+
 For the pane-core lane, the runner also invokes a long-lived deterministic
 profile harness that emits:
 
@@ -178,6 +186,7 @@ The artifact contract is now explicit per surface:
 
 - `executed_path`: the bench binary path reported by the current run
 - `worker`: the `rch` worker used for the run, or `local`
+- `worker_endpoint`: the raw endpoint printed by `rch`, or `local`
 - `binary_source`: whether the exact binary is local, remotely fetched, or
   preserved from the retrieved local path, or still unavailable
 - `exact_binary_status`: `available` or `missing`
@@ -202,12 +211,15 @@ contains both the provenance metadata and preserved exact binaries instead of
 silently relying on whichever file happens to still be present under
 `target/release/deps`.
 
-Latest verified `symbol_metadata.txt` state:
+Latest verified `symbol_metadata.txt` state from
+`./scripts/pane_profile.sh --test --out-dir target/pane-profiling/bd-1y0ph-windybeaver`
+on 2026-04-25:
 
 ```text
-layout_bench: binary_source=executed_remote_fetched, exact_binary_status=available
-pane_terminal_bench: binary_source=executed_remote_fetched, exact_binary_status=available
-pane_pointer_bench: binary_source=executed_remote_fetched, exact_binary_status=available
+pane_profile_harness: worker=ts2, worker_endpoint=ubuntu@192.168.1.124, binary_source=executed_remote_fetched, exact_binary_status=available, debug_info=present
+layout_bench: worker=ts2, worker_endpoint=ubuntu@192.168.1.124, binary_source=executed_remote_fetched, exact_binary_status=available, debug_info=present
+pane_terminal_bench: worker=ts2, worker_endpoint=ubuntu@192.168.1.124, binary_source=executed_remote_fetched, exact_binary_status=available, debug_info=present
+pane_pointer_bench: worker=ts2, worker_endpoint=ubuntu@192.168.1.124, binary_source=executed_remote_fetched, exact_binary_status=available, debug_info=present
 ```
 
 ## Representative Stack Evidence
