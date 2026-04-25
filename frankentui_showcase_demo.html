@@ -260,7 +260,9 @@ const paneGhostAlts  = [paneGhostAlt1, paneGhostAlt2];
 const paneDockHint   = document.getElementById("pane-dock-hint");
 const mobileKbToggle = document.getElementById("mobile-kb-toggle");
 const PANE_WORKSPACE_KEY = "ftui-pane-workspace-v1";
-let paneWorkspaceToken = "";
+const PANE_WORKSPACE_SAVE_RETRY_MS = 2000;
+let paneWorkspaceNextSaveRetryAt = 0;
+let paneWorkspaceSaveWarningShown = false;
 const paneActivePointers = new Set();
 const paneTouchPointers = new Set();
 let paneGhostDecay = null;
@@ -393,8 +395,10 @@ function storageSet(key, value) {
   try {
     if (window.localStorage) {
       window.localStorage.setItem(key, value);
+      return true;
     }
   } catch (_) {}
+  return false;
 }
 
 function mediaQueryMatches(query) {
@@ -523,12 +527,49 @@ function paneStateSnapshot() {
   return null;
 }
 
-function paneWorkspaceSnapshotToken(state) {
-  if (!state) return "";
-  const layoutHash = state.layout_hash ?? "";
-  const timelineCursor = state.timeline_cursor ?? "";
-  const timelineLength = state.timeline_length ?? "";
-  return `${layoutHash}:${timelineCursor}:${timelineLength}`;
+function paneWorkspaceGenerationText(state) {
+  const fromState = state?.workspace_generation;
+  if (fromState !== null && fromState !== undefined) {
+    return String(fromState);
+  }
+  if (typeof runner.paneWorkspaceGeneration === "function") {
+    try {
+      return String(runner.paneWorkspaceGeneration());
+    } catch (_) {}
+  }
+  return "";
+}
+
+function paneWorkspaceGenerationForAck(state) {
+  const generation = paneWorkspaceGenerationText(state);
+  if (!/^\d+$/.test(generation)) return null;
+  if (typeof BigInt === "function") {
+    return BigInt(generation);
+  }
+  const asNumber = Number(generation);
+  return Number.isSafeInteger(asNumber) && asNumber >= 0 ? asNumber : null;
+}
+
+function paneWorkspaceIsDirty(state) {
+  if (typeof runner.paneWorkspaceDirty === "function") {
+    try {
+      return Boolean(runner.paneWorkspaceDirty());
+    } catch (_) {}
+  }
+  if (state && typeof state.workspace_dirty === "boolean") {
+    return state.workspace_dirty;
+  }
+  const generation = paneWorkspaceGenerationText(state);
+  const savedGeneration = state?.saved_generation;
+  return generation !== "" && savedGeneration !== null && savedGeneration !== undefined
+    ? generation !== String(savedGeneration)
+    : false;
+}
+
+function warnPaneWorkspaceSaveFailure(context) {
+  if (paneWorkspaceSaveWarningShown) return;
+  paneWorkspaceSaveWarningShown = true;
+  console.warn(`[ShowcaseDemo] Pane workspace save skipped: ${context}. Will retry after state changes or retry window.`);
 }
 
 function applyGhostVisualState(rectPx, strength, zone, alphaScale = 1.0) {
@@ -727,29 +768,54 @@ function syncPaneOverlayFromRunner() {
   }
 }
 
-function persistPaneWorkspace(state) {
-  if (paneOverlaySyncFailed) return;
-  if (typeof runner.paneExportWorkspaceSnapshot !== "function") return;
+function persistPaneWorkspace(state, options = {}) {
+  if (paneOverlaySyncFailed) return false;
+  if (typeof runner.paneExportWorkspaceSnapshot !== "function") return false;
+  if (typeof runner.paneMarkWorkspaceSaved !== "function") return false;
+  const now = performance.now();
+  if (!options.force && now < paneWorkspaceNextSaveRetryAt) return false;
+  const tokenState = state || paneStateSnapshot();
+  const generationForAck = paneWorkspaceGenerationForAck(tokenState);
+  if (generationForAck === null) {
+    paneWorkspaceNextSaveRetryAt = now + PANE_WORKSPACE_SAVE_RETRY_MS;
+    warnPaneWorkspaceSaveFailure("workspace generation could not be decoded");
+    return false;
+  }
   let snapshot = null;
   try {
     snapshot = runner.paneExportWorkspaceSnapshot();
   } catch (error) {
     disablePaneOverlaySync(error, "pane snapshot export");
-    return;
+    return false;
   }
-  if (snapshot) {
-    storageSet(PANE_WORKSPACE_KEY, snapshot);
-    const tokenState = state || paneStateSnapshot();
-    paneWorkspaceToken = paneWorkspaceSnapshotToken(tokenState);
+  if (!snapshot) return false;
+  if (!storageSet(PANE_WORKSPACE_KEY, snapshot)) {
+    paneWorkspaceNextSaveRetryAt = now + PANE_WORKSPACE_SAVE_RETRY_MS;
+    warnPaneWorkspaceSaveFailure("localStorage write failed");
+    return false;
   }
+  let saveAcknowledged = false;
+  try {
+    saveAcknowledged = runner.paneMarkWorkspaceSaved(generationForAck);
+  } catch (error) {
+    paneWorkspaceNextSaveRetryAt = now + PANE_WORKSPACE_SAVE_RETRY_MS;
+    warnPaneWorkspaceSaveFailure(`save acknowledgement failed: ${error?.message || error}`);
+    return false;
+  }
+  if (!saveAcknowledged) {
+    paneWorkspaceNextSaveRetryAt = now + PANE_WORKSPACE_SAVE_RETRY_MS;
+    return false;
+  }
+  paneWorkspaceNextSaveRetryAt = 0;
+  paneWorkspaceSaveWarningShown = false;
+  return true;
 }
 
 function persistPaneWorkspaceIfChanged(state) {
   if (state && state.active_pointer_id !== null && state.active_pointer_id !== undefined) {
     return;
   }
-  const token = paneWorkspaceSnapshotToken(state);
-  if (!token || token === paneWorkspaceToken) return;
+  if (!paneWorkspaceIsDirty(state)) return;
   persistPaneWorkspace(state);
 }
 
@@ -766,7 +832,8 @@ function restorePaneWorkspace() {
     return false;
   }
   if (restored) {
-    paneWorkspaceToken = paneWorkspaceSnapshotToken(paneStateSnapshot());
+    paneWorkspaceNextSaveRetryAt = 0;
+    paneWorkspaceSaveWarningShown = false;
   }
   return restored;
 }
@@ -1901,6 +1968,7 @@ document.addEventListener("visibilitychange", () => {
   if (document.hidden && typeof runner.paneVisibilityHidden === "function") {
     runner.paneVisibilityHidden();
     syncPaneOverlayFromRunner();
+    persistPaneWorkspace(undefined, { force: true });
   }
 });
 window.addEventListener("pagehide", () => {
@@ -1908,6 +1976,7 @@ window.addEventListener("pagehide", () => {
   if (typeof runner.paneVisibilityHidden === "function") {
     runner.paneVisibilityHidden();
     syncPaneOverlayFromRunner();
+    persistPaneWorkspace(undefined, { force: true });
   }
 });
 
