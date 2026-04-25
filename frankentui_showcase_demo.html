@@ -540,6 +540,19 @@ function paneWorkspaceGenerationText(state) {
   return "";
 }
 
+function paneWorkspaceSavedGenerationText(state) {
+  const fromState = state?.saved_generation;
+  if (fromState !== null && fromState !== undefined) {
+    return String(fromState);
+  }
+  if (typeof runner.paneSavedWorkspaceGeneration === "function") {
+    try {
+      return String(runner.paneSavedWorkspaceGeneration());
+    } catch (_) {}
+  }
+  return "";
+}
+
 function paneWorkspaceGenerationForAck(state) {
   const generation = paneWorkspaceGenerationText(state);
   if (!/^\d+$/.test(generation)) return null;
@@ -560,10 +573,23 @@ function paneWorkspaceIsDirty(state) {
     return state.workspace_dirty;
   }
   const generation = paneWorkspaceGenerationText(state);
-  const savedGeneration = state?.saved_generation;
-  return generation !== "" && savedGeneration !== null && savedGeneration !== undefined
-    ? generation !== String(savedGeneration)
+  const savedGeneration = paneWorkspaceSavedGenerationText(state);
+  return generation !== "" && savedGeneration !== ""
+    ? generation !== savedGeneration
     : false;
+}
+
+function paneWorkspaceHasActivePointer(state) {
+  if (state && state.active_pointer_id !== null && state.active_pointer_id !== undefined) {
+    return true;
+  }
+  if (typeof runner.paneActivePointerId === "function") {
+    try {
+      const pointerId = runner.paneActivePointerId();
+      return pointerId !== null && pointerId !== undefined;
+    } catch (_) {}
+  }
+  return paneActivePointers.size > 0;
 }
 
 function warnPaneWorkspaceSaveFailure(context) {
@@ -755,7 +781,10 @@ function updatePaneStatusSuffix(state) {
 }
 
 function syncPaneOverlayFromRunner() {
-  if (paneOverlaySyncFailed) return null;
+  if (paneOverlaySyncFailed) {
+    persistPaneWorkspaceIfChanged(null);
+    return null;
+  }
   try {
     const state = paneStateSnapshot();
     renderPaneGhost(state);
@@ -764,12 +793,12 @@ function syncPaneOverlayFromRunner() {
     return state;
   } catch (error) {
     disablePaneOverlaySync(error, "runtime sync");
+    persistPaneWorkspaceIfChanged(null);
     return null;
   }
 }
 
 function persistPaneWorkspace(state, options = {}) {
-  if (paneOverlaySyncFailed) return false;
   if (typeof runner.paneExportWorkspaceSnapshot !== "function") return false;
   if (typeof runner.paneMarkWorkspaceSaved !== "function") return false;
   const now = performance.now();
@@ -785,7 +814,8 @@ function persistPaneWorkspace(state, options = {}) {
   try {
     snapshot = runner.paneExportWorkspaceSnapshot();
   } catch (error) {
-    disablePaneOverlaySync(error, "pane snapshot export");
+    paneWorkspaceNextSaveRetryAt = now + PANE_WORKSPACE_SAVE_RETRY_MS;
+    warnPaneWorkspaceSaveFailure(`snapshot export failed: ${error?.message || error}`);
     return false;
   }
   if (!snapshot) return false;
@@ -812,7 +842,7 @@ function persistPaneWorkspace(state, options = {}) {
 }
 
 function persistPaneWorkspaceIfChanged(state) {
-  if (state && state.active_pointer_id !== null && state.active_pointer_id !== undefined) {
+  if (paneWorkspaceHasActivePointer(state)) {
     return;
   }
   if (!paneWorkspaceIsDirty(state)) return;
@@ -820,7 +850,6 @@ function persistPaneWorkspaceIfChanged(state) {
 }
 
 function restorePaneWorkspace() {
-  if (paneOverlaySyncFailed) return false;
   if (typeof runner.paneImportWorkspaceSnapshot !== "function") return false;
   const snapshot = storageGet(PANE_WORKSPACE_KEY);
   if (!snapshot) return false;
@@ -828,7 +857,7 @@ function restorePaneWorkspace() {
   try {
     restored = runner.paneImportWorkspaceSnapshot(snapshot);
   } catch (error) {
-    disablePaneOverlaySync(error, "pane snapshot import");
+    console.warn("[ShowcaseDemo] Pane workspace restore failed:", error);
     return false;
   }
   if (restored) {
