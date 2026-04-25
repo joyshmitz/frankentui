@@ -11,9 +11,10 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashSet, VecDeque};
 use std::env;
 use std::fs::{self, OpenOptions, create_dir_all};
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, ErrorKind, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use web_time::{Duration, Instant};
 
@@ -57,6 +58,7 @@ const TICK_STALL_WARN_AFTER: Duration = Duration::from_millis(750);
 /// Rate-limit tick stall logs to avoid spamming.
 const TICK_STALL_LOG_INTERVAL: Duration = Duration::from_millis(2_000);
 const PANE_WORKSPACE_SAVE_RETRY_TICKS: u64 = 20;
+static PANE_WORKSPACE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Shared perf-HUD logger (env-gated via `FTUI_PERF_HUD_JSONL`).
 #[allow(dead_code)]
@@ -4285,9 +4287,36 @@ fn write_pane_workspace_snapshot(path: &Path, snapshot: &str) -> std::io::Result
     {
         create_dir_all(parent)?;
     }
-    let tmp_path = path.with_extension("tmp");
-    fs::write(&tmp_path, snapshot)?;
-    fs::rename(tmp_path, path)
+    for _ in 0..16 {
+        let nonce = PANE_WORKSPACE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp_path = pane_workspace_temp_path(path, nonce);
+        let write_result = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)
+            .and_then(|mut file| {
+                file.write_all(snapshot.as_bytes())?;
+                file.flush()
+            });
+        match write_result {
+            Ok(()) => return fs::rename(tmp_path, path),
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    Err(std::io::Error::new(
+        ErrorKind::AlreadyExists,
+        "could not reserve a unique pane workspace temp file",
+    ))
+}
+
+fn pane_workspace_temp_path(path: &Path, nonce: u64) -> PathBuf {
+    let mut file_name = path.file_name().map_or_else(
+        || std::ffi::OsString::from("workspace"),
+        std::ffi::OsString::from,
+    );
+    file_name.push(format!(".{}.{}.tmp", std::process::id(), nonce));
+    path.with_file_name(file_name)
 }
 
 #[derive(Clone, Copy)]
@@ -5626,6 +5655,31 @@ mod tests {
             !restored.screens.layout_lab.pane_workspace_dirty(),
             "loading a durable snapshot should restore a clean generation"
         );
+    }
+
+    #[test]
+    fn pane_workspace_writer_does_not_clobber_legacy_tmp_file()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut path = std::env::temp_dir();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
+        path.push(format!(
+            "ftui-pane-workspace-writer-{}-{nanos}.json",
+            std::process::id()
+        ));
+        let legacy_tmp_path = path.with_extension("tmp");
+        fs::write(&legacy_tmp_path, "stale temp")?;
+
+        write_pane_workspace_snapshot(&path, "{\"ok\":true}\n")?;
+
+        assert_eq!(fs::read_to_string(&path)?, "{\"ok\":true}\n");
+        assert_eq!(
+            fs::read_to_string(&legacy_tmp_path)?,
+            "stale temp",
+            "writer must not overwrite or rename the old predictable temp path"
+        );
+        Ok(())
     }
 
     #[test]
