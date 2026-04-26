@@ -1660,10 +1660,10 @@ impl LayoutLab {
             .map(pane_zone_label)
             .unwrap_or("none");
         let timeline_status = self.pane_timeline_status();
-        let recovery = self.pane_workspace_recovery_notice.as_ref().map_or_else(
-            || "Recovery: none".to_string(),
-            PaneWorkspaceRecoveryNotice::summary,
-        );
+        let recovery = self
+            .pane_workspace_recovery_notice
+            .as_ref()
+            .map_or_else(String::new, PaneWorkspaceRecoveryNotice::summary);
 
         let info = format!(
             "Preset: [{}] {}\n\
