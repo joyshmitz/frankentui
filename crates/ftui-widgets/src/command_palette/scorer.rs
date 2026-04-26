@@ -1428,6 +1428,74 @@ impl IncrementalScorer {
         results
     }
 
+    /// Score an explicit subset of corpus indices with precomputed title caches.
+    ///
+    /// This is used by indexed callers that have already narrowed the candidate
+    /// set, for example prefix-only command-palette queries. It deliberately
+    /// does not update the incremental query cache: a prefix-only candidate set
+    /// is not equivalent to the full fuzzy match set and must not constrain a
+    /// later all-match query.
+    pub fn score_candidate_indices_with_lowered_and_words(
+        &mut self,
+        query: &str,
+        corpus: &[String],
+        corpus_lower: &[String],
+        word_starts: &[Vec<usize>],
+        candidate_indices: &[usize],
+        generation: Option<u64>,
+    ) -> Vec<(usize, MatchResult)> {
+        debug_assert_eq!(
+            corpus.len(),
+            corpus_lower.len(),
+            "corpus_lower must match corpus length"
+        );
+        debug_assert_eq!(
+            corpus.len(),
+            word_starts.len(),
+            "word_starts must match corpus length"
+        );
+
+        let generation_val = generation.unwrap_or(self.corpus_generation);
+        if generation_val != self.corpus_generation || corpus.len() != self.corpus_len {
+            self.invalidate();
+            self.corpus_generation = generation_val;
+            self.corpus_len = corpus.len();
+        }
+
+        let candidate_count = candidate_indices
+            .iter()
+            .filter(|idx| **idx < corpus.len())
+            .count();
+        self.stats.incremental_scans += 1;
+        self.stats.total_evaluated += candidate_count as u64;
+        self.stats.total_pruned += corpus.len().saturating_sub(candidate_count) as u64;
+
+        let query_lower = query.to_lowercase();
+        let mut results = Vec::with_capacity(candidate_count);
+        for &idx in candidate_indices {
+            let (Some(title), Some(title_lower), Some(starts)) =
+                (corpus.get(idx), corpus_lower.get(idx), word_starts.get(idx))
+            else {
+                continue;
+            };
+
+            let result = self.scorer.score_with_lowered_title_and_words(
+                query,
+                &query_lower,
+                title,
+                title_lower,
+                Some(starts),
+            );
+            if result.score > 0.0 {
+                results.push((idx, result));
+            }
+        }
+
+        results.sort_unstable_by(compare_ranked_match_results);
+
+        results
+    }
+
     /// Full scan: score every item in the corpus.
     fn score_full(
         &mut self,

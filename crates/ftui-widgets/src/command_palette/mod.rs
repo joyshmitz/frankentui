@@ -49,6 +49,7 @@ use ftui_style::Style;
 use ftui_text::{display_width, grapheme_width, graphemes};
 
 use crate::Widget;
+use crate::adaptive_radix::AdaptiveRadixTree;
 
 #[cfg(feature = "tracing")]
 use tracing::{debug, info};
@@ -346,6 +347,8 @@ pub struct CommandPalette {
     titles_lower: Vec<String>,
     /// Cached word-start positions for each lowercased title.
     titles_word_starts: Vec<Vec<usize>>,
+    /// Adaptive radix index over lowercased titles for prefix-only searches.
+    prefix_index: AdaptiveRadixTree<usize>,
     /// Current query text.
     query: String,
     /// Cursor position in the query (byte offset for simplicity).
@@ -392,6 +395,7 @@ impl CommandPalette {
             titles_cache: Vec::new(),
             titles_lower: Vec::new(),
             titles_word_starts: Vec::new(),
+            prefix_index: AdaptiveRadixTree::new(),
             query: String::new(),
             cursor: 0,
             selected: 0,
@@ -495,6 +499,29 @@ impl CommandPalette {
         );
     }
 
+    fn prefix_index_key(title_lower: &str, action_index: usize) -> String {
+        format!("{title_lower}\u{1f}{action_index:020}")
+    }
+
+    fn insert_prefix_index_entry(&mut self, action_index: usize) {
+        let key = self
+            .titles_lower
+            .get(action_index)
+            .map(|title_lower| Self::prefix_index_key(title_lower, action_index));
+        if let Some(key) = key {
+            self.prefix_index.insert(&key, action_index);
+        }
+    }
+
+    fn rebuild_prefix_index(&mut self) {
+        let mut prefix_index = AdaptiveRadixTree::new();
+        for (action_index, title_lower) in self.titles_lower.iter().enumerate() {
+            let key = Self::prefix_index_key(title_lower, action_index);
+            prefix_index.insert(&key, action_index);
+        }
+        self.prefix_index = prefix_index;
+    }
+
     fn rebuild_title_cache(&mut self) {
         self.titles_cache.clear();
         self.titles_lower.clear();
@@ -517,6 +544,11 @@ impl CommandPalette {
         }
     }
 
+    fn rebuild_search_cache(&mut self) {
+        self.rebuild_title_cache();
+        self.rebuild_prefix_index();
+    }
+
     /// Register a new action.
     pub fn register(
         &mut self,
@@ -531,7 +563,9 @@ impl CommandPalette {
             item.description = Some(desc.to_string());
         }
         item.tags = tags.iter().map(|s| (*s).to_string()).collect();
+        let action_index = self.actions.len();
         self.push_title_cache(&item.title);
+        self.insert_prefix_index_entry(action_index);
         self.actions.push(item);
         self.generation = self.generation.wrapping_add(1);
         self.refresh_filtered_after_action_change();
@@ -540,7 +574,9 @@ impl CommandPalette {
 
     /// Register an action item directly.
     pub fn register_action(&mut self, action: ActionItem) -> &mut Self {
+        let action_index = self.actions.len();
         self.push_title_cache(&action.title);
+        self.insert_prefix_index_entry(action_index);
         self.actions.push(action);
         self.generation = self.generation.wrapping_add(1);
         self.refresh_filtered_after_action_change();
@@ -552,7 +588,7 @@ impl CommandPalette {
     /// This resets caches and refreshes the filtered results.
     pub fn replace_actions(&mut self, actions: Vec<ActionItem>) {
         self.actions = actions;
-        self.rebuild_title_cache();
+        self.rebuild_search_cache();
         self.generation = self.generation.wrapping_add(1);
         self.scorer.invalidate();
         self.selected = 0;
@@ -864,17 +900,36 @@ impl CommandPalette {
         if self.titles_cache.len() != self.actions.len()
             || self.titles_lower.len() != self.actions.len()
             || self.titles_word_starts.len() != self.actions.len()
+            || self.prefix_index.len() != self.actions.len()
         {
-            self.rebuild_title_cache();
+            self.rebuild_search_cache();
         }
 
-        let results = self.scorer.score_corpus_with_lowered_and_words(
-            &self.query,
-            &self.titles_cache,
-            &self.titles_lower,
-            &self.titles_word_starts,
-            Some(self.generation),
-        );
+        let results = if self.match_filter == MatchFilter::Prefix && !self.query.is_empty() {
+            let query_lower = self.query.to_lowercase();
+            let candidate_indices: Vec<usize> = self
+                .prefix_index
+                .prefix_scan(&query_lower)
+                .into_iter()
+                .map(|(_, action_index)| *action_index)
+                .collect();
+            self.scorer.score_candidate_indices_with_lowered_and_words(
+                &self.query,
+                &self.titles_cache,
+                &self.titles_lower,
+                &self.titles_word_starts,
+                &candidate_indices,
+                Some(self.generation),
+            )
+        } else {
+            self.scorer.score_corpus_with_lowered_and_words(
+                &self.query,
+                &self.titles_cache,
+                &self.titles_lower,
+                &self.titles_word_starts,
+                Some(self.generation),
+            )
+        };
 
         self.filtered = results
             .into_iter()
@@ -2233,6 +2288,89 @@ mod widget_tests {
         palette.set_match_filter(MatchFilter::Exact);
         let after = palette.result_count();
         assert!(after <= before);
+    }
+
+    #[test]
+    fn prefix_filter_uses_art_candidate_set() {
+        let mut palette = CommandPalette::new();
+        for idx in 0..40 {
+            palette.register_action(ActionItem::new(
+                format!("file-{idx:02}"),
+                format!("File Command {idx:02}"),
+            ));
+        }
+        for idx in 0..80 {
+            palette.register_action(ActionItem::new(
+                format!("edit-{idx:02}"),
+                format!("Edit Command {idx:02}"),
+            ));
+        }
+
+        palette.open();
+        palette.set_match_filter(MatchFilter::Prefix);
+
+        let before = palette.scorer_stats().total_evaluated;
+        palette.set_query("file");
+        let evaluated_for_query = palette.scorer_stats().total_evaluated - before;
+
+        assert_eq!(palette.result_count(), 40);
+        assert_eq!(evaluated_for_query, 40);
+    }
+
+    #[test]
+    fn prefix_filter_preserves_duplicate_titles() {
+        let mut palette = CommandPalette::new();
+        palette.register_action(ActionItem::new("open-file-a", "Open File"));
+        palette.register_action(ActionItem::new("open-file-b", "Open File"));
+        palette.register_action(ActionItem::new("open-folder", "Open Folder"));
+
+        palette.open();
+        palette.set_match_filter(MatchFilter::Prefix);
+        palette.set_query("open f");
+
+        let ids: Vec<&str> = palette.results().map(|m| m.action.id.as_str()).collect();
+        assert_eq!(ids.len(), 3);
+        assert!(ids.contains(&"open-file-a"));
+        assert!(ids.contains(&"open-file-b"));
+        assert!(ids.contains(&"open-folder"));
+    }
+
+    #[test]
+    fn prefix_filter_does_not_poison_all_match_cache() {
+        let mut palette = CommandPalette::new();
+        palette.register("Open Preferences", None, &[]);
+        palette.register("Preferences: Open", None, &[]);
+
+        palette.open();
+        palette.set_match_filter(MatchFilter::Prefix);
+        palette.set_query("pref");
+        assert_eq!(palette.result_count(), 1);
+
+        palette.set_match_filter(MatchFilter::All);
+        let titles: Vec<&str> = palette.results().map(|m| m.action.title.as_str()).collect();
+        assert!(titles.contains(&"Open Preferences"));
+        assert!(titles.contains(&"Preferences: Open"));
+    }
+
+    #[test]
+    fn replace_actions_rebuilds_prefix_index() {
+        let mut palette = CommandPalette::new();
+        palette.register_action(ActionItem::new("open-file", "Open File"));
+
+        palette.open();
+        palette.set_match_filter(MatchFilter::Prefix);
+        palette.set_query("open");
+        assert_eq!(palette.result_count(), 1);
+
+        palette.replace_actions(vec![ActionItem::new("save-file", "Save File")]);
+        assert_eq!(palette.result_count(), 0);
+
+        palette.set_query("save");
+        assert_eq!(palette.result_count(), 1);
+        assert_eq!(
+            palette.selected_action().map(|action| action.id.as_str()),
+            Some("save-file")
+        );
     }
 
     #[test]
