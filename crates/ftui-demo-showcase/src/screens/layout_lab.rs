@@ -12,6 +12,7 @@ use ftui_layout::{
     PANE_MAGNETIC_FIELD_CELLS, PaneId, PaneInertialThrow, PaneInteractionTimeline,
     PaneLayoutIntelligenceMode, PaneMotionVector, PaneNodeKind, PanePointerPosition,
     PanePressureSnapProfile, PaneSelectionState, PaneTree, WorkspaceMetadata, WorkspaceSnapshot,
+    decode_workspace_snapshot_json, to_canonical_workspace_snapshot_json,
 };
 use ftui_render::cell::{Cell as RenderCell, PackedRgba};
 use ftui_render::drawing::Draw;
@@ -1310,24 +1311,25 @@ impl LayoutLab {
         metadata.saved_generation = self.pane_workspace_generation;
         let mut snapshot = WorkspaceSnapshot::new(self.pane_tree.to_snapshot(), metadata);
         snapshot.interaction_timeline = self.pane_timeline.clone();
-        if let Some(baseline) = snapshot.interaction_timeline.baseline.as_mut() {
-            baseline.canonicalize();
-        }
         snapshot.active_pane_id = self.pane_selection.anchor;
-        snapshot
-            .validate()
-            .map_err(|err| format!("workspace snapshot validation failed: {err}"))?;
-        serde_json::to_string(&snapshot)
-            .map_err(|err| format!("workspace snapshot encode failed: {err}"))
+        to_canonical_workspace_snapshot_json(&snapshot).map_err(|err| err.to_string())
     }
 
     /// Restore a pane workspace snapshot without mutating current state on failure.
     pub fn pane_import_workspace_snapshot_json(&mut self, json: &str) -> Result<(), String> {
-        let snapshot: WorkspaceSnapshot = serde_json::from_str(json)
-            .map_err(|err| format!("workspace snapshot parse failed: {err}"))?;
-        snapshot
-            .validate()
-            .map_err(|err| format!("workspace snapshot invalid: {err}"))?;
+        let migration = decode_workspace_snapshot_json(json).map_err(|err| err.to_string())?;
+        let state_checksum = format!("{:016x}", migration.state_checksum());
+        tracing::debug!(
+            target: "ftui_demo_showcase::layout_lab",
+            source = "layout_lab.pane_workspace_json",
+            from_version = migration.from_version,
+            to_version = migration.to_version,
+            decision = migration.decision(),
+            state_checksum = %state_checksum,
+            warning_count = migration.warnings.len(),
+            "pane workspace migration complete"
+        );
+        let snapshot = migration.snapshot;
         let tree = PaneTree::from_snapshot(snapshot.pane_tree.clone())
             .map_err(|err| format!("pane tree restore failed: {err}"))?;
         let mut timeline = snapshot.interaction_timeline;
@@ -3309,6 +3311,38 @@ mod tests {
             .pane_import_workspace_snapshot_json("{not json")
             .expect_err("invalid JSON should fail to import");
         assert!(err.contains("parse failed"));
+        assert_eq!(lab.pane_tree.state_hash(), before_hash);
+        assert_eq!(lab.pane_workspace_generation(), before_generation);
+        assert_eq!(
+            lab.pane_saved_workspace_generation(),
+            before_saved_generation
+        );
+        assert_eq!(lab.pane_workspace_dirty(), before_dirty);
+    }
+
+    #[test]
+    fn pane_workspace_import_future_schema_preserves_active_state() {
+        let mut lab = LayoutLab::new();
+        lab.apply_pane_intelligence_mode(PaneLayoutIntelligenceMode::Compare);
+        let before_hash = lab.pane_tree.state_hash();
+        let before_generation = lab.pane_workspace_generation();
+        let before_saved_generation = lab.pane_saved_workspace_generation();
+        let before_dirty = lab.pane_workspace_dirty();
+        let snapshot = lab
+            .pane_export_workspace_snapshot_json()
+            .expect("snapshot export should succeed");
+        let mut payload: serde_json::Value =
+            serde_json::from_str(&snapshot).expect("exported snapshot should be JSON");
+        payload["schema_version"] =
+            serde_json::json!(ftui_layout::WORKSPACE_SCHEMA_VERSION.saturating_add(1));
+        let future_snapshot =
+            serde_json::to_string(&payload).expect("future snapshot should encode");
+
+        let err = lab
+            .pane_import_workspace_snapshot_json(&future_snapshot)
+            .expect_err("future schema should fail to import");
+
+        assert!(err.contains("migration failed"));
         assert_eq!(lab.pane_tree.state_hash(), before_hash);
         assert_eq!(lab.pane_workspace_generation(), before_generation);
         assert_eq!(

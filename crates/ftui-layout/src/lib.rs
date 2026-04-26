@@ -100,7 +100,9 @@ use std::cmp::min;
 pub use visibility::Visibility;
 pub use workspace::{
     MigrationResult, WORKSPACE_SCHEMA_VERSION, WorkspaceMetadata, WorkspaceMigrationError,
-    WorkspaceSnapshot, WorkspaceValidationError, migrate_workspace, needs_migration,
+    WorkspaceSnapshot, WorkspaceSnapshotJsonError, WorkspaceValidationError,
+    canonicalize_workspace_snapshot, decode_workspace_snapshot_json, migrate_workspace,
+    needs_migration, to_canonical_workspace_snapshot_json,
 };
 
 /// Inline capacity for layout result vectors.

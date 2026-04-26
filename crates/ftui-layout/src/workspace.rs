@@ -53,7 +53,8 @@ pub const WORKSPACE_SCHEMA_VERSION: u16 = 1;
 
 /// Persisted workspace state, wrapping a pane tree with metadata.
 ///
-/// Forward-compatible: unknown fields land in `extensions` for round-tripping.
+/// Forward-compatible data belongs in explicit `extensions` maps for
+/// round-tripping.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceSnapshot {
     /// Schema version for migration detection.
@@ -376,6 +377,24 @@ pub struct MigrationResult {
     pub warnings: Vec<String>,
 }
 
+impl MigrationResult {
+    /// Classify the migration decision for audit logs.
+    #[must_use]
+    pub fn decision(&self) -> &'static str {
+        if self.from_version == self.to_version {
+            "current_schema"
+        } else {
+            "migrated"
+        }
+    }
+
+    /// Deterministic checksum of the resulting workspace state.
+    #[must_use]
+    pub fn state_checksum(&self) -> u64 {
+        self.snapshot.state_hash()
+    }
+}
+
 /// Errors from workspace migration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceMigrationError {
@@ -398,6 +417,39 @@ impl fmt::Display for WorkspaceMigrationError {
             }
             Self::DeserializationFailed { reason } => {
                 write!(f, "deserialization failed during migration: {reason}")
+            }
+        }
+    }
+}
+
+/// Errors from canonical workspace JSON import/export.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceSnapshotJsonError {
+    /// JSON deserialization failed before schema migration could run.
+    DeserializationFailed { reason: String },
+    /// Schema migration failed.
+    MigrationFailed { source: WorkspaceMigrationError },
+    /// Snapshot validation failed.
+    ValidationFailed {
+        context: &'static str,
+        source: WorkspaceValidationError,
+    },
+    /// JSON serialization failed.
+    SerializationFailed { reason: String },
+}
+
+impl fmt::Display for WorkspaceSnapshotJsonError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DeserializationFailed { reason } => {
+                write!(f, "workspace snapshot parse failed: {reason}")
+            }
+            Self::MigrationFailed { source } => {
+                write!(f, "workspace snapshot migration failed: {source}")
+            }
+            Self::ValidationFailed { context, source } => write!(f, "{context}: {source}"),
+            Self::SerializationFailed { reason } => {
+                write!(f, "workspace snapshot encode failed: {reason}")
             }
         }
     }
@@ -434,6 +486,55 @@ pub fn migrate_workspace(
 #[must_use]
 pub fn needs_migration(snapshot: &WorkspaceSnapshot) -> bool {
     snapshot.schema_version != WORKSPACE_SCHEMA_VERSION
+}
+
+/// Canonicalize every schema field that affects deterministic workspace JSON.
+pub fn canonicalize_workspace_snapshot(snapshot: &mut WorkspaceSnapshot) {
+    snapshot.canonicalize();
+    if let Some(baseline) = snapshot.interaction_timeline.baseline.as_mut() {
+        baseline.canonicalize();
+    }
+}
+
+/// Decode, migrate, canonicalize, and validate a workspace JSON payload.
+pub fn decode_workspace_snapshot_json(
+    json: &str,
+) -> Result<MigrationResult, WorkspaceSnapshotJsonError> {
+    let snapshot: WorkspaceSnapshot = serde_json::from_str(json).map_err(|err| {
+        WorkspaceSnapshotJsonError::DeserializationFailed {
+            reason: err.to_string(),
+        }
+    })?;
+    let mut result = migrate_workspace(snapshot)
+        .map_err(|source| WorkspaceSnapshotJsonError::MigrationFailed { source })?;
+    canonicalize_workspace_snapshot(&mut result.snapshot);
+    result
+        .snapshot
+        .validate()
+        .map_err(|source| WorkspaceSnapshotJsonError::ValidationFailed {
+            context: "workspace snapshot invalid",
+            source,
+        })?;
+    Ok(result)
+}
+
+/// Validate and encode a workspace snapshot as canonical JSON.
+pub fn to_canonical_workspace_snapshot_json(
+    snapshot: &WorkspaceSnapshot,
+) -> Result<String, WorkspaceSnapshotJsonError> {
+    let mut canonical = snapshot.clone();
+    canonicalize_workspace_snapshot(&mut canonical);
+    canonical
+        .validate()
+        .map_err(|source| WorkspaceSnapshotJsonError::ValidationFailed {
+            context: "workspace snapshot validation failed",
+            source,
+        })?;
+    serde_json::to_string(&canonical).map_err(|err| {
+        WorkspaceSnapshotJsonError::SerializationFailed {
+            reason: err.to_string(),
+        }
+    })
 }
 
 // =========================================================================
@@ -916,6 +1017,121 @@ mod tests {
         assert!(needs_migration(&snap));
     }
 
+    // ---- Canonical JSON import/export corpus ----
+
+    #[test]
+    fn canonical_json_export_sorts_pane_nodes() {
+        let mut snap = WorkspaceSnapshot::new(split_tree(), WorkspaceMetadata::new("canonical"));
+        snap.pane_tree.nodes.reverse();
+
+        let json = to_canonical_workspace_snapshot_json(&snap).unwrap();
+        let decoded: WorkspaceSnapshot = serde_json::from_str(&json).unwrap();
+        let ids: Vec<u64> = decoded
+            .pane_tree
+            .nodes
+            .iter()
+            .map(|node| node.id.get())
+            .collect();
+
+        assert_eq!(ids, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn canonical_json_current_schema_round_trips_byte_stably() {
+        let snap = WorkspaceSnapshot::new(split_tree(), WorkspaceMetadata::new("roundtrip"))
+            .with_active_pane(PaneId::new(2).unwrap());
+
+        let first_json = to_canonical_workspace_snapshot_json(&snap).unwrap();
+        let first = decode_workspace_snapshot_json(&first_json).unwrap();
+        let second_json = to_canonical_workspace_snapshot_json(&first.snapshot).unwrap();
+        let second = decode_workspace_snapshot_json(&second_json).unwrap();
+
+        assert_eq!(first.from_version, WORKSPACE_SCHEMA_VERSION);
+        assert_eq!(first.to_version, WORKSPACE_SCHEMA_VERSION);
+        assert_eq!(first.decision(), "current_schema");
+        assert_eq!(first.warnings, second.warnings);
+        assert_eq!(first.state_checksum(), second.state_checksum());
+        assert_eq!(first_json, second_json);
+    }
+
+    #[test]
+    fn canonical_json_missing_schema_version_defaults_to_current() {
+        let json = r#"{
+            "pane_tree": {
+                "root": 1,
+                "next_id": 2,
+                "nodes": [{"id": 1, "kind": "leaf", "surface_key": "main"}]
+            },
+            "metadata": {"name": "legacy-missing-version"}
+        }"#;
+
+        let result = decode_workspace_snapshot_json(json).unwrap();
+
+        assert_eq!(result.from_version, WORKSPACE_SCHEMA_VERSION);
+        assert_eq!(result.to_version, WORKSPACE_SCHEMA_VERSION);
+        assert_eq!(result.snapshot.schema_version, WORKSPACE_SCHEMA_VERSION);
+        assert_eq!(result.snapshot.metadata.name, "legacy-missing-version");
+    }
+
+    #[test]
+    fn canonical_json_future_schema_reports_migration_failure() {
+        let mut snap = minimal_snapshot();
+        snap.schema_version = WORKSPACE_SCHEMA_VERSION.saturating_add(1);
+        let json = serde_json::to_string(&snap).unwrap();
+
+        let err = decode_workspace_snapshot_json(&json).unwrap_err();
+
+        assert!(matches!(
+            err,
+            WorkspaceSnapshotJsonError::MigrationFailed {
+                source: WorkspaceMigrationError::UnsupportedVersion { .. }
+            }
+        ));
+        assert!(format!("{err}").contains("migration failed"));
+    }
+
+    #[test]
+    fn canonical_json_old_schema_reports_missing_path() {
+        let mut snap = minimal_snapshot();
+        snap.schema_version = 0;
+        let json = serde_json::to_string(&snap).unwrap();
+
+        let err = decode_workspace_snapshot_json(&json).unwrap_err();
+
+        assert!(matches!(
+            err,
+            WorkspaceSnapshotJsonError::MigrationFailed {
+                source: WorkspaceMigrationError::NoMigrationPath { from: 0, to: 1 }
+            }
+        ));
+    }
+
+    #[test]
+    fn canonical_json_parse_error_uses_import_context() {
+        let err = decode_workspace_snapshot_json("{not json").unwrap_err();
+
+        assert!(matches!(
+            err,
+            WorkspaceSnapshotJsonError::DeserializationFailed { .. }
+        ));
+        assert!(format!("{err}").contains("workspace snapshot parse failed"));
+    }
+
+    #[test]
+    fn canonical_json_export_error_uses_validation_context() {
+        let snap = WorkspaceSnapshot::new(minimal_tree(), WorkspaceMetadata::new(""));
+
+        let err = to_canonical_workspace_snapshot_json(&snap).unwrap_err();
+
+        assert!(matches!(
+            err,
+            WorkspaceSnapshotJsonError::ValidationFailed {
+                context: "workspace snapshot validation failed",
+                source: WorkspaceValidationError::EmptyWorkspaceName
+            }
+        ));
+    }
+
     // ---- Error display ----
 
     #[test]
@@ -960,5 +1176,7 @@ mod tests {
         let r1 = migrate_workspace(s1).unwrap();
         let r2 = migrate_workspace(s2).unwrap();
         assert_eq!(r1.snapshot, r2.snapshot);
+        assert_eq!(r1.decision(), r2.decision());
+        assert_eq!(r1.state_checksum(), r2.state_checksum());
     }
 }
