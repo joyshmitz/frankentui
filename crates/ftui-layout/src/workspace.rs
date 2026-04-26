@@ -793,11 +793,11 @@ mod tests {
         tree.nodes[0]
             .extensions
             .insert("node_scope".to_string(), "node".to_string());
-        let PaneNodeKind::Leaf(leaf) = &mut tree.nodes[0].kind else {
-            panic!("minimal tree root should be leaf");
-        };
-        leaf.extensions
-            .insert("leaf_scope".to_string(), "leaf".to_string());
+        assert!(matches!(&tree.nodes[0].kind, PaneNodeKind::Leaf(_)));
+        if let PaneNodeKind::Leaf(leaf) = &mut tree.nodes[0].kind {
+            leaf.extensions
+                .insert("leaf_scope".to_string(), "leaf".to_string());
+        }
 
         let mut snap = WorkspaceSnapshot::new(tree, WorkspaceMetadata::new("roundtrip"));
         snap.extensions
@@ -831,16 +831,19 @@ mod tests {
                 .map(std::string::String::as_str),
             Some("node")
         );
-        let PaneNodeKind::Leaf(decoded_leaf) = &decoded.pane_tree.nodes[0].kind else {
-            panic!("decoded minimal tree root should be leaf");
-        };
-        assert_eq!(
-            decoded_leaf
-                .extensions
-                .get("leaf_scope")
-                .map(std::string::String::as_str),
-            Some("leaf")
-        );
+        assert!(matches!(
+            &decoded.pane_tree.nodes[0].kind,
+            PaneNodeKind::Leaf(_)
+        ));
+        if let PaneNodeKind::Leaf(decoded_leaf) = &decoded.pane_tree.nodes[0].kind {
+            assert_eq!(
+                decoded_leaf
+                    .extensions
+                    .get("leaf_scope")
+                    .map(std::string::String::as_str),
+                Some("leaf")
+            );
+        }
     }
 
     #[test]
