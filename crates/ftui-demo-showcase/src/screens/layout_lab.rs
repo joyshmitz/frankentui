@@ -3347,6 +3347,92 @@ mod tests {
         );
     }
 
+    fn pane_workspace_corpus_cases() -> Vec<(&'static str, LayoutLab)> {
+        let default = LayoutLab::new();
+
+        let mut compare = LayoutLab::new();
+        compare.apply_pane_intelligence_mode(PaneLayoutIntelligenceMode::Compare);
+
+        let mut undo_compare = LayoutLab::new();
+        undo_compare.apply_pane_intelligence_mode(PaneLayoutIntelligenceMode::Compare);
+        undo_compare.pane_undo();
+
+        let mut redo_compare = LayoutLab::new();
+        redo_compare.apply_pane_intelligence_mode(PaneLayoutIntelligenceMode::Compare);
+        redo_compare.pane_undo();
+        redo_compare.pane_redo();
+
+        let mut monitor_replay = LayoutLab::new();
+        monitor_replay.apply_pane_intelligence_mode(PaneLayoutIntelligenceMode::Monitor);
+        monitor_replay.pane_replay();
+
+        vec![
+            ("default", default),
+            ("compare", compare),
+            ("undo_compare", undo_compare),
+            ("redo_compare", redo_compare),
+            ("monitor_replay", monitor_replay),
+        ]
+    }
+
+    #[test]
+    fn pane_workspace_canonical_corpus_round_trips_byte_stably() {
+        for (name, lab) in pane_workspace_corpus_cases() {
+            let first_export = lab
+                .pane_export_workspace_snapshot_json()
+                .expect("corpus case should export");
+            let second_export = lab
+                .pane_export_workspace_snapshot_json()
+                .expect("corpus case should export twice");
+            assert_eq!(
+                first_export, second_export,
+                "{name} export should be deterministic before import"
+            );
+
+            let source_hash = lab.pane_tree.state_hash();
+            let source_generation = lab.pane_workspace_generation();
+            let mut restored = LayoutLab::new();
+            restored.pane_set_workspace_recovery_notice(
+                PaneWorkspaceRecoveryNotice::fallback_default(
+                    "unparseable".to_string(),
+                    "0xdeadbeef".to_string(),
+                    None,
+                    "stale recovery notice should clear after successful import".to_string(),
+                ),
+            );
+
+            restored
+                .pane_import_workspace_snapshot_json(&first_export)
+                .expect("corpus case should import");
+            assert_eq!(
+                restored.pane_tree.state_hash(),
+                source_hash,
+                "{name} import should preserve pane tree state"
+            );
+            assert_eq!(
+                restored.pane_workspace_generation(),
+                source_generation,
+                "{name} import should preserve saved generation"
+            );
+            assert!(
+                !restored.pane_workspace_dirty(),
+                "{name} import should acknowledge the restored generation as clean"
+            );
+            assert!(
+                restored.pane_workspace_recovery_notice().is_none(),
+                "{name} successful import should clear stale recovery notice"
+            );
+
+            let reexport = restored
+                .pane_export_workspace_snapshot_json()
+                .expect("imported corpus case should re-export");
+            assert_eq!(
+                first_export, reexport,
+                "{name} import/export should be byte-stable"
+            );
+        }
+    }
+
     #[test]
     fn pane_keyboard_mode_shortcuts_apply_requested_mode() {
         let mut lab = LayoutLab::new();
