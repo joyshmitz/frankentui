@@ -30,6 +30,9 @@ path = "../crates/ftui-render"
 [dependencies.ftui-widgets]
 path = "../crates/ftui-widgets"
 
+[dependencies.ftui-pty]
+path = "../crates/ftui-pty"
+
 [[bin]]
 name = "fuzz_input_parser"
 path = "fuzz_targets/fuzz_input_parser.rs"
@@ -51,9 +54,16 @@ test = false
 doc = false
 bench = false
 
-## NOTE: fuzz_vt_parser and fuzz_grid_mutations removed — frankenterm-core crate
-## was removed from the workspace. These targets need to be rewritten against
-## the current parser/grid API if/when it's available again.
+[[bin]]
+name = "fuzz_vt_parser"
+path = "fuzz_targets/fuzz_vt_parser.rs"
+test = false
+doc = false
+bench = false
+
+## NOTE: fuzz_grid_mutations was removed from the active target set because the
+## old frankenterm-core grid/cursor API is no longer vendored in this workspace.
+## Rewrite it against the current grid API before re-adding it here.
 
 [[bin]]
 name = "fuzz_text_cluster_map"

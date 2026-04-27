@@ -1513,10 +1513,13 @@ impl VirtualTerminal {
             self.cursor_x = 0;
             self.linefeed();
         } else if self.autowrap {
-            self.cursor_x += advance;
+            self.cursor_x = self.cursor_x.saturating_add(advance).min(self.width);
         } else {
             // No auto-wrap: clamp to last column
-            self.cursor_x = (self.cursor_x + advance).min(self.width.saturating_sub(1));
+            self.cursor_x = self
+                .cursor_x
+                .saturating_add(advance)
+                .min(self.width.saturating_sub(1));
         }
     }
 
@@ -1855,6 +1858,38 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn chunked_feed_matches_whole_stream_for_split_utf8_and_control_sequences() {
+        let input = b"Main\x1b]2;Title\x07\x1b[2;3H\x1b[1;32m\xe4\xb8\xad\x1b[0m\x1b[?25l";
+        let chunks: [&[u8]; 9] = [
+            &input[0..5],
+            &input[5..9],
+            &input[9..17],
+            &input[17..23],
+            &input[23..28],
+            &input[28..29],
+            &input[29..31],
+            &input[31..34],
+            &input[34..],
+        ];
+
+        let mut whole = VirtualTerminal::new(12, 4);
+        whole.feed(input);
+
+        let mut chunked = VirtualTerminal::new(12, 4);
+        for chunk in chunks {
+            chunked.feed(chunk);
+            assert_invariants(&chunked);
+        }
+
+        assert_eq!(chunked.screen_text(), whole.screen_text());
+        assert_eq!(chunked.cursor(), whole.cursor());
+        assert_eq!(chunked.title(), whole.title());
+        assert_eq!(chunked.cursor_visible(), whole.cursor_visible());
+        assert_eq!(chunked.is_alternate_screen(), whole.is_alternate_screen());
+        assert_eq!(chunked.style_at(2, 1), whole.style_at(2, 1));
     }
 
     #[test]
@@ -2282,6 +2317,16 @@ mod tests {
         assert_eq!(vt.row_text(0), "ABCD");
         assert_eq!(vt.row_text(1), "中");
         assert_eq!(vt.cursor(), (2, 1));
+    }
+
+    #[test]
+    fn wide_char_on_single_column_enters_valid_pending_wrap_state() {
+        let mut vt = VirtualTerminal::new(1, 2);
+        vt.feed("中".as_bytes());
+
+        assert_eq!(vt.char_at(0, 1), Some('中'));
+        assert_eq!(vt.cursor(), (1, 1));
+        assert_invariants(&vt);
     }
 
     #[test]

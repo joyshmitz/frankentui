@@ -14,6 +14,10 @@ set -euo pipefail
 #   FUZZ_JOBS            — parallel jobs per target (default: 1)
 #   LOG_DIR              — output directory for logs and JSONL
 #   NIGHTLY_TOOLCHAIN    — nightly toolchain name (default: nightly)
+#   RUN_ID               — deterministic run id override
+#   FUZZ_TARGET_FILTER   — optional exact target name for focused smoke runs
+#   FUZZ_ARTIFACT_ROOT   — crash artifact root (default: fuzz/artifacts)
+#   FUZZ_INJECT_CRASH_TARGET — target name for deliberate artifact failure injection
 #
 # Usage:
 #   ./scripts/fuzz_campaign_e2e.sh
@@ -27,8 +31,14 @@ FUZZ_DURATION_SECS="${FUZZ_DURATION_SECS:-30}"
 FUZZ_MAX_LEN="${FUZZ_MAX_LEN:-4096}"
 FUZZ_JOBS="${FUZZ_JOBS:-1}"
 NIGHTLY_TOOLCHAIN="${NIGHTLY_TOOLCHAIN:-nightly}"
+FUZZ_TARGET_FILTER="${FUZZ_TARGET_FILTER:-}"
 LOG_DIR="${LOG_DIR:-/tmp/fuzz_campaign_e2e_$(date +%Y%m%d_%H%M%S)}"
 LOG_JSONL="$LOG_DIR/fuzz_campaign_e2e.jsonl"
+RUN_ID="${RUN_ID:-fuzz-campaign-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+RUN_ID="${RUN_ID//[^A-Za-z0-9_.:-]/_}"
+FUZZ_ARTIFACT_ROOT="${FUZZ_ARTIFACT_ROOT:-$FUZZ_DIR/artifacts}"
+FUZZ_INJECT_CRASH_TARGET="${FUZZ_INJECT_CRASH_TARGET:-}"
+CORRELATION_SEQ=0
 mkdir -p "$LOG_DIR"
 
 # ---------------------------------------------------------------------------
@@ -58,8 +68,11 @@ print(json.dumps(data, sort_keys=True))
 emit_event() {
     local event="$1"
     shift
+    CORRELATION_SEQ=$((CORRELATION_SEQ + 1))
+    local correlation_id
+    correlation_id="$(printf '%s-corr-%04d' "$RUN_ID" "$CORRELATION_SEQ")"
     local extra="$*"
-    log_json "{\"event\":\"$event\"$extra}"
+    log_json "{\"event\":\"$event\",\"run_id\":\"$RUN_ID\",\"correlation_id\":\"$correlation_id\"$extra}"
 }
 
 # ---------------------------------------------------------------------------
@@ -74,8 +87,21 @@ while IFS= read -r line; do
     fi
 done < <(grep '^name = "fuzz_' "$FUZZ_DIR/Cargo.toml")
 
+if [[ -n "$FUZZ_TARGET_FILTER" ]]; then
+    FILTERED_TARGETS=()
+    for target in "${FUZZ_TARGETS[@]}"; do
+        if [[ "$target" == "$FUZZ_TARGET_FILTER" ]]; then
+            FILTERED_TARGETS+=("$target")
+        fi
+    done
+    FUZZ_TARGETS=("${FILTERED_TARGETS[@]}")
+fi
+
 if [[ ${#FUZZ_TARGETS[@]} -eq 0 ]]; then
     echo "ERROR: No fuzz targets found in $FUZZ_DIR/Cargo.toml"
+    if [[ -n "$FUZZ_TARGET_FILTER" ]]; then
+        echo "Filter did not match any declared target: $FUZZ_TARGET_FILTER"
+    fi
     exit 1
 fi
 
@@ -83,6 +109,7 @@ echo "=== Fuzz Campaign E2E ==="
 echo "Targets: ${#FUZZ_TARGETS[@]}"
 echo "Duration per target: ${FUZZ_DURATION_SECS}s"
 echo "Max input length: ${FUZZ_MAX_LEN}"
+echo "Run ID: $RUN_ID"
 echo "Log directory: $LOG_DIR"
 echo ""
 
@@ -96,8 +123,11 @@ emit_event "env" \
     ",\"max_len\":$FUZZ_MAX_LEN" \
     ",\"jobs\":$FUZZ_JOBS" \
     ",\"nightly_toolchain\":\"$NIGHTLY_TOOLCHAIN\"" \
+    ",\"target_filter\":\"$FUZZ_TARGET_FILTER\"" \
     ",\"git_commit\":\"$(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)\"" \
     ",\"platform\":\"$(uname -s)\"" \
+    ",\"artifact_root\":\"$FUZZ_ARTIFACT_ROOT\"" \
+    ",\"failure_injection_target\":\"$FUZZ_INJECT_CRASH_TARGET\"" \
     ",\"targets\":$(printf '%s\n' "${FUZZ_TARGETS[@]}" | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin]))')"
 
 # ---------------------------------------------------------------------------
@@ -153,8 +183,16 @@ for target in "${FUZZ_TARGETS[@]}"; do
     TARGET_STATUS="pass"
     TARGET_CRASHES=0
     TARGET_RUNS=0
+    TARGET_ARTIFACT_DIR="$FUZZ_ARTIFACT_ROOT/$target"
+    TARGET_REPLAY_CMD="cargo +$NIGHTLY_TOOLCHAIN fuzz run $target --fuzz-dir $FUZZ_DIR"
+    mkdir -p "$TARGET_ARTIFACT_DIR"
 
-    emit_event "target_start" ",\"target\":\"$target\",\"duration_secs\":$FUZZ_DURATION_SECS"
+    emit_event "target_start" \
+        ",\"target\":\"$target\"" \
+        ",\"duration_secs\":$FUZZ_DURATION_SECS" \
+        ",\"target_log\":\"$TARGET_LOG\"" \
+        ",\"artifact_dir\":\"$TARGET_ARTIFACT_DIR\"" \
+        ",\"replay_command\":\"$TARGET_REPLAY_CMD\""
 
     # Run cargo-fuzz with timeout.
     # libfuzzer returns 0 on clean exit, 77 on timeout (expected), non-zero on crash.
@@ -166,6 +204,7 @@ for target in "${FUZZ_TARGETS[@]}"; do
         -max_total_time="$FUZZ_DURATION_SECS" \
         -jobs="$FUZZ_JOBS" \
         -print_final_stats=1 \
+        -artifact_prefix="$TARGET_ARTIFACT_DIR/" \
         > "$TARGET_LOG" 2>&1
     FUZZ_EXIT=$?
     set -e
@@ -173,16 +212,26 @@ for target in "${FUZZ_TARGETS[@]}"; do
     TARGET_END=$(date +%s)
     TARGET_ELAPSED=$((TARGET_END - TARGET_START))
 
+    if [[ "$FUZZ_INJECT_CRASH_TARGET" == "$target" ]]; then
+        INJECTED_ARTIFACT="$TARGET_ARTIFACT_DIR/crash-injected-$RUN_ID"
+        printf 'deliberate failure injection for %s\n' "$target" > "$INJECTED_ARTIFACT"
+        emit_event "failure_injection" \
+            ",\"target\":\"$target\"" \
+            ",\"artifact\":\"$INJECTED_ARTIFACT\"" \
+            ",\"diagnostic\":\"synthetic crash artifact injected to validate repro reporting\"" \
+            ",\"replay_command\":\"$TARGET_REPLAY_CMD $INJECTED_ARTIFACT\""
+    fi
+
     # Parse stats from libfuzzer output.
-    # libfuzzer prints "stat::number_of_executed_inputs:" in final stats.
-    TARGET_RUNS=$(grep -oP 'stat::number_of_executed_inputs:\s*\K[0-9]+' "$TARGET_LOG" 2>/dev/null || echo "0")
-    TARGET_COV=$(grep -oP 'stat::peak_rss_mb:\s*\K[0-9]+' "$TARGET_LOG" 2>/dev/null || echo "0")
+    # libfuzzer has used both "inputs" and "units" for executed input counts.
+    TARGET_RUNS=$(grep -oP 'stat::number_of_executed_(inputs|units):\s*\K[0-9]+' "$TARGET_LOG" 2>/dev/null | tail -1 || echo "0")
+    TARGET_COV=$(grep -oP 'stat::peak_rss_mb:\s*\K[0-9]+' "$TARGET_LOG" 2>/dev/null | tail -1 || echo "0")
     TARGET_EDGES=$(grep -oP 'cov:\s*\K[0-9]+' "$TARGET_LOG" 2>/dev/null | tail -1 || echo "0")
 
     # Check for crash artifacts.
-    CRASH_DIR="$FUZZ_DIR/artifacts/$target"
+    CRASH_DIR="$TARGET_ARTIFACT_DIR"
     if [[ -d "$CRASH_DIR" ]]; then
-        TARGET_CRASHES=$(find "$CRASH_DIR" -name 'crash-*' -o -name 'oom-*' -o -name 'timeout-*' 2>/dev/null | wc -l)
+        TARGET_CRASHES=$(find "$CRASH_DIR" \( -name 'crash-*' -o -name 'oom-*' -o -name 'timeout-*' \) -type f 2>/dev/null | wc -l)
     fi
 
     # Evaluate exit code.
@@ -234,6 +283,9 @@ for target in "${FUZZ_TARGETS[@]}"; do
         ",\"edges\":$TARGET_EDGES" \
         ",\"peak_rss_mb\":$TARGET_COV" \
         ",\"crashes\":$TARGET_CRASHES" \
+        ",\"target_log\":\"$TARGET_LOG\"" \
+        ",\"artifact_dir\":\"$TARGET_ARTIFACT_DIR\"" \
+        ",\"replay_command\":\"$TARGET_REPLAY_CMD\"" \
         ",\"duration_secs\":$TARGET_ELAPSED"
 done
 
@@ -242,13 +294,13 @@ done
 # ---------------------------------------------------------------------------
 
 EXISTING_CRASHES=0
-if [[ -d "$FUZZ_DIR/artifacts" ]]; then
-    EXISTING_CRASHES=$(find "$FUZZ_DIR/artifacts" -name 'crash-*' -o -name 'oom-*' -o -name 'timeout-*' 2>/dev/null | wc -l)
+if [[ -d "$FUZZ_ARTIFACT_ROOT" ]]; then
+    EXISTING_CRASHES=$(find "$FUZZ_ARTIFACT_ROOT" \( -name 'crash-*' -o -name 'oom-*' -o -name 'timeout-*' \) -type f 2>/dev/null | wc -l)
 fi
 
 emit_event "artifact_check" \
     ",\"existing_crash_artifacts\":$EXISTING_CRASHES" \
-    ",\"artifacts_dir\":\"$FUZZ_DIR/artifacts\""
+    ",\"artifacts_dir\":\"$FUZZ_ARTIFACT_ROOT\""
 
 # ---------------------------------------------------------------------------
 # Summary
@@ -280,6 +332,7 @@ echo "Targets:         ${#FUZZ_TARGETS[@]} (pass=$PASSED_TARGETS, fail=$FAILED_T
 echo "Total runs:      $TOTAL_RUNS"
 echo "Total crashes:   $TOTAL_CRASHES"
 echo "Duration:        ${CAMPAIGN_ELAPSED}s"
+echo "Run ID:          $RUN_ID"
 echo "JSONL log:       $LOG_JSONL"
 echo "Target logs:     $LOG_DIR/*.log"
 echo ""
@@ -299,6 +352,11 @@ fi
 # Assert: at least some targets ran successfully
 if [[ $PASSED_TARGETS -eq 0 && $SKIPPED_TARGETS -lt ${#FUZZ_TARGETS[@]} ]]; then
     echo "FAIL: no targets passed"
+    EXIT_CODE=1
+fi
+
+if [[ $PASSED_TARGETS -gt 0 && $TOTAL_RUNS -eq 0 ]]; then
+    echo "FAIL: fuzz execution stats were not reported"
     EXIT_CODE=1
 fi
 
