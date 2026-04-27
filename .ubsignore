@@ -14,8 +14,5 @@ crates/ftui-demo-showcase/src/main.rs
 crates/ftui-demo-showcase/src/screens/data_viz.rs
 crates/ftui-demo-showcase/src/screens/visual_effects.rs
 
-# Archived repro snippet is not part of any active crate target.
-tests/repro/virtualized_variable.rs
-
 # False-positive hardcoded-secret heuristic: ValidationToken is not a credential.
 crates/ftui-extras/src/validation/async_validation.rs
