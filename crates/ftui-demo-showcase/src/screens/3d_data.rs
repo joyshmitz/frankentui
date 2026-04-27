@@ -2,8 +2,8 @@
 //
 // Sources:
 // - Freedoom Phase 1 E1M1 (BSD license) line geometry extracted from freedoom1.wad.
-// - docs/assets/external/quake-e1m1-the-slipgate-complex.zip provided by the user
-//   (OBJ mesh converted to triangles).
+// - User-provided Quake E1M1 source archive, intentionally not tracked in Git
+//   because the OBJ mesh has already been converted to compact Rust constants.
 //
 // NOTE: This file is data-only. Do not edit by hand; regenerate from source assets if needed.
 #[allow(clippy::unreadable_literal)]

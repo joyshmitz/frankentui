@@ -30,6 +30,10 @@ perf_*.data
 # Local profiler bundles; preserve summaries under docs/profiling/runs/ instead.
 tests/artifacts/perf/
 
+# External source archives used for one-off data generation; keep converted
+# fixtures and provenance notes in Git instead.
+docs/assets/external/*.zip
+
 # NFS temporary files
 .nfs*
 
