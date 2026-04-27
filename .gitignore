@@ -158,6 +158,7 @@ crates/*/target/
 
 # Agent coordination config
 .agent-mail.yaml
+/*.mcp.json
 
 # Claude local settings
 .claude/settings.local.json
