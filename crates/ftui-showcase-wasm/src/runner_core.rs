@@ -1395,7 +1395,7 @@ mod tests {
     }
 
     #[test]
-    fn second_touch_down_releases_pane_capture_for_pinch_layer() {
+    fn runner_core_pane_touch_second_down_releases_capture_for_pinch_layer() {
         let mut runner = RunnerCore::new(100, 32);
         runner.init();
         let modifiers = PaneModifierSnapshot::default();
@@ -1423,6 +1423,21 @@ mod tests {
         );
         assert_eq!(runner.pane_active_pointer_id(), None);
         assert!(runner.active_gesture.is_none());
+
+        let pane_logs: Vec<_> = runner
+            .take_logs()
+            .into_iter()
+            .filter(|line| line.contains("pane_pointer"))
+            .collect();
+        assert!(
+            pane_logs.iter().any(|line| {
+                line.contains("phase=native_touch_gesture")
+                    && line.contains("pointer=31")
+                    && line.contains("command=release")
+                    && line.contains("outcome=semantic_forwarded")
+            }),
+            "expected native touch yield release evidence, got: {pane_logs:?}"
+        );
     }
 
     #[test]
