@@ -462,6 +462,8 @@ pub enum BudgetDecisionReason {
     UnderloadEvidencePassed,
     /// Already at maximum degradation; cannot degrade further.
     AtMaxDegradation,
+    /// Already at the configured degradation floor; policy forbids degrading further.
+    AtDegradationFloor,
     /// Already at full quality; cannot upgrade further.
     AtFullQuality,
     /// Overload signal present but e-process degrade gate not satisfied.
@@ -481,6 +483,7 @@ impl BudgetDecisionReason {
             Self::OverloadEvidencePassed => "overload_evidence_passed",
             Self::UnderloadEvidencePassed => "underload_evidence_passed",
             Self::AtMaxDegradation => "at_max_degradation",
+            Self::AtDegradationFloor => "at_degradation_floor",
             Self::AtFullQuality => "at_full_quality",
             Self::OverloadEvidenceInsufficient => "overload_evidence_insufficient",
             Self::UnderloadEvidenceInsufficient => "underload_evidence_insufficient",
@@ -549,8 +552,10 @@ impl BudgetController {
             evidence_threshold = 1.0 / self.config.eprocess.alpha;
             evidence_margin = self.eprocess.e_value - evidence_threshold;
 
-            if self.current_level.is_max() || self.current_level >= self.config.degradation_floor {
+            if self.current_level.is_max() {
                 reason = BudgetDecisionReason::AtMaxDegradation;
+            } else if self.current_level >= self.config.degradation_floor {
+                reason = BudgetDecisionReason::AtDegradationFloor;
             } else if self.eprocess.should_degrade(&self.config.eprocess) {
                 decision = BudgetDecision::Degrade;
                 reason = BudgetDecisionReason::OverloadEvidencePassed;
@@ -3990,6 +3995,18 @@ mod tests {
                 "underload_evidence_passed"
             );
             assert_eq!(
+                BudgetDecisionReason::AtMaxDegradation.as_str(),
+                "at_max_degradation"
+            );
+            assert_eq!(
+                BudgetDecisionReason::AtDegradationFloor.as_str(),
+                "at_degradation_floor"
+            );
+            assert_eq!(
+                BudgetDecisionReason::AtFullQuality.as_str(),
+                "at_full_quality"
+            );
+            assert_eq!(
                 BudgetDecisionReason::WithinThresholdBand.as_str(),
                 "within_threshold_band"
             );
@@ -4124,6 +4141,31 @@ mod tests {
             // At max level, further overload should Hold (can't degrade further)
             let d = ctrl.update(Duration::from_millis(200));
             assert_eq!(d, BudgetDecision::Hold, "At max level, should hold");
+        }
+
+        #[test]
+        fn controller_at_configured_degradation_floor_reports_floor_reason() {
+            let mut ctrl = BudgetController::new(BudgetControllerConfig {
+                eprocess: EProcessConfig {
+                    warmup_frames: 0,
+                    ..Default::default()
+                },
+                cooldown_frames: 0,
+                degradation_floor: DegradationLevel::SimpleBorders,
+                ..Default::default()
+            });
+
+            ctrl.current_level = DegradationLevel::SimpleBorders;
+
+            let decision = ctrl.update(Duration::from_millis(200));
+            let telemetry = ctrl.telemetry();
+
+            assert_eq!(decision, BudgetDecision::Hold);
+            assert_eq!(telemetry.level, DegradationLevel::SimpleBorders);
+            assert_eq!(
+                telemetry.decision_reason,
+                BudgetDecisionReason::AtDegradationFloor
+            );
         }
 
         #[test]
