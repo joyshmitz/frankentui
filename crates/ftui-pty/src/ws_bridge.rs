@@ -1485,6 +1485,20 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
+    #[test]
+    fn parse_control_message_resize_rejects_negative_dimensions() {
+        let err = parse_control_message(r#"{"type":"resize","cols":-1,"rows":40}"#)
+            .expect_err("should fail");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn parse_control_message_resize_rejects_fractional_dimensions() {
+        let err = parse_control_message(r#"{"type":"resize","cols":80.5,"rows":40}"#)
+            .expect_err("should fail");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
     // --- read_u16_field ---
 
     #[test]
