@@ -29,6 +29,7 @@ perf_*.data
 
 # Local profiler bundles; preserve summaries under docs/profiling/runs/ instead.
 tests/artifacts/perf/
+docs/profiling/*_bench_baseline.txt
 docs/profiling/runs/**/*-bench.txt
 
 # External source archives used for one-off data generation; keep converted

@@ -403,10 +403,8 @@ Note: perf tables above use the jsonl-only artifacts (bd-t153k); the raw PTY str
 
 ## Artifacts
 
-- `docs/profiling/baseline_metrics_2026-02-03.jsonl` - Raw metrics in JSONL
-- `docs/profiling/diff_bench_baseline.txt` - Full diff bench output
-- `docs/profiling/layout_bench_baseline.txt` - Full layout bench output
-- `docs/profiling/buffer_bench_baseline.txt` - Full buffer bench output
+- `docs/profiling/baseline_metrics_2026-02-03.jsonl` - Structured benchmark
+  metrics extracted from the raw diff, layout, and buffer Criterion runs
 
 ---
 
