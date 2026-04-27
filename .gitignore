@@ -52,6 +52,7 @@ flamegraph*.svg
 # Test checksums and baselines (ephemeral, machine-dependent)
 golden_checksums.txt
 baseline_results.json
+docs/testing/*.hyperfine.json
 
 # Local scratch DBs and root-level ad-hoc database files
 /storage.sqlite3

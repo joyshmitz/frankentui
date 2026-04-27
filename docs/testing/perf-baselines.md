@@ -29,6 +29,9 @@ hyperfine --warmup 3 --min-runs 20 --export-json docs/testing/perf-baselines.80x
   "script -q -c 'stty rows 24 cols 80; FTUI_HARNESS_EXIT_AFTER_MS=800 FTUI_HARNESS_VIEW=layout-grid ./target/debug/ftui-harness' /dev/null"
 ```
 
+Raw Hyperfine JSON exports are local-only artifacts. Commit the derived
+p50/p95/p99 rows to `docs/testing/perf-baselines.jsonl`.
+
 ### 120x40
 ```
 script -q -c 'stty rows 40 cols 120; \
@@ -42,6 +45,9 @@ Hyperfine wrapper (after build success):
 hyperfine --warmup 3 --min-runs 20 --export-json docs/testing/perf-baselines.120x40.hyperfine.json \
   "script -q -c 'stty rows 40 cols 120; FTUI_HARNESS_EXIT_AFTER_MS=800 FTUI_HARNESS_VIEW=layout-grid ./target/debug/ftui-harness' /dev/null"
 ```
+
+Raw Hyperfine JSON exports are local-only artifacts. Commit the derived
+p50/p95/p99 rows to `docs/testing/perf-baselines.jsonl`.
 
 ## Results (p50/p95/p99)
 - 80x24: p50=22.459ms p95=23.645ms p99=24.105ms (n=131)
