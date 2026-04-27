@@ -55,13 +55,24 @@ sync_repo() {
     if [[ -d "$repo_path/.git" ]]; then
         # Repo exists, pull latest
         log_info "Updating $repo_name ($default_branch)..."
-        # Note: We use reset --hard to ensure we always match origin exactly.
-        # These are read-only reference copies; local modifications are not expected.
-        if (cd "$repo_path" && git fetch origin "$default_branch" --quiet && git reset --hard "origin/$default_branch" --quiet); then
+        if (
+            cd "$repo_path"
+            if ! git diff --quiet || ! git diff --cached --quiet; then
+                log_warn "  $repo_name has local modifications; refusing to overwrite them"
+                exit 2
+            fi
+            git fetch origin "$default_branch" --quiet
+            if git rev-parse --verify --quiet "$default_branch" >/dev/null; then
+                git switch --quiet "$default_branch"
+            else
+                git switch --quiet --create "$default_branch" --track "origin/$default_branch"
+            fi
+            git merge --ff-only --quiet "origin/$default_branch"
+        ); then
             log_info "  $repo_name updated successfully"
             return 0
         else
-            log_warn "  Failed to update $repo_name (check network connectivity)"
+            log_warn "  Failed to update $repo_name (check network connectivity or local modifications)"
             return 1
         fi
     else
@@ -85,8 +96,8 @@ successes=0
 failures=0
 
 # The three reference libraries that FrankenTUI synthesizes from
-sync_repo "rich_rust" "https://github.com/Dicklesworthstone/rich_rust.git" "master" && successes=$((successes + 1)) || failures=$((failures + 1))
-sync_repo "charmed_rust" "https://github.com/Dicklesworthstone/charmed_rust.git" "master" && successes=$((successes + 1)) || failures=$((failures + 1))
+sync_repo "rich_rust" "https://github.com/Dicklesworthstone/rich_rust.git" "main" && successes=$((successes + 1)) || failures=$((failures + 1))
+sync_repo "charmed_rust" "https://github.com/Dicklesworthstone/charmed_rust.git" "main" && successes=$((successes + 1)) || failures=$((failures + 1))
 sync_repo "opentui_rust" "https://github.com/Dicklesworthstone/opentui_rust.git" "main" && successes=$((successes + 1)) || failures=$((failures + 1))
 
 # Report results
