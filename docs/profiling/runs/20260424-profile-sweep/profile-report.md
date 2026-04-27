@@ -43,7 +43,8 @@ Kernel isolation:
   `200x60@5%` and `87.1us` for `200x60@50%`.
 - `render-kernel-bench-summary.md`: `compute_dirty` is materially faster than
   full compute for sparse `200x60` cases.
-- `strace-profile-sweep-off.txt`: only `199` syscalls and `0.001797s` syscall time.
+- `runtime-observation-summary.md`: only `199` syscalls and `0.001797s`
+  syscall time.
 
 ## Hotspots
 

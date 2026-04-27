@@ -20,6 +20,8 @@ Baseline artifact: `../20260424-profile-sweep/profile-sweep-off-cycles200.json`
 
 Final artifact: `profile-sweep-after-split-cycles200.json`
 
+Final runtime/resource summary: `runtime-observation-summary.md`
+
 | Metric | Before | Final | Change |
 |---|---:|---:|---:|
 | elapsed_ms | 7905.631 | 5404.941 | -31.63% |

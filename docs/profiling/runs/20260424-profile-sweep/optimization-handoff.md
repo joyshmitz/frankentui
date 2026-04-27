@@ -21,9 +21,7 @@ Primary artifacts:
 - `hotspot_table_by_count.md`
 - `profile-events.jsonl`
 - `hyperfine-rollup.json`
-- `variance-off.txt`
-- `variance-on.txt`
-- `strace-profile-sweep-off.txt`
+- `runtime-observation-summary.md`
 - `render-kernel-bench-summary.md`
 
 ## Alien Grounding
