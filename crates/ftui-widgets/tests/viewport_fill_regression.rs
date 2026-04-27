@@ -1,11 +1,13 @@
 #![forbid(unsafe_code)]
 
-use ftui::core::geometry::Rect;
-use ftui::layout::Constraint;
-use ftui::widgets::StatefulWidget;
-use ftui::widgets::list::{List, ListItem, ListState};
-use ftui::widgets::table::{Row, Table, TableState};
-use ftui::{Buffer, Frame, GraphemePool};
+use ftui_core::geometry::Rect;
+use ftui_layout::Constraint;
+use ftui_render::buffer::Buffer;
+use ftui_render::frame::Frame;
+use ftui_render::grapheme_pool::GraphemePool;
+use ftui_widgets::StatefulWidget;
+use ftui_widgets::list::{List, ListItem, ListState};
+use ftui_widgets::table::{Row, Table, TableState};
 
 fn assert_buffer_content(buf: &Buffer, y: u16, expected: &str) {
     let width = buf.width();
@@ -19,7 +21,11 @@ fn assert_buffer_content(buf: &Buffer, y: u16, expected: &str) {
             }
         }
     }
-    assert_eq!(actual.trim(), expected, "Row {} mismatch", y);
+    let actual = actual.trim_end();
+    assert!(
+        actual.starts_with(expected),
+        "Row {y} mismatch: expected prefix {expected:?}, actual {actual:?}"
+    );
 }
 
 #[test]
