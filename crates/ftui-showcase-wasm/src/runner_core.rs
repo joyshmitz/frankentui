@@ -637,6 +637,36 @@ impl RunnerCore {
         summary
     }
 
+    /// Touch-specific pointer-down path that yields multi-touch to scroll/pinch.
+    pub fn pane_touch_pointer_down_at(
+        &mut self,
+        pointer_id: u32,
+        x: i32,
+        y: i32,
+        active_touch_points: u8,
+        modifiers: PaneModifierSnapshot,
+    ) -> PaneDispatchSummary {
+        if active_touch_points > 1 {
+            let dispatch = self.pane_adapter.native_touch_gesture();
+            return self.record_pane_dispatch(dispatch);
+        }
+
+        let pointer = PanePointerPosition::new(x, y);
+        let Some(context) = self.pointer_down_context_at(pointer) else {
+            return self.reject_pointer_down(pointer_id, pointer);
+        };
+        let target = context.target;
+        let dispatch = self
+            .pane_adapter
+            .touch_pointer_down(target, pointer_id, pointer, 1, modifiers);
+        let summary = self.record_pane_dispatch(dispatch);
+        if summary.accepted() && self.active_gesture.is_none() {
+            update_selection_for_pointer_down(&mut self.selection, context.leaf, modifiers.shift);
+            self.arm_gesture(pointer_id, context.leaf, context.mode);
+        }
+        summary
+    }
+
     /// Auto-targeted pointer-move from host coordinates.
     pub fn pane_pointer_move_at(
         &mut self,
@@ -1027,6 +1057,7 @@ impl RunnerCore {
         match log.phase {
             PanePointerLifecyclePhase::PointerCancel
             | PanePointerLifecyclePhase::PointerLeave
+            | PanePointerLifecyclePhase::NativeTouchGesture
             | PanePointerLifecyclePhase::Blur
             | PanePointerLifecyclePhase::VisibilityHidden
             | PanePointerLifecyclePhase::LostPointerCapture
@@ -1073,6 +1104,7 @@ fn format_ignored_reason(reason: PanePointerIgnoredReason) -> &'static str {
         PanePointerIgnoredReason::ActivePointerAlreadyInProgress => {
             "active_pointer_already_in_progress"
         }
+        PanePointerIgnoredReason::NativeTouchGesture => "native_touch_gesture",
         PanePointerIgnoredReason::NoActivePointer => "no_active_pointer",
         PanePointerIgnoredReason::PointerMismatch => "pointer_mismatch",
         PanePointerIgnoredReason::LeaveWhileCaptured => "leave_while_captured",
@@ -1087,6 +1119,7 @@ fn format_pane_log_entry(log: PanePointerLogEntry) -> String {
         PanePointerLifecyclePhase::PointerUp => "pointer_up",
         PanePointerLifecyclePhase::PointerCancel => "pointer_cancel",
         PanePointerLifecyclePhase::PointerLeave => "pointer_leave",
+        PanePointerLifecyclePhase::NativeTouchGesture => "native_touch_gesture",
         PanePointerLifecyclePhase::Blur => "blur",
         PanePointerLifecyclePhase::VisibilityHidden => "visibility_hidden",
         PanePointerLifecyclePhase::LostPointerCapture => "lost_pointer_capture",
@@ -1359,6 +1392,37 @@ mod tests {
             "expected top-left resize gesture, got {:?}",
             runner.active_gesture
         );
+    }
+
+    #[test]
+    fn second_touch_down_releases_pane_capture_for_pinch_layer() {
+        let mut runner = RunnerCore::new(100, 32);
+        runner.init();
+        let modifiers = PaneModifierSnapshot::default();
+
+        let down = runner.pane_touch_pointer_down_at(31, 0, 0, 1, modifiers);
+        assert!(down.accepted());
+        assert_eq!(
+            down.capture_command,
+            Some(PanePointerCaptureCommand::Acquire { pointer_id: 31 })
+        );
+        let acquired = runner.pane_capture_acquired(31);
+        assert!(acquired.accepted());
+        assert!(runner.active_gesture.is_some());
+
+        let yield_to_pinch = runner.pane_touch_pointer_down_at(32, 8, 8, 2, modifiers);
+
+        assert!(yield_to_pinch.accepted());
+        assert_eq!(
+            yield_to_pinch.phase,
+            PanePointerLifecyclePhase::NativeTouchGesture
+        );
+        assert_eq!(
+            yield_to_pinch.capture_command,
+            Some(PanePointerCaptureCommand::Release { pointer_id: 31 })
+        );
+        assert_eq!(runner.pane_active_pointer_id(), None);
+        assert!(runner.active_gesture.is_none());
     }
 
     #[test]

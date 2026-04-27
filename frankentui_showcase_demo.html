@@ -265,6 +265,7 @@ let paneWorkspaceNextSaveRetryAt = 0;
 let paneWorkspaceSaveWarningShown = false;
 const paneActivePointers = new Set();
 const paneTouchPointers = new Set();
+const activeTouchPointerIds = new Set();
 let paneGhostDecay = null;
 let paneOverlaySyncFailed = false;
 
@@ -924,18 +925,34 @@ function applyPaneCaptureCommand(dispatch, options = {}) {
   return dispatch;
 }
 
-function paneDispatchPointerDown(e) {
+function paneDispatchPointerDown(e, activeTouchPoints = 1) {
   if (typeof runner.panePointerDownAt !== "function") return null;
   const point = domMouseToInput(e, "down");
   const pointerId = panePointerIdFromEvent(e);
-  const dispatch = runner.panePointerDownAt(
-    pointerId,
-    paneButtonFromDomEvent(e),
-    point.x,
-    point.y,
-    paneModsFromDomEvent(e),
-  );
+  const touchPoints = Number.isFinite(activeTouchPoints)
+    ? Math.max(1, Math.min(255, Math.trunc(activeTouchPoints)))
+    : 1;
+  const dispatch =
+    e && e.pointerType !== "mouse" && typeof runner.paneTouchPointerDownAt === "function"
+      ? runner.paneTouchPointerDownAt(
+          pointerId,
+          point.x,
+          point.y,
+          touchPoints,
+          paneModsFromDomEvent(e),
+        )
+      : runner.panePointerDownAt(
+          pointerId,
+          paneButtonFromDomEvent(e),
+          point.x,
+          point.y,
+          paneModsFromDomEvent(e),
+        );
   return applyPaneCaptureCommand(dispatch);
+}
+
+function paneDispatchYieldedToNativeTouch(dispatch) {
+  return dispatch && dispatch.phase === "native_touch_gesture";
 }
 
 function paneDispatchPointerMove(e) {
@@ -1318,6 +1335,7 @@ function startKeyboardLongPressTracker(pointerId, clientX, clientY) {
     }
     paneActivePointers.delete(tracker.pointerId);
     paneTouchPointers.delete(tracker.pointerId);
+    activeTouchPointerIds.delete(tracker.pointerId);
     touchGestureSuppressedByPane = false;
     touchState = TOUCH_IDLE;
     touchScrollAccX = 0;
@@ -1698,15 +1716,32 @@ let mouseButtonsDown = 0;
 let dragButton = 0;
 if ("PointerEvent" in window) {
 	  canvas.addEventListener("pointerdown", (e) => {
-	    e.preventDefault();
 	    const preferKeyboard = useMobileKeyboardForPointer(e.pointerType);
 	    focusTerminalInputTarget(preferKeyboard);
 	    const pointerId = panePointerIdFromEvent(e);
+	    const touchLikePointer = e.pointerType !== "mouse";
+	    if (touchLikePointer) {
+	      activeTouchPointerIds.add(pointerId);
+	    }
+	    const activeTouchPoints = touchLikePointer ? activeTouchPointerIds.size : 1;
 	    mouseButtonsDown = e.pointerType === "mouse" ? e.buttons : mouseButtonsDown;
 	    dragButton = e.pointerType === "mouse" ? e.button : dragButton;
-	    const dispatch = paneDispatchPointerDown(e);
-	    const paneAccepted = !dispatch || dispatch.accepted !== false;
-	    if (!paneAccepted && e.pointerType !== "mouse" && !preferKeyboard) {
+	    const dispatch = paneDispatchPointerDown(e, activeTouchPoints);
+	    const yieldedToNativeTouch = touchLikePointer && paneDispatchYieldedToNativeTouch(dispatch);
+	    const paneAccepted = !yieldedToNativeTouch && (!dispatch || dispatch.accepted !== false);
+	    if (!yieldedToNativeTouch) {
+	      e.preventDefault();
+	    }
+	    if (yieldedToNativeTouch) {
+	      cancelKeyboardLongPressTracker();
+	      paneActivePointers.clear();
+	      paneTouchPointers.clear();
+	      touchGestureSuppressedByPane = false;
+	      touchState = TOUCH_IDLE;
+	      touchScrollAccX = 0;
+	      touchScrollAccY = 0;
+	      pinchStartDist = 0;
+	    } else if (!paneAccepted && e.pointerType !== "mouse" && !preferKeyboard) {
 	      // Smart keyboard mode should never steal pane drags/resizes; only allow
 	      // long-press keyboard activation when the pane layer rejects the pointer.
 	      startKeyboardLongPressTracker(pointerId, e.clientX, e.clientY);
@@ -1744,6 +1779,9 @@ if ("PointerEvent" in window) {
 	    const pointerId = panePointerIdFromEvent(e);
 	    paneActivePointers.delete(pointerId);
     paneTouchPointers.delete(pointerId);
+    if (e.pointerType !== "mouse") {
+      activeTouchPointerIds.delete(pointerId);
+    }
     if (e.pointerType === "mouse") {
       mouseButtonsDown = e.buttons;
     }
@@ -1791,6 +1829,9 @@ if ("PointerEvent" in window) {
 	    const hadMouseButtonsDown = e.pointerType === "mouse" && mouseButtonsDown !== 0;
 	    paneActivePointers.delete(pointerId);
     paneTouchPointers.delete(pointerId);
+    if (e.pointerType !== "mouse") {
+      activeTouchPointerIds.delete(pointerId);
+    }
     paneDispatchPointerCancel(e);
     syncPaneOverlayFromRunner();
     if (hadMouseButtonsDown) {
@@ -1812,6 +1853,9 @@ if ("PointerEvent" in window) {
 	    const pointerId = panePointerIdFromEvent(e);
 	    paneActivePointers.delete(pointerId);
 	    paneTouchPointers.delete(pointerId);
+	    if (e.pointerType !== "mouse") {
+	      activeTouchPointerIds.delete(pointerId);
+	    }
     paneDispatchLostPointerCapture(e);
     syncPaneOverlayFromRunner();
   });
@@ -1828,6 +1872,9 @@ if ("PointerEvent" in window) {
     }
     paneActivePointers.delete(pointerId);
     paneTouchPointers.delete(pointerId);
+    if (e.pointerType !== "mouse") {
+      activeTouchPointerIds.delete(pointerId);
+    }
     if (e.pointerType === "mouse") {
       if (hadMouseButtonsDown) {
         safeTermInput(domMouseToInput(e, "up"));
@@ -1882,9 +1929,10 @@ window.addEventListener("blur", () => {
     }
     syncPaneOverlayFromRunner();
   }
-  mouseButtonsDown = 0;
-  paneActivePointers.clear();
-  paneTouchPointers.clear();
+    mouseButtonsDown = 0;
+    paneActivePointers.clear();
+    paneTouchPointers.clear();
+    activeTouchPointerIds.clear();
 });
 	// Suppress context menu on canvas (right-click is forwarded to terminal).
 	canvas.addEventListener("contextmenu", (e) => { e.preventDefault(); });
@@ -2075,6 +2123,7 @@ function resetTransientPointerAndTouchState() {
   dragButton = 0;
   paneActivePointers.clear();
   paneTouchPointers.clear();
+  activeTouchPointerIds.clear();
   wheelAccX = 0;
   wheelAccY = 0;
   touchGestureSuppressedByPane = false;

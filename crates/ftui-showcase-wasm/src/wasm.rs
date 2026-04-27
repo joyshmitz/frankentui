@@ -178,6 +178,7 @@ fn ignored_reason_label(reason: PanePointerIgnoredReason) -> &'static str {
         PanePointerIgnoredReason::ActivePointerAlreadyInProgress => {
             "active_pointer_already_in_progress"
         }
+        PanePointerIgnoredReason::NativeTouchGesture => "native_touch_gesture",
         PanePointerIgnoredReason::NoActivePointer => "no_active_pointer",
         PanePointerIgnoredReason::PointerMismatch => "pointer_mismatch",
         PanePointerIgnoredReason::LeaveWhileCaptured => "leave_while_captured",
@@ -219,6 +220,9 @@ fn pane_dispatch_to_js(view: PaneDispatchView<'_>) -> JsValue {
             "pointer_cancel"
         }
         ftui_web::pane_pointer_capture::PanePointerLifecyclePhase::PointerLeave => "pointer_leave",
+        ftui_web::pane_pointer_capture::PanePointerLifecyclePhase::NativeTouchGesture => {
+            "native_touch_gesture"
+        }
         ftui_web::pane_pointer_capture::PanePointerLifecyclePhase::Blur => "blur",
         ftui_web::pane_pointer_capture::PanePointerLifecyclePhase::VisibilityHidden => {
             "visibility_hidden"
@@ -724,6 +728,29 @@ impl ShowcaseRunner {
             button,
             x,
             y,
+            pane_modifiers_from_bits(mods),
+        );
+        self.pane_dispatch_with_state(dispatch, None)
+    }
+
+    /// Touch-specific pane pointer-down path that auto-detects pane/edge/corner.
+    ///
+    /// `active_touch_points` is the host's current touch count including this
+    /// pointer. Values above one yield pane capture to scroll/pinch handling.
+    #[wasm_bindgen(js_name = paneTouchPointerDownAt)]
+    pub fn pane_touch_pointer_down_at(
+        &mut self,
+        pointer_id: u32,
+        x: i32,
+        y: i32,
+        active_touch_points: u8,
+        mods: u8,
+    ) -> JsValue {
+        let dispatch = self.inner.pane_touch_pointer_down_at(
+            pointer_id,
+            x,
+            y,
+            active_touch_points,
             pane_modifiers_from_bits(mods),
         );
         self.pane_dispatch_with_state(dispatch, None)

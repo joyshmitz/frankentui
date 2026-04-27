@@ -174,6 +174,7 @@ pub enum PanePointerLifecyclePhase {
     PointerUp,
     PointerCancel,
     PointerLeave,
+    NativeTouchGesture,
     Blur,
     VisibilityHidden,
     LostPointerCapture,
@@ -189,6 +190,7 @@ pub enum PanePointerIgnoredReason {
     ButtonNotAllowed,
     ButtonMismatch,
     ActivePointerAlreadyInProgress,
+    NativeTouchGesture,
     NoActivePointer,
     PointerMismatch,
     LeaveWhileCaptured,
@@ -430,6 +432,51 @@ impl PanePointerCaptureAdapter {
             ));
         }
         dispatch
+    }
+
+    /// Handle touch pointer-down with deterministic multi-touch arbitration.
+    ///
+    /// A single touch follows the normal primary-button resize path. Any
+    /// multi-touch start yields to the host's native/custom scroll or pinch
+    /// layer by canceling the active pane capture before the second touch is
+    /// allowed to proceed.
+    pub fn touch_pointer_down(
+        &mut self,
+        target: PaneResizeTarget,
+        pointer_id: u32,
+        position: PanePointerPosition,
+        active_touch_points: u8,
+        modifiers: PaneModifierSnapshot,
+    ) -> PanePointerDispatch {
+        if active_touch_points > 1 {
+            return self.native_touch_gesture();
+        }
+        self.pointer_down(
+            target,
+            pointer_id,
+            PanePointerButton::Primary,
+            position,
+            modifiers,
+        )
+    }
+
+    /// Yield the current pane gesture to a native/custom touch gesture layer.
+    pub fn native_touch_gesture(&mut self) -> PanePointerDispatch {
+        let Some(active) = self.active else {
+            return PanePointerDispatch::ignored(
+                PanePointerLifecyclePhase::NativeTouchGesture,
+                PanePointerIgnoredReason::NativeTouchGesture,
+                None,
+                None,
+                None,
+            );
+        };
+        self.cancel_active(
+            PanePointerLifecyclePhase::NativeTouchGesture,
+            Some(active.pointer_id),
+            PaneCancelReason::PointerCancel,
+            true,
+        )
     }
 
     /// Mark browser pointer capture as successfully acquired.
@@ -816,6 +863,83 @@ mod tests {
                 .effect,
             PaneDragResizeEffect::Armed { pointer_id: 11, .. }
         ));
+    }
+
+    #[test]
+    fn single_touch_down_uses_primary_pointer_capture_path() {
+        let mut adapter = adapter();
+        let dispatch =
+            adapter.touch_pointer_down(target(), 14, pos(5, 8), 1, PaneModifierSnapshot::default());
+
+        assert_eq!(dispatch.log.phase, PanePointerLifecyclePhase::PointerDown);
+        assert_eq!(
+            dispatch.capture_command,
+            Some(PanePointerCaptureCommand::Acquire { pointer_id: 14 })
+        );
+        assert_eq!(adapter.active_pointer_id(), Some(14));
+        assert!(matches!(
+            dispatch
+                .semantic_event
+                .as_ref()
+                .expect("semantic event expected")
+                .kind,
+            PaneSemanticInputEventKind::PointerDown {
+                pointer_id: 14,
+                button: PanePointerButton::Primary,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn second_touch_yields_to_native_gesture_and_releases_capture() {
+        let mut adapter = adapter();
+        adapter.touch_pointer_down(target(), 21, pos(3, 3), 1, PaneModifierSnapshot::default());
+        let ack = adapter.capture_acquired(21);
+        assert_eq!(ack.log.outcome, PanePointerLogOutcome::CaptureStateUpdated);
+
+        let dispatch =
+            adapter.touch_pointer_down(target(), 22, pos(6, 6), 2, PaneModifierSnapshot::default());
+
+        assert_eq!(
+            dispatch.log.phase,
+            PanePointerLifecyclePhase::NativeTouchGesture
+        );
+        assert!(matches!(
+            dispatch
+                .semantic_event
+                .as_ref()
+                .expect("semantic cancel expected")
+                .kind,
+            PaneSemanticInputEventKind::Cancel {
+                reason: PaneCancelReason::PointerCancel,
+                ..
+            }
+        ));
+        assert_eq!(
+            dispatch.capture_command,
+            Some(PanePointerCaptureCommand::Release { pointer_id: 21 })
+        );
+        assert_eq!(dispatch.log.pointer_id, Some(21));
+        assert_eq!(adapter.active_pointer_id(), None);
+        assert_eq!(adapter.machine_state(), PaneDragResizeState::Idle);
+    }
+
+    #[test]
+    fn native_touch_gesture_without_active_capture_is_ignored() {
+        let mut adapter = adapter();
+        let dispatch = adapter.native_touch_gesture();
+
+        assert_eq!(
+            dispatch.log.phase,
+            PanePointerLifecyclePhase::NativeTouchGesture
+        );
+        assert_eq!(dispatch.semantic_event, None);
+        assert_eq!(
+            dispatch.log.outcome,
+            PanePointerLogOutcome::Ignored(PanePointerIgnoredReason::NativeTouchGesture)
+        );
+        assert_eq!(adapter.active_pointer_id(), None);
     }
 
     #[test]
