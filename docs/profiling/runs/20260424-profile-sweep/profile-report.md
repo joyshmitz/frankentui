@@ -39,8 +39,10 @@ Whole-pipeline `arena-mode off` at 200 cycles:
 
 Kernel isolation:
 
-- `presenter-pipeline-bench.txt`: full diff+present is about `76.7us` for `200x60@5%` and `87.1us` for `200x60@50%`.
-- `diff-span-sparse-stats-bench.txt`: `compute_dirty` is materially faster than full compute for sparse `200x60` cases.
+- `render-kernel-bench-summary.md`: full diff+present is about `76.7us` for
+  `200x60@5%` and `87.1us` for `200x60@50%`.
+- `render-kernel-bench-summary.md`: `compute_dirty` is materially faster than
+  full compute for sparse `200x60` cases.
 - `strace-profile-sweep-off.txt`: only `199` syscalls and `0.001797s` syscall time.
 
 ## Hotspots

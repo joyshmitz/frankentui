@@ -15,4 +15,4 @@
 
 - **Primary workload is I/O-bound** → `rejects` — `strace-profile-sweep-off.txt`: 199 syscalls and 0.001797s syscall time for 7,200 frames
 - **FrameArena improves current full demo pipeline** → `rejects` — `hyperfine-rollup.json`: arena off mean 2.711s vs on mean 3.307s across three paired repeats
-- **Diff/presenter kernel dominates whole-frame p99** → `rejects` — `profile-sweep-off-cycles200.json`: frame p99 4018us while presenter p99 132us; `presenter-pipeline-bench.txt`: 200x60 pipeline under 88us
+- **Diff/presenter kernel dominates whole-frame p99** → `rejects` — `profile-sweep-off-cycles200.json`: frame p99 4018us while presenter p99 132us; `render-kernel-bench-summary.md`: 200x60 pipeline under 88us

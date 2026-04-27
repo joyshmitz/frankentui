@@ -24,7 +24,7 @@ Primary artifacts:
 - `variance-off.txt`
 - `variance-on.txt`
 - `strace-profile-sweep-off.txt`
-- `presenter-pipeline-bench.txt`
+- `render-kernel-bench-summary.md`
 
 ## Alien Grounding
 
