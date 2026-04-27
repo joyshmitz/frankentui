@@ -34,6 +34,9 @@ tests/artifacts/perf/
 # fixtures and provenance notes in Git instead.
 docs/assets/external/*.zip
 
+# Generated doctor_frankentui coverage snapshots; keep thresholds/schemas in Git.
+crates/doctor_frankentui/coverage/baseline_summary.json
+
 # NFS temporary files
 .nfs*
 
