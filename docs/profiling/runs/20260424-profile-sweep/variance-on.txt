@@ -1,0 +1,8 @@
+source        p95_ms
+on run 1      4138.27
+on run 2      3670.30
+on run 3      3849.87
+
+Median p95: 3849.87 ms
+Max drift:  7.5%
+Verdict: NOISE (within envelope)

@@ -27,6 +27,9 @@ perf.data
 perf.data.*
 perf_*.data
 
+# Local profiler bundles; preserve summaries under docs/profiling/runs/ instead.
+tests/artifacts/perf/
+
 # NFS temporary files
 .nfs*
 

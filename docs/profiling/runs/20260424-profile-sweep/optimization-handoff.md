@@ -19,14 +19,12 @@ Primary artifacts:
 
 - `hotspot_table.md`
 - `hotspot_table_by_count.md`
-- `profile_events.jsonl`
-- `hyperfine_rollup.json`
-- `variance_off.txt`
-- `variance_on.txt`
-- `perf_profile_sweep_off_report.txt`
-- `heaptrack_profile_sweep_off_direct_report.txt`
-- `strace_profile_sweep_off.txt`
-- `presenter_pipeline_bench.txt`
+- `profile-events.jsonl`
+- `hyperfine-rollup.json`
+- `variance-off.txt`
+- `variance-on.txt`
+- `strace-profile-sweep-off.txt`
+- `presenter-pipeline-bench.txt`
 
 ## Alien Grounding
 
@@ -45,7 +43,7 @@ Score is `Impact * Confidence / Effort`.
 
 | Rank | Lever | Evidence | Impact | Confidence | Effort | Score | Recommendation |
 |------|-------|----------|:------:|:----------:|:------:|:-----:|----------------|
-| 1 | Memoize or precompile markdown math conversion | `heaptrack_profile_sweep_off_direct_report.txt`: `6,189,740` allocation calls via `unicodeit::latex_to_unicode`; `perf`: `StrSearcher::new` `7.21%` | 5 | 5 | 2 | 12.5 | Do first |
+| 1 | Memoize or precompile markdown math conversion | Raw heaptrack report: `6,189,740` allocation calls via `unicodeit::latex_to_unicode`; raw perf report: `StrSearcher::new` `7.21%` | 5 | 5 | 2 | 12.5 | Do first |
 | 2 | Avoid unconditional hit-grid clone in demo app view | `perf`: `__memmove_avx` stack includes `AppModel::view -> cache_hit_grid -> clone`, `2.94%` | 3 | 4 | 2 | 6.0 | Do after markdown |
 | 3 | Fuse buffer write and dirty-span marking for text spans | `perf`: `Buffer::set` `5.18%`, `mark_dirty_span` `3.73%`, `set_fast` `3.21%` | 4 | 4 | 3 | 5.3 | Needs tight golden tests |
 | 4 | Cache grapheme/width segmentation for repeated text | `perf`: `Graphemes::next` `7.99%`, `unicode_display_width::width` `2.27%`, `Paragraph::text_hash` `2.35%` | 4 | 4 | 3 | 5.3 | Pair with text golden corpus |

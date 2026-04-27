@@ -1,8 +1,0 @@
-file                                      p95_ms
-tests/artifacts/perf/20260424T161752Z-profile-sweep/hyperfine_on_1.json   4138.27
-tests/artifacts/perf/20260424T161752Z-profile-sweep/hyperfine_on_2.json   3670.30
-tests/artifacts/perf/20260424T161752Z-profile-sweep/hyperfine_on_3.json   3849.87
-
-Median p95: 3849.87 ms
-Max drift:  7.5%
-Verdict: NOISE (within envelope)

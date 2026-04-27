@@ -1,6 +1,0 @@
-heaptrack output will be written to "/data/projects/frankentui/tests/artifacts/perf/20260424T180619Z-math-cache/heaptrack_after_all_direct.zst"
-starting application, this might take some time...
-{"allocated_bytes":{"per_frame":{"max":2712201,"p50":460767,"p95":738248,"p99":1654450},"total":2902486920},"allocations":{"deallocations_total":5027619,"per_frame":{"max":26062,"p50":262,"p95":4877,"p99":7247},"reallocations_total":394094,"total":5078055},"arena_mode":"off","arena_peak_bytes":0,"cycles":80,"elapsed_ms":108983.498937,"frame_time_us":{"max":12670123,"p50":320,"p95":2715,"p99":30715},"pipeline":{"bytes_emitted":{"max":64168,"p50":7119,"p95":23752,"p99":54870},"changed_cells_per_frame":{"max":4800,"p50":3049,"p95":4366,"p99":4380},"present_us":{"max":169451,"p50":36,"p95":73,"p99":99}},"render_mode":"pipeline","renders_per_sec":66.06504718812614,"screen_count":45,"sizes":[{"cols":80,"rows":24},{"cols":120,"rows":40}],"total_frames":7200}
-Heaptrack finished! Now run the following to investigate the data:
-
-  heaptrack --analyze "/data/projects/frankentui/tests/artifacts/perf/20260424T180619Z-math-cache/heaptrack_after_all_direct.zst"

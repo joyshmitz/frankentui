@@ -1,0 +1,8 @@
+source        p95_ms
+off run 1     2871.42
+off run 2     2910.42
+off run 3     2766.97
+
+Median p95: 2871.42 ms
+Max drift:  3.6%
+Verdict: STABLE

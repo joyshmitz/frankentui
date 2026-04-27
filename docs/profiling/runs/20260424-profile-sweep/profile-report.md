@@ -12,7 +12,8 @@ No optimization changes were made.
 
 - Added and used Cargo profile `release-perf`.
 - Captured host/toolchain fingerprint in `fingerprint.json`.
-- Captured OS-tuning dry run in `profile_init_dry_run.txt`; no sudo tuning was applied.
+- Captured an OS-tuning dry run; no sudo tuning was applied. The raw dry-run
+  file is not retained in Git.
 - Ran paired hyperfine comparisons for `arena-mode off` and `arena-mode on`.
 - Captured single-run JSON/resource stats for `18,000` frames per arena mode.
 - Captured CPU samples with `samply` and `perf`.
@@ -38,30 +39,35 @@ Whole-pipeline `arena-mode off` at 200 cycles:
 
 Kernel isolation:
 
-- `presenter_pipeline_bench.txt`: full diff+present is about `76.7us` for `200x60@5%` and `87.1us` for `200x60@50%`.
-- `diff_span_sparse_stats_bench.txt`: `compute_dirty` is materially faster than full compute for sparse `200x60` cases.
-- `strace_profile_sweep_off.txt`: only `199` syscalls and `0.001797s` syscall time.
+- `presenter-pipeline-bench.txt`: full diff+present is about `76.7us` for `200x60@5%` and `87.1us` for `200x60@50%`.
+- `diff-span-sparse-stats-bench.txt`: `compute_dirty` is materially faster than full compute for sparse `200x60` cases.
+- `strace-profile-sweep-off.txt`: only `199` syscalls and `0.001797s` syscall time.
 
 ## Hotspots
 
 The top CPU and allocation findings are rendered in:
 
-- `hotspot_table.md`
-- `hotspot_table_by_count.md`
+- `hotspot-table.md`
+- `hotspot-table-by-count.md`
 
 The strongest root cause is repeated markdown math conversion:
 
-- `heaptrack_profile_sweep_off_direct_report.txt` reports `6,189,740` allocation calls through `unicodeit::latex_to_unicode`.
+- The raw direct heaptrack report, omitted from Git, reported `6,189,740`
+  allocation calls through `unicodeit::latex_to_unicode`.
 - The stack flows through `crates/ftui-extras/src/markdown.rs` into `crates/ftui-demo-showcase/src/screens/markdown_rich_text.rs`.
-- `perf_profile_sweep_off_report.txt` also places `core::str::pattern::StrSearcher::new` / `str::replace` at `7.21%` of cycles.
+- The raw perf report, omitted from Git, also placed
+  `core::str::pattern::StrSearcher::new` / `str::replace` at `7.21%` of cycles.
 
 ## Tool Notes
 
-- `samply_profile_sweep_off.json` was captured successfully, but the exported JSON was not symbolicated enough for the main human-readable report.
-- `perf_profile_sweep_off_report.txt` produced a useful symbol table, but emitted `addr2line` warnings and recorded `97` lost samples due to host/tooling limitations.
-- `perf_profile_sweep_off.data` is a large raw local artifact (`480M`) and should not be added to git unless a reviewer explicitly wants raw perf data.
+- Samply JSON was captured successfully, but the exported JSON was not
+  symbolicated enough for the main human-readable report and is not tracked.
+- The raw perf report produced a useful symbol table, but emitted `addr2line`
+  warnings and recorded `97` lost samples due to host/tooling limitations.
+- `perf_profile_sweep_off.data` is a large raw local artifact (`480M`) and is
+  intentionally not tracked.
 - The first heaptrack run wrapped `taskset` and is not used for attribution; the direct run is the authoritative allocation report.
 
 ## Handoff
 
-Use `optimization_handoff.md` for the next `extreme-software-optimization` pass.
+Use `optimization-handoff.md` for the next `extreme-software-optimization` pass.
