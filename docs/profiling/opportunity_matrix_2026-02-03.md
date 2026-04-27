@@ -432,15 +432,20 @@ cargo bench -p ftui-render --bench diff_bench -- --baseline baseline_2026-02-03
 
 **Flamegraph:** captured 2026-02-03 at `docs/profiling/bd-1rz0.28/voi_sampling_flamegraph.svg` (release profile, no debuginfo).
 
-### Opportunity Matrix (Pending Analysis)
-Flamegraph captured; hotspots still need to be summarized.
+### Opportunity Matrix (Needs Symbolized Re-run)
+The retained flamegraph has 5,844 samples, but the release build without
+debuginfo leaves most samples in `[unknown]`, syscall, and loader frames. Treat
+it as provenance that profiling access worked, not as a trustworthy hotspot
+ranking.
 
 | ID | Opportunity | Impact | Confidence | Effort | Score | Recommendation |
 |----|-------------|--------|------------|--------|-------|----------------|
-| O1 | Reduce decision struct cloning | 3 | 3 | 2 | 4.5 | Re-evaluate after flamegraph |
-| O2 | Inline VOI math helpers | 2 | 2 | 1 | 4.0 | Re-evaluate after flamegraph |
+| O1 | Reduce decision struct cloning | 3 | 3 | 2 | 4.5 | Re-evaluate after symbolized flamegraph |
+| O2 | Inline VOI math helpers | 2 | 2 | 1 | 4.0 | Re-evaluate after symbolized flamegraph |
 
 ### Notes
 - Flamegraph command: `cargo flamegraph -p ftui-runtime --unit-test -o docs/profiling/bd-1rz0.28/voi_sampling_flamegraph.svg -- perf_voi_sampling_budget --nocapture`
 - Perf access was temporarily enabled via `kernel.perf_event_paranoid=1` and then restored to `4`.
+- The captured SVG is dominated by unknown/syscall/loader frames, so it should
+  not drive optimization decisions.
 - To improve symbolization, rerun with debuginfo: set `CARGO_PROFILE_RELEASE_DEBUG=true` or add `[profile.release] debug = true`.
