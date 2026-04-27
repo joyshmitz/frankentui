@@ -18,6 +18,44 @@ const KNOWN_MISMATCHES_REL: &str =
     "../../tests/fixtures/vt-conformance/differential/known_mismatches.tsv";
 const JSONL_PATH_ENV: &str = "FTUI_VT_CONFORMANCE_JSONL";
 const SUMMARY_PATH_ENV: &str = "FTUI_VT_CONFORMANCE_SUMMARY_JSON";
+const RUN_ID_ENV: &str = "FTUI_VT_CONFORMANCE_RUN_ID";
+const XTERM_DIFF_JSONL_PATH_ENV: &str = "FTUI_XTERM_DIFF_JSONL";
+const XTERM_DIFF_SUMMARY_PATH_ENV: &str = "FTUI_XTERM_DIFF_SUMMARY_JSON";
+const XTERM_DIFF_RUN_ID_ENV: &str = "FTUI_XTERM_DIFF_RUN_ID";
+
+#[derive(Clone, Copy, Debug)]
+struct SuiteConfig {
+    suite: &'static str,
+    reference_engine: &'static str,
+    comparison_domain: &'static str,
+    jsonl_env: &'static str,
+    summary_env: &'static str,
+    run_id_env: &'static str,
+}
+
+impl SuiteConfig {
+    const fn vt_support_matrix() -> Self {
+        Self {
+            suite: "vt_support_matrix",
+            reference_engine: "vt-conformance-fixtures",
+            comparison_domain: "fixture_expected_grid_cursor_and_attrs",
+            jsonl_env: JSONL_PATH_ENV,
+            summary_env: SUMMARY_PATH_ENV,
+            run_id_env: RUN_ID_ENV,
+        }
+    }
+
+    const fn xterm_shared_fixture_differential() -> Self {
+        Self {
+            suite: "xterm_shared_fixture_differential",
+            reference_engine: "xterm.js-shared-fixture-baseline",
+            comparison_domain: "grid_cursor_attrs_known_mismatch_classification",
+            jsonl_env: XTERM_DIFF_JSONL_PATH_ENV,
+            summary_env: XTERM_DIFF_SUMMARY_PATH_ENV,
+            run_id_env: XTERM_DIFF_RUN_ID_ENV,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Deserialize)]
 struct Fixture {
@@ -108,21 +146,66 @@ struct FixtureResult {
 #[derive(Debug, Serialize)]
 struct Summary {
     run_id: String,
+    suite: String,
+    reference_engine: String,
+    comparison_domain: String,
     started_at: String,
     finished_at: String,
     total: usize,
     passed: usize,
     known_mismatch: usize,
     failed: usize,
+    known_mismatch_catalog_size: usize,
 }
 
 #[test]
 fn vt_support_matrix_runner_matches_fixtures() {
-    let started_at = timestamp_utc();
-    let run_id = format!(
-        "vt-support-matrix-{}",
-        OffsetDateTime::now_utc().unix_timestamp_nanos()
+    let outcome = run_fixture_suite(SuiteConfig::vt_support_matrix());
+
+    assert!(
+        outcome.failures.is_empty(),
+        "VT support-matrix failures ({}):\n{}",
+        outcome.failures.len(),
+        outcome.failures.join("\n")
     );
+}
+
+#[test]
+fn xterm_shared_fixture_differential_matches_reference_fixtures() {
+    let outcome = run_fixture_suite(SuiteConfig::xterm_shared_fixture_differential());
+
+    assert!(
+        outcome.summary.total >= 300,
+        "xterm shared fixture corpus should remain broad, got {} fixtures",
+        outcome.summary.total
+    );
+    assert!(
+        outcome.summary.passed > 0,
+        "xterm shared fixture differential must evaluate at least one passing fixture"
+    );
+    assert!(
+        outcome.failures.is_empty(),
+        "xterm shared fixture differential failures ({}):\n{}",
+        outcome.failures.len(),
+        outcome.failures.join("\n")
+    );
+}
+
+#[derive(Debug)]
+struct SuiteOutcome {
+    summary: Summary,
+    failures: Vec<String>,
+}
+
+fn run_fixture_suite(config: SuiteConfig) -> SuiteOutcome {
+    let started_at = timestamp_utc();
+    let run_id = env::var(config.run_id_env).unwrap_or_else(|_| {
+        format!(
+            "{}-{}",
+            config.suite,
+            OffsetDateTime::now_utc().unix_timestamp_nanos()
+        )
+    });
     let fixture_root = fixture_root();
     let known_mismatch_ids = load_known_mismatch_ids(&known_mismatches_path());
     let fixture_paths = collect_fixture_paths(&fixture_root);
@@ -132,15 +215,19 @@ fn vt_support_matrix_runner_matches_fixtures() {
         fixture_root.display()
     );
 
-    let mut jsonl = open_optional_log(JSONL_PATH_ENV);
+    let mut jsonl = open_optional_log(config.jsonl_env);
     write_jsonl_event(
         &mut jsonl,
         json!({
             "event": "run_start",
             "ts": timestamp_utc(),
             "run_id": run_id,
+            "suite": config.suite,
+            "reference_engine": config.reference_engine,
+            "comparison_domain": config.comparison_domain,
             "fixture_root": fixture_root.display().to_string(),
             "fixture_count": fixture_paths.len(),
+            "known_mismatch_catalog_size": known_mismatch_ids.len(),
         }),
     );
 
@@ -168,6 +255,9 @@ fn vt_support_matrix_runner_matches_fixtures() {
                 "event": "fixture_result",
                 "ts": timestamp_utc(),
                 "run_id": run_id,
+                "suite": config.suite,
+                "reference_engine": config.reference_engine,
+                "comparison_domain": config.comparison_domain,
                 "correlation_id": result.correlation_id,
                 "fixture": result.fixture_id,
                 "fixture_path": result.fixture_path,
@@ -182,12 +272,16 @@ fn vt_support_matrix_runner_matches_fixtures() {
     let finished_at = timestamp_utc();
     let summary = Summary {
         run_id: run_id.clone(),
+        suite: config.suite.to_string(),
+        reference_engine: config.reference_engine.to_string(),
+        comparison_domain: config.comparison_domain.to_string(),
         started_at,
         finished_at: finished_at.clone(),
         total: passed + known_mismatch + failed,
         passed,
         known_mismatch,
         failed,
+        known_mismatch_catalog_size: known_mismatch_ids.len(),
     };
 
     write_jsonl_event(
@@ -196,20 +290,19 @@ fn vt_support_matrix_runner_matches_fixtures() {
             "event": "run_summary",
             "ts": finished_at,
             "run_id": run_id,
+            "suite": config.suite,
+            "reference_engine": config.reference_engine,
+            "comparison_domain": config.comparison_domain,
             "total": summary.total,
             "passed": summary.passed,
             "known_mismatch": summary.known_mismatch,
             "failed": summary.failed,
+            "known_mismatch_catalog_size": summary.known_mismatch_catalog_size,
         }),
     );
-    write_optional_summary(&summary);
+    write_optional_summary(config.summary_env, &summary);
 
-    assert!(
-        failures.is_empty(),
-        "VT support-matrix failures ({}):\n{}",
-        failures.len(),
-        failures.join("\n")
-    );
+    SuiteOutcome { summary, failures }
 }
 
 #[test]
@@ -670,8 +763,8 @@ fn load_known_mismatch_ids(path: &Path) -> HashSet<String> {
         .collect()
 }
 
-fn write_optional_summary(summary: &Summary) {
-    let Some(path) = env::var_os(SUMMARY_PATH_ENV) else {
+fn write_optional_summary(var_name: &str, summary: &Summary) {
+    let Some(path) = env::var_os(var_name) else {
         return;
     };
     let path = PathBuf::from(path);
