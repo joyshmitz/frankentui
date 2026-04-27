@@ -7,9 +7,11 @@
 //! changed -- this is the data a platform accessibility bridge would
 //! push to the OS.
 
-use ahash::AHashMap;
+use ahash::{AHashMap, AHashSet};
 
 use crate::node::{A11yNodeInfo, A11yRole, LiveRegion};
+
+const MAX_TRAVERSAL_DEPTH: usize = 1000;
 
 // ── Builder ────────────────────────────────────────────────────────────
 
@@ -179,12 +181,11 @@ impl A11yTree {
     /// Includes cycle protection: stops after visiting 1000 nodes to
     /// prevent infinite loops on malformed cyclic parent chains.
     pub fn ancestors(&self, id: u64) -> Vec<u64> {
-        const MAX_DEPTH: usize = 1000;
         let mut path = Vec::new();
-        let mut visited = ahash::AHashSet::new();
+        let mut visited = AHashSet::new();
         let mut current = Some(id);
         while let Some(cid) = current {
-            if path.len() >= MAX_DEPTH || !visited.insert(cid) {
+            if path.len() >= MAX_TRAVERSAL_DEPTH || !visited.insert(cid) {
                 break;
             }
             if let Some(node) = self.nodes.get(&cid) {
@@ -195,6 +196,91 @@ impl A11yTree {
             }
         }
         path
+    }
+
+    /// Produce deterministic screen-reader mirror lines for this snapshot.
+    ///
+    /// Traversal starts at the root and follows explicit child order. Any
+    /// disconnected nodes are appended by sorted node ID so malformed partial
+    /// trees still produce stable diagnostics. Presentational nodes are skipped.
+    pub fn screen_reader_mirror(&self, policy: ScreenReaderPolicy) -> ScreenReaderMirror {
+        let mut order = Vec::with_capacity(self.nodes.len());
+        let mut visited = AHashSet::with_capacity(self.nodes.len());
+
+        if let Some(root) = self.root {
+            self.collect_mirror_order(root, 0, &mut visited, &mut order);
+        }
+
+        let mut disconnected: Vec<u64> = self
+            .nodes
+            .keys()
+            .copied()
+            .filter(|id| !visited.contains(id))
+            .collect();
+        disconnected.sort_unstable();
+
+        for id in disconnected {
+            self.collect_mirror_order(id, 0, &mut visited, &mut order);
+        }
+
+        let mut lines = Vec::new();
+        let mut omitted_nodes = 0;
+
+        for (id, depth) in order {
+            let Some(node) = self.nodes.get(&id) else {
+                continue;
+            };
+            if node.role == A11yRole::Presentation {
+                continue;
+            }
+            if lines.len() >= policy.max_mirror_nodes {
+                omitted_nodes += 1;
+                continue;
+            }
+
+            let indent = "  ".repeat(depth.min(16));
+            let summary = node_summary(node, self.focused == Some(id), true);
+            let mut line = String::with_capacity(indent.len() + summary.len());
+            line.push_str(&indent);
+            line.push_str(&summary);
+            lines.push(limit_text(line, policy.max_text_chars));
+        }
+
+        ScreenReaderMirror {
+            lines,
+            omitted_nodes,
+        }
+    }
+
+    /// Extract bounded screen-reader announcements from the previous snapshot.
+    pub fn screen_reader_announcements_since(
+        &self,
+        previous: &A11yTree,
+        policy: ScreenReaderPolicy,
+    ) -> ScreenReaderAnnouncements {
+        self.diff(previous)
+            .screen_reader_announcements(self, policy)
+    }
+
+    fn collect_mirror_order(
+        &self,
+        id: u64,
+        depth: usize,
+        visited: &mut AHashSet<u64>,
+        order: &mut Vec<(u64, usize)>,
+    ) {
+        if depth >= MAX_TRAVERSAL_DEPTH || !visited.insert(id) {
+            return;
+        }
+
+        let Some(node) = self.nodes.get(&id) else {
+            return;
+        };
+
+        order.push((id, depth));
+        for child_id in &node.children {
+            self.collect_mirror_order(*child_id, depth + 1, visited, order);
+        }
     }
 
     /// Diff this tree against a previous snapshot to find changes.
@@ -226,6 +312,9 @@ impl A11yTree {
                 removed.push(id);
             }
         }
+        added.sort_unstable();
+        removed.sort_unstable();
+        changed.sort_unstable_by_key(|(id, _)| *id);
 
         let focus_changed = if self.focused != previous.focused {
             Some((previous.focused, self.focused))
@@ -270,6 +359,153 @@ impl A11yTreeDiff {
             && self.changed.is_empty()
             && self.focus_changed.is_none()
     }
+
+    /// Convert this diff into bounded screen-reader announcements.
+    ///
+    /// Focus changes are announced first. Live-region content changes then
+    /// follow in deterministic node-ID order, with assertive announcements
+    /// ahead of polite announcements within the same reason class.
+    pub fn screen_reader_announcements(
+        &self,
+        current: &A11yTree,
+        policy: ScreenReaderPolicy,
+    ) -> ScreenReaderAnnouncements {
+        let mut candidates = Vec::new();
+
+        if let Some((_, Some(new_focus))) = self.focus_changed
+            && let Some(node) = current.node(new_focus)
+            && node.role != A11yRole::Presentation
+            && let Some(text) = announcement_text(node, current.focused == Some(new_focus), false)
+        {
+            candidates.push(ScreenReaderAnnouncement {
+                node_id: Some(new_focus),
+                urgency: LiveRegion::Polite,
+                reason: AnnouncementReason::FocusChanged,
+                text,
+            });
+        }
+
+        for id in &self.added {
+            if let Some(node) = current.node(*id)
+                && let Some(urgency) = node.live_region
+                && let Some(text) = announcement_text(node, current.focused == Some(*id), true)
+            {
+                candidates.push(ScreenReaderAnnouncement {
+                    node_id: Some(*id),
+                    urgency,
+                    reason: AnnouncementReason::LiveRegionAdded,
+                    text,
+                });
+            }
+        }
+
+        for (id, changes) in &self.changed {
+            if let Some(node) = current.node(*id)
+                && let Some(urgency) = node.live_region
+                && let Some(reason) = announcement_reason(changes)
+                && let Some(text) = announcement_text(node, current.focused == Some(*id), true)
+            {
+                candidates.push(ScreenReaderAnnouncement {
+                    node_id: Some(*id),
+                    urgency,
+                    reason,
+                    text,
+                });
+            }
+        }
+
+        candidates
+            .sort_by(|left, right| announcement_sort_key(left).cmp(&announcement_sort_key(right)));
+
+        let max = policy.max_announcements;
+        let dropped_count = candidates.len().saturating_sub(max);
+        let announcements = candidates
+            .into_iter()
+            .take(max)
+            .map(|mut announcement| {
+                announcement.text = limit_text(announcement.text, policy.max_text_chars);
+                announcement
+            })
+            .collect();
+
+        ScreenReaderAnnouncements {
+            announcements,
+            dropped_count,
+        }
+    }
+}
+
+/// Bounded output policy for screen-reader mirrors and announcements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScreenReaderPolicy {
+    /// Maximum non-presentational nodes to include in mirror output.
+    pub max_mirror_nodes: usize,
+    /// Maximum announcements to emit for one diff.
+    pub max_announcements: usize,
+    /// Maximum Unicode scalar values in each mirror line or announcement.
+    pub max_text_chars: usize,
+}
+
+impl Default for ScreenReaderPolicy {
+    fn default() -> Self {
+        Self {
+            max_mirror_nodes: 128,
+            max_announcements: 8,
+            max_text_chars: 240,
+        }
+    }
+}
+
+/// Deterministic text mirror for assistive-technology bridges.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScreenReaderMirror {
+    /// Pre-order, human-readable lines for the accessible tree.
+    pub lines: Vec<String>,
+    /// Number of non-presentational nodes dropped by the mirror cap.
+    pub omitted_nodes: usize,
+}
+
+impl ScreenReaderMirror {
+    /// Join mirror lines with newlines for platform bridges that expect text.
+    #[must_use]
+    pub fn text(&self) -> String {
+        self.lines.join("\n")
+    }
+}
+
+/// Bounded announcement batch for one tree transition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScreenReaderAnnouncements {
+    /// Announcements retained after applying [`ScreenReaderPolicy`].
+    pub announcements: Vec<ScreenReaderAnnouncement>,
+    /// Number of otherwise valid announcements dropped by the batch cap.
+    pub dropped_count: usize,
+}
+
+/// One screen-reader announcement derived from focus or live-region changes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScreenReaderAnnouncement {
+    /// Node that caused the announcement, when known.
+    pub node_id: Option<u64>,
+    /// Politeness / interruption level.
+    pub urgency: LiveRegion,
+    /// Why this announcement was emitted.
+    pub reason: AnnouncementReason,
+    /// Bounded, normalized text.
+    pub text: String,
+}
+
+/// Reason a screen-reader announcement was emitted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnouncementReason {
+    /// Keyboard focus moved to this node.
+    FocusChanged,
+    /// A live region appeared in the current tree.
+    LiveRegionAdded,
+    /// Live-region text or user-facing state changed.
+    LiveContentChanged,
+    /// The live-region policy itself changed.
+    LiveRegionChanged,
 }
 
 /// A single property change on an accessibility node.
@@ -414,4 +650,159 @@ fn diff_state(
             description: new.value_text.as_deref().unwrap_or("<none>").to_owned(),
         });
     }
+}
+
+fn announcement_reason(changes: &[A11yChange]) -> Option<AnnouncementReason> {
+    if changes
+        .iter()
+        .any(|change| matches!(change, A11yChange::LiveRegionChanged { .. }))
+    {
+        return Some(AnnouncementReason::LiveRegionChanged);
+    }
+
+    changes
+        .iter()
+        .any(|change| {
+            matches!(
+                change,
+                A11yChange::NameChanged { .. }
+                    | A11yChange::DescriptionChanged { .. }
+                    | A11yChange::RoleChanged { .. }
+            ) || matches!(
+                change,
+                A11yChange::StateChanged { field, .. }
+                    if matches!(
+                        field.as_str(),
+                        "busy" | "checked" | "expanded" | "selected" | "value_now" | "value_text"
+                    )
+            )
+        })
+        .then_some(AnnouncementReason::LiveContentChanged)
+}
+
+fn announcement_sort_key(announcement: &ScreenReaderAnnouncement) -> (u8, u8, Option<u64>, &str) {
+    let reason_rank = match announcement.reason {
+        AnnouncementReason::FocusChanged => 0,
+        AnnouncementReason::LiveRegionChanged => 1,
+        AnnouncementReason::LiveRegionAdded | AnnouncementReason::LiveContentChanged => 2,
+    };
+    let urgency_rank = match announcement.urgency {
+        LiveRegion::Assertive => 0,
+        LiveRegion::Polite => 1,
+    };
+    (
+        reason_rank,
+        urgency_rank,
+        announcement.node_id,
+        announcement.text.as_str(),
+    )
+}
+
+fn announcement_text(node: &A11yNodeInfo, focused: bool, require_content: bool) -> Option<String> {
+    if node.role == A11yRole::Presentation {
+        return None;
+    }
+    if require_content && !has_announcement_content(node) {
+        return None;
+    }
+
+    let text = node_summary(node, focused, false);
+    normalized_text(&text)
+}
+
+fn has_announcement_content(node: &A11yNodeInfo) -> bool {
+    normalized_option(node.name.as_deref()).is_some()
+        || normalized_option(node.description.as_deref()).is_some()
+        || !state_summaries(&node.state).is_empty()
+}
+
+fn node_summary(node: &A11yNodeInfo, focused: bool, include_live_region: bool) -> String {
+    let mut parts = Vec::new();
+    let mut heading = node.role.to_string();
+
+    if let Some(name) = normalized_option(node.name.as_deref()) {
+        heading.push_str(": ");
+        heading.push_str(&name);
+    }
+    parts.push(heading);
+
+    if let Some(description) = normalized_option(node.description.as_deref())
+        && normalized_option(node.name.as_deref()) != Some(description.clone())
+    {
+        parts.push(description);
+    }
+
+    let mut states = state_summaries(&node.state);
+    if focused || node.state.focused {
+        states.insert(0, "focused".to_owned());
+    }
+    if !states.is_empty() {
+        parts.push(states.join(", "));
+    }
+
+    if let Some(shortcut) = normalized_option(node.shortcut.as_deref()) {
+        parts.push(format!("shortcut {shortcut}"));
+    }
+
+    if include_live_region && let Some(region) = node.live_region {
+        parts.push(format!("live {region}"));
+    }
+
+    parts.join(". ")
+}
+
+fn state_summaries(state: &crate::node::A11yState) -> Vec<String> {
+    let mut states = Vec::new();
+    if state.disabled {
+        states.push("disabled".to_owned());
+    }
+    if let Some(checked) = state.checked {
+        states.push(if checked { "checked" } else { "not checked" }.to_owned());
+    }
+    if let Some(expanded) = state.expanded {
+        states.push(if expanded { "expanded" } else { "collapsed" }.to_owned());
+    }
+    if state.selected {
+        states.push("selected".to_owned());
+    }
+    if state.readonly {
+        states.push("read only".to_owned());
+    }
+    if state.required {
+        states.push("required".to_owned());
+    }
+    if state.busy {
+        states.push("busy".to_owned());
+    }
+    if let Some(value_text) = normalized_option(state.value_text.as_deref()) {
+        states.push(format!("value {value_text}"));
+    } else if let Some(value_now) = state.value_now {
+        states.push(format!("value {value_now}"));
+    }
+    states
+}
+
+fn normalized_option(value: Option<&str>) -> Option<String> {
+    value.and_then(normalized_text)
+}
+
+fn normalized_text(value: &str) -> Option<String> {
+    let mut normalized = String::new();
+    for word in value.split_whitespace() {
+        if !normalized.is_empty() {
+            normalized.push(' ');
+        }
+        normalized.push_str(word);
+    }
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn limit_text(text: String, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    if text.chars().count() <= max_chars {
+        return text;
+    }
+    text.chars().take(max_chars).collect()
 }

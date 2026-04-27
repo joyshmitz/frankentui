@@ -11,6 +11,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LIB_DIR="$PROJECT_ROOT/tests/e2e/lib"
+PRESET_E2E_JSONL_FILE="${E2E_JSONL_FILE:-}"
 
 # shellcheck source=/dev/null
 if [[ -f "$LIB_DIR/common.sh" ]]; then
@@ -50,13 +51,15 @@ TIMESTAMP="$(e2e_log_stamp)"
 LOG_DIR="${LOG_DIR:-/tmp/ftui-a11y-transitions-${E2E_RUN_ID}-${TIMESTAMP}}"
 E2E_LOG_DIR="$LOG_DIR"
 E2E_RESULTS_DIR="${E2E_RESULTS_DIR:-$LOG_DIR/results}"
-E2E_JSONL_FILE="${E2E_JSONL_FILE:-$LOG_DIR/a11y_transitions_e2e.jsonl}"
+E2E_JSONL_FILE="${A11Y_TRANSITIONS_JSONL_FILE:-${PRESET_E2E_JSONL_FILE:-$LOG_DIR/a11y_transitions_e2e.jsonl}}"
+E2E_CHILD_JSONL_DIR="${E2E_CHILD_JSONL_DIR:-$LOG_DIR/child-jsonl}"
 E2E_RUN_CMD="${E2E_RUN_CMD:-$0 $*}"
 E2E_RUN_START_MS="${E2E_RUN_START_MS:-$(e2e_run_start_ms)}"
 export E2E_LOG_DIR E2E_RESULTS_DIR E2E_JSONL_FILE E2E_RUN_CMD E2E_RUN_START_MS
-mkdir -p "$E2E_LOG_DIR" "$E2E_RESULTS_DIR"
+mkdir -p "$E2E_LOG_DIR" "$E2E_RESULTS_DIR" "$E2E_CHILD_JSONL_DIR"
 jsonl_init
 jsonl_assert "artifact_log_dir" "pass" "log_dir=$E2E_LOG_DIR"
+jsonl_assert "child_jsonl_dir" "pass" "child_jsonl_dir=$E2E_CHILD_JSONL_DIR"
 jsonl_set_context "host" "${COLUMNS:-}" "${LINES:-}" "${E2E_SEED:-0}"
 
 PASSED=0
@@ -125,8 +128,18 @@ fi
 
 run_step "a11y_transition_tests" bash -c "
     cd '$PROJECT_ROOT' &&
-    E2E_JSONL=1 A11Y_TEST_SEED=\${A11Y_TEST_SEED:-0} \
+    E2E_JSONL=1 \
+    E2E_JSONL_FILE='$E2E_CHILD_JSONL_DIR/a11y_transition_tests.jsonl' \
+    A11Y_TEST_SEED=\${A11Y_TEST_SEED:-0} \
         cargo test -p ftui-demo-showcase --test a11y_snapshots -- a11y_transition --nocapture
+"
+
+run_step "screen_reader_mirror_policy_tests" bash -c "
+    cd '$PROJECT_ROOT' &&
+    E2E_JSONL=1 \
+    E2E_JSONL_FILE='$E2E_CHILD_JSONL_DIR/screen_reader_mirror_policy_tests.jsonl' \
+    A11Y_TEST_SEED=\${A11Y_TEST_SEED:-0} \
+        cargo test -p ftui-a11y --test a11y_tests -- screen_reader --nocapture
 "
 
 echo ""

@@ -24,6 +24,8 @@
 //!                                     │
 //!                               A11yTreeDiff
 //!                                     │
+//!              screen-reader mirror + live announcements
+//!                                     │
 //!                          (future: platform bridge)
 //! ```
 //!
@@ -32,8 +34,9 @@
 //! - **`ftui-core`**: provides `Rect` for node bounding boxes.
 //! - **`ftui-widgets`**: widgets will `impl Accessible` in a future phase.
 //! - **`ftui-render`**: the render pass will collect nodes via the builder.
-//! - **Platform bridges** (future Phase 3): consume `A11yTreeDiff` to
-//!   push updates to AccessKit / platform APIs.
+//! - **Platform bridges** (future Phase 3): consume `A11yTreeDiff`,
+//!   screen-reader mirror text, and bounded live announcements to push
+//!   updates to AccessKit / platform APIs.
 //!
 //! # Quick start
 //!

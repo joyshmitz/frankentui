@@ -2,7 +2,9 @@
 
 use ftui_a11y::Accessible;
 use ftui_a11y::node::{A11yNodeInfo, A11yRole, A11yState, LiveRegion};
-use ftui_a11y::tree::{A11yChange, A11yTree, A11yTreeBuilder};
+use ftui_a11y::tree::{
+    A11yChange, A11yTree, A11yTreeBuilder, AnnouncementReason, ScreenReaderPolicy,
+};
 use ftui_core::geometry::Rect;
 
 // ── Helper: a toy widget that implements Accessible ────────────────────
@@ -685,6 +687,228 @@ fn diff_populated_to_empty() {
     let diff = empty.diff(&tree);
     assert!(diff.added.is_empty());
     assert_eq!(diff.removed.len(), 4);
+}
+
+#[test]
+fn diff_orders_node_ids_deterministically() {
+    let empty = A11yTree::empty();
+    let mut added_builder = A11yTreeBuilder::new();
+    for id in [30, 10, 20] {
+        added_builder.add_node(A11yNodeInfo::new(
+            id,
+            A11yRole::Button,
+            Rect::new(0, 0, 5, 1),
+        ));
+    }
+    let added_tree = added_builder.build();
+    let added_diff = added_tree.diff(&empty);
+    assert_eq!(added_diff.added, vec![10, 20, 30]);
+
+    let removed_diff = empty.diff(&added_tree);
+    assert_eq!(removed_diff.removed, vec![10, 20, 30]);
+
+    let mut changed_builder = A11yTreeBuilder::new();
+    for id in [30, 10, 20] {
+        changed_builder.add_node(
+            A11yNodeInfo::new(id, A11yRole::Button, Rect::new(0, 0, 5, 1)).with_name("changed"),
+        );
+    }
+    let changed_tree = changed_builder.build();
+    let changed_diff = changed_tree.diff(&added_tree);
+    let changed_ids: Vec<u64> = changed_diff.changed.iter().map(|(id, _)| *id).collect();
+    assert_eq!(changed_ids, vec![10, 20, 30]);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Screen-reader mirror and announcement tests
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn screen_reader_mirror_uses_child_order_and_bounds_output() {
+    let mut b = A11yTreeBuilder::new();
+    b.add_node(
+        A11yNodeInfo::new(10, A11yRole::Window, Rect::new(0, 0, 80, 24))
+            .with_name("App")
+            .with_children(vec![30, 40, 20]),
+    );
+    b.add_node(
+        A11yNodeInfo::new(20, A11yRole::Button, Rect::new(0, 2, 10, 1))
+            .with_name("Cancel")
+            .with_parent(10),
+    );
+    b.add_node(
+        A11yNodeInfo::new(30, A11yRole::Button, Rect::new(0, 1, 10, 1))
+            .with_name("Save")
+            .with_parent(10),
+    );
+    b.add_node(
+        A11yNodeInfo::new(40, A11yRole::Presentation, Rect::new(0, 1, 1, 1)).with_parent(10),
+    );
+    b.set_root(10);
+    b.set_focused(Some(30));
+    let tree = b.build();
+
+    let mirror = tree.screen_reader_mirror(ScreenReaderPolicy {
+        max_mirror_nodes: 2,
+        max_announcements: 8,
+        max_text_chars: 80,
+    });
+
+    assert_eq!(
+        mirror.lines,
+        vec![
+            "window: App".to_owned(),
+            "  button: Save. focused".to_owned()
+        ]
+    );
+    assert_eq!(mirror.omitted_nodes, 1);
+    assert_eq!(mirror.text(), "window: App\n  button: Save. focused");
+}
+
+#[test]
+fn screen_reader_mirror_appends_disconnected_nodes_by_id() {
+    let mut b = A11yTreeBuilder::new();
+    b.add_node(A11yNodeInfo::new(
+        100,
+        A11yRole::Window,
+        Rect::new(0, 0, 80, 24),
+    ));
+    b.add_node(A11yNodeInfo::new(3, A11yRole::Label, Rect::new(0, 1, 20, 1)).with_name("Three"));
+    b.add_node(A11yNodeInfo::new(2, A11yRole::Label, Rect::new(0, 2, 20, 1)).with_name("Two"));
+    b.set_root(100);
+    let tree = b.build();
+
+    let mirror = tree.screen_reader_mirror(ScreenReaderPolicy::default());
+
+    assert_eq!(
+        mirror.lines,
+        vec![
+            "window".to_owned(),
+            "label: Two".to_owned(),
+            "label: Three".to_owned()
+        ]
+    );
+}
+
+#[test]
+fn screen_reader_announcements_include_focus_and_live_content_changes() {
+    let mut before = A11yTreeBuilder::new();
+    before
+        .add_node(A11yNodeInfo::new(1, A11yRole::Button, Rect::new(0, 0, 10, 1)).with_name("Save"));
+    before.add_node(
+        A11yNodeInfo::new(2, A11yRole::Label, Rect::new(0, 1, 20, 1))
+            .with_name("Loading")
+            .with_live_region(LiveRegion::Polite),
+    );
+    before.set_root(1);
+    let before = before.build();
+
+    let mut after = A11yTreeBuilder::new();
+    after
+        .add_node(A11yNodeInfo::new(1, A11yRole::Button, Rect::new(0, 0, 10, 1)).with_name("Save"));
+    after.add_node(
+        A11yNodeInfo::new(2, A11yRole::Label, Rect::new(0, 1, 20, 1))
+            .with_name("Loaded")
+            .with_live_region(LiveRegion::Polite),
+    );
+    after.set_root(1);
+    after.set_focused(Some(1));
+    let after = after.build();
+
+    let batch = after.screen_reader_announcements_since(&before, ScreenReaderPolicy::default());
+
+    assert_eq!(batch.dropped_count, 0);
+    assert_eq!(batch.announcements.len(), 2);
+    assert_eq!(batch.announcements[0].node_id, Some(1));
+    assert_eq!(
+        batch.announcements[0].reason,
+        AnnouncementReason::FocusChanged
+    );
+    assert_eq!(batch.announcements[0].text, "button: Save. focused");
+    assert_eq!(batch.announcements[1].node_id, Some(2));
+    assert_eq!(
+        batch.announcements[1].reason,
+        AnnouncementReason::LiveContentChanged
+    );
+    assert_eq!(batch.announcements[1].text, "label: Loaded");
+}
+
+#[test]
+fn screen_reader_announcements_are_bounded_and_prioritize_assertive_live_regions() {
+    let before = A11yTree::empty();
+    let mut after = A11yTreeBuilder::new();
+    after.add_node(A11yNodeInfo::new(
+        1,
+        A11yRole::Window,
+        Rect::new(0, 0, 80, 24),
+    ));
+    for (id, region, name) in [
+        (30, LiveRegion::Polite, "Announcement 30 with extra detail"),
+        (10, LiveRegion::Polite, "Announcement 10 with extra detail"),
+        (
+            20,
+            LiveRegion::Assertive,
+            "Announcement 20 with extra detail",
+        ),
+        (
+            40,
+            LiveRegion::Assertive,
+            "Announcement 40 with extra detail",
+        ),
+    ] {
+        after.add_node(
+            A11yNodeInfo::new(id, A11yRole::Label, Rect::new(0, 1, 20, 1))
+                .with_name(name)
+                .with_live_region(region),
+        );
+    }
+    after.set_root(1);
+    let after = after.build();
+
+    let batch = after.screen_reader_announcements_since(
+        &before,
+        ScreenReaderPolicy {
+            max_mirror_nodes: 128,
+            max_announcements: 3,
+            max_text_chars: 18,
+        },
+    );
+
+    let node_ids: Vec<_> = batch
+        .announcements
+        .iter()
+        .map(|announcement| announcement.node_id)
+        .collect();
+    assert_eq!(node_ids, vec![Some(20), Some(40), Some(10)]);
+    assert_eq!(batch.dropped_count, 1);
+    assert!(
+        batch
+            .announcements
+            .iter()
+            .all(|announcement| announcement.text.chars().count() <= 18)
+    );
+}
+
+#[test]
+fn screen_reader_announcements_skip_empty_live_regions_and_presentational_nodes() {
+    let before = A11yTree::empty();
+    let mut after = A11yTreeBuilder::new();
+    after.add_node(
+        A11yNodeInfo::new(1, A11yRole::Presentation, Rect::new(0, 0, 1, 1))
+            .with_name("Decorative")
+            .with_live_region(LiveRegion::Assertive),
+    );
+    after.add_node(
+        A11yNodeInfo::new(2, A11yRole::Label, Rect::new(0, 1, 20, 1))
+            .with_live_region(LiveRegion::Polite),
+    );
+    after.set_root(1);
+    after.set_focused(Some(1));
+    let after = after.build();
+
+    let batch = after.screen_reader_announcements_since(&before, ScreenReaderPolicy::default());
+    assert!(batch.announcements.is_empty());
+    assert_eq!(batch.dropped_count, 0);
 }
 
 // ═══════════════════════════════════════════════════════════════════════
