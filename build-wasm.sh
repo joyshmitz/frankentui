@@ -103,4 +103,4 @@ done < <(find pkg -type f -name '*.wasm' | sort)
 echo ""
 echo "── Build complete ──"
 echo "Serve from the project root with: python3 -m http.server 8080"
-echo "Open: http://localhost:8080/frankentui_showcase_demo.html"
+echo "Open: http://localhost:8080/crates/ftui-showcase-wasm/frankentui_showcase_demo.html"

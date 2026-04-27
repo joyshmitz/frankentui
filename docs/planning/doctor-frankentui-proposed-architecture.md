@@ -1,4 +1,4 @@
-# PROPOSED_ARCHITECTURE.md
+# Doctor FrankenTUI Proposed Architecture
 
 ## Target Crate
 

@@ -1,4 +1,4 @@
-# PLAN_TO_CREATE_FRANKENTUI__CODEX.md
+# Plan To Create FrankenTUI: Codex
 
 ## FrankenTUI (ftui): The Optimal Terminal UI Kernel
 Version 6.3 — Kernel-First, Math-Informed, Practice-Proven Architecture
@@ -499,4 +499,3 @@ The list below is the full task inventory. Do not delete items; check off when d
 - [ ] Inline vs alt-screen explanation
 - [ ] One-writer rule guidance
 - [ ] Windows v1 limitations
-

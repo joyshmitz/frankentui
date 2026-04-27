@@ -1,4 +1,4 @@
-# FEATURE_PARITY.md
+# Doctor FrankenTUI Feature Parity
 
 Status key:
 

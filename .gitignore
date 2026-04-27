@@ -40,9 +40,15 @@ flamegraph*.svg
 golden_checksums.txt
 baseline_results.json
 
-# Local scratch DBs
-storage.sqlite3
-storage.sqlite3-*
+# Local scratch DBs and root-level ad-hoc database files
+/storage.sqlite3
+/storage.sqlite3-*
+/*.sqlite
+/*.sqlite-*
+/*.sqlite3
+/*.sqlite3-*
+/*.db
+/*.db-*
 
 # Local scratch dirs (agent/temp)
 .scratch/
@@ -85,8 +91,10 @@ rustc-ice-*.txt
 row_skip_dy*
 --graph-format.svg
 
-# Puppeteer/Chrome screenshots (agent artifacts)
-Chrome_*.png
+# Screenshots and local image captures (agent artifacts)
+/Chrome_*.png
+/Snipping_*.png
+/docs/assets/screenshots/demo-showcase-*.png
 
 # Font setup scratch scripts (agent artifacts)
 optimize_fonts.py
@@ -100,26 +108,40 @@ SESSION_REPORT.md
 # macOS metadata
 .DS_Store
 
-# Determinism test output (ephemeral, machine-dependent)
-determinism_lab_report.jsonl
-
 # Ephemeral files (agent-generated, build artifacts, test detritus)
 ci-artifacts/
 test_meminfo
 
 # Agent session ephemeral files
-SESSION_TODO.md
-SESSION_*.md
-verify_*.sh
-newfile.txt
-repro_*.rs
+/SESSION_TODO.md
+/SESSION_*.md
+/verify_*.sh
+/newfile.txt
+/repro_*.rs
+/fuzz-*.log
+/vfx_harness.jsonl
+/determinism_lab_report.jsonl
+/*.jsonl
+/*-progress.json
+/progress*.json
+/report*.json
+/results*.json
+/summary*.json
+/artifact*.json
+/claude-upgrade-progress.json
+docs/archive/agent-session-artifacts/*.json
+docs/archive/repros/repro_*.rs
+docs/archive/scripts/*.py
+docs/archive/session-todo.md
+/.codex_dummy
+/buffer
+/diff
+/present
+/write
+/~/
 
 # Nested crate build artifacts
 crates/*/target/
-
-# Local scratch DBs
-storage.sqlite3
-storage.sqlite3-*
 
 # FastEmbed model caches
 .fastembed_cache/
@@ -159,13 +181,6 @@ clippy_unwrap.json
 clippy_unwrap_clean.txt
 check_output.txt
 .next_backup*/
-storage.sqlite3
-storage.sqlite3-shm
-storage.sqlite3-wal
-storage.sqlite3.bak
-storage.sqlite3.corrupt-*
-storage.sqlite3-shm.corrupt-*
-storage.sqlite3-wal.corrupt-*
 
 # NTM session state
 .ntm/

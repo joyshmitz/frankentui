@@ -356,7 +356,7 @@ impl ShowcaseRunner {
    - Dependencies: ftui-web, ftui-demo-showcase, wasm-bindgen, js-sys.
    - Build: `wasm-pack build --target web`.
 
-3. **Host HTML: `frankentui_showcase_demo.html`**
+3. **Host HTML: `crates/ftui-showcase-wasm/frankentui_showcase_demo.html`**
    - Creates FrankenTermWeb + ShowcaseRunner.
    - requestAnimationFrame host loop.
    - ResizeObserver → fitToContainer → runner.resize.

@@ -10,7 +10,7 @@
 ```
 
 <div align="center">
-  <img src="frankentui_illustration.webp" alt="FrankenTUI - Minimal, high-performance terminal UI kernel">
+  <img src="docs/assets/frankentui_illustration.webp" alt="FrankenTUI - Minimal, high-performance terminal UI kernel">
 </div>
 
 High‑performance terminal UI kernel -- 850K+ lines of Rust across 20 crates, 80+ widget/stateful-widget implementations, 46 interactive demo screens, a Bayesian intelligence layer, resizable pane workspaces, and in-tree web/WASM backends -- focused on correctness, determinism, and clean architecture.

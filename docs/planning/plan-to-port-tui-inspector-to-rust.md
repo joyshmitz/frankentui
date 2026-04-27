@@ -1,4 +1,4 @@
-# PLAN_TO_PORT_TUI_INSPECTOR_TO_RUST.md
+# Plan To Port TUI Inspector To Rust
 
 ## Why This Port
 
@@ -84,7 +84,7 @@ Non-goal exclusions (implementation-level):
 
 5. Verification and handoff
 - run required quality gates (`cargo check`, `cargo clippy`, `cargo fmt --check`),
-- update `FEATURE_PARITY.md` with actual status,
+- update `doctor-frankentui-feature-parity.md` with actual status,
 - document residual gaps (if any) and next steps.
 
 ## Success Criteria

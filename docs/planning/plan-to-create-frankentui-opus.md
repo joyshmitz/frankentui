@@ -1,4 +1,4 @@
-# PLAN_TO_CREATE_FRANKENTUI__OPUS.md
+# Plan To Create FrankenTUI: Opus
 
 ## FrankenTUI (ftui): The Optimal Terminal UI Kernel
 

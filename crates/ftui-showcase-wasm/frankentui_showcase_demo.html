@@ -4,11 +4,11 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <title>FrankenTUI — Showcase Demo</title>
-<link rel="preload" href="./fonts/pragmasevka-nf-subset.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="../../fonts/pragmasevka-nf-subset.woff2" as="font" type="font/woff2" crossorigin>
 <style>
 	  @font-face {
 	    font-family: "Pragmasevka NF";
-	    src: url("./fonts/pragmasevka-nf-subset.woff2") format("woff2");
+	    src: url("../../fonts/pragmasevka-nf-subset.woff2") format("woff2");
 	    font-weight: 400;
 	    font-style: normal;
 	    font-display: block;
@@ -330,8 +330,8 @@ let runnerWasmExports = null;
 try {
   // 1a. Download JS glue modules.
   setProgress(0, "Downloading JS modules...");
-  const termJsUrl = `./pkg/FrankenTerm.js?v=${ASSET_VERSION}`;
-  const runnerJsUrl = `./pkg/ftui_showcase_wasm.js?v=${ASSET_VERSION}`;
+  const termJsUrl = `../../pkg/FrankenTerm.js?v=${ASSET_VERSION}`;
+  const runnerJsUrl = `../../pkg/ftui_showcase_wasm.js?v=${ASSET_VERSION}`;
   [termMod, runnerMod] = await Promise.all([
     import(termJsUrl),
     import(runnerJsUrl),
@@ -341,8 +341,8 @@ try {
   // Let wasm-bindgen use the browser's streaming compilation path instead of
   // buffering + copying full ArrayBuffers in JS first.
   setProgress(-1, "Initializing WASM modules...");
-  const termWasmUrl = `./pkg/FrankenTerm_bg.wasm?v=${ASSET_VERSION}`;
-  const runnerWasmUrl = `./pkg/ftui_showcase_wasm_bg.wasm?v=${ASSET_VERSION}`;
+  const termWasmUrl = `../../pkg/FrankenTerm_bg.wasm?v=${ASSET_VERSION}`;
+  const runnerWasmUrl = `../../pkg/ftui_showcase_wasm_bg.wasm?v=${ASSET_VERSION}`;
 
   [, runnerWasmExports] = await Promise.all([
     termMod.default(termWasmUrl),
@@ -352,7 +352,7 @@ try {
 } catch (e) {
   showError(
     `Failed to load WASM modules.\n\n` +
-    `Expected wasm-pack output at ./pkg/FrankenTerm.js and ./pkg/ftui_showcase_wasm.js\n\n` +
+    `Expected wasm-pack output at ../../pkg/FrankenTerm.js and ../../pkg/ftui_showcase_wasm.js\n\n` +
     `Build with:\n` +
     `  ./build-wasm.sh\n\n` +
     `Error: ${e.message || e}`

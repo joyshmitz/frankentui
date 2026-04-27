@@ -68,7 +68,7 @@ FrankenTUI has a complete focus management subsystem
 
 ### Web rendering (canvas + semantic proxy)
 
-The web showcase (`frankentui_showcase_demo.html`) renders via HTML
+The web showcase (`crates/ftui-showcase-wasm/frankentui_showcase_demo.html`) renders via HTML
 `<canvas>` with WebGPU. The canvas element now carries:
 
 - `role="application"` and `aria-label` for screen-reader identification.

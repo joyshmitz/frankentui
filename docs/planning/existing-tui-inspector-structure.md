@@ -1,4 +1,4 @@
-# EXISTING_TUI_INSPECTOR_STRUCTURE.md
+# Existing TUI Inspector Structure
 
 This document is the extracted behavior spec for `/dp/tui_inspector`.
 
