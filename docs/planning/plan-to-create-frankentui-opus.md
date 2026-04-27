@@ -15,7 +15,7 @@
 > **How to use this plan (practical):**
 > 1) Read **PART 0** once end-to-end: contracts, invariants, quality gates, and public API intent.
 > 2) Lock the "churn-magnets" via ADRs (inline mode strategy, presenter emission strategy, backend choice, Windows scope).
-> 3) Implement by phases, but **track work via the Master TODO Inventory** (added at the end of this document).
+> 3) Implement by phases, but **track work via the Main TODO Inventory** (added at the end of this document).
 > 4) Treat the **PTY + terminal-model + fuzz** suite as a product requirement, not "nice to have."
 
 > **Core promise:** ftui is designed so you can build a Claude Code / Codex-class agent harness UI
@@ -638,7 +638,7 @@ Agent harnesses display tool output, LLM streams, and logs. Malicious or buggy c
 ## 0.14 Execution Tracker
 
 This plan is intentionally detailed, but shipping requires an execution board.
-The **Master TODO Inventory** lives at the end of this document and is designed to be checked off.
+The **Main TODO Inventory** lives at the end of this document and is designed to be checked off.
 
 ---
 
@@ -4646,7 +4646,7 @@ mod benchmarks {
 
 ---
 
-# PART X: MASTER TODO INVENTORY (DO NOT DELETE; CHECK OFF)
+# PART X: MAIN TODO INVENTORY (DO NOT DELETE; CHECK OFF)
 
 The list below is the full task inventory designed to be checked off over time.
 Treat it as the execution board that connects ADRs → phases → shipped v1.

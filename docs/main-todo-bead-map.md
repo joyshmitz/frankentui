@@ -1,6 +1,6 @@
-# Master TODO Inventory → Bead Map
+# Main TODO Inventory → Bead Map
 
-This document maps the plan’s Master TODO Inventory (A–K) to concrete Bead IDs.
+This document maps the plan’s Main TODO Inventory (A–K) to concrete Bead IDs.
 It is the execution tracker so we do not need to reopen the plan to see intent.
 
 How to use:
@@ -122,6 +122,6 @@ How to use:
 ---
 
 ## Acceptance Criteria Checklist
-- [ ] Every bullet in the plan’s Master TODO Inventory A–K is mapped here to at least one bead.
+- [ ] Every bullet in the plan’s Main TODO Inventory A–K is mapped here to at least one bead.
 - [ ] Missing items are turned into beads immediately (no “TODO later”).
 - [ ] This mapping remains up to date as scope changes.
