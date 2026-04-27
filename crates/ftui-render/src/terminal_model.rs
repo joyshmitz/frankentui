@@ -266,7 +266,7 @@ impl TerminalModel {
     pub fn row_text(&self, y: usize) -> Option<String> {
         self.row(y).map(|cells| {
             let s: String = cells.iter().map(|c| c.text.as_str()).collect();
-            s.trim_end().to_string()
+            s.trim_end_matches(' ').to_string()
         })
     }
 
@@ -1460,6 +1460,14 @@ mod tests {
         let mut model = TerminalModel::new(10, 1);
         model.process(b"Hi");
         assert_eq!(model.row_text(0), Some("Hi".to_string()));
+    }
+
+    #[test]
+    fn row_text_preserves_trailing_non_padding_whitespace() {
+        let mut model = TerminalModel::new(10, 1);
+        let text = "Hi\u{00A0}";
+        model.process(text.as_bytes());
+        assert_eq!(model.row_text(0).as_deref(), Some(text));
     }
 
     #[test]

@@ -171,7 +171,7 @@ impl TerminalModel {
     pub fn row_text(&self, y: u16) -> String {
         if let Some(row) = self.grid.get(y as usize) {
             let s: String = row.iter().map(|c| c.ch).collect();
-            s.trim_end().to_string()
+            s.trim_end_matches(' ').to_string()
         } else {
             String::new()
         }
@@ -1147,6 +1147,15 @@ mod tests {
     fn row_text_out_of_bounds() {
         let m = TerminalModel::new(5, 3);
         assert_eq!(m.row_text(100), "");
+    }
+
+    #[test]
+    fn row_text_preserves_trailing_non_padding_whitespace() {
+        let mut m = TerminalModel::new(5, 3);
+        m.grid[0][0].ch = 'H';
+        m.grid[0][1].ch = '\u{00A0}';
+
+        assert_eq!(m.row_text(0), "H\u{00A0}");
     }
 
     #[test]
