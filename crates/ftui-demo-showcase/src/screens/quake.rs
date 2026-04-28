@@ -115,16 +115,43 @@ fn point_segment_distance_sq(px: f32, py: f32, x1: f32, y1: f32, x2: f32, y2: f3
     dx * dx + dy * dy
 }
 
-fn clip_polygon_near(poly: &[Vec3], near: f32) -> Vec<Vec3> {
-    if poly.is_empty() {
-        return Vec::new();
+#[derive(Debug, Clone, Copy)]
+struct ClippedTriangle {
+    verts: [Vec3; 4],
+    len: usize,
+}
+
+impl ClippedTriangle {
+    fn new() -> Self {
+        Self {
+            verts: [Vec3::new(0.0, 0.0, 0.0); 4],
+            len: 0,
+        }
     }
 
-    let mut out = Vec::with_capacity(poly.len() + 2);
-    let mut prev = poly[poly.len() - 1];
+    fn push(&mut self, vertex: Vec3) {
+        debug_assert!(self.len < self.verts.len());
+        if self.len < self.verts.len() {
+            self.verts[self.len] = vertex;
+            self.len += 1;
+        }
+    }
+
+    fn as_slice(&self) -> &[Vec3] {
+        &self.verts[..self.len]
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+}
+
+fn clip_triangle_near(poly: [Vec3; 3], near: f32) -> ClippedTriangle {
+    let mut out = ClippedTriangle::new();
+    let mut prev = poly[2];
     let mut prev_inside = prev.z >= near;
 
-    for &curr in poly {
+    for curr in poly {
         let curr_inside = curr.z >= near;
         if prev_inside && curr_inside {
             out.push(curr);
@@ -635,7 +662,7 @@ impl QuakeE1M1State {
                 (w2 - eye).dot(up),
                 (w2 - eye).dot(forward),
             );
-            let clipped = clip_polygon_near(&[cam0, cam1, cam2], near);
+            let clipped = clip_triangle_near([cam0, cam1, cam2], near);
             if clipped.len() < 3 {
                 continue;
             }
@@ -738,6 +765,7 @@ impl QuakeE1M1State {
                 }
             };
 
+            let clipped = clipped.as_slice();
             if clipped.len() == 3 {
                 draw_tri(clipped[0], clipped[1], clipped[2]);
             } else {
@@ -1074,6 +1102,46 @@ mod tests {
         assert!(n.x.abs() < EPS);
         assert!(n.y.abs() < EPS);
         assert!(n.z.abs() < EPS);
+    }
+
+    #[test]
+    fn clip_triangle_near_keeps_fully_visible_triangle() {
+        let tri = [
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 1.0),
+            Vec3::new(0.0, 1.0, 1.0),
+        ];
+
+        let clipped = clip_triangle_near(tri, 0.5);
+
+        assert_eq!(clipped.as_slice(), tri.as_slice());
+    }
+
+    #[test]
+    fn clip_triangle_near_expands_one_clipped_vertex_to_quad() {
+        let tri = [
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 1.0),
+            Vec3::new(0.5, 1.0, 0.0),
+        ];
+
+        let clipped = clip_triangle_near(tri, 0.5);
+
+        assert_eq!(clipped.len(), 4);
+        assert!(clipped.as_slice().iter().all(|v| v.z >= 0.5));
+    }
+
+    #[test]
+    fn clip_triangle_near_discards_fully_hidden_triangle() {
+        let tri = [
+            Vec3::new(0.0, 0.0, 0.1),
+            Vec3::new(1.0, 0.0, 0.2),
+            Vec3::new(0.0, 1.0, 0.3),
+        ];
+
+        let clipped = clip_triangle_near(tri, 0.5);
+
+        assert!(clipped.as_slice().is_empty());
     }
 
     // ── cross2 tests ─────────────────────────────────────────────────
