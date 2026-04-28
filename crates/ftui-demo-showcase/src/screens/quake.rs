@@ -263,6 +263,16 @@ impl FloorTri {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct RenderTri {
+    i0: usize,
+    i1: usize,
+    i2: usize,
+    normal: Vec3,
+    diffuse: f32,
+    base: PackedRgba,
+}
+
 #[derive(Debug, Clone)]
 pub struct QuakePlayer {
     pub pos: Vec3,
@@ -292,6 +302,9 @@ pub struct QuakeE1M1State {
     bounds_max: Vec3,
     wall_segments: Vec<WallSeg>,
     floor_tris: Vec<FloorTri>,
+    world_vertices: Vec<Vec3>,
+    camera_vertices: Vec<Vec3>,
+    render_tris: Vec<RenderTri>,
     depth: Vec<f32>,
     depth_w: u16,
     depth_h: u16,
@@ -304,6 +317,8 @@ impl Default for QuakeE1M1State {
     fn default() -> Self {
         let (min, max) = Self::compute_bounds();
         let (wall_segments, floor_tris) = Self::build_collision();
+        let (world_vertices, render_tris) = Self::build_render_mesh(min, max);
+        let camera_vertices = vec![Vec3::new(0.0, 0.0, 0.0); world_vertices.len()];
         let center_x = (min.x + max.x) * 0.5;
         let center_y = (min.y + max.y) * 0.5;
         let start = Vec3::new(center_x, center_y, min.z + QUAKE_EYE_HEIGHT);
@@ -314,6 +329,9 @@ impl Default for QuakeE1M1State {
             bounds_max: max,
             wall_segments,
             floor_tris,
+            world_vertices,
+            camera_vertices,
+            render_tris,
             depth: Vec::new(),
             depth_w: 0,
             depth_h: 0,
@@ -406,6 +424,46 @@ impl QuakeE1M1State {
         }
 
         (walls, floors)
+    }
+
+    fn build_render_mesh(bounds_min: Vec3, bounds_max: Vec3) -> (Vec<Vec3>, Vec<RenderTri>) {
+        let inv_scale = 1.0 / 1024.0;
+        let world_vertices = QUAKE_E1M1_VERTS
+            .iter()
+            .map(|(x, y, z)| {
+                Vec3::new(
+                    *x as f32 * inv_scale,
+                    *y as f32 * inv_scale,
+                    *z as f32 * inv_scale,
+                )
+            })
+            .collect::<Vec<_>>();
+        let height_span = (bounds_max.z - bounds_min.z).max(0.001);
+        let light_dir = Vec3::new(0.4, -0.6, 0.5).normalized();
+        let render_tris = QUAKE_E1M1_TRIS
+            .iter()
+            .copied()
+            .map(|(i0, i1, i2)| {
+                let i0 = i0 as usize;
+                let i1 = i1 as usize;
+                let i2 = i2 as usize;
+                let w0 = world_vertices[i0];
+                let w1 = world_vertices[i1];
+                let w2 = world_vertices[i2];
+                let normal = (w1 - w0).cross(w2 - w0).normalized();
+                let height_t = ((w0.z - bounds_min.z) / height_span).clamp(0.0, 1.0);
+                RenderTri {
+                    i0,
+                    i1,
+                    i2,
+                    normal,
+                    diffuse: normal.dot(light_dir).max(0.0),
+                    base: palette_quake_stone(height_t as f64),
+                }
+            })
+            .collect::<Vec<_>>();
+
+        (world_vertices, render_tris)
     }
 
     fn ground_height_at(&self, x: f32, y: f32) -> Option<f32> {
@@ -593,13 +651,10 @@ impl QuakeE1M1State {
         let right = Vec3::new(-sy, cy, 0.0).normalized();
         let up = right.cross(forward).normalized();
 
-        let light_dir = Vec3::new(0.4, -0.6, 0.5).normalized();
-
         let proj_scale = w.min(h) * 0.9;
         let near = 0.04f32;
         let far = 8.0f32;
 
-        let inv_scale = 1.0 / 1024.0;
         let tri_step = match quality {
             FxQuality::Off => 0,
             _ => 1,
@@ -610,58 +665,33 @@ impl QuakeE1M1State {
             (cx - ax) * (by - ay) - (cy - ay) * (bx - ax)
         };
 
-        for (tri_idx, tri) in QUAKE_E1M1_TRIS.iter().enumerate().step_by(tri_step) {
-            let (i0, i1, i2) = (tri.0 as usize, tri.1 as usize, tri.2 as usize);
-            let v0 = QUAKE_E1M1_VERTS[i0];
-            let v1 = QUAKE_E1M1_VERTS[i1];
-            let v2 = QUAKE_E1M1_VERTS[i2];
+        if self.camera_vertices.len() != self.world_vertices.len() {
+            self.camera_vertices
+                .resize(self.world_vertices.len(), Vec3::new(0.0, 0.0, 0.0));
+        }
+        for (camera, world) in self.camera_vertices.iter_mut().zip(&self.world_vertices) {
+            let rel = *world - eye;
+            *camera = Vec3::new(rel.dot(right), rel.dot(up), rel.dot(forward));
+        }
 
-            let w0 = Vec3::new(
-                v0.0 as f32 * inv_scale,
-                v0.1 as f32 * inv_scale,
-                v0.2 as f32 * inv_scale,
-            );
-            let w1 = Vec3::new(
-                v1.0 as f32 * inv_scale,
-                v1.1 as f32 * inv_scale,
-                v1.2 as f32 * inv_scale,
-            );
-            let w2 = Vec3::new(
-                v2.0 as f32 * inv_scale,
-                v2.1 as f32 * inv_scale,
-                v2.2 as f32 * inv_scale,
-            );
-
-            let n = (w1 - w0).cross(w2 - w0).normalized();
+        for (tri_idx, tri) in self.render_tris.iter().enumerate().step_by(tri_step) {
+            let w0 = self.world_vertices[tri.i0];
+            let n = tri.normal;
             let view_dir = (eye - w0).normalized();
             let facing = n.dot(view_dir);
             if facing <= 0.02 {
                 continue;
             }
-            let diffuse = n.dot(light_dir).max(0.0);
+            let diffuse = tri.diffuse;
             let rim = (1.0 - facing.clamp(0.0, 1.0)).powf(3.0) * 0.5;
 
-            let height_span = (self.bounds_max.z - self.bounds_min.z).max(0.001);
-            let height_t = ((w0.z - self.bounds_min.z) / height_span).clamp(0.0, 1.0);
-            let base = palette_quake_stone(height_t as f64);
+            let base = tri.base;
             let ambient = 0.15f32;
             let light = (ambient + diffuse * 0.8 + rim).clamp(0.0, 1.5);
 
-            let cam0 = Vec3::new(
-                (w0 - eye).dot(right),
-                (w0 - eye).dot(up),
-                (w0 - eye).dot(forward),
-            );
-            let cam1 = Vec3::new(
-                (w1 - eye).dot(right),
-                (w1 - eye).dot(up),
-                (w1 - eye).dot(forward),
-            );
-            let cam2 = Vec3::new(
-                (w2 - eye).dot(right),
-                (w2 - eye).dot(up),
-                (w2 - eye).dot(forward),
-            );
+            let cam0 = self.camera_vertices[tri.i0];
+            let cam1 = self.camera_vertices[tri.i1];
+            let cam2 = self.camera_vertices[tri.i2];
             let clipped = clip_triangle_near([cam0, cam1, cam2], near);
             if clipped.len() < 3 {
                 continue;
