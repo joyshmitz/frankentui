@@ -15,7 +15,9 @@ use std::sync::Arc;
 
 use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use ftui_core::geometry::Rect;
-use ftui_extras::markdown::{MarkdownRenderer, MarkdownTheme, is_likely_markdown};
+use ftui_extras::markdown::{
+    MarkdownDetection, MarkdownRenderer, MarkdownTheme, is_likely_markdown,
+};
 use ftui_extras::syntax::SyntaxHighlighter;
 use ftui_extras::visual_fx::{Backdrop, PlasmaFx, PlasmaPalette, Scrim, ThemeInputs};
 use ftui_layout::{Constraint, Flex};
@@ -295,8 +297,99 @@ struct MarkdownPanel<'a> {
     markdown: &'a str,
     scroll: u16,
     renderer: &'a MarkdownRenderer,
-    table_phase: f32,
+    render_cache: &'a RefCell<RenderedMarkdownCache>,
     border_style: Style,
+}
+
+#[derive(Default)]
+struct RenderedMarkdownCache {
+    width: Option<u16>,
+    rendered: Option<Text<'static>>,
+}
+
+impl RenderedMarkdownCache {
+    fn text(&mut self, width: u16, renderer: &MarkdownRenderer, markdown: &str) -> &Text<'static> {
+        if self.width != Some(width) {
+            self.width = Some(width);
+            self.rendered = None;
+        }
+
+        self.rendered.get_or_insert_with(|| {
+            renderer
+                .clone()
+                .rule_width(RULE_WIDTH.min(width))
+                .table_max_width(width)
+                .render(markdown)
+        })
+    }
+
+    fn clear(&mut self) {
+        self.width = None;
+        self.rendered = None;
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct StreamRenderKey {
+    width: u16,
+    position: usize,
+    complete: bool,
+}
+
+struct StreamRenderEntry {
+    text: Text<'static>,
+    detection: MarkdownDetection,
+}
+
+#[derive(Default)]
+struct StreamRenderCache {
+    key: Option<StreamRenderKey>,
+    entry: Option<StreamRenderEntry>,
+}
+
+impl StreamRenderCache {
+    fn text_and_detection(
+        &mut self,
+        width: u16,
+        position: usize,
+        complete: bool,
+        renderer: &MarkdownRenderer,
+        fragment: &str,
+    ) -> (&Text<'static>, MarkdownDetection) {
+        let key = StreamRenderKey {
+            width,
+            position,
+            complete,
+        };
+        if self.key != Some(key) {
+            self.key = Some(key);
+            self.entry = None;
+        }
+
+        let entry = self.entry.get_or_insert_with(|| {
+            let mut text = renderer
+                .clone()
+                .rule_width(RULE_WIDTH.min(width))
+                .table_max_width(width)
+                .render_streaming(fragment);
+
+            if !complete {
+                let cursor = Span::styled("▌", Style::new().fg(theme::accent::PRIMARY).blink());
+                text.push_span(cursor);
+            }
+
+            StreamRenderEntry {
+                text,
+                detection: is_likely_markdown(fragment),
+            }
+        });
+        (&entry.text, entry.detection)
+    }
+
+    fn clear(&mut self) {
+        self.key = None;
+        self.entry = None;
+    }
 }
 
 fn wrap_markdown_for_panel<'a>(text: &Text<'a>, width: u16) -> Text<'a> {
@@ -531,14 +624,11 @@ impl Widget for MarkdownPanel<'_> {
         }
 
         let max_width = inner.width.saturating_sub(1).max(1);
-        let renderer = self
-            .renderer
-            .clone()
-            .rule_width(RULE_WIDTH.min(max_width))
-            .table_max_width(max_width)
-            .table_effect_phase(self.table_phase);
-        let rendered = renderer.render(self.markdown);
-        let wrapped = wrap_markdown_for_viewport(&rendered, max_width, self.scroll, inner.height);
+        let wrapped = {
+            let mut cache = self.render_cache.borrow_mut();
+            let rendered = cache.text(max_width, self.renderer, self.markdown);
+            wrap_markdown_for_viewport(rendered, max_width, self.scroll, inner.height)
+        };
         Paragraph::new(wrapped)
             .wrap(WrapMode::None)
             .render(inner, frame);
@@ -556,6 +646,8 @@ pub struct MarkdownRichText {
     stream_scroll: u16,
     markdown_renderer: MarkdownRenderer,
     stream_renderer: MarkdownRenderer,
+    rendered_markdown_cache: RefCell<RenderedMarkdownCache>,
+    stream_render_cache: RefCell<StreamRenderCache>,
     tick_count: u64,
     markdown_backdrop: RefCell<Backdrop>,
     focus: FocusPanel,
@@ -596,6 +688,8 @@ impl MarkdownRichText {
             stream_scroll: 0,
             markdown_renderer,
             stream_renderer,
+            rendered_markdown_cache: RefCell::default(),
+            stream_render_cache: RefCell::default(),
             tick_count: 0,
             markdown_backdrop: RefCell::new(markdown_backdrop),
             focus: FocusPanel::Markdown,
@@ -607,6 +701,8 @@ impl MarkdownRichText {
     pub fn apply_theme(&mut self) {
         self.markdown_renderer = Self::build_renderer(Self::build_theme());
         self.stream_renderer = Self::build_renderer(Self::build_theme());
+        self.rendered_markdown_cache.borrow_mut().clear();
+        self.stream_render_cache.borrow_mut().clear();
         let theme_inputs = Self::current_fx_theme();
         self.markdown_backdrop.borrow_mut().set_theme(theme_inputs);
     }
@@ -736,28 +832,6 @@ impl MarkdownRichText {
         &STREAMING_MARKDOWN[..end]
     }
 
-    /// Render the streaming fragment using streaming-aware rendering.
-    ///
-    /// Adds a visible blinking cursor at the end when still streaming.
-    fn render_stream_fragment(&self, width: u16) -> Text<'_> {
-        let fragment = self.current_stream_fragment();
-        let renderer = self
-            .stream_renderer
-            .clone()
-            .rule_width(RULE_WIDTH.min(width))
-            .table_max_width(width)
-            .table_effect_phase(theme::table_theme_phase(self.tick_count));
-        let mut text = renderer.render_streaming(fragment);
-
-        // Add blinking cursor at end if still streaming
-        if !self.stream_complete() {
-            let cursor = Span::styled("▌", Style::new().fg(theme::accent::PRIMARY).blink());
-            text.push_span(cursor);
-        }
-
-        text
-    }
-
     /// Check if streaming is complete.
     fn stream_complete(&self) -> bool {
         self.stream_position >= STREAMING_MARKDOWN.len()
@@ -796,7 +870,7 @@ impl MarkdownRichText {
             markdown: SAMPLE_MARKDOWN,
             scroll: self.md_scroll,
             renderer: &self.markdown_renderer,
-            table_phase: theme::table_theme_phase(self.tick_count),
+            render_cache: &self.rendered_markdown_cache,
             border_style: theme::panel_border_style(
                 self.focus == FocusPanel::Markdown,
                 theme::screen_accent::MARKDOWN,
@@ -999,13 +1073,27 @@ impl MarkdownRichText {
             .split(inner);
 
         // Render the streaming markdown fragment
-        let stream_text = self.render_stream_fragment(chunks[0].width);
-        let wrapped_stream = wrap_markdown_for_viewport(
-            &stream_text,
-            chunks[0].width,
-            self.stream_scroll,
-            chunks[0].height,
-        );
+        let fragment = self.current_stream_fragment();
+        let stream_complete = self.stream_complete();
+        let (wrapped_stream, detection) = {
+            let mut cache = self.stream_render_cache.borrow_mut();
+            let (stream_text, detection) = cache.text_and_detection(
+                chunks[0].width,
+                self.stream_position,
+                stream_complete,
+                &self.stream_renderer,
+                fragment,
+            );
+            (
+                wrap_markdown_for_viewport(
+                    stream_text,
+                    chunks[0].width,
+                    self.stream_scroll,
+                    chunks[0].height,
+                ),
+                detection,
+            )
+        };
         Paragraph::new(wrapped_stream)
             .wrap(WrapMode::None)
             .render(chunks[0], frame);
@@ -1026,8 +1114,6 @@ impl MarkdownRichText {
         Paragraph::new(Text::from_lines([progress_bar])).render(chunks[1], frame);
 
         // Detection status panel
-        let fragment = self.current_stream_fragment();
-        let detection = is_likely_markdown(fragment);
         let det_line1 = format!(
             "Detection: {} indicators | {}",
             detection.indicators,
@@ -1171,6 +1257,7 @@ impl Screen for MarkdownRichText {
                     self.stream_position = 0;
                     self.stream_paused = false;
                     self.stream_scroll = 0;
+                    self.stream_render_cache.borrow_mut().clear();
                 }
                 KeyCode::Char('[') => {
                     // Scroll stream panel up
