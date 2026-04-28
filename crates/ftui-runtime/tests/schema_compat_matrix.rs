@@ -9,9 +9,17 @@
 //!   cargo test -p ftui-runtime --test schema_compat_matrix
 
 use ftui_runtime::schema_compat::{
-    Compatibility, SchemaKind, check_schema_compat, default_compatibility_matrix,
-    run_compatibility_matrix,
+    Compatibility, SchemaKind, check_schema_compat, classify_schema_compat,
+    default_compatibility_matrix, run_compatibility_matrix,
 };
+
+static COMPAT_METRICS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn compat_metrics_guard() -> std::sync::MutexGuard<'static, ()> {
+    COMPAT_METRICS_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 // ============================================================================
 // Default Matrix Gate
@@ -58,7 +66,7 @@ fn matrix_covers_all_schema_kinds() {
 #[test]
 fn all_kinds_exact_match_current() {
     for kind in SchemaKind::ALL {
-        let result = check_schema_compat(kind, kind.current_version());
+        let result = classify_schema_compat(kind, kind.current_version());
         assert_eq!(
             result.compatibility,
             Compatibility::Exact,
@@ -74,7 +82,7 @@ fn all_kinds_exact_match_current() {
 
 #[test]
 fn evidence_v1_forward_compat() {
-    let result = check_schema_compat(SchemaKind::Evidence, "ftui-evidence-v1");
+    let result = classify_schema_compat(SchemaKind::Evidence, "ftui-evidence-v1");
     assert!(result.is_compatible(), "v1 should be readable by v2 reader");
     assert!(matches!(
         result.compatibility,
@@ -87,13 +95,13 @@ fn evidence_v1_forward_compat() {
 
 #[test]
 fn evidence_v0_forward_compat() {
-    let result = check_schema_compat(SchemaKind::Evidence, "ftui-evidence-v0");
+    let result = classify_schema_compat(SchemaKind::Evidence, "ftui-evidence-v0");
     assert!(result.is_compatible(), "v0 should be readable by v2 reader");
 }
 
 #[test]
 fn evidence_v3_backward_incompat() {
-    let result = check_schema_compat(SchemaKind::Evidence, "ftui-evidence-v3");
+    let result = classify_schema_compat(SchemaKind::Evidence, "ftui-evidence-v3");
     assert!(
         !result.is_compatible(),
         "v3 should NOT be readable by v2 reader"
@@ -102,7 +110,7 @@ fn evidence_v3_backward_incompat() {
 
 #[test]
 fn evidence_garbage_incompat() {
-    let result = check_schema_compat(SchemaKind::Evidence, "totally-wrong");
+    let result = classify_schema_compat(SchemaKind::Evidence, "totally-wrong");
     assert!(!result.is_compatible());
     assert!(matches!(
         result.compatibility,
@@ -116,13 +124,13 @@ fn evidence_garbage_incompat() {
 
 #[test]
 fn render_trace_v0_forward() {
-    let result = check_schema_compat(SchemaKind::RenderTrace, "render-trace-v0");
+    let result = classify_schema_compat(SchemaKind::RenderTrace, "render-trace-v0");
     assert!(result.is_compatible());
 }
 
 #[test]
 fn render_trace_v2_backward() {
-    let result = check_schema_compat(SchemaKind::RenderTrace, "render-trace-v2");
+    let result = classify_schema_compat(SchemaKind::RenderTrace, "render-trace-v2");
     assert!(!result.is_compatible());
 }
 
@@ -132,13 +140,13 @@ fn render_trace_v2_backward() {
 
 #[test]
 fn event_trace_v0_forward() {
-    let result = check_schema_compat(SchemaKind::EventTrace, "event-trace-v0");
+    let result = classify_schema_compat(SchemaKind::EventTrace, "event-trace-v0");
     assert!(result.is_compatible());
 }
 
 #[test]
 fn event_trace_v2_backward() {
-    let result = check_schema_compat(SchemaKind::EventTrace, "event-trace-v2");
+    let result = classify_schema_compat(SchemaKind::EventTrace, "event-trace-v2");
     assert!(!result.is_compatible());
 }
 
@@ -148,13 +156,13 @@ fn event_trace_v2_backward() {
 
 #[test]
 fn golden_trace_v0_forward() {
-    let result = check_schema_compat(SchemaKind::GoldenTrace, "golden-trace-v0");
+    let result = classify_schema_compat(SchemaKind::GoldenTrace, "golden-trace-v0");
     assert!(result.is_compatible());
 }
 
 #[test]
 fn golden_trace_v2_backward() {
-    let result = check_schema_compat(SchemaKind::GoldenTrace, "golden-trace-v2");
+    let result = classify_schema_compat(SchemaKind::GoldenTrace, "golden-trace-v2");
     assert!(!result.is_compatible());
 }
 
@@ -164,7 +172,7 @@ fn golden_trace_v2_backward() {
 
 #[test]
 fn telemetry_older_major_forward() {
-    let result = check_schema_compat(SchemaKind::Telemetry, "0.9.0");
+    let result = classify_schema_compat(SchemaKind::Telemetry, "0.9.0");
     assert!(
         result.is_compatible(),
         "older major version should be forward-compatible"
@@ -173,7 +181,7 @@ fn telemetry_older_major_forward() {
 
 #[test]
 fn telemetry_newer_major_backward() {
-    let result = check_schema_compat(SchemaKind::Telemetry, "2.0.0");
+    let result = classify_schema_compat(SchemaKind::Telemetry, "2.0.0");
     assert!(
         !result.is_compatible(),
         "newer major version should be incompatible"
@@ -183,7 +191,7 @@ fn telemetry_newer_major_backward() {
 #[test]
 fn telemetry_same_major_different_minor() {
     // Same major version → exact match (we only compare major)
-    let result = check_schema_compat(SchemaKind::Telemetry, "1.1.0");
+    let result = classify_schema_compat(SchemaKind::Telemetry, "1.1.0");
     assert_eq!(
         result.compatibility,
         Compatibility::Exact,
@@ -197,13 +205,13 @@ fn telemetry_same_major_different_minor() {
 
 #[test]
 fn migration_ir_v0_forward() {
-    let result = check_schema_compat(SchemaKind::MigrationIr, "migration-ir-v0");
+    let result = classify_schema_compat(SchemaKind::MigrationIr, "migration-ir-v0");
     assert!(result.is_compatible());
 }
 
 #[test]
 fn migration_ir_v2_backward() {
-    let result = check_schema_compat(SchemaKind::MigrationIr, "migration-ir-v2");
+    let result = classify_schema_compat(SchemaKind::MigrationIr, "migration-ir-v2");
     assert!(!result.is_compatible());
 }
 
@@ -237,6 +245,8 @@ fn all_kinds_have_nonempty_display() {
 
 #[test]
 fn compat_check_tracing_contract() {
+    let _guard = compat_metrics_guard();
+
     // The trace.compat_check span is only emitted when the "tracing" feature
     // is enabled on ftui-runtime. This test verifies the function runs
     // correctly regardless of feature state and that the result is correct.
@@ -259,6 +269,8 @@ fn compat_check_tracing_contract() {
 fn incompat_check_increments_counter() {
     use ftui_runtime::metrics_registry::{BuiltinCounter, METRICS};
 
+    let _guard = compat_metrics_guard();
+
     let before = METRICS
         .counter(BuiltinCounter::TraceCompatFailuresTotal)
         .get();
@@ -275,6 +287,8 @@ fn incompat_check_increments_counter() {
 #[test]
 fn compat_check_does_not_increment_counter() {
     use ftui_runtime::metrics_registry::{BuiltinCounter, METRICS};
+
+    let _guard = compat_metrics_guard();
 
     let before = METRICS
         .counter(BuiltinCounter::TraceCompatFailuresTotal)
@@ -294,14 +308,14 @@ fn compat_check_does_not_increment_counter() {
 // ============================================================================
 
 #[test]
-fn version_n_replays_on_n_plus_1() {
+fn version_n_replays_on_n_plus_1() -> Result<(), Box<dyn std::error::Error>> {
     // Simulate the scenario: if we bump each schema's version by 1,
     // the *old* (current) version must be forward-compatible with the new reader.
     // This is the core CI contract: trace from N must replay on N+1.
     for kind in SchemaKind::ALL {
         if kind == SchemaKind::Telemetry {
             // Semver: 1.0.0 reader should read 0.x.x data
-            let result = check_schema_compat(kind, "0.0.1");
+            let result = classify_schema_compat(kind, "0.0.1");
             assert!(
                 result.is_compatible(),
                 "telemetry: v0 data should replay on v1 reader"
@@ -316,13 +330,18 @@ fn version_n_replays_on_n_plus_1() {
                 SchemaKind::EventTrace => "event-trace-v",
                 SchemaKind::GoldenTrace => "golden-trace-v",
                 SchemaKind::MigrationIr => "migration-ir-v",
-                SchemaKind::Telemetry => unreachable!(),
+                SchemaKind::Telemetry => continue,
             };
             let current = kind.current_version();
-            let current_num: u32 = current.strip_prefix(prefix).unwrap().parse().unwrap();
+            let current_suffix = current
+                .strip_prefix(prefix)
+                .ok_or("current version should start with schema prefix")?;
+            let current_num: u32 = current_suffix
+                .parse()
+                .map_err(|_| "current version suffix should be numeric")?;
             if current_num > 0 {
                 let older = format!("{prefix}{}", current_num - 1);
-                let result = check_schema_compat(kind, &older);
+                let result = classify_schema_compat(kind, &older);
                 assert!(
                     result.is_compatible(),
                     "{kind}: v{} data should replay on v{current_num} reader",
@@ -331,4 +350,6 @@ fn version_n_replays_on_n_plus_1() {
             }
         }
     }
+
+    Ok(())
 }

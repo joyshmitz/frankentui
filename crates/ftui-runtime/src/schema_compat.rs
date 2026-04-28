@@ -233,14 +233,12 @@ fn parse_version_number(kind: SchemaKind, version: &str) -> Option<u32> {
 // Core Compatibility Check
 // ============================================================================
 
-/// Check compatibility between a reader (current) and writer version.
+/// Classify compatibility between a reader (current) and writer version without
+/// emitting tracing spans or metrics.
 ///
 /// The reader version is always the current version for the given schema kind.
 /// The writer version is the version found in the data being read.
-///
-/// Emits a `trace.compat_check` tracing span and increments
-/// `trace_compat_failures_total` on incompatibility.
-pub fn check_schema_compat(kind: SchemaKind, writer_version: &str) -> CompatCheckResult {
+pub fn classify_schema_compat(kind: SchemaKind, writer_version: &str) -> CompatCheckResult {
     let reader_version = kind.current_version();
 
     let compatibility = if writer_version == reader_version {
@@ -265,7 +263,24 @@ pub fn check_schema_compat(kind: SchemaKind, writer_version: &str) -> CompatChec
         }
     };
 
-    let compatible = compatibility.is_compatible();
+    CompatCheckResult {
+        kind,
+        reader_version,
+        writer_version: writer_version.to_string(),
+        compatibility,
+    }
+}
+
+/// Check compatibility between a reader (current) and writer version.
+///
+/// The reader version is always the current version for the given schema kind.
+/// The writer version is the version found in the data being read.
+///
+/// Emits a `trace.compat_check` tracing span and increments
+/// `trace_compat_failures_total` on incompatibility.
+pub fn check_schema_compat(kind: SchemaKind, writer_version: &str) -> CompatCheckResult {
+    let result = classify_schema_compat(kind, writer_version);
+    let compatible = result.is_compatible();
 
     // Tracing span
     #[cfg(feature = "tracing")]
@@ -275,7 +290,7 @@ pub fn check_schema_compat(kind: SchemaKind, writer_version: &str) -> CompatChec
         let span = info_span!(
             "trace.compat_check",
             schema_version = kind.current_version(),
-            reader_version = reader_version,
+            reader_version = result.reader_version,
             writer_version = writer_version,
             compatible = compatible,
         );
@@ -284,7 +299,7 @@ pub fn check_schema_compat(kind: SchemaKind, writer_version: &str) -> CompatChec
         if !compatible {
             error!(
                 schema_kind = kind.as_str(),
-                reader_version = reader_version,
+                reader_version = result.reader_version,
                 writer_version = writer_version,
                 "trace schema version incompatible"
             );
@@ -298,12 +313,7 @@ pub fn check_schema_compat(kind: SchemaKind, writer_version: &str) -> CompatChec
             .inc();
     }
 
-    CompatCheckResult {
-        kind,
-        reader_version,
-        writer_version: writer_version.to_string(),
-        compatibility,
-    }
+    result
 }
 
 /// Convenience: check evidence schema compatibility.
@@ -346,7 +356,7 @@ pub fn run_compatibility_matrix(entries: &[MatrixEntry]) -> Vec<(MatrixEntry, Co
     entries
         .iter()
         .map(|entry| {
-            let result = check_schema_compat(entry.kind, &entry.writer_version);
+            let result = classify_schema_compat(entry.kind, &entry.writer_version);
             (entry.clone(), result)
         })
         .collect()
@@ -423,10 +433,18 @@ pub fn default_compatibility_matrix() -> Vec<MatrixEntry> {
 mod tests {
     use super::*;
 
+    static COMPAT_METRICS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn compat_metrics_guard() -> std::sync::MutexGuard<'static, ()> {
+        COMPAT_METRICS_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     #[test]
     fn exact_match_all_kinds() {
         for kind in SchemaKind::ALL {
-            let result = check_schema_compat(kind, kind.current_version());
+            let result = classify_schema_compat(kind, kind.current_version());
             assert_eq!(result.compatibility, Compatibility::Exact, "{kind}");
             assert!(result.is_compatible(), "{kind}");
         }
@@ -434,7 +452,7 @@ mod tests {
 
     #[test]
     fn forward_compat_evidence() {
-        let result = check_schema_compat(SchemaKind::Evidence, "ftui-evidence-v1");
+        let result = classify_schema_compat(SchemaKind::Evidence, "ftui-evidence-v1");
         assert!(
             matches!(
                 result.compatibility,
@@ -451,7 +469,7 @@ mod tests {
 
     #[test]
     fn backward_incompat_evidence() {
-        let result = check_schema_compat(SchemaKind::Evidence, "ftui-evidence-v3");
+        let result = classify_schema_compat(SchemaKind::Evidence, "ftui-evidence-v3");
         assert!(
             matches!(
                 result.compatibility,
@@ -468,7 +486,7 @@ mod tests {
 
     #[test]
     fn unknown_version_format() {
-        let result = check_schema_compat(SchemaKind::Evidence, "garbage-string");
+        let result = classify_schema_compat(SchemaKind::Evidence, "garbage-string");
         assert!(
             matches!(result.compatibility, Compatibility::Unknown { .. }),
             "got {:?}",
@@ -479,7 +497,7 @@ mod tests {
 
     #[test]
     fn forward_compat_telemetry_semver() {
-        let result = check_schema_compat(SchemaKind::Telemetry, "0.9.0");
+        let result = classify_schema_compat(SchemaKind::Telemetry, "0.9.0");
         assert!(
             matches!(
                 result.compatibility,
@@ -496,7 +514,7 @@ mod tests {
 
     #[test]
     fn backward_incompat_telemetry_semver() {
-        let result = check_schema_compat(SchemaKind::Telemetry, "2.0.0");
+        let result = classify_schema_compat(SchemaKind::Telemetry, "2.0.0");
         assert!(
             matches!(
                 result.compatibility,
@@ -562,6 +580,8 @@ mod tests {
 
     #[test]
     fn compat_failures_counter_increments() {
+        let _guard = compat_metrics_guard();
+
         let before = METRICS
             .counter(BuiltinCounter::TraceCompatFailuresTotal)
             .get();
@@ -577,6 +597,8 @@ mod tests {
 
     #[test]
     fn exact_match_does_not_increment_counter() {
+        let _guard = compat_metrics_guard();
+
         let before = METRICS
             .counter(BuiltinCounter::TraceCompatFailuresTotal)
             .get();
@@ -589,12 +611,12 @@ mod tests {
 
     #[test]
     fn display_impls() {
-        let result = check_schema_compat(SchemaKind::Evidence, "ftui-evidence-v1");
+        let result = classify_schema_compat(SchemaKind::Evidence, "ftui-evidence-v1");
         let s = result.to_string();
         assert!(s.contains("evidence"), "{s}");
         assert!(s.contains("forward compatible"), "{s}");
 
-        let result2 = check_schema_compat(SchemaKind::RenderTrace, "render-trace-v99");
+        let result2 = classify_schema_compat(SchemaKind::RenderTrace, "render-trace-v99");
         let s2 = result2.to_string();
         assert!(s2.contains("incompatible"), "{s2}");
     }
@@ -608,7 +630,7 @@ mod tests {
 
     #[test]
     fn render_trace_forward_compat() {
-        let result = check_schema_compat(SchemaKind::RenderTrace, "render-trace-v0");
+        let result = classify_schema_compat(SchemaKind::RenderTrace, "render-trace-v0");
         assert!(result.is_compatible());
         assert!(matches!(
             result.compatibility,
@@ -618,26 +640,26 @@ mod tests {
 
     #[test]
     fn event_trace_exact() {
-        let result = check_schema_compat(SchemaKind::EventTrace, "event-trace-v1");
+        let result = classify_schema_compat(SchemaKind::EventTrace, "event-trace-v1");
         assert_eq!(result.compatibility, Compatibility::Exact);
     }
 
     #[test]
     fn golden_trace_backward_incompat() {
-        let result = check_schema_compat(SchemaKind::GoldenTrace, "golden-trace-v2");
+        let result = classify_schema_compat(SchemaKind::GoldenTrace, "golden-trace-v2");
         assert!(!result.is_compatible());
     }
 
     #[test]
     fn migration_ir_exact() {
-        let result = check_schema_compat(SchemaKind::MigrationIr, "migration-ir-v1");
+        let result = classify_schema_compat(SchemaKind::MigrationIr, "migration-ir-v1");
         assert_eq!(result.compatibility, Compatibility::Exact);
     }
 
     #[test]
     fn evidence_v0_forward() {
         // Evidence reader is v2, writer is v0 → forward compatible
-        let result = check_schema_compat(SchemaKind::Evidence, "ftui-evidence-v0");
+        let result = classify_schema_compat(SchemaKind::Evidence, "ftui-evidence-v0");
         assert!(result.is_compatible());
         assert!(matches!(
             result.compatibility,

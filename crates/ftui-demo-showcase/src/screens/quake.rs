@@ -656,10 +656,12 @@ impl QuakeE1M1State {
         let far = 8.0f32;
 
         let tri_step = match quality {
+            FxQuality::Full => 1,
+            FxQuality::Reduced => 2,
+            FxQuality::Minimal => 4,
             FxQuality::Off => 0,
-            _ => 1,
         };
-        let edge_stride = if tri_step > 1 { tri_step * 2 } else { 1 };
+        let edge_stride = if tri_step == 1 { 1 } else { tri_step * 2 };
 
         let edge = |ax: f32, ay: f32, bx: f32, by: f32, cx: f32, cy: f32| {
             (cx - ax) * (by - ay) - (cy - ay) * (bx - ax)
@@ -1348,16 +1350,17 @@ mod tests {
     }
 
     #[test]
-    fn floor_tri_valid_computes_bounds() {
+    fn floor_tri_valid_computes_bounds() -> Result<(), &'static str> {
         let v0 = Vec3::new(0.0, 0.0, 1.0);
         let v1 = Vec3::new(1.0, 0.0, 1.0);
         let v2 = Vec3::new(0.0, 1.0, 1.0);
-        let tri = FloorTri::new(v0, v1, v2).expect("valid triangle");
+        let tri = FloorTri::new(v0, v1, v2).ok_or("triangle should be non-degenerate")?;
         assert!((tri.min_x - 0.0).abs() < EPS);
         assert!((tri.max_x - 1.0).abs() < EPS);
         assert!((tri.min_y - 0.0).abs() < EPS);
         assert!((tri.max_y - 1.0).abs() < EPS);
         assert!(tri.area.abs() > EPS, "area should be nonzero");
+        Ok(())
     }
 
     // ── QuakePlayer tests ────────────────────────────────────────────
@@ -1485,5 +1488,55 @@ mod tests {
         assert!(state.player.pos.x <= state.bounds_max.x - margin + EPS);
         assert!(state.player.pos.y >= state.bounds_min.y + margin - EPS);
         assert!(state.player.pos.y <= state.bounds_max.y - margin + EPS);
+    }
+
+    fn painted_pixels(painter: &Painter) -> usize {
+        let (width, height) = painter.size();
+        let mut count = 0;
+        for y in 0..i32::from(height) {
+            for x in 0..i32::from(width) {
+                if painter.get(x, y) {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    fn render_pixel_count(quality: FxQuality) -> usize {
+        let mut state = QuakeE1M1State::default();
+        let mut painter = Painter::new(96, 48, Mode::Braille);
+        state.render(&mut painter, 96, 48, quality, 0.0, 0);
+        painted_pixels(&painter)
+    }
+
+    #[test]
+    fn quality_tiers_reduce_rendered_triangle_work() {
+        let full = render_pixel_count(FxQuality::Full);
+        let reduced = render_pixel_count(FxQuality::Reduced);
+        let minimal = render_pixel_count(FxQuality::Minimal);
+
+        assert!(full > 0, "full quality should render visible geometry");
+        assert!(
+            reduced > 0,
+            "reduced quality should render visible geometry"
+        );
+        assert!(
+            minimal > 0,
+            "minimal quality should render visible geometry"
+        );
+        assert!(
+            reduced < full,
+            "reduced quality should paint fewer pixels than full quality: {reduced} >= {full}"
+        );
+        assert!(
+            minimal <= reduced,
+            "minimal quality should not paint more pixels than reduced quality: {minimal} > {reduced}"
+        );
+    }
+
+    #[test]
+    fn quality_off_renders_nothing() {
+        assert_eq!(render_pixel_count(FxQuality::Off), 0);
     }
 }
