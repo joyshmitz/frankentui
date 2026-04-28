@@ -2077,11 +2077,7 @@ impl<'t> RenderState<'t> {
         spans.push(Span::styled("│", context.border_style));
 
         for (idx, width) in context.widths.iter().enumerate() {
-            let cell_spans = row
-                .cells
-                .get(idx)
-                .cloned()
-                .unwrap_or_else(|| vec![Span::raw("")]);
+            let cell_spans = row.cells.get(idx).map(Vec::as_slice).unwrap_or(&[]);
             let cell_style = if let Some(phase) = context.effect_phase {
                 context.resolver.resolve(
                     context.base_style,
@@ -2091,7 +2087,7 @@ impl<'t> RenderState<'t> {
             } else {
                 context.base_style
             };
-            let (cell_spans, cell_width) = self.table_cell_spans(&cell_spans, *width, cell_style);
+            let (cell_spans, cell_width) = self.table_cell_spans(cell_spans, *width, cell_style);
             let extra = width.saturating_sub(cell_width);
             let alignment = context
                 .alignments
@@ -2166,15 +2162,12 @@ impl<'t> RenderState<'t> {
         spans
             .iter()
             .map(|span| {
-                let content = span.content.to_string();
                 let style = match span.style {
                     Some(style) => style.merge(&base_style),
                     None => base_style,
                 };
-                let mut styled = Span::styled(content, style);
-                if let Some(link) = &span.link {
-                    styled = styled.link(link.to_string());
-                }
+                let mut styled = span.clone();
+                styled.style = Some(style);
                 styled
             })
             .collect()
@@ -3111,6 +3104,23 @@ The end.
         assert!(content.contains("Col3"));
         assert!(content.contains("A"));
         assert!(content.contains("F"));
+    }
+
+    #[test]
+    fn markdown_table_preserves_cell_links() {
+        let md = "| Link |\n| --- |\n| [docs](https://example.com) |";
+        let text = render_markdown(md);
+        let linked_span = text
+            .lines()
+            .iter()
+            .flat_map(|line| line.spans())
+            .find(|span| span.as_str() == "docs")
+            .expect("table cell link span");
+
+        assert_eq!(
+            linked_span.link.as_ref().map(|link| link.as_ref()),
+            Some("https://example.com")
+        );
     }
 
     #[test]
