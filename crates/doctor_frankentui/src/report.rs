@@ -102,7 +102,7 @@ fn sanitize_run_for_report(suite_dir: &Path, run: RunMeta) -> RunMeta {
 }
 
 fn html_escape(value: &str) -> String {
-    v_htmlescape::escape(value).to_string()
+    v_htmlescape::escape_fmt(value).to_string()
 }
 
 fn resolve_existing_artifact_path(run_dir: &Path, path_value: &str) -> Option<PathBuf> {
