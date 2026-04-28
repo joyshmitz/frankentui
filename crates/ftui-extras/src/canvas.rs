@@ -72,6 +72,76 @@ impl Mode {
     }
 }
 
+/// Rectangle in painter sub-pixel coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CanvasPixelRect {
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+}
+
+impl CanvasPixelRect {
+    /// Create a sub-pixel rectangle.
+    #[must_use]
+    pub const fn new(x: usize, y: usize, width: usize, height: usize) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    /// Convert an absolute terminal-cell rectangle into painter sub-pixel coordinates.
+    #[must_use]
+    pub fn from_cell_intersection(cell_rect: Rect, canvas_area: Rect, mode: Mode) -> Option<Self> {
+        let clipped = cell_rect.intersection_opt(&canvas_area)?;
+        let local_x = clipped.x.saturating_sub(canvas_area.x);
+        let local_y = clipped.y.saturating_sub(canvas_area.y);
+        let cols = usize::from(mode.cols_per_cell());
+        let rows = usize::from(mode.rows_per_cell());
+        let rect = Self::new(
+            usize::from(local_x) * cols,
+            usize::from(local_y) * rows,
+            usize::from(clipped.width) * cols,
+            usize::from(clipped.height) * rows,
+        );
+        (!rect.is_empty()).then_some(rect)
+    }
+
+    /// Check whether the rectangle has zero area.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.width == 0 || self.height == 0
+    }
+
+    #[inline]
+    pub(crate) const fn contains(self, x: usize, y: usize) -> bool {
+        x >= self.x && x < self.right() && y >= self.y && y < self.bottom()
+    }
+
+    #[inline]
+    pub(crate) const fn contains_y(self, y: usize) -> bool {
+        y >= self.y && y < self.bottom()
+    }
+
+    #[inline]
+    pub(crate) const fn covers_x_range(self, x: usize, width: usize) -> bool {
+        x >= self.x && x.saturating_add(width) <= self.right()
+    }
+
+    #[inline]
+    const fn right(self) -> usize {
+        self.x.saturating_add(self.width)
+    }
+
+    #[inline]
+    const fn bottom(self) -> usize {
+        self.y.saturating_add(self.height)
+    }
+}
+
 /// A painter that accumulates pixel-level drawing operations on a virtual grid.
 ///
 /// The grid dimensions are in sub-pixels. After drawing, convert to a
@@ -703,6 +773,81 @@ impl Painter {
         }
     }
 
+    /// Render this painter's pixels while skipping an absolute terminal-cell rectangle.
+    pub(crate) fn render_to_buffer_excluding(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        style: Style,
+        exclude: Rect,
+    ) {
+        let Some(exclude) = exclude.intersection_opt(&area) else {
+            self.render_to_buffer(area, buf, style);
+            return;
+        };
+        if exclude.is_empty() {
+            self.render_to_buffer(area, buf, style);
+            return;
+        }
+        let exclude = Rect::new(
+            exclude.x.saturating_sub(area.x),
+            exclude.y.saturating_sub(area.y),
+            exclude.width,
+            exclude.height,
+        );
+
+        let cols = self.mode.cols_per_cell() as i32;
+        let rows = self.mode.rows_per_cell() as i32;
+
+        let cell_cols = area
+            .width
+            .min(self.width.div_ceil(self.mode.cols_per_cell()));
+        let cell_rows = area
+            .height
+            .min(self.height.div_ceil(self.mode.rows_per_cell()));
+
+        for cy in 0..cell_rows as i32 {
+            for cx in 0..cell_cols as i32 {
+                if exclude.contains(cx as u16, cy as u16) {
+                    continue;
+                }
+
+                let px_x = cx * cols;
+                let px_y = cy * rows;
+
+                let (ch, fg_color, bg_color) = match self.mode {
+                    Mode::Braille => self.braille_cell(px_x, px_y),
+                    Mode::Block => self.block_cell(px_x, px_y),
+                    Mode::HalfBlock => self.halfblock_cell(px_x, px_y),
+                };
+
+                if ch == ' ' {
+                    continue;
+                }
+
+                let mut cell = Cell::from_char(ch);
+                if let Some(fg) = style.fg {
+                    cell.fg = fg;
+                }
+                if let Some(bg) = style.bg {
+                    cell.bg = bg;
+                }
+                if let Some(c) = fg_color {
+                    cell.fg = c;
+                }
+                if let Some(c) = bg_color {
+                    cell.bg = c;
+                }
+
+                buf.set_fast(
+                    area.x.saturating_add(cx as u16),
+                    area.y.saturating_add(cy as u16),
+                    cell,
+                );
+            }
+        }
+    }
+
     /// Compute the Braille character for a 2×4 sub-pixel block.
     fn braille_cell(&self, px_x: i32, px_y: i32) -> (char, Option<PackedRgba>, Option<PackedRgba>) {
         // Braille dot numbering to bit mapping:
@@ -948,6 +1093,15 @@ impl<'a> CanvasRef<'a> {
     pub fn style(mut self, style: Style) -> Self {
         self.style = style;
         self
+    }
+
+    /// Render while skipping an absolute terminal-cell rectangle.
+    pub fn render_excluding(&self, area: Rect, frame: &mut Frame, exclude: Rect) {
+        if area.is_empty() {
+            return;
+        }
+        self.painter
+            .render_to_buffer_excluding(area, &mut frame.buffer, self.style, exclude);
     }
 }
 
@@ -1450,6 +1604,27 @@ mod tests {
 
         let cell = frame.buffer.get(0, 0).unwrap();
         assert_eq!(cell.content.as_char(), Some('\u{28FF}'));
+    }
+
+    #[test]
+    fn canvas_ref_render_excluding_skips_absolute_cells() {
+        let mut painter = Painter::new(4, 8, Mode::Braille);
+        for y in 0..8 {
+            for x in 0..4 {
+                painter.point(x, y);
+            }
+        }
+
+        let canvas_ref = CanvasRef::from_painter(&painter);
+        let area = Rect::new(0, 0, 2, 2);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(2, 2, &mut pool);
+        canvas_ref.render_excluding(area, &mut frame, Rect::new(1, 0, 1, 2));
+
+        let rendered = frame.buffer.get(0, 0).unwrap();
+        let skipped = frame.buffer.get(1, 0).unwrap();
+        assert_eq!(rendered.content.as_char(), Some('\u{28FF}'));
+        assert!(skipped.is_empty());
     }
 
     #[test]

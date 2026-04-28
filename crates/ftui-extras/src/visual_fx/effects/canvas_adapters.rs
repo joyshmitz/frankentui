@@ -35,7 +35,7 @@
 //! Canvas::from_painter(&painter).render(area, &mut frame);
 //! ```
 
-use crate::canvas::Painter;
+use crate::canvas::{CanvasPixelRect, Painter};
 use crate::visual_fx::effects::metaballs::MetaballsParams;
 use crate::visual_fx::effects::plasma::PlasmaPalette;
 use crate::visual_fx::effects::sampling::BallState;
@@ -604,6 +604,19 @@ impl MetaballsCanvasAdapter {
     /// # No Allocations
     /// This method does not allocate after initial painter setup.
     pub fn fill(&mut self, painter: &mut Painter, quality: FxQuality, theme: &ThemeInputs) {
+        self.fill_excluding(painter, quality, theme, None);
+    }
+
+    /// Fill a painter while leaving a sub-pixel rectangle untouched.
+    ///
+    /// This is useful when a later opaque widget is known to cover that region.
+    pub fn fill_excluding(
+        &mut self,
+        painter: &mut Painter,
+        quality: FxQuality,
+        theme: &ThemeInputs,
+        skip_rect: Option<CanvasPixelRect>,
+    ) {
         if !quality.is_enabled() || self.ball_cache.is_empty() {
             return;
         }
@@ -612,6 +625,7 @@ impl MetaballsCanvasAdapter {
         if width == 0 || height == 0 {
             return;
         }
+        let skip_rect = skip_rect.filter(|rect| !rect.is_empty());
 
         self.ensure_coords(width, height);
 
@@ -708,6 +722,7 @@ impl MetaballsCanvasAdapter {
                 }
 
                 let row_offset = y * w;
+                let row_skip_rect = skip_rect.filter(|rect| rect.contains_y(y));
 
                 // --- 4-pixel blocking: accumulate field for 4 columns per ball ---
                 // Per-pixel accumulation order is preserved (ball 0, 1, …, N for each
@@ -715,6 +730,9 @@ impl MetaballsCanvasAdapter {
                 let full_blocks = w / 4;
                 for block in 0..full_blocks {
                     let x_base = block * 4;
+                    if row_skip_rect.is_some_and(|rect| rect.covers_x_range(x_base, 4)) {
+                        continue;
+                    }
 
                     // Block-level spatial culling:
                     // If every ball is far enough from every pixel in this 4-wide block,
@@ -793,6 +811,9 @@ impl MetaballsCanvasAdapter {
                     }
 
                     for j in 0..4 {
+                        if row_skip_rect.is_some_and(|rect| rect.contains(x_base + j, y)) {
+                            continue;
+                        }
                         let s = sums[j];
                         if s > glow {
                             let avg_hue = hues[j] / s;
@@ -810,6 +831,9 @@ impl MetaballsCanvasAdapter {
 
                 // Scalar tail for remaining columns (w % 4 != 0).
                 for x in (full_blocks * 4)..w {
+                    if row_skip_rect.is_some_and(|rect| rect.contains(x, y)) {
+                        continue;
+                    }
                     let mut sum = 0.0;
                     let mut weighted_hue = 0.0;
                     for (i, &dy2) in dy2_cache.iter().enumerate().take(balls_len) {
@@ -856,10 +880,14 @@ impl MetaballsCanvasAdapter {
                 }
 
                 let row_offset = y * w;
+                let row_skip_rect = skip_rect.filter(|rect| rect.contains_y(y));
 
                 let full_blocks = w / 4;
                 for block in 0..full_blocks {
                     let x_base = block * 4;
+                    if row_skip_rect.is_some_and(|rect| rect.covers_x_range(x_base, 4)) {
+                        continue;
+                    }
 
                     // Block-level spatial culling (active balls only).
                     let mut min_dist2 = f64::MAX;
@@ -928,6 +956,9 @@ impl MetaballsCanvasAdapter {
                     }
 
                     for j in 0..4 {
+                        if row_skip_rect.is_some_and(|rect| rect.contains(x_base + j, y)) {
+                            continue;
+                        }
                         let s = sums[j];
                         if s > glow {
                             let avg_hue = hues[j] / s;
@@ -944,6 +975,9 @@ impl MetaballsCanvasAdapter {
                 }
 
                 for x in (full_blocks * 4)..w {
+                    if row_skip_rect.is_some_and(|rect| rect.contains(x, y)) {
+                        continue;
+                    }
                     let mut sum = 0.0;
                     let mut weighted_hue = 0.0;
                     for &i in active_indices {
@@ -983,6 +1017,19 @@ impl MetaballsCanvasAdapter {
     ) {
         self.prepare(time, quality);
         self.fill(painter, quality, theme);
+    }
+
+    /// Convenience method that calls prepare and fills outside a sub-pixel skip rectangle.
+    pub fn fill_frame_excluding(
+        &mut self,
+        painter: &mut Painter,
+        time: f64,
+        quality: FxQuality,
+        theme: &ThemeInputs,
+        skip_rect: Option<CanvasPixelRect>,
+    ) {
+        self.prepare(time, quality);
+        self.fill_excluding(painter, quality, theme, skip_rect);
     }
 }
 
@@ -1777,6 +1824,54 @@ mod tests {
             count < (w as usize).saturating_mul(h as usize),
             "Should not render every pixel when skip paths trigger"
         );
+    }
+
+    #[test]
+    fn metaballs_fill_excluding_leaves_skip_rect_blank() {
+        let theme = default_theme();
+        let params = MetaballsParams {
+            balls: vec![crate::visual_fx::effects::metaballs::Metaball {
+                x: 0.5,
+                y: 0.5,
+                vx: 0.0,
+                vy: 0.0,
+                radius: 10.0,
+                hue: 0.0,
+                phase: 0.0,
+            }],
+            threshold: 1.0,
+            glow_threshold: 0.5,
+            pulse_amount: 0.0,
+            pulse_speed: 0.0,
+            hue_speed: 0.0,
+            time_scale: 1.0,
+            bounds_min: 0.0,
+            bounds_max: 1.0,
+            radius_min: 10.0,
+            radius_max: 10.0,
+            ..Default::default()
+        };
+
+        let mut adapter = MetaballsCanvasAdapter::with_params(params);
+        let mut baseline = Painter::new(8, 8, Mode::Braille);
+        adapter.fill_frame(&mut baseline, 0.0, FxQuality::Full, &theme);
+
+        let skip_rect = CanvasPixelRect::new(2, 2, 3, 4);
+        let mut skipped = Painter::new(8, 8, Mode::Braille);
+        adapter.fill_frame_excluding(&mut skipped, 0.0, FxQuality::Full, &theme, Some(skip_rect));
+
+        for y in 0..8 {
+            for x in 0..8 {
+                if skip_rect.contains(x, y) {
+                    assert!(!skipped.get(x as i32, y as i32));
+                } else {
+                    assert_eq!(
+                        baseline.get(x as i32, y as i32),
+                        skipped.get(x as i32, y as i32)
+                    );
+                }
+            }
+        }
     }
 
     // =========================================================================

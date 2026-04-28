@@ -24,7 +24,7 @@ use web_time::Instant;
 use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEventKind};
 use ftui_core::geometry::Rect;
 use ftui_core::with_panic_cleanup_suppressed;
-use ftui_extras::canvas::{CanvasRef, Mode, Painter};
+use ftui_extras::canvas::{CanvasPixelRect, CanvasRef, Mode, Painter};
 use ftui_extras::markdown::render_markdown;
 use ftui_extras::text_effects::{
     AsciiArtStyle, AsciiArtText, ColorGradient, Direction, Easing, Reflection, StyledMultiLine,
@@ -4351,11 +4351,11 @@ impl VisualEffectsScreen {
         self.transition.set_speed(0.05);
     }
 
-    fn render_markdown_overlay(&self, frame: &mut Frame, area: Rect) {
+    fn markdown_overlay_area(area: Rect) -> Option<Rect> {
         let min_width = 32u16;
         let min_height = 10u16;
         if area.width < min_width || area.height < min_height {
-            return;
+            return None;
         }
 
         let max_width = area.width.saturating_sub(4).max(min_width);
@@ -4367,8 +4367,17 @@ impl VisualEffectsScreen {
 
         let x = area.x + (area.width - panel_width) / 2;
         let y = area.y + (area.height - panel_height) / 2;
-        let panel_area = Rect::new(x, y, panel_width, panel_height);
+        Some(Rect::new(x, y, panel_width, panel_height))
+    }
 
+    fn render_markdown_overlay(&self, frame: &mut Frame, area: Rect) {
+        let Some(panel_area) = Self::markdown_overlay_area(area) else {
+            return;
+        };
+        self.render_markdown_overlay_panel(frame, panel_area);
+    }
+
+    fn render_markdown_overlay_panel(&self, frame: &mut Frame, panel_area: Rect) {
         let border_style = Style::new().fg(PackedRgba::rgb(140, 190, 255));
         let panel_style = Style::new()
             .fg(PackedRgba::rgb(220, 230, 255))
@@ -4927,6 +4936,12 @@ impl Screen for VisualEffectsScreen {
         };
 
         // Reuse cached painter (grow-only) and render at sub-pixel resolution.
+        let markdown_overlay_area =
+            if matches!(self.effect, EffectType::Metaballs | EffectType::Plasma) {
+                Self::markdown_overlay_area(canvas_area)
+            } else {
+                None
+            };
         {
             let area_cells = canvas_area.width as usize * canvas_area.height as usize;
             let mut quality = FxQuality::from_degradation_with_area(frame.degradation, area_cells);
@@ -4945,6 +4960,9 @@ impl Screen for VisualEffectsScreen {
             painter.ensure_for_area(canvas_area, mode);
             painter.clear();
             let (pw, ph) = painter.size();
+            let skip_pixels = markdown_overlay_area.and_then(|overlay| {
+                CanvasPixelRect::from_cell_intersection(overlay, canvas_area, mode)
+            });
 
             let mut effect_panicked = false;
             if !matches!(quality, FxQuality::Off) {
@@ -4989,7 +5007,13 @@ impl Screen for VisualEffectsScreen {
                         // Canvas adapters for metaballs and plasma (bd-l8x9.5.3)
                         EffectType::Metaballs => {
                             self.with_metaballs_adapter_mut(|adapter| {
-                                adapter.fill_frame(&mut painter, self.time, quality, &theme_inputs);
+                                adapter.fill_frame_excluding(
+                                    &mut painter,
+                                    self.time,
+                                    quality,
+                                    &theme_inputs,
+                                    skip_pixels,
+                                );
                             });
                         }
                         EffectType::Plasma => {
@@ -5008,7 +5032,11 @@ impl Screen for VisualEffectsScreen {
 
             // Render canvas to frame without cloning painter buffers.
             let canvas = CanvasRef::from_painter(&painter);
-            canvas.render(canvas_area, frame);
+            if let Some(overlay) = markdown_overlay_area {
+                canvas.render_excluding(canvas_area, frame, overlay);
+            } else {
+                canvas.render(canvas_area, frame);
+            }
 
             if effect_panicked {
                 let crash_block = Block::new()
@@ -5030,8 +5058,8 @@ impl Screen for VisualEffectsScreen {
         }
 
         // Render markdown overlay for metaballs/plasma
-        if matches!(self.effect, EffectType::Metaballs | EffectType::Plasma) {
-            self.render_markdown_overlay(frame, canvas_area);
+        if let Some(overlay) = markdown_overlay_area {
+            self.render_markdown_overlay_panel(frame, overlay);
         }
 
         // Render transition overlay if active
