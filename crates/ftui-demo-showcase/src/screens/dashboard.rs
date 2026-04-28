@@ -13,7 +13,7 @@
 //!
 //! Dynamically reflowable from 40x10 to 200x50+.
 
-use std::cell::Cell as StdCell;
+use std::cell::{Cell as StdCell, RefCell};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use web_time::Instant;
@@ -3250,6 +3250,58 @@ impl ChartMode {
 }
 
 /// Dashboard state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DashboardMarkdownRenderKey {
+    sample_index: usize,
+    position: usize,
+    complete: bool,
+    width: u16,
+}
+
+#[derive(Default)]
+struct DashboardMarkdownRenderCache {
+    key: Option<DashboardMarkdownRenderKey>,
+    wrapped: Option<Text<'static>>,
+}
+
+impl DashboardMarkdownRenderCache {
+    fn text(
+        &mut self,
+        key: DashboardMarkdownRenderKey,
+        renderer: &MarkdownRenderer,
+        markdown: &str,
+    ) -> &Text<'static> {
+        if self.key != Some(key) {
+            self.key = Some(key);
+            self.wrapped = None;
+        }
+
+        self.wrapped.get_or_insert_with(|| {
+            let end = key.position.min(markdown.len());
+            let fragment = &markdown[..end];
+            let mut rendered = renderer
+                .clone()
+                .rule_width(key.width)
+                .table_max_width(key.width)
+                .render_streaming(fragment);
+
+            if !key.complete {
+                rendered.push_span(Span::styled(
+                    "▌",
+                    Style::new().fg(theme::accent::PRIMARY).blink(),
+                ));
+            }
+
+            Dashboard::wrap_markdown_for_panel(&rendered, key.width)
+        })
+    }
+
+    fn clear(&mut self) {
+        self.key = None;
+        self.wrapped = None;
+    }
+}
+
 pub struct Dashboard {
     // Animation
     tick_count: u64,
@@ -3276,6 +3328,7 @@ pub struct Dashboard {
 
     // Markdown renderer (cached)
     md_renderer: MarkdownRenderer,
+    md_render_cache: RefCell<DashboardMarkdownRenderCache>,
 
     // Code showcase state
     code_index: usize,
@@ -3345,6 +3398,7 @@ impl Dashboard {
             code_cache,
             md_renderer: MarkdownRenderer::new(MarkdownTheme::default())
                 .with_syntax_highlighter(Arc::clone(&highlighter)),
+            md_render_cache: RefCell::default(),
             code_index: 0,
             md_sample_index: 0,
             md_stream_pos: 0,
@@ -3380,6 +3434,7 @@ impl Dashboard {
         self.highlighter = Arc::clone(&highlighter);
         self.md_renderer =
             MarkdownRenderer::new(MarkdownTheme::default()).with_syntax_highlighter(highlighter);
+        self.md_render_cache.borrow_mut().clear();
     }
 
     pub fn enable_deterministic_mode(&mut self, tick_ms: u64) {
@@ -3575,6 +3630,7 @@ impl Dashboard {
 
     fn reset_markdown_stream(&mut self) {
         self.md_stream_pos = 0;
+        self.md_render_cache.borrow_mut().clear();
     }
 
     fn current_effect_demo(&self) -> &'static EffectDemo {
@@ -5244,7 +5300,7 @@ impl Dashboard {
             .render(bar_area, frame);
     }
 
-    fn wrap_markdown_for_panel<'a>(&self, text: &Text<'a>, width: u16) -> Text<'a> {
+    fn wrap_markdown_for_panel<'a>(text: &Text<'a>, width: u16) -> Text<'a> {
         let width = usize::from(width);
         if width == 0 {
             return text.clone();
@@ -5333,28 +5389,15 @@ impl Dashboard {
         }
 
         let md = self.current_markdown_sample();
-        let end = self.md_stream_pos.min(md.len());
-        let fragment = &md[..end];
-        let renderer = self
-            .md_renderer
-            .clone()
-            .rule_width(inner.width)
-            .table_max_width(inner.width);
-        let mut rendered = renderer.render_streaming(fragment);
-
-        if !self.markdown_stream_complete() {
-            let cursor = Span::styled("▌", Style::new().fg(theme::accent::PRIMARY).blink());
-            let mut lines: Vec<Line> = rendered.lines().to_vec();
-            if let Some(last_line) = lines.last_mut() {
-                last_line.push_span(cursor);
-            } else {
-                lines.push(Line::from_spans([cursor]));
-            }
-            rendered = Text::from_lines(lines);
-        }
-
-        let wrapped = self.wrap_markdown_for_panel(&rendered, inner.width);
-        Paragraph::new(wrapped)
+        let key = DashboardMarkdownRenderKey {
+            sample_index: self.md_sample_index % DASH_MARKDOWN_SAMPLES.len(),
+            position: self.md_stream_pos.min(md.len()),
+            complete: self.markdown_stream_complete(),
+            width: inner.width,
+        };
+        let mut cache = self.md_render_cache.borrow_mut();
+        let wrapped = cache.text(key, &self.md_renderer, md);
+        Paragraph::new(wrapped.clone())
             .wrap(WrapMode::None)
             .render(inner, frame);
         let hint = self
@@ -6486,6 +6529,43 @@ mod tests {
         state.update(&click);
 
         assert_eq!(state.focus, DashboardFocus::Markdown);
+    }
+
+    #[test]
+    fn dashboard_markdown_render_cache_reuses_width_stable_text() {
+        let mut state = Dashboard::new();
+        state.md_stream_pos = state.current_markdown_sample().len();
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(120, 40, &mut pool);
+        state.view(&mut frame, Rect::new(0, 0, 120, 40));
+
+        let first_key = state.md_render_cache.borrow().key;
+        let first_lines = state
+            .md_render_cache
+            .borrow()
+            .wrapped
+            .as_ref()
+            .map(|text| text.lines().as_ptr());
+        assert!(
+            first_key.is_some(),
+            "markdown cache key should be populated"
+        );
+        assert!(
+            first_lines.is_some(),
+            "markdown cache should hold wrapped text"
+        );
+
+        let mut frame = Frame::new(120, 40, &mut pool);
+        state.view(&mut frame, Rect::new(0, 0, 120, 40));
+
+        let second_cache = state.md_render_cache.borrow();
+        let second_lines = second_cache
+            .wrapped
+            .as_ref()
+            .map(|text| text.lines().as_ptr());
+        assert_eq!(second_cache.key, first_key);
+        assert_eq!(second_lines, first_lines);
     }
 
     #[test]
