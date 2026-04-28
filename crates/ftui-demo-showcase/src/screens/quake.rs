@@ -690,19 +690,34 @@ impl QuakeE1M1State {
                 }
 
                 let inv_area = 1.0 / area;
+                let e12_dy = sy2 - sy1;
+                let e12_dx = sx2 - sx1;
+                let e20_dy = sy0 - sy2;
+                let e20_dx = sx0 - sx2;
+                let e01_dy = sy1 - sy0;
+                let e01_dx = sx1 - sx0;
                 let stride_usize = stride;
 
                 for py in (miny..=maxy).step_by(stride_usize) {
                     let fy = py as f32;
+                    let row_w0_fy = (fy - sy1) * e12_dx;
+                    let row_w1_fy = (fy - sy2) * e20_dx;
+                    let row_w2_fy = (fy - sy0) * e01_dx;
+                    let mut entered = false;
+
                     for px in (minx..=maxx).step_by(stride_usize) {
                         let fx = px as f32;
-                        let w0e = edge(sx1, sy1, sx2, sy2, fx, fy);
-                        let w1e = edge(sx2, sy2, sx0, sy0, fx, fy);
-                        let w2e = edge(sx0, sy0, sx1, sy1, fx, fy);
+                        let w0e = (fx - sx1) * e12_dy - row_w0_fy;
+                        let w1e = (fx - sx2) * e20_dy - row_w1_fy;
+                        let w2e = (fx - sx0) * e01_dy - row_w2_fy;
 
                         if (w0e * area) < 0.0 || (w1e * area) < 0.0 || (w2e * area) < 0.0 {
+                            if entered {
+                                break;
+                            }
                             continue;
                         }
+                        entered = true;
 
                         let b0 = w0e * inv_area;
                         let b1 = w1e * inv_area;
