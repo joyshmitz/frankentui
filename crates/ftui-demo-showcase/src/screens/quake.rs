@@ -808,6 +808,7 @@ impl QuakeE1M1State {
 /// Dedicated easter-egg screen for the Quake E1M1 renderer.
 pub struct QuakeEasterEggScreen {
     quake: RefCell<QuakeE1M1State>,
+    painter: RefCell<Painter>,
     quality: FxQuality,
     tick_count: u64,
     time: f64,
@@ -823,6 +824,7 @@ impl QuakeEasterEggScreen {
     pub fn new() -> Self {
         Self {
             quake: RefCell::new(QuakeE1M1State::default()),
+            painter: RefCell::new(Painter::new(0, 0, Mode::Braille)),
             quality: FxQuality::Reduced,
             tick_count: 0,
             time: 0.0,
@@ -929,7 +931,9 @@ impl Screen for QuakeEasterEggScreen {
             .style(Style::new().fg(theme::fg::SECONDARY).attrs(StyleFlags::DIM))
             .render(rows[0], frame);
 
-        let mut painter = Painter::for_area(rows[1], Mode::Braille);
+        let mut painter = self.painter.borrow_mut();
+        painter.ensure_for_area(rows[1], Mode::Braille);
+        painter.clear();
         let (pw, ph) = painter.size();
         self.quake.borrow_mut().render(
             &mut painter,
