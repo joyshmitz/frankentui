@@ -939,7 +939,7 @@ impl Screen for QuakeEasterEggScreen {
             self.time,
             self.tick_count,
         );
-        Canvas::from_painter(&painter).render(rows[1], frame);
+        Canvas::from_painter_ref(&painter).render(rows[1], frame);
 
         let player = self.quake.borrow();
         let status = format!(
