@@ -16,7 +16,7 @@ use std::time::Instant;
 
 use ftui_core::event::Event;
 use ftui_core::terminal_capabilities::TerminalCapabilities;
-use ftui_demo_showcase::app::AppModel;
+use ftui_demo_showcase::app::{AppModel, ScreenId};
 use ftui_demo_showcase::screens;
 use ftui_render::arena::FrameArena;
 use ftui_render::buffer::Buffer;
@@ -151,6 +151,21 @@ fn percentile(sorted: &[u64], p: f64) -> u64 {
     sorted[idx]
 }
 
+fn sorted_copy(values: &[u64]) -> Vec<u64> {
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    sorted
+}
+
+fn metric_summary_json(sorted: &[u64]) -> serde_json::Value {
+    serde_json::json!({
+        "p50": percentile(sorted, 0.50),
+        "p95": percentile(sorted, 0.95),
+        "p99": percentile(sorted, 0.99),
+        "max": sorted.last().copied().unwrap_or(0),
+    })
+}
+
 struct PipelineHarness {
     current: Buffer,
     scratch: Buffer,
@@ -243,12 +258,83 @@ fn pipeline_metrics_json(
     })
 }
 
+struct ScreenMetrics {
+    screen: ScreenId,
+    frame_us: Vec<u64>,
+    allocs: Vec<u64>,
+    alloc_bytes: Vec<u64>,
+    changed_cells: Vec<u64>,
+    present_us: Vec<u64>,
+    bytes: Vec<u64>,
+}
+
+impl ScreenMetrics {
+    fn new(screen: ScreenId, capacity: usize) -> Self {
+        Self {
+            screen,
+            frame_us: Vec::with_capacity(capacity),
+            allocs: Vec::with_capacity(capacity),
+            alloc_bytes: Vec::with_capacity(capacity),
+            changed_cells: Vec::with_capacity(capacity),
+            present_us: Vec::with_capacity(capacity),
+            bytes: Vec::with_capacity(capacity),
+        }
+    }
+
+    fn record_common(&mut self, frame_us: u64, allocs: u64, alloc_bytes: u64) {
+        self.frame_us.push(frame_us);
+        self.allocs.push(allocs);
+        self.alloc_bytes.push(alloc_bytes);
+    }
+
+    fn record_pipeline(&mut self, bytes: u64, changed_cells: u64, present_us: u64) {
+        self.bytes.push(bytes);
+        self.changed_cells.push(changed_cells);
+        self.present_us.push(present_us);
+    }
+
+    fn to_json(&self, render_mode: RenderMode) -> serde_json::Value {
+        let sorted_frame_us = sorted_copy(&self.frame_us);
+        let sorted_allocs = sorted_copy(&self.allocs);
+        let sorted_alloc_bytes = sorted_copy(&self.alloc_bytes);
+        let pipeline = if render_mode == RenderMode::Pipeline {
+            let sorted_changed_cells = sorted_copy(&self.changed_cells);
+            let sorted_present_us = sorted_copy(&self.present_us);
+            let sorted_bytes = sorted_copy(&self.bytes);
+            serde_json::json!({
+                "changed_cells_per_frame": metric_summary_json(&sorted_changed_cells),
+                "present_us": metric_summary_json(&sorted_present_us),
+                "bytes_emitted": metric_summary_json(&sorted_bytes),
+            })
+        } else {
+            serde_json::Value::Null
+        };
+
+        serde_json::json!({
+            "screen": self.screen.slug(),
+            "title": self.screen.title(),
+            "index": self.screen.index(),
+            "frames": self.frame_us.len(),
+            "frame_time_us": metric_summary_json(&sorted_frame_us),
+            "allocations_per_frame": metric_summary_json(&sorted_allocs),
+            "allocated_bytes_per_frame": metric_summary_json(&sorted_alloc_bytes),
+            "pipeline": pipeline,
+        })
+    }
+}
+
 fn main() {
     let args = parse_args();
 
     let sizes: &[(u16, u16)] = &[(80, 24), (120, 40)];
     let screen_ids = screens::screen_ids();
     let total_frames = screen_ids.len() * sizes.len() * args.cycles;
+    let per_screen_capacity = args.cycles * sizes.len();
+    let mut screen_metrics = screen_ids
+        .iter()
+        .copied()
+        .map(|screen| ScreenMetrics::new(screen, per_screen_capacity))
+        .collect::<Vec<_>>();
 
     if !args.json {
         eprintln!(
@@ -284,11 +370,14 @@ fn main() {
         let mut pipeline = PipelineHarness::new(cols, rows);
 
         for cycle in 0..args.cycles {
-            for &screen in screen_ids.iter() {
+            for (screen_idx, &screen) in screen_ids.iter().enumerate() {
                 app.current_screen = screen;
                 let _: Cmd<_> = app.update(Event::Tick.into());
                 let frame_start = Instant::now();
                 let alloc_region = Region::new(GLOBAL);
+                let mut bytes_emitted = 0;
+                let mut changed_cells = 0;
+                let mut present_us = 0;
 
                 {
                     match args.render_mode {
@@ -304,19 +393,19 @@ fn main() {
                             std::hint::black_box(&frame);
                         }
                         RenderMode::Pipeline => {
-                            let (bytes_emitted, changed_cells, present_us) =
+                            (bytes_emitted, changed_cells, present_us) =
                                 pipeline.render(&mut app, cols, rows, &mut pool, arena.as_ref());
-                            per_frame_bytes.push(bytes_emitted);
-                            per_frame_changed_cells.push(changed_cells as u64);
-                            per_frame_present_us.push(present_us);
                             std::hint::black_box(bytes_emitted);
                         }
                     }
                 }
 
+                let elapsed_us = frame_start.elapsed().as_micros().min(u64::MAX as u128) as u64;
                 let alloc_delta = alloc_region.change();
-                per_frame_allocs.push(alloc_delta.allocations as u64);
-                per_frame_alloc_bytes.push(alloc_delta.bytes_allocated as u64);
+                let frame_allocs = alloc_delta.allocations as u64;
+                let frame_alloc_bytes = alloc_delta.bytes_allocated as u64;
+                per_frame_allocs.push(frame_allocs);
+                per_frame_alloc_bytes.push(frame_alloc_bytes);
                 total_allocs = total_allocs.saturating_add(alloc_delta.allocations);
                 total_alloc_bytes = total_alloc_bytes.saturating_add(alloc_delta.bytes_allocated);
                 total_reallocs = total_reallocs.saturating_add(alloc_delta.reallocations);
@@ -328,8 +417,23 @@ fn main() {
                     arena_mut.reset();
                 }
 
-                let elapsed_us = frame_start.elapsed().as_micros().min(u64::MAX as u128) as u64;
                 per_frame_us.push(elapsed_us);
+                screen_metrics[screen_idx].record_common(
+                    elapsed_us,
+                    frame_allocs,
+                    frame_alloc_bytes,
+                );
+                if args.render_mode == RenderMode::Pipeline {
+                    let changed_cells = changed_cells as u64;
+                    per_frame_bytes.push(bytes_emitted);
+                    per_frame_changed_cells.push(changed_cells);
+                    per_frame_present_us.push(present_us);
+                    screen_metrics[screen_idx].record_pipeline(
+                        bytes_emitted,
+                        changed_cells,
+                        present_us,
+                    );
+                }
             }
             if !args.json && cycle % 10 == 0 {
                 eprint!(".");
@@ -413,7 +517,11 @@ fn main() {
                 &sorted_changed_cells,
                 &sorted_present_us,
                 &sorted_bytes
-            )
+            ),
+            "screens": screen_metrics
+                .iter()
+                .map(|metrics| metrics.to_json(args.render_mode))
+                .collect::<Vec<_>>()
         });
         println!("{summary}");
     } else {
