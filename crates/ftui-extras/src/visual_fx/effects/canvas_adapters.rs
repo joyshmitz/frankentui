@@ -723,140 +723,141 @@ impl MetaballsCanvasAdapter {
 
                 let row_offset = y * w;
                 let row_skip_rect = skip_rect.filter(|rect| rect.contains_y(y));
+                let row_segments = visible_row_segments(w, row_skip_rect);
 
-                // --- 4-pixel blocking: accumulate field for 4 columns per ball ---
-                // Per-pixel accumulation order is preserved (ball 0, 1, …, N for each
-                // pixel independently), so floating-point results are bit-identical.
-                let full_blocks = w / 4;
-                for block in 0..full_blocks {
-                    let x_base = block * 4;
-                    if row_skip_rect.is_some_and(|rect| rect.covers_x_range(x_base, 4)) {
+                for (x_start, x_end) in row_segments {
+                    if x_start >= x_end {
                         continue;
                     }
 
-                    // Block-level spatial culling:
-                    // If every ball is far enough from every pixel in this 4-wide block,
-                    // the aggregate field cannot exceed `glow` and we can skip the expensive
-                    // per-pixel divisions entirely.
-                    let mut min_dist2 = f64::MAX;
-                    for (i, &dy2) in dy2_cache.iter().enumerate().take(balls_len) {
-                        let dx2_base = i * w + x_base;
-                        let d0 = dx2_cache[dx2_base] + dy2;
-                        let d1 = dx2_cache[dx2_base + 1] + dy2;
-                        let d2 = dx2_cache[dx2_base + 2] + dy2;
-                        let d3 = dx2_cache[dx2_base + 3] + dy2;
-                        min_dist2 = min_dist2.min(d0.min(d1).min(d2).min(d3));
+                    // --- 4-pixel blocking: accumulate field for 4 columns per ball ---
+                    // Per-pixel accumulation order is preserved (ball 0, 1, …, N for each
+                    // pixel independently), so floating-point results are bit-identical.
+                    let segment_len = x_end - x_start;
+                    let full_blocks = segment_len / 4;
+                    for block in 0..full_blocks {
+                        let x_base = x_start + block * 4;
 
-                        // Early-out: once min_dist² is below the threshold, skipping is impossible.
-                        if min_dist2 <= row_skip_dy2 {
-                            break;
+                        // Block-level spatial culling:
+                        // If every ball is far enough from every pixel in this 4-wide block,
+                        // the aggregate field cannot exceed `glow` and we can skip the expensive
+                        // per-pixel divisions entirely.
+                        let mut min_dist2 = f64::MAX;
+                        for (i, &dy2) in dy2_cache.iter().enumerate().take(balls_len) {
+                            let dx2_base = i * w + x_base;
+                            let d0 = dx2_cache[dx2_base] + dy2;
+                            let d1 = dx2_cache[dx2_base + 1] + dy2;
+                            let d2 = dx2_cache[dx2_base + 2] + dy2;
+                            let d3 = dx2_cache[dx2_base + 3] + dy2;
+                            min_dist2 = min_dist2.min(d0.min(d1).min(d2).min(d3));
+
+                            // Early-out: once min_dist² is below the threshold, skipping is impossible.
+                            if min_dist2 <= row_skip_dy2 {
+                                break;
+                            }
                         }
-                    }
-                    if min_dist2 > row_skip_dy2 {
-                        continue;
-                    }
-
-                    let mut sums = [0.0_f64; 4];
-                    let mut hues = [0.0_f64; 4];
-
-                    for (i, &dy2) in dy2_cache.iter().enumerate().take(balls_len) {
-                        let r2 = r2_cache[i];
-                        let hue_val = hue_cache[i];
-                        let dx2_base = i * w + x_base;
-
-                        // 4 contiguous dx² reads from ball-major layout.
-                        let dx2_0 = dx2_cache[dx2_base];
-                        let dx2_1 = dx2_cache[dx2_base + 1];
-                        let dx2_2 = dx2_cache[dx2_base + 2];
-                        let dx2_3 = dx2_cache[dx2_base + 3];
-
-                        let d0 = dx2_0 + dy2;
-                        let d1 = dx2_1 + dy2;
-                        let d2 = dx2_2 + dy2;
-                        let d3 = dx2_3 + dy2;
-
-                        // Accumulate per-pixel field (branch almost always taken).
-                        if d0 > EPS {
-                            let c = r2 / d0;
-                            sums[0] += c;
-                            hues[0] += hue_val * c;
-                        } else {
-                            sums[0] += 100.0;
-                            hues[0] += hue_val * 100.0;
-                        }
-                        if d1 > EPS {
-                            let c = r2 / d1;
-                            sums[1] += c;
-                            hues[1] += hue_val * c;
-                        } else {
-                            sums[1] += 100.0;
-                            hues[1] += hue_val * 100.0;
-                        }
-                        if d2 > EPS {
-                            let c = r2 / d2;
-                            sums[2] += c;
-                            hues[2] += hue_val * c;
-                        } else {
-                            sums[2] += 100.0;
-                            hues[2] += hue_val * 100.0;
-                        }
-                        if d3 > EPS {
-                            let c = r2 / d3;
-                            sums[3] += c;
-                            hues[3] += hue_val * c;
-                        } else {
-                            sums[3] += 100.0;
-                            hues[3] += hue_val * 100.0;
-                        }
-                    }
-
-                    for j in 0..4 {
-                        if row_skip_rect.is_some_and(|rect| rect.contains(x_base + j, y)) {
+                        if min_dist2 > row_skip_dy2 {
                             continue;
                         }
-                        let s = sums[j];
-                        if s > glow {
-                            let avg_hue = hues[j] / s;
-                            let intensity = if s > threshold {
+
+                        let mut sums = [0.0_f64; 4];
+                        let mut hues = [0.0_f64; 4];
+
+                        for (i, &dy2) in dy2_cache.iter().enumerate().take(balls_len) {
+                            let r2 = r2_cache[i];
+                            let hue_val = hue_cache[i];
+                            let dx2_base = i * w + x_base;
+
+                            // 4 contiguous dx² reads from ball-major layout.
+                            let dx2_0 = dx2_cache[dx2_base];
+                            let dx2_1 = dx2_cache[dx2_base + 1];
+                            let dx2_2 = dx2_cache[dx2_base + 2];
+                            let dx2_3 = dx2_cache[dx2_base + 3];
+
+                            let d0 = dx2_0 + dy2;
+                            let d1 = dx2_1 + dy2;
+                            let d2 = dx2_2 + dy2;
+                            let d3 = dx2_3 + dy2;
+
+                            // Accumulate per-pixel field (branch almost always taken).
+                            if d0 > EPS {
+                                let c = r2 / d0;
+                                sums[0] += c;
+                                hues[0] += hue_val * c;
+                            } else {
+                                sums[0] += 100.0;
+                                hues[0] += hue_val * 100.0;
+                            }
+                            if d1 > EPS {
+                                let c = r2 / d1;
+                                sums[1] += c;
+                                hues[1] += hue_val * c;
+                            } else {
+                                sums[1] += 100.0;
+                                hues[1] += hue_val * 100.0;
+                            }
+                            if d2 > EPS {
+                                let c = r2 / d2;
+                                sums[2] += c;
+                                hues[2] += hue_val * c;
+                            } else {
+                                sums[2] += 100.0;
+                                hues[2] += hue_val * 100.0;
+                            }
+                            if d3 > EPS {
+                                let c = r2 / d3;
+                                sums[3] += c;
+                                hues[3] += hue_val * c;
+                            } else {
+                                sums[3] += 100.0;
+                                hues[3] += hue_val * 100.0;
+                            }
+                        }
+
+                        for j in 0..4 {
+                            let s = sums[j];
+                            if s > glow {
+                                let avg_hue = hues[j] / s;
+                                let intensity = if s > threshold {
+                                    1.0
+                                } else {
+                                    (s - glow) / (threshold - glow)
+                                };
+                                let color = color_at_with_stops(&stops, avg_hue, intensity, theme);
+                                painter.point_colored_at_index_in_bounds(
+                                    row_offset + x_base + j,
+                                    color,
+                                );
+                            }
+                        }
+                    }
+
+                    // Scalar tail for remaining columns in this visible segment.
+                    for x in (x_start + full_blocks * 4)..x_end {
+                        let mut sum = 0.0;
+                        let mut weighted_hue = 0.0;
+                        for (i, &dy2) in dy2_cache.iter().enumerate().take(balls_len) {
+                            let dist_sq = dx2_cache[i * w + x] + dy2;
+                            if dist_sq > EPS {
+                                let contrib = r2_cache[i] / dist_sq;
+                                sum += contrib;
+                                weighted_hue += hue_cache[i] * contrib;
+                            } else {
+                                sum += 100.0;
+                                weighted_hue += hue_cache[i] * 100.0;
+                            }
+                        }
+
+                        if sum > glow {
+                            let avg_hue = weighted_hue / sum;
+                            let intensity = if sum > threshold {
                                 1.0
                             } else {
-                                (s - glow) / (threshold - glow)
+                                (sum - glow) / (threshold - glow)
                             };
                             let color = color_at_with_stops(&stops, avg_hue, intensity, theme);
-                            painter
-                                .point_colored_at_index_in_bounds(row_offset + x_base + j, color);
+                            painter.point_colored_at_index_in_bounds(row_offset + x, color);
                         }
-                    }
-                }
-
-                // Scalar tail for remaining columns (w % 4 != 0).
-                for x in (full_blocks * 4)..w {
-                    if row_skip_rect.is_some_and(|rect| rect.contains(x, y)) {
-                        continue;
-                    }
-                    let mut sum = 0.0;
-                    let mut weighted_hue = 0.0;
-                    for (i, &dy2) in dy2_cache.iter().enumerate().take(balls_len) {
-                        let dist_sq = dx2_cache[i * w + x] + dy2;
-                        if dist_sq > EPS {
-                            let contrib = r2_cache[i] / dist_sq;
-                            sum += contrib;
-                            weighted_hue += hue_cache[i] * contrib;
-                        } else {
-                            sum += 100.0;
-                            weighted_hue += hue_cache[i] * 100.0;
-                        }
-                    }
-
-                    if sum > glow {
-                        let avg_hue = weighted_hue / sum;
-                        let intensity = if sum > threshold {
-                            1.0
-                        } else {
-                            (sum - glow) / (threshold - glow)
-                        };
-                        let color = color_at_with_stops(&stops, avg_hue, intensity, theme);
-                        painter.point_colored_at_index_in_bounds(row_offset + x, color);
                     }
                 }
             }
@@ -881,126 +882,127 @@ impl MetaballsCanvasAdapter {
 
                 let row_offset = y * w;
                 let row_skip_rect = skip_rect.filter(|rect| rect.contains_y(y));
+                let row_segments = visible_row_segments(w, row_skip_rect);
 
-                let full_blocks = w / 4;
-                for block in 0..full_blocks {
-                    let x_base = block * 4;
-                    if row_skip_rect.is_some_and(|rect| rect.covers_x_range(x_base, 4)) {
+                for (x_start, x_end) in row_segments {
+                    if x_start >= x_end {
                         continue;
                     }
 
-                    // Block-level spatial culling (active balls only).
-                    let mut min_dist2 = f64::MAX;
-                    for &i in active_indices {
-                        let dy2 = dy2_cache[i];
-                        let dx2_base = i * w + x_base;
-                        let d0 = dx2_cache[dx2_base] + dy2;
-                        let d1 = dx2_cache[dx2_base + 1] + dy2;
-                        let d2 = dx2_cache[dx2_base + 2] + dy2;
-                        let d3 = dx2_cache[dx2_base + 3] + dy2;
-                        min_dist2 = min_dist2.min(d0.min(d1).min(d2).min(d3));
-                        if min_dist2 <= row_skip_dy2 {
-                            break;
-                        }
-                    }
-                    if min_dist2 > row_skip_dy2 {
-                        continue;
-                    }
+                    let segment_len = x_end - x_start;
+                    let full_blocks = segment_len / 4;
+                    for block in 0..full_blocks {
+                        let x_base = x_start + block * 4;
 
-                    let mut sums = [0.0_f64; 4];
-                    let mut hues = [0.0_f64; 4];
-
-                    for &i in active_indices {
-                        let r2 = r2_cache[i];
-                        let hue_val = hue_cache[i];
-                        let dy2 = dy2_cache[i];
-                        let dx2_base = i * w + x_base;
-
-                        let d0 = dx2_cache[dx2_base] + dy2;
-                        let d1 = dx2_cache[dx2_base + 1] + dy2;
-                        let d2 = dx2_cache[dx2_base + 2] + dy2;
-                        let d3 = dx2_cache[dx2_base + 3] + dy2;
-
-                        if d0 > EPS {
-                            let c = r2 / d0;
-                            sums[0] += c;
-                            hues[0] += hue_val * c;
-                        } else {
-                            sums[0] += 100.0;
-                            hues[0] += hue_val * 100.0;
+                        // Block-level spatial culling (active balls only).
+                        let mut min_dist2 = f64::MAX;
+                        for &i in active_indices {
+                            let dy2 = dy2_cache[i];
+                            let dx2_base = i * w + x_base;
+                            let d0 = dx2_cache[dx2_base] + dy2;
+                            let d1 = dx2_cache[dx2_base + 1] + dy2;
+                            let d2 = dx2_cache[dx2_base + 2] + dy2;
+                            let d3 = dx2_cache[dx2_base + 3] + dy2;
+                            min_dist2 = min_dist2.min(d0.min(d1).min(d2).min(d3));
+                            if min_dist2 <= row_skip_dy2 {
+                                break;
+                            }
                         }
-                        if d1 > EPS {
-                            let c = r2 / d1;
-                            sums[1] += c;
-                            hues[1] += hue_val * c;
-                        } else {
-                            sums[1] += 100.0;
-                            hues[1] += hue_val * 100.0;
-                        }
-                        if d2 > EPS {
-                            let c = r2 / d2;
-                            sums[2] += c;
-                            hues[2] += hue_val * c;
-                        } else {
-                            sums[2] += 100.0;
-                            hues[2] += hue_val * 100.0;
-                        }
-                        if d3 > EPS {
-                            let c = r2 / d3;
-                            sums[3] += c;
-                            hues[3] += hue_val * c;
-                        } else {
-                            sums[3] += 100.0;
-                            hues[3] += hue_val * 100.0;
-                        }
-                    }
-
-                    for j in 0..4 {
-                        if row_skip_rect.is_some_and(|rect| rect.contains(x_base + j, y)) {
+                        if min_dist2 > row_skip_dy2 {
                             continue;
                         }
-                        let s = sums[j];
-                        if s > glow {
-                            let avg_hue = hues[j] / s;
-                            let intensity = if s > threshold {
+
+                        let mut sums = [0.0_f64; 4];
+                        let mut hues = [0.0_f64; 4];
+
+                        for &i in active_indices {
+                            let r2 = r2_cache[i];
+                            let hue_val = hue_cache[i];
+                            let dy2 = dy2_cache[i];
+                            let dx2_base = i * w + x_base;
+
+                            let d0 = dx2_cache[dx2_base] + dy2;
+                            let d1 = dx2_cache[dx2_base + 1] + dy2;
+                            let d2 = dx2_cache[dx2_base + 2] + dy2;
+                            let d3 = dx2_cache[dx2_base + 3] + dy2;
+
+                            if d0 > EPS {
+                                let c = r2 / d0;
+                                sums[0] += c;
+                                hues[0] += hue_val * c;
+                            } else {
+                                sums[0] += 100.0;
+                                hues[0] += hue_val * 100.0;
+                            }
+                            if d1 > EPS {
+                                let c = r2 / d1;
+                                sums[1] += c;
+                                hues[1] += hue_val * c;
+                            } else {
+                                sums[1] += 100.0;
+                                hues[1] += hue_val * 100.0;
+                            }
+                            if d2 > EPS {
+                                let c = r2 / d2;
+                                sums[2] += c;
+                                hues[2] += hue_val * c;
+                            } else {
+                                sums[2] += 100.0;
+                                hues[2] += hue_val * 100.0;
+                            }
+                            if d3 > EPS {
+                                let c = r2 / d3;
+                                sums[3] += c;
+                                hues[3] += hue_val * c;
+                            } else {
+                                sums[3] += 100.0;
+                                hues[3] += hue_val * 100.0;
+                            }
+                        }
+
+                        for j in 0..4 {
+                            let s = sums[j];
+                            if s > glow {
+                                let avg_hue = hues[j] / s;
+                                let intensity = if s > threshold {
+                                    1.0
+                                } else {
+                                    (s - glow) / (threshold - glow)
+                                };
+                                let color = color_at_with_stops(&stops, avg_hue, intensity, theme);
+                                painter.point_colored_at_index_in_bounds(
+                                    row_offset + x_base + j,
+                                    color,
+                                );
+                            }
+                        }
+                    }
+
+                    for x in (x_start + full_blocks * 4)..x_end {
+                        let mut sum = 0.0;
+                        let mut weighted_hue = 0.0;
+                        for &i in active_indices {
+                            let dist_sq = dx2_cache[i * w + x] + dy2_cache[i];
+                            if dist_sq > EPS {
+                                let contrib = r2_cache[i] / dist_sq;
+                                sum += contrib;
+                                weighted_hue += hue_cache[i] * contrib;
+                            } else {
+                                sum += 100.0;
+                                weighted_hue += hue_cache[i] * 100.0;
+                            }
+                        }
+
+                        if sum > glow {
+                            let avg_hue = weighted_hue / sum;
+                            let intensity = if sum > threshold {
                                 1.0
                             } else {
-                                (s - glow) / (threshold - glow)
+                                (sum - glow) / (threshold - glow)
                             };
                             let color = color_at_with_stops(&stops, avg_hue, intensity, theme);
-                            painter
-                                .point_colored_at_index_in_bounds(row_offset + x_base + j, color);
+                            painter.point_colored_at_index_in_bounds(row_offset + x, color);
                         }
-                    }
-                }
-
-                for x in (full_blocks * 4)..w {
-                    if row_skip_rect.is_some_and(|rect| rect.contains(x, y)) {
-                        continue;
-                    }
-                    let mut sum = 0.0;
-                    let mut weighted_hue = 0.0;
-                    for &i in active_indices {
-                        let dist_sq = dx2_cache[i * w + x] + dy2_cache[i];
-                        if dist_sq > EPS {
-                            let contrib = r2_cache[i] / dist_sq;
-                            sum += contrib;
-                            weighted_hue += hue_cache[i] * contrib;
-                        } else {
-                            sum += 100.0;
-                            weighted_hue += hue_cache[i] * 100.0;
-                        }
-                    }
-
-                    if sum > glow {
-                        let avg_hue = weighted_hue / sum;
-                        let intensity = if sum > threshold {
-                            1.0
-                        } else {
-                            (sum - glow) / (threshold - glow)
-                        };
-                        let color = color_at_with_stops(&stops, avg_hue, intensity, theme);
-                        painter.point_colored_at_index_in_bounds(row_offset + x, color);
                     }
                 }
             }
@@ -1103,6 +1105,24 @@ fn thresholds(params: &MetaballsParams) -> (f64, f64) {
         threshold = glow + 0.0001;
     }
     (glow, threshold)
+}
+
+#[inline]
+fn visible_row_segments(
+    width: usize,
+    row_skip_rect: Option<CanvasPixelRect>,
+) -> [(usize, usize); 2] {
+    let Some(rect) = row_skip_rect else {
+        return [(0, width), (width, width)];
+    };
+
+    let skip_start = rect.left().min(width);
+    let skip_end = rect.right().min(width);
+    if skip_start >= skip_end {
+        return [(0, width), (width, width)];
+    }
+
+    [(0, skip_start), (skip_end, width)]
 }
 
 fn palette_stops(
@@ -1862,7 +1882,7 @@ mod tests {
 
         for y in 0..8 {
             for x in 0..8 {
-                if skip_rect.contains(x, y) {
+                if skip_rect.contains_y(y) && x >= skip_rect.left() && x < skip_rect.right() {
                     assert!(!skipped.get(x as i32, y as i32));
                 } else {
                     assert_eq!(

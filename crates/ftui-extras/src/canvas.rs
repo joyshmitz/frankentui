@@ -117,22 +117,17 @@ impl CanvasPixelRect {
     }
 
     #[inline]
-    pub(crate) const fn contains(self, x: usize, y: usize) -> bool {
-        x >= self.x && x < self.right() && y >= self.y && y < self.bottom()
-    }
-
-    #[inline]
     pub(crate) const fn contains_y(self, y: usize) -> bool {
         y >= self.y && y < self.bottom()
     }
 
     #[inline]
-    pub(crate) const fn covers_x_range(self, x: usize, width: usize) -> bool {
-        x >= self.x && x.saturating_add(width) <= self.right()
+    pub(crate) const fn left(self) -> usize {
+        self.x
     }
 
     #[inline]
-    const fn right(self) -> usize {
+    pub(crate) const fn right(self) -> usize {
         self.x.saturating_add(self.width)
     }
 
