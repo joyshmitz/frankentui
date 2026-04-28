@@ -1114,7 +1114,12 @@ mod tests {
 
         let clipped = clip_triangle_near(tri, 0.5);
 
-        assert_eq!(clipped.as_slice(), tri.as_slice());
+        assert_eq!(clipped.len(), 3);
+        for (actual, expected) in clipped.as_slice().iter().zip(tri) {
+            assert!((actual.x - expected.x).abs() < EPS);
+            assert!((actual.y - expected.y).abs() < EPS);
+            assert!((actual.z - expected.z).abs() < EPS);
+        }
     }
 
     #[test]
@@ -1192,35 +1197,35 @@ mod tests {
         assert!((dist - 25.0).abs() < EPS, "distance to point segment");
     }
 
-    // ── clip_polygon_near tests ──────────────────────────────────────
+    // ── clip_triangle_near tests ─────────────────────────────────────
 
     #[test]
-    fn clip_empty_polygon() {
-        let result = clip_polygon_near(&[], 1.0);
-        assert!(result.is_empty());
+    fn clipped_triangle_starts_empty() {
+        let result = ClippedTriangle::new();
+        assert!(result.as_slice().is_empty());
     }
 
     #[test]
     fn clip_all_in_front() {
-        let poly = [
+        let tri = [
             Vec3::new(0.0, 0.0, 2.0),
             Vec3::new(1.0, 0.0, 2.0),
             Vec3::new(0.0, 1.0, 2.0),
         ];
-        let result = clip_polygon_near(&poly, 1.0);
+        let result = clip_triangle_near(tri, 1.0);
         assert_eq!(result.len(), 3, "all-in-front triangle should be unclipped");
     }
 
     #[test]
     fn clip_all_behind() {
-        let poly = [
+        let tri = [
             Vec3::new(0.0, 0.0, 0.1),
             Vec3::new(1.0, 0.0, 0.1),
             Vec3::new(0.0, 1.0, 0.1),
         ];
-        let result = clip_polygon_near(&poly, 1.0);
+        let result = clip_triangle_near(tri, 1.0);
         assert!(
-            result.is_empty(),
+            result.as_slice().is_empty(),
             "all-behind triangle should be fully clipped"
         );
     }
@@ -1228,18 +1233,18 @@ mod tests {
     #[test]
     fn clip_partial_produces_valid_polygon() {
         // One vertex behind, two in front
-        let poly = [
+        let tri = [
             Vec3::new(0.0, 0.0, 0.5), // Behind near=1.0
             Vec3::new(1.0, 0.0, 2.0), // In front
             Vec3::new(0.0, 1.0, 2.0), // In front
         ];
-        let result = clip_polygon_near(&poly, 1.0);
+        let result = clip_triangle_near(tri, 1.0);
         assert!(
             result.len() >= 3,
             "partial clip should produce >= 3 vertices"
         );
         // All clipped vertices must be at or beyond the near plane
-        for v in &result {
+        for v in result.as_slice() {
             assert!(
                 v.z >= 1.0 - EPS,
                 "clipped vertex z={} should be >= near=1.0",
