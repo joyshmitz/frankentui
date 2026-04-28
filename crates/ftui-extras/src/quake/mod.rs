@@ -131,10 +131,14 @@ impl QuakeEngine {
 
     /// Render the current frame to a Painter.
     pub fn render(&mut self, painter: &mut Painter, _pw: u16, _ph: u16, stride: usize) {
+        let (painter_width, painter_height) = painter.size();
+        let (target_width, target_height) =
+            self.target_framebuffer_dims(painter_width, painter_height, stride);
+
         // Ensure framebuffer matches desired resolution
-        if self.framebuffer.width != self.fb_width || self.framebuffer.height != self.fb_height {
-            self.framebuffer.resize(self.fb_width, self.fb_height);
-            self.renderer.resize(self.fb_width, self.fb_height);
+        if self.framebuffer.width != target_width || self.framebuffer.height != target_height {
+            self.framebuffer.resize(target_width, target_height);
+            self.renderer.resize(target_width, target_height);
         }
 
         // Render the scene
@@ -162,6 +166,25 @@ impl QuakeEngine {
         // Blit framebuffer to painter
         self.framebuffer.blit_to_painter(painter, stride);
         self.frame += 1;
+    }
+
+    fn target_framebuffer_dims(
+        &self,
+        painter_width: u16,
+        painter_height: u16,
+        stride: usize,
+    ) -> (u32, u32) {
+        let stride = stride.max(1) as u32;
+        if stride == 1 {
+            return (self.fb_width, self.fb_height);
+        }
+
+        let sampled_width = u32::from(painter_width).div_ceil(stride).max(1);
+        let sampled_height = u32::from(painter_height).div_ceil(stride).max(1);
+        (
+            sampled_width.min(self.fb_width).max(1),
+            sampled_height.min(self.fb_height).max(1),
+        )
     }
 
     // -------------------------------------------------------------------------
@@ -664,6 +687,19 @@ mod tests {
 
         assert_eq!(engine.framebuffer.width, 64);
         assert_eq!(engine.framebuffer.height, 40);
+    }
+
+    #[test]
+    fn engine_reduced_stride_renders_only_sampled_framebuffer() {
+        let mut engine = QuakeEngine::new();
+        engine.fb_width = 320;
+        engine.fb_height = 200;
+
+        let mut painter = Painter::new(240, 160, crate::canvas::Mode::Braille);
+        engine.render(&mut painter, 120, 40, 2);
+
+        assert_eq!(engine.framebuffer.width, 120);
+        assert_eq!(engine.framebuffer.height, 80);
     }
 
     // ---- draw_line_fb: additional Bresenham edge cases ----
