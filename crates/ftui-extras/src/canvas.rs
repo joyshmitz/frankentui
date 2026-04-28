@@ -1621,10 +1621,11 @@ mod tests {
         let mut frame = Frame::new(2, 2, &mut pool);
         canvas_ref.render_excluding(area, &mut frame, Rect::new(1, 0, 1, 2));
 
-        let rendered = frame.buffer.get(0, 0).unwrap();
-        let skipped = frame.buffer.get(1, 0).unwrap();
-        assert_eq!(rendered.content.as_char(), Some('\u{28FF}'));
-        assert!(skipped.is_empty());
+        assert_eq!(
+            frame.buffer.get(0, 0).map(|cell| cell.content.as_char()),
+            Some(Some('\u{28FF}'))
+        );
+        assert!(frame.buffer.get(1, 0).is_some_and(Cell::is_empty));
     }
 
     #[test]

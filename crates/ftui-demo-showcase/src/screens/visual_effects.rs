@@ -5058,8 +5058,8 @@ impl Screen for VisualEffectsScreen {
         }
 
         // Render markdown overlay for metaballs/plasma
-        if let Some(overlay) = markdown_overlay_area {
-            self.render_markdown_overlay_panel(frame, overlay);
+        if markdown_overlay_area.is_some() {
+            self.render_markdown_overlay(frame, canvas_area);
         }
 
         // Render transition overlay if active
