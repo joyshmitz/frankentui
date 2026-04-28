@@ -196,12 +196,16 @@ fn stress_view_render_with_many_tasks() {
     let avg_ns = render_times.iter().sum::<u64>() / render_times.len() as u64;
     let max_ns = *render_times.iter().max().unwrap();
     render_times.sort();
+    let p50_ns = percentile(&render_times, 50);
     let p95_ns = percentile(&render_times, 95);
+    let p99_ns = percentile(&render_times, 99);
 
-    let budget_avg_ns = if is_coverage_run() {
-        5_000_000
+    // Gate on p95 rather than average wall-clock latency. This keeps the stress
+    // test useful while avoiding false failures from shared-worker scheduling.
+    let budget_p95_ns = if is_coverage_run() {
+        15_000_000
     } else {
-        4_000_000
+        10_000_000
     };
 
     log_jsonl(&serde_json::json!({
@@ -209,16 +213,20 @@ fn stress_view_render_with_many_tasks() {
         "render_count": 50,
         "avg_ns": avg_ns,
         "max_ns": max_ns,
+        "p50_ns": p50_ns,
         "p95_ns": p95_ns,
-        "budget_avg_ns": budget_avg_ns,
+        "p99_ns": p99_ns,
+        "budget_p95_ns": budget_p95_ns,
     }));
 
-    // Budget: render should complete in < 2ms (coverage runs are slower)
+    // Budget: heavy render p95 should stay below the shared-worker guardrail.
     assert!(
-        avg_ns < budget_avg_ns,
-        "Render latency exceeded budget: avg={}ns (budget={}ns)",
+        p95_ns < budget_p95_ns,
+        "Render latency exceeded budget: p95={}ns (budget={}ns, avg={}ns, max={}ns)",
+        p95_ns,
+        budget_p95_ns,
         avg_ns,
-        budget_avg_ns
+        max_ns
     );
 }
 

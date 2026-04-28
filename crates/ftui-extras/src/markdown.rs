@@ -58,6 +58,7 @@ use ftui_text::text::Span;
 use pulldown_cmark::{
     Alignment, BlockQuoteKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
 };
+use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
@@ -317,8 +318,8 @@ pub fn is_likely_markdown(text: &str) -> MarkdownDetection {
 /// Complete any unclosed markdown constructs in a fragment.
 ///
 /// This is used internally by streaming render to handle incomplete input.
-fn complete_fragment(text: &str) -> String {
-    let mut result = text.to_string();
+fn complete_fragment(text: &str) -> Cow<'_, str> {
+    let mut result = None;
 
     // Count backticks to close any unclosed code
     let backtick_count = text.bytes().filter(|&b| b == b'`').count();
@@ -327,16 +328,16 @@ fn complete_fragment(text: &str) -> String {
     let fence_count = text.matches("```").count();
     if fence_count % 2 == 1 {
         // Odd number of fences means one is unclosed
-        result.push_str("\n```");
+        completed_fragment(&mut result, text).push_str("\n```");
     } else if backtick_count % 2 == 1 {
         // Odd backticks means unclosed inline code
-        result.push('`');
+        completed_fragment(&mut result, text).push('`');
     }
 
     // Check for unclosed bold (**)
     let bold_count = text.matches("**").count();
     if bold_count % 2 == 1 {
-        result.push_str("**");
+        completed_fragment(&mut result, text).push_str("**");
     }
 
     // Check for unclosed italic (*) - tricky because * is also used for lists
@@ -349,18 +350,18 @@ fn complete_fragment(text: &str) -> String {
         && pos > 0
         && !text.as_bytes()[pos - 1].is_ascii_whitespace()
     {
-        result.push('*');
+        completed_fragment(&mut result, text).push('*');
     }
 
     // Check for unclosed math
     let dollar_count = text.bytes().filter(|&b| b == b'$').count();
     let display_math_count = text.matches("$$").count();
     if display_math_count % 2 == 1 {
-        result.push_str("$$");
+        completed_fragment(&mut result, text).push_str("$$");
     } else {
         let inline_math = dollar_count.saturating_sub(display_math_count * 2);
         if inline_math % 2 == 1 {
-            result.push('$');
+            completed_fragment(&mut result, text).push('$');
         }
     }
 
@@ -421,18 +422,25 @@ fn complete_fragment(text: &str) -> String {
     // Close unclosed constructs based on final state
     match state {
         LinkState::InBracket => {
-            result.push_str("](...)");
+            completed_fragment(&mut result, text).push_str("](...)");
         }
         LinkState::AfterBracket => {
-            result.push_str("(...)");
+            completed_fragment(&mut result, text).push_str("(...)");
         }
         LinkState::InParen => {
-            result.push(')');
+            completed_fragment(&mut result, text).push(')');
         }
         LinkState::None => {}
     }
 
-    result
+    match result {
+        Some(completed) => Cow::Owned(completed),
+        None => Cow::Borrowed(text),
+    }
+}
+
+fn completed_fragment<'a>(result: &'a mut Option<String>, text: &str) -> &'a mut String {
+    result.get_or_insert_with(|| text.to_string())
 }
 
 /// Render markdown text that may be incomplete (streaming/fragment mode).

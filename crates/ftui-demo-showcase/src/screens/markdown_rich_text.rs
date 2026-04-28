@@ -300,37 +300,79 @@ struct MarkdownPanel<'a> {
 }
 
 fn wrap_markdown_for_panel<'a>(text: &Text<'a>, width: u16) -> Text<'a> {
+    wrap_markdown_for_viewport(text, width, 0, u16::MAX)
+}
+
+fn wrap_markdown_for_viewport<'a>(
+    text: &Text<'a>,
+    width: u16,
+    scroll: u16,
+    height: u16,
+) -> Text<'a> {
     let width = usize::from(width);
-    if width == 0 {
-        return text.clone();
+    let start = usize::from(scroll);
+    let end = start.saturating_add(usize::from(height));
+    if width == 0 || start == end {
+        return Text::from_lines([]);
     }
 
-    let mut lines = Vec::new();
+    let mut lines = Vec::with_capacity(usize::from(height).min(text.lines().len()));
+    let mut visual_line = 0usize;
     for line in text.lines() {
+        if visual_line >= end {
+            break;
+        }
+
+        let line_width = line.width();
+        if line_width <= width {
+            push_visible_wrapped_line(&mut lines, &mut visual_line, start, end, line.clone());
+            continue;
+        }
+
         let plain = line.to_plain_text();
         let table_like = is_table_line(&plain) || is_table_like_line(&plain);
         if table_like {
-            if line.width() <= width {
-                lines.push(line.clone());
-            } else {
-                lines.extend(truncate_line_to_width(line, width));
+            for wrapped in truncate_line_to_width(line, width) {
+                push_visible_wrapped_line(&mut lines, &mut visual_line, start, end, wrapped);
+                if visual_line >= end {
+                    break;
+                }
             }
-            continue;
-        }
-        if line.width() <= width {
-            lines.push(line.clone());
             continue;
         }
 
         if let Some(prefix_width) = blockquote_prefix_width(&plain) {
-            lines.extend(wrap_blockquote_line(line, width, prefix_width));
+            for wrapped in wrap_blockquote_line(line, width, prefix_width) {
+                push_visible_wrapped_line(&mut lines, &mut visual_line, start, end, wrapped);
+                if visual_line >= end {
+                    break;
+                }
+            }
             continue;
         }
 
-        lines.extend(wrap_line_to_width(line, width));
+        for wrapped in wrap_line_to_width(line, width) {
+            push_visible_wrapped_line(&mut lines, &mut visual_line, start, end, wrapped);
+            if visual_line >= end {
+                break;
+            }
+        }
     }
 
     Text::from_lines(lines)
+}
+
+fn push_visible_wrapped_line<'a>(
+    lines: &mut Vec<Line<'a>>,
+    visual_line: &mut usize,
+    start: usize,
+    end: usize,
+    line: Line<'a>,
+) {
+    if *visual_line >= start && *visual_line < end {
+        lines.push(line);
+    }
+    *visual_line = (*visual_line).saturating_add(1);
 }
 
 fn is_table_line(plain: &str) -> bool {
@@ -372,9 +414,29 @@ fn wrap_line_to_width<'a>(line: &Line<'a>, width: usize) -> Vec<Line<'a>> {
 }
 
 fn truncate_line_to_width<'a>(line: &Line<'a>, width: usize) -> Vec<Line<'a>> {
-    let mut text = Text::from_lines([line.clone()]);
-    text.truncate(width, None);
-    text.lines().to_vec()
+    let mut remaining = width;
+    let mut spans = Vec::with_capacity(line.len());
+
+    for span in line.spans() {
+        if remaining == 0 {
+            break;
+        }
+
+        let span_width = span.width();
+        if span_width <= remaining {
+            spans.push(span.clone());
+            remaining -= span_width;
+            continue;
+        }
+
+        let (head, _tail) = span.split_at_cell(remaining);
+        if !head.is_empty() {
+            spans.push(head);
+        }
+        break;
+    }
+
+    vec![Line::from_spans(spans)]
 }
 
 fn blockquote_prefix_width(plain: &str) -> Option<usize> {
@@ -476,10 +538,9 @@ impl Widget for MarkdownPanel<'_> {
             .table_max_width(max_width)
             .table_effect_phase(self.table_phase);
         let rendered = renderer.render(self.markdown);
-        let wrapped = wrap_markdown_for_panel(&rendered, max_width);
+        let wrapped = wrap_markdown_for_viewport(&rendered, max_width, self.scroll, inner.height);
         Paragraph::new(wrapped)
             .wrap(WrapMode::None)
-            .scroll((self.scroll, 0))
             .render(inner, frame);
     }
 }
@@ -690,15 +751,8 @@ impl MarkdownRichText {
 
         // Add blinking cursor at end if still streaming
         if !self.stream_complete() {
-            // Create cursor span with accent color and blink
             let cursor = Span::styled("▌", Style::new().fg(theme::accent::PRIMARY).blink());
-            let mut lines: Vec<Line> = text.lines().to_vec();
-            if let Some(last_line) = lines.last_mut() {
-                last_line.push_span(cursor);
-            } else {
-                lines.push(Line::from_spans([cursor]));
-            }
-            text = Text::from_lines(lines);
+            text.push_span(cursor);
         }
 
         text
@@ -946,10 +1000,14 @@ impl MarkdownRichText {
 
         // Render the streaming markdown fragment
         let stream_text = self.render_stream_fragment(chunks[0].width);
-        let wrapped_stream = wrap_markdown_for_panel(&stream_text, chunks[0].width);
+        let wrapped_stream = wrap_markdown_for_viewport(
+            &stream_text,
+            chunks[0].width,
+            self.stream_scroll,
+            chunks[0].height,
+        );
         Paragraph::new(wrapped_stream)
             .wrap(WrapMode::None)
-            .scroll((self.stream_scroll, 0))
             .render(chunks[0], frame);
 
         // Render mini progress bar
@@ -1284,6 +1342,41 @@ mod tests {
         // Task list items should have checkbox markers
         assert!(plain.contains("Inline mode + scrollback"));
         assert!(plain.contains("Conformal frame-time predictor"));
+    }
+
+    #[test]
+    fn truncate_line_to_width_preserves_styled_prefix() {
+        let line = Line::from_spans([
+            Span::styled("abcd", Style::new().bold()),
+            Span::styled("efgh", Style::new().fg(theme::accent::PRIMARY)),
+        ]);
+
+        let truncated = truncate_line_to_width(&line, 6);
+
+        assert_eq!(truncated.len(), 1);
+        assert_eq!(truncated[0].to_plain_text(), "abcdef");
+        assert!(truncated[0].width() <= 6);
+        assert_eq!(truncated[0].spans()[0].style, Some(Style::new().bold()));
+        assert_eq!(
+            truncated[0].spans()[1].style,
+            Some(Style::new().fg(theme::accent::PRIMARY))
+        );
+    }
+
+    #[test]
+    fn viewport_wrapping_matches_full_wrapping_visible_slice() {
+        let text = Text::from_lines([
+            Line::raw("short"),
+            Line::raw("alpha beta gamma delta"),
+            Line::raw("| table | row |"),
+            Line::raw("tail"),
+        ]);
+
+        let full = wrap_markdown_for_panel(&text, 10);
+        let viewport = wrap_markdown_for_viewport(&text, 10, 1, 3);
+        let expected = Text::from_lines(full.lines()[1..4].iter().cloned());
+
+        assert_eq!(viewport, expected);
     }
 
     #[test]
