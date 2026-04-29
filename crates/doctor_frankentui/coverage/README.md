@@ -2,14 +2,10 @@
 
 This directory contains the reproducible coverage policy for `doctor_frankentui`.
 
-## Tracked Policy
+## Artifacts
 
 - `thresholds.toml` — required minimum coverage percentages.
-- `e2e_jsonl_schema.json` — telemetry schema used by doctor workflow validation.
-
-Generated coverage summaries are not committed. They contain run-specific paths
-and belong under `target/doctor_frankentui_coverage/`, the explicit output
-directory passed to the script, or uploaded CI artifacts.
+- `baseline_summary.json` — current baseline snapshot from `cargo llvm-cov` (`--branch --summary-only --json`).
 
 ## Local Command
 
