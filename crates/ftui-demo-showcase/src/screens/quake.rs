@@ -642,6 +642,7 @@ impl QuakeE1M1State {
 
         let w = width as f32;
         let h = height as f32;
+        let width_usize = width as usize;
         let center = Vec3::new(w * 0.5, h * 0.5, 0.0);
         let eye = self.player.pos;
 
@@ -677,27 +678,32 @@ impl QuakeE1M1State {
         }
 
         for (tri_idx, tri) in self.render_tris.iter().enumerate().step_by(tri_step) {
-            let w0 = self.world_vertices[tri.i0];
+            let cam0 = self.camera_vertices[tri.i0];
+            let cam1 = self.camera_vertices[tri.i1];
+            let cam2 = self.camera_vertices[tri.i2];
+            if cam0.z < near && cam1.z < near && cam2.z < near {
+                continue;
+            }
+
             let n = tri.normal;
+            let w0 = self.world_vertices[tri.i0];
             let view_dir = (eye - w0).normalized();
             let facing = n.dot(view_dir);
             if facing <= 0.02 {
                 continue;
             }
+
+            let clipped = clip_triangle_near([cam0, cam1, cam2], near);
+            if clipped.len() < 3 {
+                continue;
+            }
+
             let diffuse = tri.diffuse;
             let rim = (1.0 - facing.clamp(0.0, 1.0)).powf(3.0) * 0.5;
 
             let base = tri.base;
             let ambient = 0.15f32;
             let light = (ambient + diffuse * 0.8 + rim).clamp(0.0, 1.5);
-
-            let cam0 = self.camera_vertices[tri.i0];
-            let cam1 = self.camera_vertices[tri.i1];
-            let cam2 = self.camera_vertices[tri.i2];
-            let clipped = clip_triangle_near([cam0, cam1, cam2], near);
-            if clipped.len() < 3 {
-                continue;
-            }
 
             let mut draw_tri = |a: Vec3, b: Vec3, c: Vec3| {
                 let sx0 = center.x + (a.x / a.z) * proj_scale;
@@ -756,7 +762,7 @@ impl QuakeE1M1State {
                         let b2 = w2e * inv_area;
                         let z = b0 * a.z + b1 * b.z + b2 * c.z;
 
-                        let idx = py as usize * width as usize + px as usize;
+                        let idx = py as usize * width_usize + px as usize;
                         if z >= self.depth[idx] {
                             continue;
                         }
@@ -777,7 +783,7 @@ impl QuakeE1M1State {
                         let r = (base.r() as f32 * brightness) as u8;
                         let g = (base.g() as f32 * brightness) as u8;
                         let b = (base.b() as f32 * brightness) as u8;
-                        painter.point_colored(px, py, PackedRgba::rgb(r, g, b));
+                        painter.point_colored_at_index_in_bounds(idx, PackedRgba::rgb(r, g, b));
                     }
                 }
 
