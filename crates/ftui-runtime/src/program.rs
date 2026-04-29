@@ -6269,10 +6269,15 @@ impl<M: Model> AppBuilder<M> {
         M::Message: Send + 'static,
     {
         let _ = (self.model, self.config);
-        #[cfg(not(feature = "native-backend"))]
-        let msg = "enable `native-backend` feature to use AppBuilder::run_native()";
-        #[cfg(all(feature = "native-backend", not(unix)))]
+        // Prefer the platform-level message: a Windows user without
+        // `native-backend` enabled would otherwise be told to enable the
+        // feature, only to discover after rebuilding that it's still
+        // Unix-only. Pointing them at crossterm-compat up front avoids the
+        // two-step debug.
+        #[cfg(not(unix))]
         let msg = "AppBuilder::run_native() is Unix-only; use AppBuilder::run() (crossterm-compat) on this platform";
+        #[cfg(all(unix, not(feature = "native-backend")))]
+        let msg = "enable `native-backend` feature to use AppBuilder::run_native()";
         Err(io::Error::new(io::ErrorKind::Unsupported, msg))
     }
 }
