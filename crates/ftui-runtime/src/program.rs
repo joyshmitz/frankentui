@@ -4503,6 +4503,13 @@ impl<M: Model> Program<M, ftui_tty::TtyBackend, Stdout> {
     /// This opens a live terminal session via `ftui-tty`, entering raw mode
     /// and enabling the requested features. When the program exits (or panics),
     /// `TtyBackend::drop()` restores the terminal to its original state.
+    ///
+    /// **Unix-only.** `ftui-tty` does not yet have a Windows-native backend.
+    /// On non-Unix targets call [`Program::with_config`] (with `crossterm-compat`)
+    /// instead — calling `with_native_backend` from Windows used to silently
+    /// fall through to the headless 0×0 test backend and produce a single
+    /// init-frame-then-silence pattern that looks like a hung TUI.
+    #[cfg(unix)]
     pub fn with_native_backend(model: M, config: ProgramConfig) -> io::Result<Self>
     where
         M::Message: Send + 'static,
@@ -4522,10 +4529,7 @@ impl<M: Model> Program<M, ftui_tty::TtyBackend, Stdout> {
             features,
             intercept_signals: config.intercept_signals,
         };
-        #[cfg(unix)]
         let backend = ftui_tty::TtyBackend::open(0, 0, options)?;
-        #[cfg(not(unix))]
-        let backend = ftui_tty::TtyBackend::new(0, 0);
 
         let writer = TerminalWriter::with_diff_config(
             io::stdout(),
@@ -6226,7 +6230,7 @@ impl<M: Model> AppBuilder<M> {
     }
 
     /// Run the application using the native TTY backend.
-    #[cfg(feature = "native-backend")]
+    #[cfg(all(feature = "native-backend", unix))]
     pub fn run_native(self) -> io::Result<()>
     where
         M::Message: Send + 'static,
@@ -6256,16 +6260,20 @@ impl<M: Model> AppBuilder<M> {
     }
 
     /// Run the application using the native TTY backend.
-    #[cfg(not(feature = "native-backend"))]
+    ///
+    /// On non-Unix targets the native backend is unavailable; call
+    /// [`AppBuilder::run`] (with `crossterm-compat`) instead.
+    #[cfg(any(not(feature = "native-backend"), not(unix)))]
     pub fn run_native(self) -> io::Result<()>
     where
         M::Message: Send + 'static,
     {
         let _ = (self.model, self.config);
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "enable `native-backend` feature to use AppBuilder::run_native()",
-        ))
+        #[cfg(not(feature = "native-backend"))]
+        let msg = "enable `native-backend` feature to use AppBuilder::run_native()";
+        #[cfg(all(feature = "native-backend", not(unix)))]
+        let msg = "AppBuilder::run_native() is Unix-only; use AppBuilder::run() (crossterm-compat) on this platform";
+        Err(io::Error::new(io::ErrorKind::Unsupported, msg))
     }
 }
 
