@@ -519,6 +519,19 @@ impl GoldenResult {
 /// Emits a `golden.compare` tracing span with comparison metadata.
 /// On mismatch, emits an ERROR-level event including both expected and actual hashes.
 pub fn verify_checksums(actual: &[String], expected: &[String]) -> (GoldenOutcome, Option<usize>) {
+    verify_checksums_with_enforcement(actual, expected, is_golden_enforced())
+}
+
+/// Same as [`verify_checksums`], but the "expected is empty" enforcement
+/// decision is provided by the caller. Splitting this out lets unit tests
+/// exercise the comparison logic without depending on process-global env
+/// state (CI=1, FTUI_GOLDEN_ENFORCE=1) which `forbid(unsafe_code)` here
+/// prevents tests from clearing.
+pub fn verify_checksums_with_enforcement(
+    actual: &[String],
+    expected: &[String],
+    enforce_empty_as_failure: bool,
+) -> (GoldenOutcome, Option<usize>) {
     let span = tracing::info_span!(
         "golden.compare",
         actual_count = actual.len(),
@@ -530,7 +543,7 @@ pub fn verify_checksums(actual: &[String], expected: &[String]) -> (GoldenOutcom
 
     if expected.is_empty() {
         // No expected checksums - optionally enforce in CI
-        if is_golden_enforced() {
+        if enforce_empty_as_failure {
             tracing::error!(
                 actual_count = actual.len(),
                 "golden checksums enforced but no expected checksums found"
@@ -677,9 +690,13 @@ mod tests {
 
     #[test]
     fn test_verify_checksums_empty_expected() {
+        // Verify the soft-pass path explicitly. The CI env makes
+        // `verify_checksums` enforce by default, and `forbid(unsafe_code)`
+        // prevents clearing env in tests, so go through the
+        // enforcement-aware constructor instead.
         let actual = vec!["blake3:abc".to_string()];
         let expected: Vec<String> = vec![];
-        let (outcome, _) = verify_checksums(&actual, &expected);
+        let (outcome, _) = verify_checksums_with_enforcement(&actual, &expected, false);
         assert_eq!(outcome, GoldenOutcome::Pass);
     }
 
@@ -1104,7 +1121,10 @@ mod tests {
 
     #[test]
     fn verify_checksums_both_empty_is_pass() {
-        let (outcome, idx) = verify_checksums(&[], &[]);
+        // CI sets `CI=1`, which flips `is_golden_enforced()` to true and
+        // makes "no expected checksums" a hard fail. Use the enforcement-aware
+        // entry point to test the soft-pass branch independently of env state.
+        let (outcome, idx) = verify_checksums_with_enforcement(&[], &[], false);
         assert_eq!(outcome, GoldenOutcome::Pass);
         assert!(idx.is_none());
     }
