@@ -103,7 +103,9 @@ thread_local! {
     static PANIC_CLEANUP_SUPPRESS_DEPTH: Cell<u32> = const { Cell::new(0) };
 }
 
+#[cfg(unix)]
 const SIGNAL_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+#[cfg(unix)]
 const SIGNAL_SHUTDOWN_POLL: Duration = Duration::from_millis(10);
 
 /// Returns (sum_us, count) for read I/O operations.
@@ -130,6 +132,7 @@ pub fn terminal_io_flush_stats() -> (u64, u64) {
     )
 }
 
+#[cfg(unix)]
 fn wait_for_shutdown_ack() -> bool {
     let deadline = std::time::Instant::now()
         .checked_add(SIGNAL_SHUTDOWN_GRACE)
