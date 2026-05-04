@@ -1092,8 +1092,17 @@ jobs:
           set -euo pipefail
           VHS_VERSION="0.10.0"
           curl -fsSL -o /tmp/vhs.tar.gz "https://github.com/charmbracelet/vhs/releases/download/v${VHS_VERSION}/vhs_${VHS_VERSION}_Linux_x86_64.tar.gz"
+          # The 0.10.x tarballs contain a versioned directory rather than
+          # extracting the binary at the archive root, so locate the binary
+          # before installing instead of assuming `/tmp/vhs` exists.
           tar -xzf /tmp/vhs.tar.gz -C /tmp
-          sudo install -m 0755 /tmp/vhs /usr/local/bin/vhs
+          vhs_bin="$(find /tmp -maxdepth 3 -type f -name vhs -perm -u+x 2>/dev/null | head -n 1)"
+          if [ -z "$vhs_bin" ]; then
+            echo "vhs binary not found after extracting /tmp/vhs.tar.gz" >&2
+            ls -R /tmp | head -50 >&2 || true
+            exit 1
+          fi
+          sudo install -m 0755 "$vhs_bin" /usr/local/bin/vhs
           vhs --version
 
       - name: Install cargo-llvm-cov
