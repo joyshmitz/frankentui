@@ -4,8 +4,8 @@
 //!
 //! This module provides:
 //!
-//! - **Cx-aware task execution**: [`run_task_with_cx`] wraps a closure with
-//!   a [`Cx`] context for cooperative cancellation and deadline enforcement.
+//! - **Cx-aware task execution**: `run_task_with_cx` wraps a closure with
+//!   a `Cx` context for cooperative cancellation and deadline enforcement.
 //! - **Tracing spans**: `effect.command` and `effect.subscription` spans
 //!   with structured fields for observability dashboards.
 //! - **Metrics counters**: `effects_executed_total` (by type) and

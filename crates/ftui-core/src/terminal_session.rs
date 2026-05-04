@@ -614,7 +614,7 @@ impl TerminalSession {
         crossterm::event::poll(timeout)
     }
 
-    /// Poll for an event, respecting the [`Cx`] deadline and cancellation.
+    /// Poll for an event, respecting the `Cx` deadline and cancellation.
     ///
     /// The effective timeout is `min(timeout, cx.remaining())`. Returns
     /// `Ok(false)` immediately if the context is cancelled or expired.
@@ -659,7 +659,7 @@ impl TerminalSession {
         Ok(Event::from_crossterm(event))
     }
 
-    /// Read the next event, respecting the [`Cx`] deadline and cancellation.
+    /// Read the next event, respecting the `Cx` deadline and cancellation.
     ///
     /// Polls with the context's remaining deadline, then reads if available.
     /// Returns `Ok(None)` if the context is cancelled, expired, or the poll
@@ -700,7 +700,7 @@ impl TerminalSession {
         crossterm::execute!(io::stdout(), crossterm::cursor::Show)
     }
 
-    /// Show the cursor, respecting the [`Cx`] deadline and cancellation.
+    /// Show the cursor, respecting the `Cx` deadline and cancellation.
     ///
     /// Returns `Ok(())` without writing if the context is already done.
     pub fn show_cursor_cx(&self, cx: &crate::cx::Cx) -> io::Result<()> {
@@ -730,7 +730,7 @@ impl TerminalSession {
         crossterm::execute!(io::stdout(), crossterm::cursor::Hide)
     }
 
-    /// Hide the cursor, respecting the [`Cx`] deadline and cancellation.
+    /// Hide the cursor, respecting the `Cx` deadline and cancellation.
     ///
     /// Returns `Ok(())` without writing if the context is already done.
     pub fn hide_cursor_cx(&self, cx: &crate::cx::Cx) -> io::Result<()> {
@@ -814,7 +814,7 @@ impl TerminalSession {
         Ok(())
     }
 
-    /// Enable or disable terminal mouse capture, respecting the [`Cx`] deadline.
+    /// Enable or disable terminal mouse capture, respecting the `Cx` deadline.
     ///
     /// Returns `Ok(())` without writing if the context is already done.
     pub fn set_mouse_capture_cx(&mut self, enabled: bool, cx: &crate::cx::Cx) -> io::Result<()> {
@@ -873,7 +873,7 @@ impl TerminalSession {
         result
     }
 
-    /// Query terminal size, respecting the [`Cx`] deadline and cancellation.
+    /// Query terminal size, respecting the `Cx` deadline and cancellation.
     ///
     /// Skips the retry-with-delay fallback if the context is done.
     pub fn size_cx(&self, cx: &crate::cx::Cx) -> io::Result<(u16, u16)> {
@@ -915,7 +915,7 @@ impl TerminalSession {
         Ok((w2.max(2), h2.max(2)))
     }
 
-    /// Flush stdout, respecting the [`Cx`] deadline and cancellation.
+    /// Flush stdout, respecting the `Cx` deadline and cancellation.
     ///
     /// Returns `Ok(())` without flushing if the context is already done.
     pub fn flush_cx(&self, cx: &crate::cx::Cx) -> io::Result<()> {

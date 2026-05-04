@@ -7,9 +7,9 @@
 //!
 //! # Policy-Aware Search
 //!
-//! When the `normalization` feature is enabled, [`search_with_policy`] provides a
+//! When the `normalization` feature is enabled, `search_with_policy` provides a
 //! unified entry point that combines configurable normalization form, case folding,
-//! and width measurement into a single [`SearchPolicy`]. Results include display
+//! and width measurement into a single `SearchPolicy`. Results include display
 //! column offsets computed under the chosen [`WidthMode`].
 //!
 //! # Example
@@ -135,7 +135,7 @@ pub fn search_exact_overlapping(haystack: &str, needle: &str) -> Vec<SearchResul
 
 /// Case-insensitive search using simple ASCII lowering.
 ///
-/// For full Unicode case folding, use [`search_case_insensitive`] with the
+/// For full Unicode case folding, use `search_case_insensitive` with the
 /// `normalization` feature enabled.
 #[must_use]
 pub fn search_ascii_case_insensitive(haystack: &str, needle: &str) -> Vec<SearchResult> {

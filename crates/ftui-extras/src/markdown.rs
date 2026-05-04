@@ -2,7 +2,7 @@
 
 //! GitHub-Flavored Markdown renderer for FrankenTUI.
 //!
-//! Converts Markdown text into styled [`Text`] for rendering in terminal UIs.
+//! Converts Markdown text into styled [`ftui_text::text::Text`] for rendering in terminal UIs.
 //! Uses [pulldown-cmark] for parsing with full GFM support including:
 //!
 //! - Tables, strikethrough, task lists
@@ -471,7 +471,7 @@ pub fn render_streaming(fragment: &str, theme: &MarkdownTheme) -> Text {
 /// Convenience function to auto-detect and render text.
 ///
 /// If the text looks like markdown (2+ indicators), renders it as markdown.
-/// Otherwise returns the text as plain [`Text`].
+/// Otherwise returns the text as plain [`ftui_text::text::Text`].
 ///
 /// # Example
 /// ```
@@ -985,7 +985,7 @@ fn default_markdown_table_theme() -> TableTheme {
 // Renderer
 // ---------------------------------------------------------------------------
 
-/// Markdown renderer that converts Markdown text into styled [`Text`].
+/// Markdown renderer that converts Markdown text into styled [`ftui_text::text::Text`].
 ///
 /// Supports GitHub-Flavored Markdown including math expressions, task lists,
 /// footnotes, and admonitions.
@@ -1054,7 +1054,7 @@ impl MarkdownRenderer {
         self
     }
 
-    /// Render a Markdown string into styled [`Text`].
+    /// Render a Markdown string into styled [`ftui_text::text::Text`].
     ///
     /// Parses the input as GitHub-Flavored Markdown with all extensions enabled:
     /// tables, strikethrough, task lists, math, footnotes, and admonitions.
@@ -1110,7 +1110,7 @@ impl MarkdownRenderer {
     /// Check if text appears to be markdown and render appropriately.
     ///
     /// Returns rendered markdown if the text looks like markdown (2+ indicators),
-    /// otherwise returns the text as plain [`Text`].
+    /// otherwise returns the text as plain [`ftui_text::text::Text`].
     #[must_use]
     pub fn auto_render(&self, text: &str) -> Text {
         if is_likely_markdown(text).is_likely() {
@@ -2491,7 +2491,7 @@ fn mermaid_style_from_cell(cell: &Cell) -> Style {
 // Convenience function
 // ---------------------------------------------------------------------------
 
-/// Render Markdown to styled [`Text`] using the default theme.
+/// Render Markdown to styled [`ftui_text::text::Text`] using the default theme.
 ///
 /// This is a convenience function for quick rendering without customization.
 /// For custom themes or settings, use [`MarkdownRenderer`] directly.

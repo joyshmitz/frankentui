@@ -7,7 +7,7 @@
 //!
 //! # Mathematical Model
 //!
-//! Given a d-dimensional path X: [0,T] → ℝ^d, the **signature** is the
+//! Given a d-dimensional path `X: [0,T] → ℝ^d`, the **signature** is the
 //! collection of iterated integrals:
 //!
 //! ```text

@@ -11,7 +11,7 @@
 //!
 //! # Integration
 //!
-//! The guard sits between frame measurement and [`BudgetController`]:
+//! The guard sits between frame measurement and `BudgetController`:
 //!
 //! ```text
 //! frame_time ──► ConformalFrameGuard ──► P99Prediction

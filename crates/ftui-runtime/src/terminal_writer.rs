@@ -1162,7 +1162,7 @@ impl<W: Write> TerminalWriter<W> {
 
     /// Present a UI frame, taking ownership of the buffer (O(1) — no clone).
     ///
-    /// Prefer this over [`present_ui`] when the caller has an owned buffer
+    /// Prefer this over `present_ui` when the caller has an owned buffer
     /// that won't be reused, as it avoids an O(width × height) clone.
     pub fn present_ui_owned(
         &mut self,

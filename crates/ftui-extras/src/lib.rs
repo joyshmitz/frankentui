@@ -26,22 +26,22 @@
 //! | `filesize` | [`filesize`] | Human-readable file size formatting |
 //! | `filepicker` | [`filepicker`] | File picker state utilities |
 //! | `forms` | [`forms`] | Form layout and input widgets |
-//! | `validation` | [`validation`] | Form validation framework with composable validators |
+//! | `validation` | `validation` | Form validation framework with composable validators |
 //! | `image` | [`image`] | Terminal image protocols (iTerm2/Kitty) |
 //! | `live` | [`live`] | Live-updating display (depends on console) |
 //! | `logging` | [`logging`] | Tracing subscriber for TUI logging |
 //! | `markdown` | [`markdown`] | Markdown to styled text rendering |
-//! | `pty-capture` | [`pty_capture`] | PTY session capture |
+//! | `pty-capture` | `pty_capture` | PTY session capture |
 //! | `stopwatch` | [`stopwatch`] | Stopwatch timing utility |
 //! | `syntax` | [`syntax`] | Syntax highlighting spans |
 //! | `timer` | [`timer`] | Countdown timer utility |
 //! | `traceback` | [`traceback`] | Error/stacktrace display |
 //! | `theme` | [`theme`] | Color themes + palette tokens |
-//! | `terminal` | [`terminal`] | ANSI escape sequence parser for terminal emulation |
+//! | `terminal` | `terminal` | ANSI escape sequence parser for terminal emulation |
 //! | `text-effects` | [`text_effects`] | Animated text effects (gradients, fades, ASCII art) |
 //! | `visual-fx` | [`visual_fx`] | Feature-gated visual FX primitives (backdrops, CPU/GPU adapters) |
 //! | `fx-gpu` | `visual_fx::gpu` | Optional GPU acceleration for metaballs (silent CPU fallback) |
-//! | `help` | [`help`] | Contextual help system with tooltips |
+//! | `help` | `help` | Contextual help system with tooltips |
 
 #![forbid(unsafe_code)]
 

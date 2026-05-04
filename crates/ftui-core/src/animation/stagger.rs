@@ -2,9 +2,9 @@
 
 //! Stagger utilities: coordinated delay offsets for animation lists.
 //!
-//! [`stagger`] produces delay offsets for a sequence of items, useful for
-//! cascading entrance/exit animations. Combined with [`Delayed`] and
-//! [`AnimationGroup`], this enables staggered list-item animations.
+//! `stagger` produces delay offsets for a sequence of items, useful for
+//! cascading entrance/exit animations. Combined with `Delayed` and
+//! `AnimationGroup`, this enables staggered list-item animations.
 //!
 //! # Usage
 //!
@@ -26,7 +26,7 @@
 //! 1. `stagger_offsets(0, ..)` returns an empty vec.
 //! 2. First offset is always `Duration::ZERO`.
 //! 3. Offsets are monotonically non-decreasing for all modes except `Random`.
-//! 4. For `Linear`, offset[i] = i * delay.
+//! 4. For `Linear`, `offset[i] = i * delay`.
 //! 5. For `EaseIn`/`EaseOut`/`EaseInOut`, offsets follow the corresponding
 //!    easing curve scaled to `(count - 1) * delay`.
 //! 6. For `Random`, offsets are within `[0, (count - 1) * delay]` with
@@ -65,7 +65,7 @@ fn duration_from_nanos_u128(nanos: u128) -> Duration {
 /// How to distribute delay offsets across items.
 #[derive(Debug, Clone, Copy)]
 pub enum StaggerMode {
-    /// Equal spacing: offset[i] = i * delay.
+    /// Equal spacing: `offset[i] = i * delay`.
     Linear,
     /// Slow start, accelerating gaps (quadratic ease-in).
     EaseIn,

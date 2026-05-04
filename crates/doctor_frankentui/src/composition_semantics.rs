@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! UI composition semantics extractor for migration analysis.
 //!
-//! Transforms the flat AST output from [`tsx_parser`] into a richly annotated
+//! Transforms the flat AST output from `tsx_parser` into a richly annotated
 //! component tree preserving parent-child hierarchy, conditional rendering
 //! branches, typed prop constraints, and state-to-prop data flow. Output is
-//! consumed by the IR lowering pipeline ([`migration_ir`]).
+//! consumed by the IR lowering pipeline (`migration_ir`).
 //!
 //! # Design
 //!

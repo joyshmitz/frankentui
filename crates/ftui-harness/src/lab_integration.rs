@@ -2,9 +2,9 @@
 
 //! FrankenLab integration: deterministic model simulation with LabScenario.
 //!
-//! Bridges [`LabScenario`](crate::determinism::LabScenario) (seed-controlled
+//! Bridges [`LabScenario`] (seed-controlled
 //! scheduling, JSONL logging, tracing spans) with
-//! [`ProgramSimulator`](ftui_runtime::simulator::ProgramSimulator) (headless
+//! [`ProgramSimulator`] (headless
 //! model execution, frame capture).
 //!
 //! # Design

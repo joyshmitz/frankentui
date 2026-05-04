@@ -6315,7 +6315,7 @@ impl Default for LegendConfig {
 /// A single entry in the legend region.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LegendEntry {
-    /// Display text for this entry (e.g. "[1] https://example.com (Node A)").
+    /// Display text for this entry (e.g. `"[1] https://example.com (Node A)"`).
     pub text: String,
     /// Bounding rectangle in world units.
     pub rect: LayoutRect,
@@ -6346,7 +6346,7 @@ impl LegendLayout {
 
 /// Compute the legend layout for link footnotes and spilled labels.
 ///
-/// Takes the diagram bounding box, resolved links (from [`LinkResolution`]),
+/// Takes the diagram bounding box, resolved links (from `LinkResolution`),
 /// spilled labels, and config. Returns a deterministic layout that does not
 /// overlap the diagram.
 #[must_use]

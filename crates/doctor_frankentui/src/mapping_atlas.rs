@@ -89,7 +89,7 @@ pub struct MappingEntry {
 /// The target FrankenTUI construct for a mapping.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FtuiTarget {
-    /// Target construct name (e.g. "Model", "Cmd::Task", "Subscription<M>").
+    /// Target construct name (e.g. "Model", "Cmd::Task", `"Subscription<M>"`).
     pub construct: String,
     /// Target crate (e.g. "ftui-runtime", "ftui-layout", "ftui-widgets").
     pub crate_name: String,

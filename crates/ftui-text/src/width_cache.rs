@@ -791,7 +791,7 @@ mod tests {
 ///
 /// Uses `depth` independent hash functions (derived from a single hash via
 /// mixing) and `width` counters per row. Each counter is a `u8` saturating
-/// at [`CountMinSketch::MAX_COUNT`] (15 by default, representing 4-bit counters).
+/// at `CountMinSketch::MAX_COUNT` (15 by default, representing 4-bit counters).
 ///
 /// # Error Bounds
 ///

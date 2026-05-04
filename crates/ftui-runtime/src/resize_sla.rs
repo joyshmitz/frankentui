@@ -413,7 +413,7 @@ impl ResizeSlaMonitor {
 
 /// Create TelemetryHooks that feed into an SLA monitor.
 ///
-/// Returns a tuple of (TelemetryHooks, Rc<ResizeSlaMonitor>) so the monitor
+/// Returns a tuple of `(TelemetryHooks, Rc<ResizeSlaMonitor>)` so the monitor
 /// can be queried after hooking into a ResizeCoalescer.
 ///
 /// Note: Uses Rc + RefCell internally since TelemetryHooks callbacks are

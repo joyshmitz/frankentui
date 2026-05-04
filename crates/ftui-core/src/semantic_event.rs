@@ -3,7 +3,7 @@
 //! High-level semantic events derived from raw terminal input (bd-3fu8).
 //!
 //! [`SemanticEvent`] represents user *intentions* rather than raw key presses or
-//! mouse coordinates. A gesture recognizer (see bd-2v34) converts raw [`Event`]
+//! mouse coordinates. A gesture recognizer (see bd-2v34) converts raw `Event`
 //! sequences into these semantic events.
 //!
 //! # Design

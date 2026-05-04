@@ -5,7 +5,7 @@
 //!
 //! Each bridge function takes a domain-specific decision/evidence struct and
 //! a timestamp, and returns a unified `EvidenceEntry` suitable for the
-//! [`UnifiedEvidenceLedger`].
+//! `UnifiedEvidenceLedger`.
 //!
 //! # Supported domains
 //!
@@ -23,7 +23,7 @@ use crate::unified_evidence::{DecisionDomain, EvidenceEntry, EvidenceEntryBuilde
 // 1. Diff Strategy
 // ============================================================================
 
-/// Convert a [`StrategyEvidence`] into a unified evidence entry.
+/// Convert a `StrategyEvidence` into a unified evidence entry.
 ///
 /// Maps the Beta-Binomial posterior on change rate and per-strategy costs
 /// to the unified schema.
@@ -96,7 +96,7 @@ pub fn from_diff_strategy(
 // 2. E-Process Throttle
 // ============================================================================
 
-/// Convert a [`ThrottleDecision`] into a unified evidence entry.
+/// Convert a `ThrottleDecision` into a unified evidence entry.
 ///
 /// Maps the wealth-based e-process and empirical rate to the unified schema.
 pub fn from_eprocess(
@@ -146,7 +146,7 @@ pub fn from_eprocess(
 // 3. VOI Sampling
 // ============================================================================
 
-/// Convert a [`VoiDecision`] into a unified evidence entry.
+/// Convert a `VoiDecision` into a unified evidence entry.
 ///
 /// Maps the VOI score, e-process wealth, and posterior statistics
 /// to the unified schema.
@@ -189,7 +189,7 @@ pub fn from_voi(decision: &crate::voi_sampling::VoiDecision, timestamp_ns: u64) 
 // 4. Conformal Prediction (Degradation)
 // ============================================================================
 
-/// Convert a [`ConformalPrediction`] into a unified evidence entry.
+/// Convert a `ConformalPrediction` into a unified evidence entry.
 ///
 /// Maps the conformal prediction bound and budget risk to the unified
 /// degradation decision schema.
@@ -245,7 +245,7 @@ pub fn from_conformal(
 // 5. BOCPD (Resize Coalescing)
 // ============================================================================
 
-/// Convert a [`BocpdEvidence`] into a unified evidence entry.
+/// Convert a `BocpdEvidence` into a unified evidence entry.
 ///
 /// Maps the BOCPD regime posterior and run-length statistics to the
 /// resize coalescing decision schema.

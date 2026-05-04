@@ -904,8 +904,8 @@ impl VirtualizedListState {
     ///
     /// **Warning:** After `scroll_to_bottom`, this may return `usize::MAX`
     /// (a lazy sentinel that gets clamped during rendering). Use
-    /// [`scroll_offset_clamped`] with a known `total_items` to get a
-    /// safe value for display or indexing.
+    /// [`scroll_offset_clamped`](Self::scroll_offset_clamped) with a known
+    /// `total_items` to get a safe value for display or indexing.
     #[must_use]
     pub fn scroll_offset(&self) -> usize {
         self.scroll_offset
@@ -913,7 +913,7 @@ impl VirtualizedListState {
 
     /// Get scroll offset clamped against a known total item count.
     ///
-    /// Prefer this over [`scroll_offset()`] when the total is available,
+    /// Prefer this over [`scroll_offset()`](Self::scroll_offset) when the total is available,
     /// because `scroll_to_bottom` may store `usize::MAX` internally.
     #[must_use]
     pub fn scroll_offset_clamped(&self, total_items: usize) -> usize {

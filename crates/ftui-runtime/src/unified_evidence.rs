@@ -13,7 +13,7 @@
 //! - Confidence interval `[lower, upper]`
 //!
 //! The ledger is a fixed-capacity ring buffer (zero per-decision allocation on
-//! the hot path). JSONL export is supported via [`EvidenceSink`].
+//! the hot path). JSONL export is supported via `EvidenceSink`.
 //!
 //! # Usage
 //!

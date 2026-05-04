@@ -2,7 +2,7 @@
 
 //! WASM showcase runner for the FrankenTUI demo application.
 //!
-//! This crate provides [`ShowcaseRunner`], a `wasm-bindgen`-exported struct
+//! This crate provides `ShowcaseRunner` (wasm32-only), a `wasm-bindgen`-exported struct
 //! that wraps `ftui_web::step_program::StepProgram<AppModel>` and exposes
 //! it to JavaScript for host-driven execution.
 //!

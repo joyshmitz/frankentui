@@ -6347,7 +6347,7 @@ impl<M: Model> AppBuilder<M> {
 
 /// Adaptive batch window controller based on M/G/1 queueing model.
 ///
-/// Estimates arrival rate λ and service time E[S] from observations,
+/// Estimates arrival rate λ and service time `E[S]` from observations,
 /// then computes the optimal batch window τ to maintain stability
 /// (ρ < 1) while minimizing latency.
 #[derive(Debug, Clone)]
@@ -6422,13 +6422,13 @@ impl BatchController {
         }
     }
 
-    /// Estimated service time E[S] (seconds).
+    /// Estimated service time `E[S]` (seconds).
     #[inline]
     pub fn service_est_s(&self) -> f64 {
         self.ema_service_s
     }
 
-    /// Estimated utilization ρ = λ × E[S].
+    /// Estimated utilization ρ = λ × `E[S]`.
     #[inline]
     pub fn rho_est(&self) -> f64 {
         self.lambda_est() * self.ema_service_s
@@ -6436,7 +6436,7 @@ impl BatchController {
 
     /// Compute the optimal batch window τ (seconds).
     ///
-    /// τ = clamp(E[S] × headroom, τ_min, τ_max)
+    /// τ = clamp(`E[S]` × headroom, τ_min, τ_max)
     ///
     /// When ρ approaches 1, τ increases to maintain stability.
     pub fn tau_s(&self) -> f64 {

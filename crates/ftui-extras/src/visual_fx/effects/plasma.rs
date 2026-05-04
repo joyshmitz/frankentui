@@ -76,16 +76,16 @@ pub fn plasma_wave_low(nx: f64, ny: f64, time: f64) -> f64 {
 /// # Theme-Derived Palettes
 ///
 /// Several presets dynamically derive their colors from `ThemeInputs`:
-/// - [`ThemeAccents`]: Blends through accent_primary -> accent_secondary
-/// - [`Aurora`]: Cool tones using accent_slots[0..2] with blue bias
-/// - [`Ember`]: Warm tones using accent_slots[2..4] with orange bias
-/// - [`Subtle`]: Low saturation, bg-focused for non-distracting backdrops
-/// - [`Monochrome`]: Grayscale from bg_base to fg_primary
+/// - `ThemeAccents`: Blends through accent_primary -> accent_secondary
+/// - `Aurora`: Cool tones using accent_slots[0..2] with blue bias
+/// - `Ember`: Warm tones using accent_slots[2..4] with orange bias
+/// - `Subtle`: Low saturation, bg-focused for non-distracting backdrops
+/// - `Monochrome`: Grayscale from bg_base to fg_primary
 ///
 /// # Fixed Palettes
 ///
 /// These presets use hard-coded colors for consistent appearance:
-/// - [`Sunset`], [`Ocean`], [`Fire`], [`Neon`], [`Cyberpunk`]
+/// - `Sunset`, `Ocean`, `Fire`, `Neon`, `Cyberpunk`
 ///
 /// # Fallbacks
 ///

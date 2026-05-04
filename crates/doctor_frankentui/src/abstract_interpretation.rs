@@ -17,11 +17,11 @@
 //!
 //! # Safety properties
 //!
-//! - [`EffectOrderingSafety`]: ordering constraints form a DAG (no cycles)
-//! - [`NoForbiddenSideEffects`]: no effect writes to a forbidden state set
-//! - [`DeterminismGuarantee`]: all effects on replay-critical paths are deterministic
-//! - [`CleanupCompleteness`]: every subscription has a cleanup path
-//! - [`IdempotencePreservation`]: idempotent effects remain idempotent after transform
+//! - `EffectOrderingSafety`: ordering constraints form a DAG (no cycles)
+//! - `NoForbiddenSideEffects`: no effect writes to a forbidden state set
+//! - `DeterminismGuarantee`: all effects on replay-critical paths are deterministic
+//! - `CleanupCompleteness`: every subscription has a cleanup path
+//! - `IdempotencePreservation`: idempotent effects remain idempotent after transform
 //!
 //! # Migration rationale
 //!

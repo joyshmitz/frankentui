@@ -10,7 +10,7 @@
 //! # Budget Integration
 //!
 //! Animations themselves are budget-unaware. The caller decides whether to
-//! call [`Animation::tick`] based on the current [`DegradationLevel`]:
+//! call [`Animation::tick`] based on the current `DegradationLevel`:
 //!
 //! ```ignore
 //! if budget.degradation().render_decorative() {
@@ -18,7 +18,7 @@
 //! }
 //! ```
 //!
-//! [`DegradationLevel`]: ftui_render::budget::DegradationLevel
+//! `DegradationLevel` lives in the `ftui_render::budget` module.
 
 use std::time::Duration;
 

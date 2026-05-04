@@ -18,7 +18,7 @@
 //! # Key Properties
 //!
 //! - **Anytime-valid**: Can stop testing early without invalid inference
-//! - **No false positives in stable runs**: E[E_t] ≤ 1 under H₀
+//! - **No false positives in stable runs**: `E[E_t]` ≤ 1 under H₀
 //! - **Early detection**: Strong evidence triggers early failure
 //! - **Variable-length support**: Works with different test run lengths
 //!

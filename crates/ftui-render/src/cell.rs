@@ -26,7 +26,7 @@
 
 use crate::char_width;
 
-/// Grapheme ID: reference to an interned string in [`GraphemePool`].
+/// Grapheme ID: reference to an interned string in `GraphemePool`.
 ///
 /// # Layout
 ///

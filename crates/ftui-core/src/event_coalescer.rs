@@ -186,7 +186,7 @@ impl EventCoalescer {
     ///
     /// Returns a vector of events that were pending. The order is:
     /// 1. Pending scroll event (single coalesced event; use
-    ///    [`pending_scroll_count`] before flushing if you need the count)
+    ///    `pending_scroll_count` before flushing if you need the count)
     /// 2. Pending mouse move (latest position)
     ///
     /// After calling `flush()`, the coalescer is empty.

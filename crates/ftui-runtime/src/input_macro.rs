@@ -235,7 +235,7 @@ impl MacroRecorder {
     }
 }
 
-/// Replays an [`InputMacro`] through a [`ProgramSimulator`].
+/// Replays an [`InputMacro`] through a `ProgramSimulator`.
 ///
 /// Events are injected in order. Timing information is available
 /// for inspection but does not cause real delays (the simulator

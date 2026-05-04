@@ -88,7 +88,7 @@
 //! ## Boundary Inventory By Current Artifact Surface
 //!
 //! The current code already exposes the fields later migration work must keep
-//! stable. [`RunMeta`] is the key per-run contract and currently carries:
+//! stable. `RunMeta` is the key per-run contract and currently carries:
 //!
 //! - identity: `trace_id`, `policy_id`, `profile`, `run_dir`
 //! - fallback state: `fallback_active`, `fallback_reason`,

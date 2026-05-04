@@ -204,7 +204,7 @@ impl fmt::Display for RuntimeCapability {
 
 /// User-facing layout policy configuration.
 ///
-/// Combines a desired tier with optional overrides. Call [`resolve`] with
+/// Combines a desired tier with optional overrides. Call `resolve` with
 /// a [`RuntimeCapability`] to get a fully-resolved configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LayoutPolicy {

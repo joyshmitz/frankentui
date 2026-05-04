@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Translation planner with confidence-ranked strategies.
 //!
-//! Consumes a [`MigrationIr`], the [`MappingAtlas`], and the
+//! Consumes a [`MigrationIr`], the `MappingAtlas`, and the
 //! [`ConfidenceModel`] to emit an ordered list of translation strategy
 //! decisions — one per IR segment — ranked by confidence and risk.
 //!
@@ -247,7 +247,7 @@ struct PlannerContext {
 ///
 /// The planner:
 /// 1. Enumerates all translatable segments from the IR.
-/// 2. Looks up each segment in the [`MappingAtlas`].
+/// 2. Looks up each segment in the `MappingAtlas`.
 /// 3. Scores candidate strategies using the [`ConfidenceModel`] posterior.
 /// 4. Emits [`CapabilityGapTicket`]s for unmapped or low-confidence segments.
 /// 5. Orders decisions deterministically by segment id.

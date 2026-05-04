@@ -171,7 +171,7 @@ impl LeakAlert {
 
 /// Sequential allocation leak detector combining CUSUM and e-process.
 ///
-/// Feed per-frame allocation counts via [`observe`]. The detector maintains
+/// Feed per-frame allocation counts via `observe`. The detector maintains
 /// running estimates of the baseline mean and standard deviation, then
 /// applies both CUSUM and an e-process test to the standardised residuals.
 ///

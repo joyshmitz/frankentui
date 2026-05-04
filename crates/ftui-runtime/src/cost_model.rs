@@ -318,7 +318,7 @@ pub struct StageStats {
 }
 
 impl StageStats {
-    /// Second moment E[S²] = Var[S] + E[S]².
+    /// Second moment `E[S²]` = `Var[S]` + `E[S]`².
     #[must_use]
     pub fn second_moment(&self) -> f64 {
         self.var_us2 + self.mean_us * self.mean_us
@@ -379,7 +379,7 @@ pub struct PipelineCostResult {
     pub total_mean_us: f64,
     /// Total service time variance (µs²).
     pub total_var_us2: f64,
-    /// Server utilization ρ = λ × E[S].
+    /// Server utilization ρ = λ × `E[S]`.
     pub utilization: f64,
     /// Mean sojourn time via Pollaczek-Khinchine (µs).
     pub mean_sojourn_us: f64,
@@ -1491,10 +1491,10 @@ mod tests {
             mean_us: 100.0,
             var_us2: 0.0,
         };
-        // E[S²] = Var[S] + E[S]² = 0 + 10000 = 10000
+        // `E[S²]` = `Var[S]` + `E[S]`² = 0 + 10000 = 10000
         assert!(
             (s.second_moment() - 10_000.0).abs() < 1e-10,
-            "E[S²] = mean² when variance is zero"
+            "`E[S²]` = mean² when variance is zero"
         );
     }
 
@@ -1505,10 +1505,10 @@ mod tests {
             mean_us: 50.0,
             var_us2: 400.0,
         };
-        // E[S²] = 400 + 2500 = 2900
+        // `E[S²]` = 400 + 2500 = 2900
         assert!(
             (s.second_moment() - 2900.0).abs() < 1e-10,
-            "E[S²] = Var + mean²"
+            "`E[S²]` = Var + mean²"
         );
     }
 

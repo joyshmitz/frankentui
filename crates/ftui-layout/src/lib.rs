@@ -563,7 +563,7 @@ impl Flex {
 
     /// Set the horizontal flow direction (LTR or RTL).
     ///
-    /// When set to [`FlowDirection::Rtl`](direction::FlowDirection::Rtl),
+    /// When set to [`FlowDirection::Rtl`],
     /// horizontal layouts are mirrored: the first child appears at the right
     /// edge instead of the left. Vertical layouts are not affected.
     #[must_use]
@@ -810,7 +810,7 @@ impl Flex {
     /// Split area using intrinsic sizing and temporal coherence.
     ///
     /// Combines the content-aware sizing of [`split_with_measurer`](Self::split_with_measurer)
-    /// with the stability of [`split_stably`](Self::split_stably).
+    /// with stability across small geometry perturbations.
     pub fn split_with_measurer_stably<F>(
         &self,
         area: Rect,

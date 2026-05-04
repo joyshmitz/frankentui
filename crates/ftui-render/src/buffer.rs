@@ -807,7 +807,7 @@ impl Buffer {
     /// - Only the base opacity is active (no nested push)
     /// - The existing cell at the target is also single-width and not a continuation
     ///
-    /// Falls through to [`set()`] for any non-trivial case, so behavior is
+    /// Falls through to `set()` for any non-trivial case, so behavior is
     /// always identical to calling `set()` directly.
     #[inline]
     pub fn set_fast(&mut self, x: u16, y: u16, cell: Cell) {
@@ -865,7 +865,7 @@ impl Buffer {
     /// - **Atomic wide writes**: If a wide character doesn't fully fit in the
     ///   scissor region/bounds, NOTHING is written.
     ///
-    /// For bulk operations without scissor/opacity/safety, use [`set_raw`].
+    /// For bulk operations without scissor/opacity/safety, use `set_raw`.
     #[inline]
     pub fn set(&mut self, x: u16, y: u16, cell: Cell) {
         let width = cell.content.width();

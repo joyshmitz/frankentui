@@ -1,7 +1,7 @@
 //! Style and theming semantics extraction.
 //!
-//! Bridges the raw JSX prop data from [`tsx_parser`] to the canonical
-//! [`migration_ir::StyleIntent`] representation.  The extractor detects:
+//! Bridges the raw JSX prop data from `tsx_parser` to the canonical
+//! `migration_ir::StyleIntent` representation. The extractor detects:
 //!
 //! - **Inline style objects** (`style={{ color: 'red' }}`)
 //! - **ClassName bindings** (static strings, template literals, `clsx`/`cn` calls)

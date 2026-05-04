@@ -3,8 +3,8 @@
 //! Ergonomic binding utilities for connecting [`Observable`] values to UI state.
 //!
 //! A [`Binding<T>`] encapsulates an observable source plus an optional transform,
-//! making it easy to derive display values from reactive state. The [`bind!`] and
-//! [`bind_map!`] macros provide syntactic sugar.
+//! making it easy to derive display values from reactive state. The `bind!` and
+//! `bind_map!` macros provide syntactic sugar.
 //!
 //! # Usage
 //!

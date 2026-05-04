@@ -4,7 +4,7 @@
 //!
 //! Records Bayesian diff strategy decisions in a fixed-capacity ring buffer
 //! for zero per-frame allocation on the hot path. Supports JSONL export
-//! via the [`EvidenceSink`] infrastructure.
+//! via the `EvidenceSink` infrastructure.
 //!
 //! # Usage
 //!

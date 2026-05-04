@@ -63,14 +63,14 @@
 //! ```text
 //! p ~ Beta(α, β)
 //!
-//! Prior: α₀ = 1, β₀ = 19  (E[p] = 0.05, expecting ~5% change rate)
+//! Prior: α₀ = 1, β₀ = 19  (`E[p]` = 0.05, expecting ~5% change rate)
 //!
 //! Update per frame:
 //!   α ← α + N_changed
 //!   β ← β + (N_scanned - N_changed)
 //!
-//! Posterior mean: E[p] = α / (α + β)
-//! Posterior variance: Var[p] = αβ / ((α+β)² × (α+β+1))
+//! Posterior mean: `E[p]` = α / (α + β)
+//! Posterior variance: `Var[p]` = αβ / ((α+β)² × (α+β+1))
 //! ```
 //!
 //! # Decision Rule
@@ -151,7 +151,7 @@ pub struct DiffStrategyConfig {
     pub prior_alpha: f64,
 
     /// Prior β for Beta distribution (pseudo-count for "unchanged").
-    /// Default: 19.0 (prior E[p] = 0.05)
+    /// Default: 19.0 (prior `E[p]` = 0.05)
     pub prior_beta: f64,
 
     /// Decay factor for exponential forgetting.
@@ -310,12 +310,12 @@ impl ChangeRateEstimator {
         (self.alpha, self.beta)
     }
 
-    /// Posterior mean E[p].
+    /// Posterior mean `E[p]`.
     pub fn mean(&self) -> f64 {
         self.alpha / (self.alpha + self.beta)
     }
 
-    /// Posterior variance Var[p].
+    /// Posterior variance `Var[p]`.
     pub fn variance(&self) -> f64 {
         let sum = self.alpha + self.beta;
         (self.alpha * self.beta) / (sum * sum * (sum + 1.0))
@@ -545,13 +545,13 @@ impl DiffStrategySelector {
         self.estimator.posterior_params()
     }
 
-    /// Get the posterior mean E[p].
+    /// Get the posterior mean `E[p]`.
     #[must_use]
     pub fn posterior_mean(&self) -> f64 {
         self.estimator.mean()
     }
 
-    /// Get the posterior variance Var[p].
+    /// Get the posterior variance `Var[p]`.
     #[must_use]
     pub fn posterior_variance(&self) -> f64 {
         self.estimator.variance()
@@ -836,7 +836,7 @@ mod tests {
     #[test]
     fn test_posterior_mean_initial() {
         let selector = DiffStrategySelector::with_defaults();
-        // E[p] = α / (α + β) = 1 / 20 = 0.05
+        // `E[p]` = α / (α + β) = 1 / 20 = 0.05
         assert!((selector.posterior_mean() - 0.05).abs() < 1e-9);
     }
 
@@ -850,7 +850,7 @@ mod tests {
         // After update (with decay=0.95):
         // α = 0.95 * 1 + 10 = 10.95
         // β = 0.95 * 19 + 90 = 108.05
-        // E[p] = 10.95 / 119.0 ≈ 0.092
+        // `E[p]` = 10.95 / 119.0 ≈ 0.092
         let mean = selector.posterior_mean();
         assert!(
             mean > 0.05,
@@ -893,7 +893,7 @@ mod tests {
     fn test_select_full_redraw_when_high_change() {
         let config = DiffStrategyConfig {
             prior_alpha: 9.0, // High prior change rate
-            prior_beta: 1.0,  // E[p] = 0.9
+            prior_beta: 1.0,  // `E[p]` = 0.9
             ..Default::default()
         };
 
@@ -2164,7 +2164,7 @@ mod tests {
             // High prior alpha → expect more changes → Full/FullRedraw more likely
             let mut selector = DiffStrategySelector::new(DiffStrategyConfig {
                 prior_alpha: 50.0,
-                prior_beta: 1.0, // E[p] ≈ 0.98
+                prior_beta: 1.0, // `E[p]` ≈ 0.98
                 ..Default::default()
             });
             selector.select(80, 24, 24);
@@ -2181,7 +2181,7 @@ mod tests {
             // High prior beta → expect few changes → DirtyRows efficient
             let mut selector = DiffStrategySelector::new(DiffStrategyConfig {
                 prior_alpha: 1.0,
-                prior_beta: 1000.0, // E[p] ≈ 0.001
+                prior_beta: 1000.0, // `E[p]` ≈ 0.001
                 ..Default::default()
             });
             let strategy = selector.select(80, 24, 5);

@@ -685,7 +685,7 @@ impl<W: Write> Presenter<W> {
 
     /// Finish a frame by restoring neutral SGR state and closing any open link.
     ///
-    /// Callers that drive emission manually through [`emit_diff_runs`] must
+    /// Callers that drive emission manually through `emit_diff_runs` must
     /// invoke this before returning control to non-UI terminal output.
     pub fn finish_frame(&mut self) -> io::Result<()> {
         let reset_result = ansi::sgr_reset(&mut self.writer);

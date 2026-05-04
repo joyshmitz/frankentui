@@ -509,9 +509,9 @@ pub struct ProbeId(u32);
 /// # Usage Pattern
 ///
 /// 1. Create a `CapabilityProber` during session init (after raw mode).
-/// 2. Call [`send_all_probes`] to emit queries for missing capabilities.
-/// 3. Feed incoming terminal bytes to [`process_response`].
-/// 4. Call [`check_timeouts`] periodically.
+/// 2. Call `send_all_probes` to emit queries for missing capabilities.
+/// 3. Feed incoming terminal bytes to `process_response`.
+/// 4. Call `check_timeouts` periodically.
 /// 5. Apply confirmed upgrades to `TerminalCapabilities`.
 ///
 /// # Upgrade-Only Guarantee
@@ -642,7 +642,7 @@ impl CapabilityProber {
     /// Apply confirmed upgrades to the given capabilities.
     ///
     /// This only enables features — it never disables them. Call this
-    /// after [`process_response`] and [`check_timeouts`] to update the
+    /// after `process_response` and `check_timeouts` to update the
     /// capability set with probe-confirmed features.
     pub fn apply_upgrades(&self, caps: &mut TerminalCapabilities) {
         for &cap in &self.confirmed {

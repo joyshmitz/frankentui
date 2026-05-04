@@ -5815,7 +5815,7 @@ pub enum QuadrantAxisKind {
     Y,
 }
 
-/// A data point on a quadrant chart with normalized [0,1] coordinates.
+/// A data point on a quadrant chart with normalized `[0,1]` coordinates.
 #[derive(Debug, Clone)]
 pub struct QuadrantPoint {
     pub name: String,

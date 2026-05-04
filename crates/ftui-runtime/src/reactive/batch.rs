@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-//! Batch update coalescing for [`Observable`] notifications.
+//! Batch update coalescing for `Observable` notifications.
 //!
 //! When multiple `Observable` values are updated in rapid succession,
 //! subscribers receive a notification for each change. In render-heavy

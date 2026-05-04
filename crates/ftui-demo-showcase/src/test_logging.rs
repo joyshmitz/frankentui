@@ -7,7 +7,7 @@
 //!
 //! - A single [`escape_json`] implementation (handles all control chars).
 //! - [`JsonlLogger`] — a thread-safe, sequenced event logger with builder API.
-//! - [`LoggerFactory`] — a reusable bootstrap pattern (env gating, `OnceLock`,
+//! - `LoggerFactory` — a reusable bootstrap pattern (env gating, `OnceLock`,
 //!   run_id / seed / screen_mode) so each subsystem doesn't re-invent the wheel.
 //! - [`JsonlSink`] — stderr or file sink abstraction.
 //!

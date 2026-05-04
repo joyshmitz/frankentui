@@ -335,7 +335,7 @@ pub struct VirtualTerminal {
     charset_slots: [u8; 4],
     /// Active charset slot index (0 = G0, 1 = G1).
     active_charset: u8,
-    /// Single-shift override: if Some(n), next printed char uses G<n> then reverts.
+    /// Single-shift override: if `Some(n)`, next printed char uses `G<n>` then reverts.
     single_shift: Option<u8>,
 }
 

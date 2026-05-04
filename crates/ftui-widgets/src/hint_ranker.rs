@@ -68,7 +68,7 @@ pub struct HintStats {
 }
 
 impl HintStats {
-    /// Posterior mean E[U] = α / (α + β).
+    /// Posterior mean `E[U] = α / (α + β)`.
     #[inline]
     pub fn expected_utility(&self) -> f64 {
         self.alpha / (self.alpha + self.beta)

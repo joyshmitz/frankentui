@@ -143,7 +143,7 @@ pub mod text_width {
     //! disagrees.
     //!
     //! **Default behavior** (`FTUI_EMOJI_VS16_WIDTH` unset):
-    //! - [`strip_vs16`] removes U+FE0F before width calculation.
+    //! - `strip_vs16` removes U+FE0F before width calculation.
     //! - Text-default emoji render at width 1 (matching most terminals).
     //! - Emoji with `Emoji_Presentation=Yes` (e.g. U+1F600) are unaffected
     //!   — they are always width 2.

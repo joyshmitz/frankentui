@@ -14,10 +14,10 @@
 //!
 //! # Key Types
 //!
-//! - [`DiagnosticRecord`] — trait for entries that can be serialized to JSONL
-//! - [`DiagnosticLog`] — bounded in-memory log with optional stderr mirroring
-//! - [`TelemetryCallback`] — type alias for observer callbacks
-//! - [`fnv1a_hash`] — FNV-1a checksum utility for determinism verification
+//! - `DiagnosticRecord` — trait for entries that can be serialized to JSONL
+//! - `DiagnosticLog` — bounded in-memory log with optional stderr mirroring
+//! - `TelemetryCallback` — type alias for observer callbacks
+//! - `fnv1a_hash` — FNV-1a checksum utility for determinism verification
 //!
 //! # Example
 //!

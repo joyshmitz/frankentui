@@ -2,7 +2,7 @@
 
 //! Ready-to-use animation presets built from core primitives.
 //!
-//! Each preset composes [`Fade`], [`Slide`], [`Delayed`], [`AnimationGroup`],
+//! Each preset composes [`Fade`], [`Slide`], `Delayed`, `AnimationGroup`,
 //! and [`stagger_offsets`] into common UI animation patterns. All presets
 //! return concrete types that implement [`Animation`].
 //!

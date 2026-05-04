@@ -36,7 +36,7 @@
 //! - Orders by `r_i = p_i - elapsed_i`
 //! - Provably optimal for minimizing mean response time in M/G/1
 //! - Preemptive in theory; we use non-preemptive variant for simplicity
-//! - Theorem: SRPT minimizes E[T] (mean sojourn time) among all policies
+//! - Theorem: SRPT minimizes `E[T]` (mean sojourn time) among all policies
 //!
 //! ### Smith's Rule (Weighted SJF)
 //! - Orders by ratio `w_i / p_i` (weight per unit time)
@@ -406,7 +406,7 @@ impl HazardConfig {
 
     /// Calculate expected loss for continuing vs canceling.
     ///
-    /// Returns (E[Loss_continue], E[Loss_cancel], recommendation).
+    /// Returns `(E[Loss_continue], E[Loss_cancel], recommendation)`.
     pub fn expected_loss_analysis(&self, task: &Task) -> CancellationAnalysis {
         let remaining = task.estimated_ticks.saturating_sub(task.elapsed_ticks);
         let p_fail = self.failure_probability(task, remaining.max(1));

@@ -1165,7 +1165,7 @@ impl TerminalCapabilities {
 
 /// Wait-free shared terminal capabilities for concurrent read/write.
 ///
-/// Wraps [`TerminalCapabilities`] in an [`ArcSwapStore`] so that the render
+/// Wraps [`TerminalCapabilities`] in an `ArcSwapStore` so that the render
 /// thread can read capabilities without locking while the main thread updates
 /// them on terminal reconfiguration or resize.
 ///

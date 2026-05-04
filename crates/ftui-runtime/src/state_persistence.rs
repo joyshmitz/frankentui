@@ -1,7 +1,7 @@
 //! Widget state persistence for save/restore across sessions.
 //!
 //! This module provides the [`StateRegistry`] and [`StorageBackend`] infrastructure
-//! for persisting widget state. It works with the [`Stateful`] trait from `ftui-widgets`.
+//! for persisting widget state. It works with the `Stateful` trait from `ftui-widgets`.
 //!
 //! # Architecture
 //!
@@ -42,7 +42,7 @@
 //! - `state-persistence`: Enables `FileStorage` with JSON serialization.
 //!   Without this feature, only `MemoryStorage` is available.
 //!
-//! [`Stateful`]: ftui_widgets::stateful::Stateful
+//! `Stateful` lives in `ftui_widgets::stateful`.
 
 use std::collections::HashMap;
 use std::fmt;

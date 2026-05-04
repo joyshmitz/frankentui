@@ -586,7 +586,7 @@ impl Painter {
     ///
     /// # Arguments
     ///
-    /// - `sampler`: A [`MetaballFieldSampler`] containing ball positions and radii
+    /// - `sampler`: A `MetaballFieldSampler` containing ball positions and radii
     /// - `threshold`: Field intensity for full color (typically 1.0)
     /// - `glow_threshold`: Field intensity where glow begins (typically 0.6)
     /// - `quality`: Quality level affecting how many balls contribute

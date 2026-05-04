@@ -4,7 +4,7 @@
 //!
 //! [`WasmRunner`] drives an ftui [`Model`] without threads, blocking polls, or
 //! OS-level I/O. Instead, the host (JavaScript) delivers events via
-//! [`push_event`] and calls [`step`] / [`render`] from its own animation loop.
+//! `push_event` and calls `step` / `render` from its own animation loop.
 //!
 //! The execution model is:
 //! ```text

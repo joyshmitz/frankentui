@@ -169,7 +169,7 @@ impl CascadeEvidence {
 /// Degradation cascade orchestrator.
 ///
 /// Sits between the conformal frame guard and the render budget system.
-/// Call [`pre_render`] before each frame and [`post_render`] after.
+/// Call `pre_render` before each frame and `post_render` after.
 #[derive(Debug)]
 pub struct DegradationCascade {
     config: CascadeConfig,
