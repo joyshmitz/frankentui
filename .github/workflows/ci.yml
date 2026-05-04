@@ -312,6 +312,15 @@ jobs:
           key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run perf gates (bd-3cwi, bd-lff4p.5.5)
+        # CI bench runs are noisy: --quick uses sample-size 10 and
+        # measurement-time 100ms, which makes the dense-regression dirty/full
+        # ratio swing wildly even when nothing has changed (observed ratios
+        # 0.80 - 1.32 on identical commits). The gate's intent is to flag
+        # large pessimisations like 2x; loosen the threshold for CI while
+        # keeping it tight for local "cargo bench" runs.
+        env:
+          FTUI_SPAN_DENSE_MAX_OVERHEAD: "1.50"
+          FTUI_TILE_DENSE_MAX_OVERHEAD: "1.50"
         run: ./scripts/bench_budget.sh --quick
 
       - name: Upload benchmark results
