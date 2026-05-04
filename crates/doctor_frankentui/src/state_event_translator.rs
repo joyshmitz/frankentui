@@ -523,7 +523,7 @@ fn build_update_arms(
         let event = ir.event_catalog.events.get(&transition.event_id);
         let variant_name = event
             .map(|e| to_pascal_case(&e.name))
-            .unwrap_or_else(|| format!("Unknown_{}", &transition.event_id.0));
+            .unwrap_or_else(|| format!("Unknown_{}", transition.event_id.0));
 
         let mutations = build_mutations_from_transition(ir, transition);
         let commands = build_commands_from_transition(transition, effects, diagnostics);
