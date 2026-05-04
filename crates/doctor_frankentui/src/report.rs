@@ -480,7 +480,8 @@ pub(crate) fn run_report_with_runs(
     if let Some(parent) = output_html.parent() {
         crate::util::ensure_dir(parent)?;
     }
-    let link_base_buf = fs::canonicalize(raw_link_base).unwrap_or_else(|_| raw_link_base.to_path_buf());
+    let link_base_buf =
+        fs::canonicalize(raw_link_base).unwrap_or_else(|_| raw_link_base.to_path_buf());
     let html = render_html(&summary, link_base_buf.as_path());
     write_string(&output_html, &html)?;
 
