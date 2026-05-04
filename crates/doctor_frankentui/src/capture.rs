@@ -3246,9 +3246,12 @@ mod tests {
     fn dry_run_tmux_observe_does_not_create_tmux_artifacts() {
         let temp = tempdir().expect("tempdir");
         let run_root = temp.path().join("runs");
+        let project_dir = temp.path().join("project");
+        std::fs::create_dir_all(&project_dir).expect("project dir");
         let run_name = "dry-run-tmux";
 
         let mut args = minimal_args();
+        args.project_dir = Some(project_dir);
         args.run_root = Some(run_root.clone());
         args.run_name = Some(run_name.to_string());
         args.observe = ObserveMode::Tmux;
@@ -3270,8 +3273,11 @@ mod tests {
     fn run_capture_rejects_unsafe_run_name() {
         let temp = tempdir().expect("tempdir");
         let run_root = temp.path().join("runs");
+        let project_dir = temp.path().join("project");
+        std::fs::create_dir_all(&project_dir).expect("project dir");
 
         let mut args = minimal_args();
+        args.project_dir = Some(project_dir);
         args.run_root = Some(run_root);
         args.run_name = Some("../escape".to_string());
         args.dry_run = true;

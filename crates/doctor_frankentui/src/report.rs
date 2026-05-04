@@ -472,8 +472,16 @@ pub(crate) fn run_report_with_runs(
     let json_content = serde_json::to_string_pretty(&summary)?;
     write_string(&output_json, &json_content)?;
 
-    let link_base = output_html.parent().unwrap_or(args.suite_dir.as_path());
-    let html = render_html(&summary, link_base);
+    let raw_link_base = output_html.parent().unwrap_or(args.suite_dir.as_path());
+    // Canonicalize so the relative-link calculation matches canonicalized
+    // artifact paths produced by `resolve_existing_artifact_path` (otherwise
+    // platform-specific symlinks like macOS's `/var/folders -> /private/var/folders`
+    // produce absurd `../../../../private/var/folders/...` link prefixes).
+    if let Some(parent) = output_html.parent() {
+        crate::util::ensure_dir(parent)?;
+    }
+    let link_base_buf = fs::canonicalize(raw_link_base).unwrap_or_else(|_| raw_link_base.to_path_buf());
+    let html = render_html(&summary, link_base_buf.as_path());
     write_string(&output_html, &html)?;
 
     ui.success(&format!("report JSON: {}", output_json.display()));
