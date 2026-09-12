@@ -28,7 +28,7 @@ for arg in "$@"; do
             echo ""
             echo "Options:"
             echo "  --verbose, -v   Enable debug logging"
-            echo "  --quick, -q     Run only core tests (inline + cleanup)"
+            echo "  --quick, -q     Run only core tests (inline + cleanup + examples)"
             echo "  --help, -h      Show this help"
             exit 0
             ;;
@@ -109,9 +109,14 @@ else
     cargo build -p ftui-harness > "$E2E_LOG_DIR/01_build.log" 2>&1
 fi
 
+cargo build -p ftui-harness --example minimal > "$E2E_LOG_DIR/02_minimal_build.log" 2>&1
+cargo build -p ftui-pty --bin pty_canonicalize > "$E2E_LOG_DIR/03_parser_build.log" 2>&1
+
 TARGET_DIR="${CARGO_TARGET_DIR:-$PROJECT_ROOT/target}"
 E2E_HARNESS_BIN="$TARGET_DIR/debug/ftui-harness"
-export E2E_HARNESS_BIN
+E2E_MINIMAL_BIN="$TARGET_DIR/debug/examples/minimal"
+PTY_CANONICALIZE_BIN="$TARGET_DIR/debug/pty_canonicalize"
+export E2E_HARNESS_BIN E2E_MINIMAL_BIN PTY_CANONICALIZE_BIN
 
 if [[ ! -x "$E2E_HARNESS_BIN" ]]; then
     log_error "ftui-harness binary not found at $E2E_HARNESS_BIN"
@@ -138,6 +143,7 @@ log_info "Running tests..."
 # Core suites (always run)
 run_suite "inline"  "$SCRIPT_DIR/test_inline.sh"
 run_suite "cleanup" "$SCRIPT_DIR/test_cleanup.sh"
+run_suite "examples" "$SCRIPT_DIR/test_examples.sh"
 
 if $QUICK; then
     log_warn "Skipping extended tests (--quick)"
