@@ -1,0 +1,18 @@
+# Run on a configured native DSR host with its retained source checkout:
+# DSR_REPOS_FILE="$PWD/.config/dsr-quality.yaml" dsr quality --tool frankentui-env-docs -w "$PWD"
+# For frankentui-examples, set E2E_MINIMAL_BIN and PTY_CANONICALIZE_BIN to
+# executables built from that checkout through DSR with the pinned toolchain.
+# These focused gates supplement the workspace compiler/lint/doc/test gates.
+schema_version: "1.0.0"
+tools:
+  frankentui-env-docs:
+    repo: Dicklesworthstone/frankentui
+    language: rust
+    required_checks:
+      - python3 -B scripts/check_env_docs.py --self-test
+      - python3 -B scripts/check_env_docs.py
+  frankentui-examples:
+    repo: Dicklesworthstone/frankentui
+    language: rust
+    required_checks:
+      - bash tests/e2e/scripts/test_examples.sh
