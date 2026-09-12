@@ -61,6 +61,7 @@ pub mod responsive;
 pub mod responsive_layout;
 pub mod veb_tree;
 pub mod visibility;
+pub mod wide_prefix;
 pub mod workspace;
 
 #[cfg(feature = "experimental")]
@@ -135,6 +136,7 @@ pub use smallvec;
 use smallvec::SmallVec;
 use std::cmp::min;
 pub use visibility::Visibility;
+pub use wide_prefix::{WidePrefixError, WidePrefixSums};
 pub use workspace::{
     MigrationResult, WORKSPACE_SCHEMA_VERSION, WorkspaceMetadata, WorkspaceMigrationError,
     WorkspaceSnapshot, WorkspaceSnapshotJsonError, WorkspaceValidationError,
