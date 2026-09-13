@@ -347,7 +347,7 @@ impl std::error::Error for WidePrefixError {}
 
 #[inline]
 fn lowbit(value: usize) -> usize {
-    value & value.wrapping_neg()
+    value.isolate_lowest_one()
 }
 
 #[inline]
