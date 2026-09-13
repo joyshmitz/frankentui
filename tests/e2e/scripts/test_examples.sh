@@ -29,6 +29,7 @@ run_example() (
     export TERM=xterm-kitty TERM_PROGRAM=kitty COLORTERM=truecolor
     export FTUI_SYNC_OUTPUT=1 FTUI_SCROLL_REGION=1 FTUI_CAPS_PROBE=0
     export PTY_TIMEOUT=5 PTY_RETRIES=1 PTY_COLS=80 PTY_ROWS=24 PTY_CANONICALIZE=0
+    export PTY_TIMING_FILE="$capture.timing.json"
     export PTY_SEND="$key" PTY_SEND_DELAY_MS=550
     if [[ -n "$key" ]]; then
         export PTY_SEND_AFTER_OUTPUT="Hello from FrankenTUI ticks:"
@@ -52,6 +53,8 @@ import sys
 
 capture, screen, name, elapsed, binary = sys.argv[1:]
 raw = Path(capture).read_bytes()
+timing = json.loads(Path(capture + '.timing.json').read_text())
+child_ms = timing['spawn_to_exit_ms']
 lines = Path(screen).read_text().splitlines()
 cursor = re.findall(rb'\x1b\[\?25[hl]', raw)
 sync = re.findall(rb'\x1b\[\?2026([hl])', raw)
@@ -65,15 +68,21 @@ counts = dict(cursor_hide=raw.count(b'\x1b[?25l'), cursor_show=raw.count(b'\x1b[
               alt_1049h=raw.count(b'\x1b[?1049h'), sync_h=sync.count(b'h'), sync_l=sync.count(b'l'),
               decstbm_set=len(re.findall(rb'\x1b\[\d+;\d+r', raw)), decstbm_reset=raw.count(b'\x1b[r'))
 # Each frame ends its sync block; terminal-session cleanup sends one extra end.
-checks = dict(duration=(950 if name == 'auto_exit' else 500) <= int(elapsed) < 2000,
-              visible=bordered, ticked=bool(ticks) and ticks[-1] >= 2,
+checks = dict(duration=child_ms is not None and (950 if name == 'auto_exit' else 500) <= child_ms < 2000
+                       and not timing['timed_out'],
+              input=timing['input_chunks_sent'] == timing['input_chunks_expected']
+                    and timing['input_while_alive']
+                    and (name == 'auto_exit' or timing['input_chunks_sent'] > 0),
+              visible=bordered, ticked=bool(ticks) and ticks[-1] > 0
+                                     and b'Hello from FrankenTUI ticks: 0' in raw,
               cursor=bool(cursor) and cursor[0] == b'\x1b[?25l' and cursor[-1] == b'\x1b[?25h',
               inline=counts['alt_1049h'] == 0,
               sync=counts['sync_h'] > 0 and sync == [b'h', b'l'] * counts['sync_h'] + [b'l'],
               scroll=counts['decstbm_set'] > 0 and counts['decstbm_reset'] == 2
                      and raw.rfind(b'\x1b7\x1b[r\x1b8') > raw.rfind(b'\x1b[?2026h'))
 record = dict(scenario='minimal_example_' + name, identity='kitty', exit_code=0,
-              duration_ms=int(elapsed), esc_tallies=counts, checks=checks,
+              duration_ms=child_ms, driver_duration_ms=int(elapsed), timing=timing,
+              esc_tallies=counts, checks=checks,
               binary_sha256=hashlib.sha256(Path(binary).read_bytes()).hexdigest(),
               capture_sha256=hashlib.sha256(raw).hexdigest(),
               text_found=bordered, status='passed' if all(checks.values()) else 'failed')

@@ -396,6 +396,9 @@ def _preexec_setup_controlling_tty() -> None:
     except Exception:
         pass
 
+child_started = time.monotonic()
+child_exited = None
+input_while_alive = True
 proc = subprocess.Popen(
     cmd,
     stdin=slave_fd,
@@ -433,6 +436,7 @@ try:
         )
         if input_due:
             try:
+                input_while_alive = input_while_alive and proc.poll() is None
                 payload = send_sequence[send_index][1]
                 # A nonblocking PTY write may accept only a prefix. Keep the
                 # remainder and poll writability instead of dropping it.
@@ -532,6 +536,8 @@ try:
 
         exit_code = proc.poll()
         if exit_code is not None:
+            if child_exited is None:
+                child_exited = time.monotonic()
             if now - last_data >= drain_timeout:
                 break
 
@@ -558,6 +564,19 @@ if capture_max is not None and capture_max > 0 and len(captured) > capture_max:
 
 with open(output_path, "wb") as handle:
     handle.write(captured)
+
+timing_path = os.environ.get("PTY_TIMING_FILE")
+if timing_path:
+    # This measures the child lifecycle, excluding capture canonicalization,
+    # shell metadata subprocesses and the post-exit drain interval.
+    with open(timing_path, "x", encoding="utf-8") as handle:
+        json.dump({
+            "spawn_to_exit_ms": (child_exited - child_started) * 1000 if child_exited is not None else None,
+            "timed_out": terminate_at is not None,
+            "input_chunks_sent": send_index,
+            "input_chunks_expected": len(send_sequence),
+            "input_while_alive": input_while_alive,
+        }, handle)
 
 if send_error is not None or send_index < len(send_sequence):
     print(f"PTY input delivery incomplete: chunk={send_index}/{len(send_sequence)}, offset={send_offset}, readiness_observed={send_start is not None}, error={send_error}", file=sys.stderr)
