@@ -311,19 +311,31 @@ pub enum WidePrefixError {
 impl std::fmt::Display for WidePrefixError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::CapacityOverflow { len } => write!(formatter, "wide-prefix length overflow: {len}"),
-            Self::AllocationFailed { len } => write!(formatter, "wide-prefix allocation failed: {len}"),
+            Self::CapacityOverflow { len } => {
+                write!(formatter, "wide-prefix length overflow: {len}")
+            }
+            Self::AllocationFailed { len } => {
+                write!(formatter, "wide-prefix allocation failed: {len}")
+            }
             Self::IndexOutOfBounds { index, len } => {
-                write!(formatter, "wide-prefix index {index} out of bounds (len={len})")
+                write!(
+                    formatter,
+                    "wide-prefix index {index} out of bounds (len={len})"
+                )
             }
             Self::InvalidRange { start, end, len } => {
-                write!(formatter, "wide-prefix range [{start}, {end}) invalid (len={len})")
+                write!(
+                    formatter,
+                    "wide-prefix range [{start}, {end}) invalid (len={len})"
+                )
             }
             Self::EndOutOfBounds { end, len } => {
                 write!(formatter, "wide-prefix end {end} out of bounds (len={len})")
             }
             Self::SumOverflow { index } => write!(formatter, "wide-prefix sum overflow at {index}"),
-            Self::SumUnderflow { index } => write!(formatter, "wide-prefix sum underflow at {index}"),
+            Self::SumUnderflow { index } => {
+                write!(formatter, "wide-prefix sum underflow at {index}")
+            }
             Self::InvariantViolation { index } => {
                 write!(formatter, "wide-prefix invariant violation at {index}")
             }
@@ -437,7 +449,10 @@ mod tests {
         assert_eq!(sums.range(0, 2).unwrap(), 7);
         assert_eq!(
             sums.insert(usize::MAX, 1),
-            Err(WidePrefixError::IndexOutOfBounds { index: usize::MAX, len: 2 })
+            Err(WidePrefixError::IndexOutOfBounds {
+                index: usize::MAX,
+                len: 2
+            })
         );
     }
 

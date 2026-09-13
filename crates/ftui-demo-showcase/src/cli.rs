@@ -1235,8 +1235,8 @@ mod tests {
     #[test]
     fn mouse_mode_env_override() {
         for mode in ["on", "off", "auto"] {
-            let opts = parse_with_env(Vec::<String>::new(), &[("FTUI_DEMO_MOUSE", mode)])
-                .expect("parse");
+            let opts =
+                parse_with_env(Vec::<String>::new(), &[("FTUI_DEMO_MOUSE", mode)]).expect("parse");
             assert_eq!(opts.mouse_mode, mode);
         }
     }
