@@ -1206,10 +1206,39 @@ mod tests {
     }
 
     #[test]
+    fn cli_screen_flag_and_env_select_screen() {
+        let from_flag = parse_with_env(["--screen=3"], &[]).expect("screen flag");
+        assert_eq!(from_flag.start_screen, 3);
+        let from_env = parse_with_env(Vec::<String>::new(), &[("FTUI_DEMO_SCREEN", "5")])
+            .expect("screen environment default");
+        assert_eq!(from_env.start_screen, 5);
+        let both = parse_with_env(["--screen=3"], &[("FTUI_DEMO_SCREEN", "5")])
+            .expect("flag overrides environment default");
+        assert_eq!(both.start_screen, 3);
+    }
+
+    #[test]
+    fn harness_view_env_is_ignored_by_showcase() {
+        for view in ["dashboard", "visual_effects"] {
+            let opts = parse_with_env(Vec::<String>::new(), &[("FTUI_HARNESS_VIEW", view)])
+                .expect("unrelated harness variable");
+            assert_eq!(opts.start_screen, 1);
+            let selected = parse_with_env(
+                ["--screen=3"],
+                &[("FTUI_HARNESS_VIEW", view), ("FTUI_DEMO_SCREEN", "5")],
+            )
+            .expect("showcase selection is unaffected by harness variable");
+            assert_eq!(selected.start_screen, 3);
+        }
+    }
+
+    #[test]
     fn mouse_mode_env_override() {
-        let opts =
-            parse_with_env(Vec::<String>::new(), &[("FTUI_DEMO_MOUSE", "off")]).expect("parse");
-        assert_eq!(opts.mouse_mode, "off");
+        for mode in ["on", "off", "auto"] {
+            let opts = parse_with_env(Vec::<String>::new(), &[("FTUI_DEMO_MOUSE", mode)])
+                .expect("parse");
+            assert_eq!(opts.mouse_mode, mode);
+        }
     }
 
     #[test]
